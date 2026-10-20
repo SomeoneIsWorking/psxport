@@ -3,20 +3,14 @@
 #include "core.h"
 #include "field_rate.h"
 #include "game.h"
-#include "gpu_device.h"
-#include "pace_plan.h"
+#include "host_clock.h"
 
 #include <lucent/log.h>
 
 #include <chrono>
-#include <cstdlib>
 #include <thread>
 
 namespace psx::frame {
-
-unsigned FramePacer::fieldRateMilliHz(Core &core) const {
-  return psx::frame::fieldRateMilliHz(core.gpuDevice().displayArea().pal);
-}
 
 PacePlan FramePacer::plan(PaceInputs inputs) {
   inputs.nextMs = nextMs_;
@@ -24,15 +18,12 @@ PacePlan FramePacer::plan(PaceInputs inputs) {
   const PacePlan result = pacePlan(inputs);
   if (result.quotaUnset && !warnedQuotaUnset_) {
     warnedQuotaUnset_ = true;
-    lucent::warn("gpu",
-                 "no guest field count — pacing 1 display field per call. The title's frame driver "
-                 "must pass its measured cadence (fields per pacing call).");
+    lucent::warn(
+        "gpu", "no guest field count: pacing 1 display field per call; the title's frame driver must pass its cadence");
   }
   if (result.rateUnset && !warnedRateUnset_) {
     warnedRateUnset_ = true;
-    lucent::warn("gpu",
-                 "no display field rate — NOT pacing. GP1(08) has not been decoded for this "
-                 "Core, so there is no clock to pace against and none will be invented.");
+    lucent::warn("gpu", "no display field rate: not pacing");
   }
   if (result.paced) {
     nextMs_ = result.nextMs;
@@ -41,70 +32,59 @@ PacePlan FramePacer::plan(PaceInputs inputs) {
   return result;
 }
 
-namespace {
-
-// `inputs` carries the driver's quota and parts; the rest is read here.
-PacePlan preparePace(Core &core, PaceInputs inputs) {
-  // NOPACE and a fast-forward (resume replay or host pre-roll) suppress host sleeping only. Neither changes windowing,
-  // the guest display cadence, or the emulated time delivered below.
-  inputs.unpaced = core.game->config.unpaced || core.game->fastForwarding();
-  inputs.fieldRateMilliHz = core.game->framePacer.fieldRateMilliHz(core);
-  inputs.nowMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now().time_since_epoch()).count();
-
-  const PacePlan plan = core.game->framePacer.plan(inputs);
-
-  return plan;
-}
-
-// The play check judges the next present against the fields this plan holds it for, paced or not.
-void waitForPlan(Core &core, const PacePlan &plan, unsigned fieldRateMilliHz) {
-  core.game->perf.heldFor(static_cast<double>(plan.effectiveQuota) / static_cast<double>(plan.effectiveParts));
-  if (!plan.paced) {
+void FramePacer::pace(Core &core, PaceInputs inputs, bool advanceClock) {
+  Game &game = *core.game;
+  inputs.nowMs = psx::platform::hostNowMs();
+  const PacePlan planned = plan(inputs);
+  if (advanceClock && !planned.rateUnset) {
+    game.timing.advanceDisplayFields({planned.effectiveQuota, planned.effectiveParts}, inputs.fieldRateMilliHz);
+  }
+  if (planned.paced) {
+    pacedFields_ += static_cast<unsigned long long>(planned.effectiveQuota);
+  }
+  // The play check judges the next present against the fields this plan holds it for, paced or not.
+  game.perf.heldFor(static_cast<double>(planned.effectiveQuota) / static_cast<double>(planned.effectiveParts));
+  if (!planned.paced) {
     return;
   }
   lucent::debug("pacer",
                 "interval={:.4f}ms sleep={:.4f}ms quota={} parts={} rate={}mHz{}",
-                plan.intervalMs,
-                plan.sleepMs,
-                plan.effectiveQuota,
-                plan.effectiveParts,
-                fieldRateMilliHz,
-                plan.resync ? " RESYNC" : "");
-  if (plan.sleepMs <= 0.0) {
-    return;
+                planned.intervalMs,
+                planned.sleepMs,
+                planned.effectiveQuota,
+                planned.effectiveParts,
+                inputs.fieldRateMilliHz,
+                planned.resync ? " RESYNC" : "");
+  if (planned.sleepMs > 0.0) {
+    std::this_thread::sleep_for(std::chrono::duration<double, std::milli>(planned.sleepMs));
   }
-  std::this_thread::sleep_for(std::chrono::duration<double, std::milli>(plan.sleepMs));
+}
+
+namespace {
+
+// A guest cadence at the standard the guest programmed; NOPACE and a fast-forward suppress the sleep
+// only, never the emulated time delivered.
+PaceInputs guestInputs(const Game &game, FieldCadence cadence) {
+  return {.unpaced = game.config.unpaced || game.fastForwarding(),
+          .quota = cadence.fields,
+          .parts = cadence.parts,
+          .fieldRateMilliHz = fieldRateMilliHz(game.timing.displayFieldRate())};
 }
 
 } // namespace
 
 void FramePacer::paceSubframeFields(Core &core, FieldCadence cadence) {
-  const PacePlan plan = preparePace(core, {.quota = cadence.fields, .parts = cadence.parts});
-  if (!plan.rateUnset) {
-    core.game->timing.advanceDisplayFields({plan.effectiveQuota, plan.effectiveParts}, fieldRateMilliHz(core));
-  }
-  if (plan.paced) {
-    pacedFields_ += static_cast<unsigned long long>(plan.effectiveQuota);
-  }
-  waitForPlan(core, plan, fieldRateMilliHz(core));
+  pace(core, guestInputs(*core.game, cadence), true);
 }
 
 void FramePacer::waitPresentedFields(Core &core, FieldCadence cadence) {
-  const PacePlan plan = preparePace(core, {.quota = cadence.fields, .parts = cadence.parts});
-  if (plan.paced) {
-    pacedFields_ += static_cast<unsigned long long>(plan.effectiveQuota);
-  }
-  waitForPlan(core, plan, fieldRateMilliHz(core));
+  pace(core, guestInputs(*core.game, cadence), false);
 }
 
 void FramePacer::hostScreenPace(Core &core) {
-  PaceInputs inputs;
-  inputs.unpaced = core.game->config.unpaced;
-  inputs.quota = 1;
-  inputs.parts = 1;
-  inputs.fieldRateMilliHz = psx::frame::fieldRateMilliHz(false);
-  inputs.nowMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now().time_since_epoch()).count();
-  waitForPlan(core, core.game->framePacer.plan(inputs), inputs.fieldRateMilliHz);
+  pace(core,
+       {.unpaced = core.game->config.unpaced, .quota = 1, .parts = 1, .fieldRateMilliHz = kHostScreenFieldRateMilliHz},
+       false);
 }
 
 } // namespace psx::frame

@@ -1,5 +1,5 @@
-// render_readback.cpp — what this Game presented, read back: the present image (present shot, the pane
-// hold and its content measure), and the device's VRAM written out as images or raw words.
+// render_readback.cpp — what this Game presented, read back: the present image (present shot and the
+// pane hold), and the device's VRAM written out as images or raw words.
 #include "core.h"
 #include "game.h"
 #include "gpu_device.h"
@@ -12,8 +12,8 @@
 
 #include <SDL3/SDL_gpu.h>
 
-#include <algorithm>
 #include <cstdio>
+#include <cstdlib>
 #include <vector>
 
 namespace psx::render {
@@ -73,7 +73,7 @@ void RenderState::shot(const char *path) {
 
 PresentedImage RenderState::newestPresentedPicture() const {
   if (blankSerial_ == presentSerial_ && filled_ != nullptr) {
-    return {filled_, filledSize_.width, filledSize_.height, filledViewport_, content_};
+    return {filled_, filledSize_.width, filledSize_.height, filledViewport_};
   }
   return lastPresented();
 }
@@ -134,7 +134,6 @@ bool RenderState::retainFilledPresentImage() {
     blankSerial_ = presentSerial_;
     return filled_ != nullptr;
   }
-  measurePresentedContent(rgba.bytes());
   if (filled_ == nullptr || filledSize_ != presentImageSize_) {
     device_.release(filled_);
     filled_ = device_.makeTexture(presentImageSize_, kPresentImageFormat, SDL_GPU_TEXTUREUSAGE_SAMPLER);
@@ -147,53 +146,6 @@ bool RenderState::retainFilledPresentImage() {
   }
   filledViewport_ = viewport_;
   return true;
-}
-
-// The picture's own lit extent inside the viewport on a coarse grid, only ever widened, so a dark
-// scene cannot shrink the crop.
-void RenderState::measurePresentedContent(const std::uint8_t *rgba) {
-  const int w = presentImageSize_.width;
-  const int h = presentImageSize_.height;
-  const present::PaneRect area = viewport_;
-  if (area.w <= 0 || area.h <= 0) {
-    return;
-  }
-  constexpr int kGrid = 24;
-  int top = -1;
-  int bottom = -1;
-  int left = w;
-  int right = -1;
-  for (int gy = 0; gy < kGrid; ++gy) {
-    const int y = area.y + static_cast<int>(static_cast<long>(gy) * area.h / kGrid);
-    if (y < 0 || y >= h) {
-      continue;
-    }
-    for (int gx = 0; gx < kGrid; ++gx) {
-      const int x = area.x + static_cast<int>(static_cast<long>(gx) * area.w / kGrid);
-      if (x < 0 || x >= w) {
-        continue;
-      }
-      const std::uint8_t *px = rgba + (static_cast<long>(y) * w + x) * 4;
-      if ((px[0] | px[1] | px[2]) != 0) {
-        top = top < 0 ? y : top;
-        bottom = y + 1;
-        left = std::min(left, x);
-        right = std::max(right, x + 1);
-      }
-    }
-  }
-  if (top < 0 || right <= left) {
-    return;
-  }
-  if (content_.w == 0 || content_.h == 0) {
-    content_ = present::PaneRect{left, top, right - left, bottom - top};
-    return;
-  }
-  const int x0 = std::min(content_.x, left);
-  const int y0 = std::min(content_.y, top);
-  const int x1 = std::max(content_.x + content_.w, right);
-  const int y1 = std::max(content_.y + content_.h, bottom);
-  content_ = present::PaneRect{x0, y0, x1 - x0, y1 - y0};
 }
 
 void vramRegion(Core &core, const char *path, gpu::VramRect rect) {

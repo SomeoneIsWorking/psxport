@@ -5,10 +5,10 @@
 
 #include "core.h"
 #include "dbg_server.h"
-#include "field_rate.h"
 #include "field_turn.h"
 #include "frame_pacer.h"
 #include "game.h"
+#include "host_input.h"
 #include "render_device.h"
 #include "render_state.h"
 
@@ -22,12 +22,7 @@
 namespace psx::host {
 namespace {
 
-// Active-low pad bits, as Pad::buttons carries them.
-constexpr std::uint16_t kPadLeft = 0x0100u;
-constexpr std::uint16_t kPadRight = 0x0200u;
-constexpr std::uint16_t kPadStart = 0x0008u;
-constexpr std::uint16_t kPadCross = 0x4000u;
-constexpr std::uint16_t kPadConfirm = kPadCross | kPadStart;
+constexpr std::uint16_t kConfirm = psx::input::kButtonCross | psx::input::kButtonStart;
 
 } // namespace
 
@@ -44,41 +39,38 @@ PickerSession::PickerSession(PickerRuntime &runtime,
     std::abort();
   }
   panels_ = std::make_unique<PanelSessions>(catalog_, content_, services_);
-  runtime_.bind(&content_, nullptr);
+  runtime_.bind(&content_);
 }
 
 PickerSession::~PickerSession() = default;
 
-void PickerSession::composite() {
+void PickerSession::build() {
   sources_.clear();
   for (int panel = 0; panel < panels_->count(); ++panel) {
-    PanelSource source;
-    source.session = panels_->core(panel);
-    // So the panel cover-crops to the shape the picture really is and leaves no band of background.
-    source.pictureWidth = panels_->pictureWidth(panel);
-    source.pictureHeight = panels_->pictureHeight(panel);
-    source.logo = panels_->logo(panel);
-    sources_.push_back(source);
+    sources_.push_back({.picture = panels_->picture(panel), .logo = panels_->logo(panel)});
   }
-  composite_->build(*layout_, sources_, panels_->selected());
-  composited_ = true;
+  host_->display.buildPanes(panes_.build(*layout_, sources_, panels_->selected(), services_.presentation));
+  built_ = true;
+}
+
+void PickerSession::show() {
+  host_->display.show();
 }
 
 // The selected panel is the only one that steps, so its presents are the selector's cadence: the
-// composite is built with the panel's build and shown with its show. A pre-rolling panel is a
-// fast-forward that can present a hundred times in one picker frame, so it gets no host and the loop
-// composites for it.
+// screen is built with the panel's build and shown with its show. A pre-rolling panel can present a
+// hundred times in one selector frame, so it gets no host and the loop builds for it.
 void PickerSession::attachPaneHost() {
   for (int panel = 0; panel < panels_->count(); ++panel) {
     if (TitleSession *session = panels_->session(panel)) {
       if (panel == hostedPanel_ && panels_->panelSettled(hostedPanel_)) {
         session->setPaneHost({.built =
                                   [this] {
-                                    composite();
+                                    build();
                                   },
                               .show =
                                   [this] {
-                                    composite_->show();
+                                    show();
                                   }});
       } else {
         session->setPaneHost({});
@@ -87,40 +79,28 @@ void PickerSession::attachPaneHost() {
   }
 }
 
-int PickerSession::serviceInput(Game &host) {
-  // The host's pad is the only pad that sees the player, so a Left tap moves one selection
-  // instead of three demos at once.
-  int panel = panels_->selected();
-  const int count = panels_->count();
-  if (count > 0) {
-    if (host.pad.pressedButton(kPadLeft)) {
-      panel = panel - 1 >= 0 ? panel - 1 : count - 1;
+int PickerSession::serviceInput() {
+  const int before = panels_->selected();
+  // The host's pad is the only one that sees the player, so a tap moves one selection.
+  if (panels_->count() > 0) {
+    const int step = runtime_.takeStep() + (host_->pad.pressedButton(psx::input::kButtonRight) ? 1 : 0) -
+                     (host_->pad.pressedButton(psx::input::kButtonLeft) ? 1 : 0);
+    if (step != 0) {
+      panels_->step(step);
     }
-    if (host.pad.pressedButton(kPadRight)) {
-      panel = panel + 1 < count ? panel + 1 : 0;
+    if (std::optional<int> requested = runtime_.takePanel()) {
+      panels_->select(*requested);
     }
-    if (std::optional<int> requested = runtime_.takeSelection()) {
-      panel = *requested;
-    }
-    panels_->select(panel);
-  }
-  runtime_.setSelection(panels_->selected());
-  // The host follows the selected panel and is attached once that panel has settled.
-  const bool settled = panels_->panelSettled(panels_->selected());
-  if (hostedPanel_ != panels_->selected() || hostedSettled_ != settled) {
-    hostedPanel_ = panels_->selected();
-    hostedSettled_ = settled;
-    attachPaneHost();
   }
 
   int chosen = -1;
-  if (host.pad.pressedButton(kPadConfirm) && panels_->count() > 0) {
+  if (host_->pad.pressedButton(kConfirm) && panels_->count() > 0) {
     chosen = panels_->selected();
   }
   if (std::optional<std::string> slug = runtime_.takePick()) {
     std::string refusal;
     if (const TitleAvailability *title = content_.findAvailable(*slug, refusal)) {
-      const int requested = panels_->panelOf(title->identity->slug);
+      const int requested = content_.panelOf(title->identity->slug);
       if (requested >= 0) {
         panels_->select(requested);
         chosen = requested;
@@ -129,87 +109,76 @@ int PickerSession::serviceInput(Game &host) {
       lucent::warn("picker", "pick refused: {}", refusal);
     }
   }
+  if (panels_->selected() != before) {
+    layout_->setSelection(panels_->selected());
+  }
+  // The host follows the selected panel and is attached once that panel has settled.
+  const bool settled = panels_->panelSettled(panels_->selected());
+  if (hostedPanel_ != panels_->selected() || hostedSettled_ != settled) {
+    hostedPanel_ = panels_->selected();
+    hostedSettled_ = settled;
+    attachPaneHost();
+  }
   return chosen;
 }
 
 PickerSession::Result PickerSession::run() {
-  // No guest runs here, but the control endpoint, the pad and the screen text all need an owner,
-  // and no panel session may have them.
-  auto host = std::make_unique<Game>(runtime_, services_.presentation, services_.config);
-  Core &core = host->core;
-  // The layout is the player's settings, which the host Game loaded.
+  host_ = std::make_unique<Game>(runtime_, services_.presentation, services_.config);
+  Core &core = host_->core;
   layout_.emplace(content_.panelCount(),
-                  PickerLayout::Motion{.selectedShare = host->mods.pickerSelectedShare,
-                                       .slantPerWidth = host->mods.pickerSlantPerWidth,
-                                       .responsePerFrame = host->mods.pickerWidthResponse});
-  host->pad.useLiveInputOnly(); // a selector must not open or rotate the player's pad recording
-  host->hostInput.attachQuitScope(&services_.quit);
+                  PickerLayout::Motion{.selectedShare = host_->mods.pickerSelectedShare,
+                                       .slantPerWidth = host_->mods.pickerSlantPerWidth,
+                                       .responsePerFrame = host_->mods.pickerWidthResponse});
+  host_->pad.useLiveInputOnly(); // a selector must not open or rotate the player's pad recording
+  host_->hostInput.attachQuitScope(&services_.quit);
   // No guest runs here, so the channel needs no store observer.
-  host->dbg_server.start();
-  // The overlay exists before the first composite.
+  host_->dbg_server.start();
+  // The overlay exists before the first build.
   if (services_.presentation.enabled()) {
-    host->render().bringUp();
+    host_->render().bringUp();
   }
 
-  composite_ = std::make_unique<PickerComposite>(services_.presentation, &core);
-  runtime_.bind(&content_, composite_.get());
-
-  // Each panel is a live session's own presented frame plus that title's own logo read from its own
-  // disc, with no overlay screen in between.
-
-  // The same four services a title's field owes: the player is read, panels advance and the
-  // composite presents.
+  // The same services a title's field owes: the player is read, panels advance, the screen presents.
   const psx::frame::FieldTurn fieldTurn;
   int frame = 0;
-  const auto fieldInterval = std::chrono::duration_cast<PreRollBudget::Clock::duration>(
-      std::chrono::duration<double, std::milli>(1000000.0 / psx::frame::FIELD_RATE_NTSC_MILLIHZ));
+  const auto fieldInterval =
+      std::chrono::duration_cast<PreRollBudget::Clock::duration>(std::chrono::duration<double, std::milli>(
+          psx::frame::fieldIntervalMs(psx::frame::kHostScreenFieldRateMilliHz, 1, 1)));
   for (; !services_.budget.exhausted(); ++frame) {
-    if (services_.quit.take() || host->dbg_server.takeQuitRequest()) {
+    if (services_.quit.take() || host_->dbg_server.takeQuitRequest()) {
       lucent::info("picker", "selector asked to quit after {} frame(s)", frame);
       return {};
     }
     const PreRollBudget preRoll(PreRollBudget::Clock::now() + fieldInterval);
     fieldTurn.beginField(core);
-    host->pad.serviceFrame();
-    // Reset before anything can present, so the question below is "did a panel present this
-    // iteration?" and not "did it, at any point in the run?".
-    composited_ = false;
+    host_->pad.serviceFrame();
+    // Reset before anything can present, so it asks whether a panel presented this iteration.
+    built_ = false;
 
     const psx::present::PixelSize sink = services_.presentation.sinkSize();
     layout_->setSurface(sink.width, sink.height);
-    layout_->setSelection(panels_->selected());
-    composite_->setSurface(*layout_, sink.width, sink.height);
-    // Every panel session presents into the composite, never into the window: the window belongs to
-    // this host, and each session's picture is a fraction of it.
+
+    const int chosen = serviceInput();
+    // Each panel builds its own picture at the size it is shown at; the window is the host's.
     for (int panel = 0; panel < panels_->count(); ++panel) {
       if (TitleSession *session = panels_->session(panel)) {
-        session->presentToPane(composite_->paneImage(panel));
+        session->presentToPane(layout_->imageSize(panel));
       }
     }
-
-    const int chosen = serviceInput(*host);
     if (chosen >= 0 && panels_->count() > 0) {
       std::unique_ptr<TitleSession> session = panels_->confirm();
       if (session != nullptr) {
-        // No press is replayed into the new session: `boot()` has not run, so a tap held over from
-        // the selector's own pad would arrive as a phantom press in the title's first frame.
+        // `boot()` has not run, so no press held over from the selector reaches the title.
         lucent::info("picker",
-                     "{} confirmed at panel {} — it boots fresh into the window",
+                     "{} confirmed at panel {}; it boots fresh into the window",
                      content_.panelTitle(chosen).identity->slug,
                      chosen);
-        // The panels die with the composite, but their Games could still present into it.
-        for (int panel = 0; panel < panels_->count(); ++panel) {
-          if (TitleSession *panelSession = panels_->session(panel)) {
-            panelSession->setPaneHost({});
-          }
-        }
-        composite_.reset();
+        host_.reset();
         return Result{Outcome::Chosen, std::move(session)};
       }
     }
 
-    // The panel animation runs on the same frame, so the width change the player just
-    // asked for is drawn from its first frame.
+    // The width animation runs on the same frame, so a selection change is drawn from its first frame.
     const unsigned long long pacedFields = panels_->advance(preRoll);
     layout_->advance();
     lucent::debug("layout",
@@ -220,15 +189,14 @@ PickerSession::Result PickerSession::run() {
                   sink.width);
     panels_->report();
 
-    // The composite follows the selected panel's presents (attachPaneHost), each already paced by
-    // that panel. An iteration in which no panel presented still owes the window a frame: build,
-    // pace unless the panel's step already did, show.
-    if (!composited_) {
-      composite();
+    // A frame in which no panel presented still owes the window one: build, pace unless the panel's
+    // step already did, show.
+    if (!built_) {
+      build();
       if (pacedFields == 0) {
-        core.game->framePacer.hostScreenPace(core);
+        host_->framePacer.hostScreenPace(core);
       }
-      composite_->show();
+      show();
     }
     services_.budget.step();
     fieldTurn.endField(core, static_cast<std::uint32_t>(frame));

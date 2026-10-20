@@ -105,32 +105,15 @@ public:
   // Both answers are the title's — its frame driver and its presentation owner — because no pixel
   // test can tell an animated publisher logo from an attract demo.
   bool showsTitlePicture() const;
-  bool hasPicture() const;
   // A cold boot presents black for its first frames, and a panel that stops there is
-  // indistinguishable from a title that did not start.
-  //
-  // The answer is about the last presented frame, so it is only asked of a session still coming
-  // up: each ask is a GPU readback.
-  //
-  // Looking and holding are separate because looking costs a readback and holding costs nothing: a
-  // paused panel must not be asked to look again. `refreshPicture()` is for a running session, or
-  // one with nothing yet; `heldPicture()` is the answer, whenever it is wanted.
+  // indistinguishable from a title that did not start. Looking costs a GPU readback, so it is asked
+  // only of a session still coming up; holding the answer costs nothing.
   bool heldPicture() const {
     return contentSeen_;
   }
   void refreshPicture() const;
-  // The picture's own aspect, for the panel that will draw it. A session that has presented nothing
-  // reports 1:1, which the layout treats as "the panel's own shape".
-  int pictureWidth() const;
-  int pictureHeight() const;
-  // The newest presented frame that had a picture, so a fade or load screen between the guest's
-  // scenes leaves the panel showing the last real frame.
+  // The newest presented frame with a picture, at the size this session built it.
   psx::render::PresentedImage presentedPicture() const;
-  // A picture's own shape for the panel crop: its measured content rect where there is one.
-  struct PaneSize {
-    int width = 1, height = 1;
-  };
-  PaneSize pictureSize(const psx::render::PresentedImage &image) const;
 
   // ---- what a panel session is allowed to do
   // ------------------------------------------------------ Route this session's present into the

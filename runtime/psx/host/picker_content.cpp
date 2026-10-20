@@ -9,41 +9,20 @@
 namespace psx::host {
 namespace {
 
-// A title that cannot be started stays listed carrying its reason.
-psx::ui::ChoiceEntry entryFor(const TitleAvailability &title) {
-  psx::ui::ChoiceEntry entry;
-  entry.label = std::string(title.identity->displayName);
-  entry.detail = std::string(title.identity->serial);
-  entry.enabled = title.available();
-  entry.reason = title.reason;
-  return entry;
+// An empty request means every title.
+bool wanted(std::span<const std::string_view> slugs, std::string_view slug) {
+  return slugs.empty() || std::find(slugs.begin(), slugs.end(), slug) != slugs.end();
 }
 
 } // namespace
 
-namespace {
-// Whether `slug` is one of the requested panel titles. An empty request means "all of them".
-bool wanted(std::span<const std::string> slugs, std::string_view slug) {
-  if (slugs.empty()) {
-    return true;
-  }
-  return std::find(slugs.begin(), slugs.end(), slug) != slugs.end();
-}
-} // namespace
-
-PickerContent::PickerContent(std::string_view heading,
-                             std::span<const TitleAvailability> titles,
-                             std::span<const std::string> panelSlugs)
+PickerContent::PickerContent(std::span<const TitleAvailability> titles, std::span<const std::string_view> panelSlugs)
     : titles_(titles) {
-  content_.heading = std::string(heading);
-  content_.hint = "Left / Right: choose   -   Cross / Start: play";
   for (int index = 0; index < static_cast<int>(titles_.size()); ++index) {
     const TitleAvailability &title = titles_[static_cast<std::size_t>(index)];
-    content_.entries.push_back(entryFor(title));
-    if (!title.available() || !wanted(panelSlugs, title.identity->slug)) {
-      continue;
+    if (title.available() && wanted(panelSlugs, title.identity->slug)) {
+      panels_.push_back(index);
     }
-    panels_.push_back(index);
   }
 }
 

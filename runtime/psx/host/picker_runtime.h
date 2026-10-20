@@ -8,51 +8,45 @@
 
 namespace psx::host {
 
-class PickerComposite;
-
-// The host's own session, in which no guest runs: the control channel is its job, which is the
-// headless route to every decision the pad makes in the window. It also owns the screen's Game,
-// the one that holds the control endpoint, reads the pad and records the screen text.
+// The selector host's runtime, in which no guest runs: its control channel is the headless route to
+// every decision the pad makes in the window. Commands only record a request; the selector applies it.
 class PickerRuntime final : public psx::game::GameRuntime {
 public:
   PickerRuntime() = default;
 
-  void bind(const PickerContent *content, PickerComposite *composite) {
+  void bind(const PickerContent *content) {
     content_ = content;
-    composite_ = composite;
     pendingSlug_.reset();
-    pendingSelection_.reset();
+    pendingPanel_.reset();
+    pendingStep_ = 0;
   }
-  // The slug `pick` accepted since the last call: the title to start, as opposed to the panel to
-  // show.
+  // The slug `pick` accepted since the last call: the title to start.
   std::optional<std::string> takePick() {
     std::optional<std::string> pick = std::move(pendingSlug_);
     pendingSlug_.reset();
     return pick;
   }
-  // The panel index is into the panels, which are the available titles in catalog order.
-  std::optional<int> takeSelection() {
-    std::optional<int> selection = pendingSelection_;
-    pendingSelection_.reset();
-    return selection;
+  // The panel `select <slug>` named since the last call.
+  std::optional<int> takePanel() {
+    std::optional<int> panel = pendingPanel_;
+    pendingPanel_.reset();
+    return panel;
+  }
+  // The steps `select left|right` asked for since the last call.
+  int takeStep() {
+    const int step = pendingStep_;
+    pendingStep_ = 0;
+    return step;
   }
 
   void registerOverrides(Game &) override {}
-  // `line` is the whole command line, as the framework passes it.
   bool titleCommand(Core &core, const psx::game::TitleCommandLine &input, FILE *out) override;
-
-  // The command logic itself, which needs no Core: a hermetic test drives it directly.
-  bool handle(const psx::debug::CommandArgs &args, FILE *out);
-  // The panel count is the content's own, so `select left|right` cannot resolve a panel that does
-  // not exist.
-  void setSelection(int selected);
 
 private:
   const PickerContent *content_ = nullptr;
-  PickerComposite *composite_ = nullptr;
   std::optional<std::string> pendingSlug_;
-  std::optional<int> pendingSelection_;
-  int selected_ = 0;
+  std::optional<int> pendingPanel_;
+  int pendingStep_ = 0;
 };
 
 } // namespace psx::host

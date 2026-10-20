@@ -7,7 +7,6 @@
 #include <SDL3/SDL_gpu.h>
 
 #include <cstdint>
-#include <memory>
 #include <vector>
 
 namespace psx::render {
@@ -34,10 +33,6 @@ public:
   int height() const {
     return m_height;
   }
-  // Nearest-neighbour magnification, so a panel shows the game's own texels at its own scale.
-  // Built on first ask and kept: a panel asks every frame, but the logo never changes.
-  // Returns `*this` when there is nothing to magnify.
-  const PanelLogo &magnifiedNearest(int factor) const;
   // Created on first use against `device` and destroyed with this object.
   SDL_GPUTexture *texture(psx::render::RenderDevice &device) const;
 
@@ -47,10 +42,6 @@ private:
   std::vector<std::uint8_t> m_rgba;
   mutable psx::render::RenderDevice *m_textureDevice = nullptr;
   mutable SDL_GPUTexture *m_texture = nullptr;
-  // Lazy, and keyed by the factor it was built for; a logo is immutable, so one copy per factor
-  // suffices. A factor of 0 means "not built yet".
-  mutable std::unique_ptr<PanelLogo> m_magnified;
-  mutable int m_magnifiedFactor = 0;
 };
 
 } // namespace psx::host

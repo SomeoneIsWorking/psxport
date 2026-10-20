@@ -1,4 +1,4 @@
-// frame_loop_shell.h — framework-owned product-loop boundary.
+// frame_loop_shell.h — the framework-owned product loop boundary.
 #pragma once
 
 #include <cstdint>
@@ -19,7 +19,6 @@ public:
   // Run once after the title has installed its native overrides and before product boot or
   // stepping. This is the single owner of the driver + fatal guest-VSync product preflight.
   psx::game::FrameDriver &prepareProduct(Game &game) const;
-  psx::game::FrameDriver &requireDriver(Game &game) const;
   // Rebinds the process-global devices only when `core` is not the Core bound last.
   void step(Core &core, uint32_t frame);
   // Point the process-global device bindings (GTE, projection, SPU, MDEC, XA) at `core`.

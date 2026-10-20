@@ -1,6 +1,7 @@
 #include "menu_row.h"
 
 #include "dev_command_control.h"
+#include "mod_row_model.h"
 #include "mods.h"
 #include "rml_text.h"
 #include "title_settings.h"
@@ -17,35 +18,15 @@ class ModToggleBinding final : public RowBinding {
 public:
   ModToggleBinding(Mods *mods, std::string id) : mMods(mods), mId(std::move(id)) {}
   bool available() const override {
-    return mMods && ModRowModel::available(*mMods, RowKind::Toggle, mId);
+    return mMods && ModRowModel::available(*mMods, mId);
   }
   bool text(std::string &out) const override {
-    return mMods && ModRowModel::value_text(*mMods, RowKind::Toggle, mId, out);
+    return mMods && ModRowModel::value_text(*mMods, mId, out);
   }
   void step(int) override {
     if (mMods) {
       ModRowModel::toggle(*mMods, mId);
     }
-  }
-
-private:
-  Mods *mMods;
-  std::string mId;
-};
-
-class ModAdjustBinding final : public RowBinding {
-public:
-  ModAdjustBinding(Mods *mods, std::string id) : mMods(mods), mId(std::move(id)) {}
-  bool text(std::string &out) const override {
-    return mMods && ModRowModel::value_text(*mMods, RowKind::Adjust, mId, out);
-  }
-  void step(int dir) override {
-    if (mMods) {
-      ModRowModel::adjust(*mMods, mId, dir);
-    }
-  }
-  bool steps_with_arrows() const override {
-    return true;
   }
 
 private:
@@ -159,9 +140,6 @@ private:
 std::unique_ptr<RowBinding> make_mod_toggle_binding(Mods *mods, std::string id) {
   return std::make_unique<ModToggleBinding>(mods, std::move(id));
 }
-std::unique_ptr<RowBinding> make_mod_adjust_binding(Mods *mods, std::string id) {
-  return std::make_unique<ModAdjustBinding>(mods, std::move(id));
-}
 std::unique_ptr<RowBinding> make_title_setting_binding(const psx::game::TitleIntSetting *setting, Mods *mods) {
   return std::make_unique<TitleSettingBinding>(setting, mods);
 }
@@ -178,7 +156,6 @@ std::unique_ptr<RowBinding> make_action_binding(std::function<void()> action, st
 MenuRow::MenuRow(Rml::Element *root, std::unique_ptr<RowBinding> binding, std::function<void(MenuRow &)> on_click)
     : Component(root), mBinding(std::move(binding)), mOnClick(std::move(on_click)) {
   mValue = mRoot ? mRoot->QuerySelector("value") : nullptr;
-  // The listener's lifetime is this row's — see ui_event.h for what that replaces.
   listen(mRoot, Rml::EventId::Click, [this](Rml::Event &) {
     if (mOnClick) {
       mOnClick(*this);
@@ -215,8 +192,7 @@ std::string MenuRow::describe() const {
     }
   }
   Rml::Element *key = mRoot->QuerySelector("key");
-  // DECODED, not the raw markup: the whole point of the text boundary is that these can differ,
-  // and a dump that echoed the markup would have shown "&middot;" as correct.
+  // Decoded, so an entity reads as the glyph drawn.
   const std::string label = key ? Rml::StringUtilities::DecodeRml(key->GetInnerRML()) : std::string();
   const std::string value = mValue ? Rml::StringUtilities::DecodeRml(mValue->GetInnerRML()) : std::string();
   return kind + "=\"" + id + "\" \"" + label + "\" = \"" + value + "\"" + (mBinding ? "" : "   <-- NO BINDING (inert)");

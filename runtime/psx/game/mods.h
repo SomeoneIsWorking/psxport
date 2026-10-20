@@ -26,6 +26,8 @@ public:
   }
   // The settings file, then this run's PSXPORT_FPS60, which is never saved; idempotent.
   void init(bool interpolates);
+  // The settings as they now stand, for a Game whose settings another Game's menu changed.
+  void reload();
   void save() const;
   bool temporalInterpolationSupported() const {
     return temporalInterpolationSupported_;

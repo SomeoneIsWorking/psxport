@@ -2,6 +2,7 @@
 
 #include "dev_command_control.h"
 #include "game.h"
+#include "wrap.h"
 
 #include <cstdio>
 
@@ -29,14 +30,7 @@ std::string WarpControl::areaLabel(int area) const {
 }
 
 void WarpControl::adjust(int dir) {
-  const int n = areaCount();
-  if (n <= 0) {
-    return;
-  }
-  mArea = (mArea + dir) % n;
-  if (mArea < 0) {
-    mArea += n; // wrap both ways, so Left from 0 reaches the last area
-  }
+  mArea = wrap(mArea, dir, areaCount());
 }
 
 std::string WarpControl::arm() {

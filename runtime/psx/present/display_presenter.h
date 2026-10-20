@@ -4,10 +4,12 @@
 
 #include "frame_schedule.h"
 #include "pixel_size.h"
+#include "render_pane.h"
 #include "vram_rect.h"
 
 #include <cstdint>
 #include <optional>
+#include <span>
 #include <string>
 
 class Core;
@@ -28,6 +30,8 @@ public:
   void buildInBetween();
   // Builds a host RGBA8 picture (movie frame, splash) as the whole frame, letterboxed 4:3 and faded by `fade` (0..1).
   void buildHostPicture(const std::uint8_t *rgba, PixelSize size, float fade);
+  // Builds a host screen (the title selector) from panes, under the same overlay as a guest frame.
+  void buildPanes(std::span<const render::Pane> panes);
   // Shows the last build in the window; a paced present waits between its build and this.
   void show();
   // Re-show the last present without building anything (debug-server pause loop).

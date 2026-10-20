@@ -225,15 +225,7 @@ bool TitleSession::showsTitlePicture() const {
   }
   // The driver knows when the retail boot prefix has returned; a pixel test cannot tell an
   // animated publisher logo from an attract demo.
-  const psx::game::FrameDriver &driver = services_.frameLoop.requireDriver(*parts_->game);
-  if (!driver.pastBootPrefix()) {
-    return false;
-  }
-  return true;
-}
-
-bool TitleSession::hasPicture() const {
-  return parts_->booted && parts_->game->render().lastPresented().valid();
+  return parts_->game->requireFrameDriver().pastBootPrefix();
 }
 
 void TitleSession::refreshPicture() const {
@@ -252,24 +244,6 @@ void TitleSession::refreshPicture() const {
   contentSeen_ = parts_->game->render().retainFilledPresentImage();
 }
 
-int TitleSession::pictureWidth() const {
-  return pictureSize(presentedPicture()).width;
-}
-
-int TitleSession::pictureHeight() const {
-  return pictureSize(presentedPicture()).height;
-}
-
-// The same rect the compositor samples, or the panel crops to one aspect and draws another.
-TitleSession::PaneSize TitleSession::pictureSize(const psx::render::PresentedImage &image) const {
-  if (!image.valid()) {
-    return PaneSize{1, 1};
-  }
-  const psx::present::PaneRect picture = image.picture();
-  return PaneSize{picture.w, picture.h};
-}
-
-// The picture the compositor samples.
 psx::render::PresentedImage TitleSession::presentedPicture() const {
   if (!parts_->booted) {
     return {};

@@ -8,6 +8,7 @@
 #include "first_run_setup.h"
 #include "game.h"
 #include "memcensus.h"
+#include "number_text.h"
 #include "picker_content.h"
 #include "picker_runtime.h"
 #include "picker_session.h"
@@ -24,32 +25,9 @@
 #include <string_view>
 #include <system_error>
 #include <utility>
+#include <vector>
 
 namespace psx::host {
-namespace {
-// Split comma/space-separated slug list. Empty string means "every title".
-std::vector<std::string> splitSlugs(const std::string &text) {
-  std::vector<std::string> slugs;
-  std::string current;
-  for (const char *p = text.c_str(); *p != '\0'; ++p) {
-    if (*p == ',') {
-      if (!current.empty()) {
-        slugs.push_back(current);
-      }
-      current.clear();
-      continue;
-    }
-    if (*p == ' ' || *p == '\t') {
-      continue;
-    }
-    current.push_back(*p);
-  }
-  if (!current.empty()) {
-    slugs.push_back(current);
-  }
-  return slugs;
-}
-} // namespace
 
 ProductHost::Process::Process(const TitleCatalog &catalog, const psx::config::Config &launch)
     : config(launch), windowTitle(catalog.productName()), budget(RunBudget::fromConfig(config)),
@@ -126,8 +104,9 @@ int ProductHost::runSelector() {
     // Re-probed on every return: a title provisioned while another ran becomes available.
     const std::vector<TitleAvailability> titles = probe.probe();
     // Empty (the default) is every provisioned title.
-    const std::vector<std::string> panelSlugs = splitSlugs(psx::config::picker_titles());
-    const PickerContent content(catalog_.productName(), titles, panelSlugs);
+    const std::string panelList = psx::config::picker_titles();
+    const std::vector<std::string_view> panelSlugs = psx::config::splitList(panelList, psx::config::kListSeparators);
+    const PickerContent content(titles, panelSlugs);
     PickerSession picker(pickerRuntime, catalog_, content, state.services);
     const PickerSession::Result choice = picker.run();
     if (choice.outcome != PickerSession::Outcome::Chosen || choice.session == nullptr) {

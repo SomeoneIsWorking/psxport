@@ -9,18 +9,8 @@
 
 namespace psx::frame {
 
-psx::game::FrameDriver &FrameLoopShell::requireDriver(Game &game) const {
-  if (!game.frameDriver) {
-    lucent::error("frame-loop",
-                  "GameRuntime created no FrameDriver; refusing before startProgram can dispatch a "
-                  "non-returning guest frame loop");
-    std::abort();
-  }
-  return *game.frameDriver;
-}
-
 psx::game::FrameDriver &FrameLoopShell::prepareProduct(Game &game) const {
-  psx::game::FrameDriver &driver = requireDriver(game);
+  psx::game::FrameDriver &driver = game.requireFrameDriver();
   game.platform_hle.requireNativeFrameLoopContract();
   game.productFrameLoopPrepared_ = true;
   return driver;
@@ -57,14 +47,9 @@ void FrameLoopShell::step(Core &core, uint32_t frame) {
   if (bound_ != &core) {
     bindRunningCore(core);
   }
-  requireDriver(game).stepFrame(core, frame);
-  // THE FRAME'S CAPTURES, HERE, because this is where the frame's presentation ends. A frame can have
-  // more than one presenter — the main one, and DisplayPresenter::buildHostPicture when a native movie is playing —
-  // and in the movie case the second runs last and is what the window shows. Capturing at the tail of
-  // whichever presenter happened to be main therefore read the movie's frame as the empty guest-VRAM
-  // composite: black, on every frame of a movie (issue 0040). Both presenters now only present; the
-  // capture is taken once, here, and reads whatever the turn ended showing.
-  core.game->display.captureFrame();
+  game.requireFrameDriver().stepFrame(core, frame);
+  // Once per step, after every presenter of the step, so a movie frame is what it reads (issue 0040).
+  game.display.captureFrame();
   const uint64_t fenceAfter = game.presentation.fence();
   if (fenceAfter != fenceBefore + 1u) {
     lucent::error("frame-loop",

@@ -172,7 +172,7 @@ set(PSXPORT_FRAMEWORK_SRC
   ${PSXPORT_ROOT}/runtime/psx/render/record_present.cpp # RenderPath::Record present, shot and recordcheck
   ${PSXPORT_ROOT}/runtime/psx/render/render_window.cpp # the one window for the whole product run
   ${PSXPORT_ROOT}/runtime/psx/render/render_screen.cpp # a Game's present target: window or pane
-  ${PSXPORT_ROOT}/runtime/psx/present/pane_composite.cpp # ONE window frame from SEVERAL sessions' presented pictures
+  ${PSXPORT_ROOT}/runtime/psx/render/render_panes.cpp # a present image built from panes (the title selector)
   ${PSXPORT_ROOT}/runtime/psx/present/picture_announce.cpp
   ${PSXPORT_ROOT}/runtime/psx/debug/gpu_perf.cpp
   ${PSXPORT_ROOT}/runtime/psx/frame/frame_time_histogram.cpp  # the frame-time distribution gpu_perf reports percentiles from
@@ -196,8 +196,8 @@ set(PSXPORT_FRAMEWORK_SRC
   ${PSXPORT_ROOT}/runtime/psx/host/panel_logo.cpp # a title's logo image and its lazy GPU texture
   ${PSXPORT_ROOT}/runtime/psx/host/picker_session.cpp
   ${PSXPORT_ROOT}/runtime/psx/host/picker_runtime.cpp
-  ${PSXPORT_ROOT}/runtime/psx/host/picker_composite.cpp
   ${PSXPORT_ROOT}/runtime/psx/host/picker_layout.cpp
+  ${PSXPORT_ROOT}/runtime/psx/host/picker_panes.cpp
   ${PSXPORT_ROOT}/runtime/psx/host/picker_content.cpp
   ${PSXPORT_ROOT}/runtime/psx/host/executable_provisioner.cpp
   ${PSXPORT_ROOT}/runtime/psx/host/title_disc.cpp # a title's disc, keyed or one exact image
@@ -235,14 +235,13 @@ set(PSXPORT_FRAMEWORK_SRC
   ${PSXPORT_ROOT}/runtime/ui/ui_event.cpp           # ScopedEventListener — registration IS lifetime
   ${PSXPORT_ROOT}/runtime/ui/ui_component.cpp       # Component base + the ONE data->DOM text boundary
   ${PSXPORT_ROOT}/runtime/ui/ui_assets.cpp          # asset resolution that REFUSES to report success
-  ${PSXPORT_ROOT}/runtime/ui/mod_row_model.cpp      # what a menu row MEANS (Mods toggle/adjust tables)
+  ${PSXPORT_ROOT}/runtime/ui/mod_row_model.cpp      # what a Mods toggle row means
   ${PSXPORT_ROOT}/runtime/ui/warp_control.cpp       # the Debug tab's dev area warp
   ${PSXPORT_ROOT}/runtime/ui/dev_command_control.cpp # the Debug tab's warp entry, items and flag commands
   ${PSXPORT_ROOT}/runtime/ui/menu_row.cpp           # one <select-button> + its binding
   ${PSXPORT_ROOT}/runtime/ui/menu_pane.cpp          # one tab's page of rows
   ${PSXPORT_ROOT}/runtime/ui/menu_tab_bar.cpp       # the <tab> row and which one is selected
   ${PSXPORT_ROOT}/runtime/ui/menu_readouts.cpp      # the live video/world/music/warp status lines
-  ${PSXPORT_ROOT}/runtime/ui/choice_navigator.cpp   # the rules of a choose-one list (no RmlUi)
   ${PSXPORT_ROOT}/runtime/ui/menu_document.cpp      # the tree over assets/rml/menu.rml
   ${PSXPORT_ROOT}/runtime/psx/present/present_ledger.cpp # recorded vs composed producers of a t = 1 present
   ${PSXPORT_ROOT}/vendor/rmlui/Backends/RmlUi_Platform_SDL.cpp)
