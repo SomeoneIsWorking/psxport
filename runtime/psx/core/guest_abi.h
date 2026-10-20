@@ -1,27 +1,10 @@
-// guest_abi.h — helpers for native overrides that preserve the MIPS register and stack ABI.
-//
-// Why this exists: a native body can hold a value the guest keeps LIVE
-// in a callee-saved register (r16..r23/r30) as an ordinary C++ local instead of writing it to
-// `c->r[N]`, so a nested guest call that spills its caller's callee-saved registers
-// this routinely) spills STALE register content instead of the real value. Using GuestReg<N> instead
-// of a C++ local makes that bug class impossible to write: the "local" IS `c->r[N]`.
-//
-// This header is pure stdlib + Core; no new dependencies. Deliberately NOT over-templated — three
-// small pieces, each usable independently:
-//   1. GuestReg<N>            — a proxy for c->r[N], usable as a drop-in local variable.
-//   2. GuestFrame<Size,Count> — RAII: descends sp, spills the given registers to their RE'd offsets
-//                                at construction, restores + ascends at destruction.
-//
-// Derive frame size and spill offsets from the authenticated executable or debugger/oracle evidence;
-// generated C is not an authority.
+// guest_abi.h — native-override helpers that keep the MIPS register and stack ABI the guest sees.
+// Frame sizes and spill offsets come from the guest function's prologue.
 #pragma once
 #include "core.h"
 
-// ---------------------------------------------------------------------------------------------
-// 1. GuestReg<N> — proxy for c->r[N]. Held BY VALUE in a faithful body in place of a bare local,
-//    e.g.:  GuestReg<16> i(c); i = 0; ... i = i + 1;
-//    Every read/write goes straight through to the real register file, so any nested call that
-//    depends on r16 being live sees the true value, exactly like the guest machine.
+// A callee-saved register held as a local: every access is c->r[N], so a nested guest call spills
+// the live value.
 template <int N> struct GuestReg {
   Core *c;
   explicit GuestReg(Core *c_) : c(c_) {}
@@ -37,9 +20,6 @@ template <int N> struct GuestReg {
     c->r[N] = static_cast<uint32_t>(o);
     return *this;
   }
-
-  // Convenience arithmetic — mirrors the handful of ops faithful bodies actually need; deliberately
-  // not a full operator suite (add more only when a real port needs it, per "don't over-template").
   GuestReg &operator+=(uint32_t v) {
     c->r[N] += v;
     return *this;
@@ -50,19 +30,14 @@ template <int N> struct GuestReg {
   }
 };
 
-// ---------------------------------------------------------------------------------------------
-// 2. GuestFrame<FrameSize, NumSpills> — contract-driven RAII stack frame.
-//
-//    A spill table entry is (register number, sp-relative offset), in guest program order. Construction spills
-//    the CURRENT live value of each register (so callee-saved liveness set by the caller BEFORE
-//    entering the frame is preserved, matching the real callee-save contract); destruction restores
-//    them and ascends sp. This is the exact idiom game/render/perobj_dispatch.cpp's CmdListFrame /
-//    game/world/object_table.cpp hand-write today, generalized so a new port doesn't hand-roll it.
+// One prologue spill: a register and its sp-relative offset.
 struct GuestFrameSpill {
-  int reg;    // MIPS register number (16..23, 30, or 31 for ra)
-  int offset; // sp-relative byte offset recovered from the guest function's prologue
+  int reg;
+  int offset;
 };
 
+// The guest's stack frame: lowers sp and spills on entry, reloads and raises sp on exit.
+// GuestFrame<0, 0> is a leaf with no frame.
 template <int FrameSize, int NumSpills> struct GuestFrame {
   Core *c;
   const GuestFrameSpill (&spills)[NumSpills];
@@ -72,33 +47,63 @@ template <int FrameSize, int NumSpills> struct GuestFrame {
     for (int i = 0; i < NumSpills; i++) {
       saved[i] = c->r[spills[i].reg];
     }
-    c->r[29] -= FrameSize;
+    c->r[psx::cpu::kSp] -= FrameSize;
     for (int i = 0; i < NumSpills; i++) {
-      c->mem_w32(c->r[29] + (uint32_t)spills[i].offset, saved[i]);
+      c->mem_w32(c->r[psx::cpu::kSp] + (uint32_t)spills[i].offset, saved[i]);
     }
   }
   ~GuestFrame() {
     for (int i = 0; i < NumSpills; i++) {
-      c->r[spills[i].reg] = c->mem_r32(c->r[29] + (uint32_t)spills[i].offset);
+      c->r[spills[i].reg] = c->mem_r32(c->r[psx::cpu::kSp] + (uint32_t)spills[i].offset);
     }
-    c->r[29] += FrameSize;
+    c->r[psx::cpu::kSp] += FrameSize;
   }
-
-  // No frame at all (frame_size == 0, e.g. a leaf with only local scratch or no sp descent) — use
-  // GuestFrame<0, 0> with an empty spill table; the ctor/dtor become no-ops on sp (spill loop is
-  // zero-length), so a leaf can uniformly declare a frame guard without a special case.
 };
 
-// ---------------------------------------------------------------------------------------------
-// 3. multiply — MIPS mult with its hi/lo side effect, which is guest-visible state; a body that ports a guest
-//    `mult` goes through it. Division is psx::cpu::divide (cpu_divide.h).
 namespace psx::cpu {
 
+// MIPS mult with its guest-visible HI/LO. Division is psx::cpu::divide (cpu_divide.h).
 inline int64_t multiply(Core *c, int32_t a, int32_t b) {
   int64_t p = (int64_t)a * (int64_t)b;
   c->lo = (uint32_t)p;
   c->hi = (uint32_t)((uint64_t)p >> 32);
   return p;
 }
+
+// A retail body returns with the $ra it entered with; declare this first in an override.
+class PreservedReturnAddress {
+public:
+  explicit PreservedReturnAddress(Core &core) : core_(core), entry_(core.r[kRa]) {}
+  PreservedReturnAddress(const PreservedReturnAddress &) = delete;
+  PreservedReturnAddress &operator=(const PreservedReturnAddress &) = delete;
+  PreservedReturnAddress(PreservedReturnAddress &&) = delete;
+  PreservedReturnAddress &operator=(PreservedReturnAddress &&) = delete;
+  ~PreservedReturnAddress() {
+    core_.r[kRa] = entry_;
+  }
+
+private:
+  Core &core_;
+  std::uint32_t entry_;
+};
+
+// The retail body's lowered $sp for a frameless override's callees; the entry $sp comes back after.
+class GuestFrameScope {
+public:
+  GuestFrameScope(Core &core, std::uint32_t frame) : core_(core), entry_(core.r[kSp]) {
+    core_.r[kSp] = frame;
+  }
+  GuestFrameScope(const GuestFrameScope &) = delete;
+  GuestFrameScope &operator=(const GuestFrameScope &) = delete;
+  GuestFrameScope(GuestFrameScope &&) = delete;
+  GuestFrameScope &operator=(GuestFrameScope &&) = delete;
+  ~GuestFrameScope() {
+    core_.r[kSp] = entry_;
+  }
+
+private:
+  Core &core_;
+  std::uint32_t entry_;
+};
 
 } // namespace psx::cpu

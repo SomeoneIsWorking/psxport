@@ -6,9 +6,15 @@
 
 namespace psx::present {
 
-// `t` of the way from `from` to `to`, rounded to the nearest integer.
+// `t` of the way from `from` to `to`, rounded to the nearest integer; the span is taken in 64 bits.
 inline std::int32_t lerpInt(std::int32_t from, std::int32_t to, float t) {
-  return from + static_cast<std::int32_t>(std::lround(static_cast<double>(to - from) * static_cast<double>(t)));
+  const std::int64_t span = static_cast<std::int64_t>(to) - from;
+  return static_cast<std::int32_t>(from + std::llround(static_cast<double>(span) * static_cast<double>(t)));
+}
+
+// A guest word blended as a signed 32-bit value.
+inline std::uint32_t lerpWord(std::uint32_t from, std::uint32_t to, float t) {
+  return static_cast<std::uint32_t>(lerpInt(static_cast<std::int32_t>(from), static_cast<std::int32_t>(to), t));
 }
 
 enum class Halfword : unsigned { Low = 0, High = 16 };

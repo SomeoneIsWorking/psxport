@@ -6,6 +6,7 @@
 #include "guest_host_dispatch_kind.h"
 #include "host_dispatch_cache.h"
 #include "image_identity.h"
+#include "native_function.h"
 
 #include <cstdint>
 #include <memory>
@@ -21,8 +22,6 @@ namespace psx::cpu {
 
 class OverrideDifferential;
 class SuppressionScope;
-
-using NativeFunction = void (*)(Core *);
 
 struct NativeRegistration {
   NativeKey key;
