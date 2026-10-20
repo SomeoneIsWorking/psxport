@@ -1,121 +1,97 @@
 # Codemap
 
-Where each psxport concept lives. Feature chains (which owner calls which, hop by hop) are
-`docs/features.md`; intent is `docs/project-goals.md`; capability state is `docs/project-state.md`;
-atomic work is `docs/issues/`.
+Dependency direction: title repo → `runtime/psx/game/` (the title interface) → CPU, device, frame and present owners → `vendor/` libraries; the executor reaches services only through typed exits, `runtime/psx/{boot,host}/` and `runtime/psx/cpu/beetle/` are private to psxport (titles never include them), and `tools/oracle/` never links into the product.
 
-Dependency direction: title code → the title API (`runtime/psx/game/` and section 3.5 of
-`docs/workspace/RESTRUCTURE.md`) → PSX CPU, device and platform owners → host libraries. The executor
-calls services only through typed exits after synchronising guest state. `boot/`, `host/` and
-`cpu/beetle/` are PRIVATE to `psxport` (`PSXPORT_INTERNAL_INCLUDES`); framework tests and tools
-reach them through `psxport_internal`, titles never do. `gpu/` is public: titles call the guest GPU
-device, its ports and the ordering-table walk. Test oracles never link into the product.
-
-## Owners
-
-| owner | where | owns |
-|---|---|---|
-| Process top level | `runtime/psx/host/product_host.*` (`ProductHost::run`), `product_main.cpp` | The command line, provisioning, the selector and run budget; the only `main` |
-| Title session | `runtime/psx/host/title_session.*` | The shared boot steps (`TitleSession::boot`) and one field (`TitleSession::step`) |
-| Title host | `runtime/psx/host/` (`PickerSession`, `PanelSessions`, `RunBudget`, `PreRollBudget`, `PickerRuntime`) | One window and device for many titles, the in-window picker, quit scope |
-| First-run disc setup | `runtime/psx/host/first_run_setup.*`, `saved_disc.*`, `title_disc.*` | The setup-ui screen, the saved disc choice, a title's disc for one read |
-| Executable provisioning | `runtime/psx/host/executable_provisioner.*` | A missing boot executable extracted from the title's disc and authenticated |
-| Title catalog | `runtime/psx/catalog/` | `TitleCatalog`, `SingleTitleCatalog`, `TitleIdentity`, selection, availability, logo image |
-| Title interface | `runtime/psx/game/game_runtime.*` | `GameRuntime`, `FrameDriver`, `TitleSessionState`, `TitleAudio`, `TitleDevWarp`, `HostIdentity` |
-| Game composition | `runtime/psx/game/game.*` | One title's `Core`, devices, presenters and session; `Game::wireRuntimeMembers` |
-| Title commands | `runtime/psx/game/title_command.*` | One capture of a title command's reply for the debug verbs and the Debug tab |
-| Crt0 replay | `runtime/psx/game/crt0_boot.*`, `runtime/psx/game/crt0_scan.h` | `scanCrt0` decodes the boot group from the guest prologue at the title's `Crt0Image::entry`; `planCrt0` refuses an unresolved group; `Crt0Boot::run` applies it |
-| Executable admission | `runtime/psx/game/psx_exe_image.*`, `disc_executable.h` | `parsePsxExeImage` reads the header; `loadTopLevelPsxExe` maps a top-level EXE, sets its entry registers and names it by `code_module::digest` |
-| Packet pool layouts | `runtime/psx/game/guest_packet_pool_windows.*` | The layouts a title answers `packetPool` with |
-| Title settings | `runtime/psx/game/title_settings.h` | `TitleIntSetting` rows a title declares |
-| Canonical PSX state | `runtime/psx/core/core.*` | Per-Core registers, RAM, scratchpad, device ownership |
-| Guest memory | `runtime/psx/core/guest_memory.cpp`, `mem.cpp` | Loads, stores, write guards, MMIO dispatch and executable-write notification |
-| Guest code modules | `runtime/psx/core/guest_code_module.*`, `overlay_glue.*` | A landed module's identity and generation |
-| Guest ABI | `runtime/psx/core/guest_abi.h`, `guest_address_range.h` | The guest stack frame, `PreservedReturnAddress`, `GuestFrameScope`, address ranges |
-| Memory map | `runtime/psx/core/guest_memory_map.h` | RAM, mirror, scratchpad, hardware and BIOS spans; `physical`, `mainRamOffset`, `kseg0Address` |
-| Machine snapshot tick | `runtime/psx/core/snapshot.*` | The periodic snapshot a title ticks |
-| Architectural state | `runtime/psx/cpu/` (`r3000.h`, COP0, `cpu_divide.*`) | The register file the executor transfers, `Gpr`/`gprName`, COP0 numbers, `GuestContextScope`, DIV `quotient`/`remainder` |
-| GTE | `runtime/psx/cpu/gte.h`, `gte_registers.h`, `gte_state.h` | `psx::cpu::Gte` per Core (`core.gte()`): reads, writes, `execute`, `storeScreenXy`, `loadRotation`/`storeRotation`, `saveRaw`/`restoreRaw`; `psx::gte` register and command names |
-| Beetle GTE adapter | `runtime/psx/cpu/beetle/` (`beetle_gte.h`, `gte_beetle.cpp`, `gte_register_transfer.h`, `gte_vendor_hooks.cpp`) | Beetle's GTE binding, the executor's register transfer, disabled PGXP hooks |
-| GTE guard | `runtime/psx/present/gte_control.*` | `GteGuard`: a host pass hands the GTE back as it found it |
-| Lightrec executor | `runtime/cpu/lightrec_executor.*`, `fallback_policy.h` | Lightrec lifetime per Core, state sync, bounded execution, fallback telemetry |
-| Typed exits | `runtime/cpu/execution_exit.*`, `execution_control.*`, `execution_services.*` | Exit reasons, budgets, `handleBreak`, exit requests |
-| Image identity | `runtime/cpu/image_identity.*` | Authenticated resident and module identity and generation |
-| Native dispatch | `runtime/cpu/native_dispatch.*`, `native_function.h`, `guest_call.*`, `guest_call_site.h` | Image-scoped overrides, `NativeFunction`, `Producer{Arg}` registration, scoped original calls, `GuestCallSite::fromJal` |
-| Resumable guest call | `runtime/cpu/resumable_guest_call.*`, `guest_call_census.*` | A guest call across fields: boundary latch, turn cap, refusals; the run's call census |
-| Host-dispatch cache | `runtime/cpu/host_dispatch_cache.*`, `guest_host_dispatch_kind.h` | What an address is, until an image, override or service registration changes |
-| Invalidation | `runtime/cpu/invalidation.*`, `executable_write_source.h` | Executable writes revoking translated blocks and dispatch decisions |
-| Override differential | `runtime/cpu/override_differential*`, `machine_snapshot.*`, `side_effect_journal.*` | Shadowing a native override against its original in a real run |
-| Function reach | `runtime/cpu/function_reach.*` | Every dispatched guest pc per code image (`PSXPORT_REACH_REPORT`) |
-| Store observer | `runtime/cpu/store_observe.*` | Armed guest-store watches |
-| Host turn | `runtime/psx/boot/host_turn.cpp`, `runtime/cpu/host_turn.h` | The per-Core guest-time field clock and callback delivery |
-| Lightrec dependency | `cmake/lightrec_dependency.cmake` | The pinned Lightrec revision; `tools/psxport_fetch.py --lightrec` makes its worktree |
-| BIOS and kernel HLE | `runtime/psx/hle/` (`hle.cpp`, `hle_heap.cpp`, `hle_interrupt.cpp`, `bios_*`, `kernel_syscall.cpp`, `syscall_exception.*`) | BIOS/libc services, interrupts, kernel syscalls, `LoadExec` |
-| Stock libraries | `runtime/psx/hle/stock_{libgpu,libgte,vsync,dma_callbacks}.*`, `runtime/psx/cd/stock_libcd.*`, `runtime/psx/input/stock_pad_buffers.*` | PSY-Q bodies a title binds at its addresses from `registerOverrides` |
-| Platform HLE binding | `runtime/psx/hle/platform_hle.*` | `bindStock` and the per-Game binding table |
-| CD drive | `runtime/psx/cd/cdc_native.cpp`, `cdc_state.h`, `cdc_command_phase.*`, `cd_drive_timing.h`, `cd_position.*` | The controller, its command phases and deterministic drive timing |
-| Disc | `runtime/psx/cd/disc.*`, `disc_file.h`, `disc_provision.cpp`, `disc_toc.*` | CHD access, ISO9660 files, the TOC answers |
-| Stock CD results | `runtime/psx/cd/stock_cd_command.h`, `stock_cd_response.*`, `stock_cd_work_area.*`, `cd_stock_read_completion.*`, `cd_ready_delivery.*` | Responses through CdSync, work-area bytes, the INT1 a synchronous read still owes |
-| DMA and peripherals | `runtime/psx/platform/` (`dma_*`, `io_peripherals.*`, `irq_edge.h`) | DMA transfers, callbacks, IRQ edges |
-| Guest continuations | `runtime/psx/platform/coro.*` | The `Coro` a title's task scheduler runs on |
-| Memory card | `runtime/psx/platform/memcard.*`, `card_syscall_log.*` | The card device and its identity |
-| Watchdog | `runtime/psx/platform/watchdog.*` | The frame watchdog `ProductHost` owns |
-| Host clock | `runtime/psx/platform/host_clock.h` | The host's monotonic clock in ns and ms |
-| Field turn | `runtime/psx/frame/field_turn.*` | The services owed around a title's field body: pause, watchdog re-arm, RAM dump, one command |
-| Frame loop | `runtime/psx/frame/frame_loop_shell.*`, `logic_frame.*` | Stepping a `FrameDriver`; the logic-frame start |
-| Frame presentation | `runtime/psx/frame/frame_presenter.*` | `FramePresenter::commit`: seal, cut, compose, build, pace, show |
-| Pacing and time | `runtime/psx/frame/frame_pacer.*`, `pace_plan.h`, `field_cadence.h`, `timing.*`, `emulated_time.*`, `field_rate.h` | Host pacing, field rate and `fieldIntervalMs`, emulated time |
-| GPU device | `runtime/psx/gpu/gpu_device.*`, `gpu_display_mode.h` | Beetle `gpu.c`: the only VRAM and GP0 executor |
-| Guest GPU ports | `runtime/psx/gpu/gpu_ports.*` | `gp1Write` at the scanline clock, DMA2 block and linked-list modes; everything else is `core.gpuDevice()` |
-| Frame record | `runtime/psx/gpu/gp0_record_tap.*`, `texture_feedback.*`, `runtime/psx/present/frame_record.*` | The device's GP0 work recorded per logic frame |
-| Record rasteriser | `runtime/psx/gpu/gpu_vk_record_raster.*`, `record_raster_setup.*`, `record_raster_regions.h`, `vram_bitmap.h` | Drawing a record on the device image |
-| SDL3 GPU backend | `runtime/psx/gpu/gpu_vk_*.cpp`, `gpu_vk_window.*`, `gpu_vk_shader.*`, `runtime/psx/shaders_gpu/` | Window, device, present, submit, readback, shaders |
-| Display presenter | `runtime/psx/present/display_presenter.*`, `present_ledger.*`, `present_plan.h`, `video_plan.h`, `pixel_size.h` | Building a record, an in-between or a host picture, and showing it; the present ledger |
-| Render mode | `runtime/psx/present/render_mode.h` | `RenderPath {Record, Device}`, `DisplayPassGuard` |
-| Frame composer | `runtime/psx/present/frame_composer.*`, `state_producer.*`, `frame_state.*`, `emission_scope.*`, `emit_memory.*`, `blend.h` | In-betweens from `StateProducer` renders of saved state; `EmitMemory`/`HostMemory` (merged guest-seeded or zeroed ranges, overlay, level reads); `lerpInt`/`lerpWord`/`lerpHalves` |
-| GP0 decode | `runtime/psx/present/gp0_command.h`, `gp0_primitive_decode.*`, `state_bytes.h` | One decode of guest draw commands; polygon opcodes and packet tag/byte sizes; `DrawModeTracker`, the one GP0(E1) rule |
-| VRAM format | `runtime/psx/present/vram_rect.h`, `vram_pixel.h` | VRAM size, points and rects, the 555 pixel, texpage/CLUT words, the CPU texel sampler |
-| Ordering table | `runtime/psx/gpu/ordering_table.*` | OT node decode, the guest OT walk, `OtTables` |
-| Packet chains | `runtime/psx/present/packet_chains.*` | `PacketChainWalker`: a body's tag chains or bucket table, over guest or host memory, as primitives |
-| Widescreen | `runtime/psx/present/guest_widescreen_projection.*`, `viewport_layout.h`, `proj_params.*`, `picture_announce.*` | The title's aspect policy, canvas margins, projection publication |
-| Panes | `runtime/psx/present/pane_composite.*`, `pane_host.h`, `host_presentation.h`, `rgb24_picture.h` | Picker panes and host pictures |
-| Host input | `runtime/psx/input/host_input.*` | The one SDL event drain, key state, `QuitScope` |
-| Pad | `runtime/psx/input/pad_input.*`, `sio_pad.*`, `pad_delivery.h`, `input_phase.h` | The guest pad and its delivery |
-| Pad record/replay | `runtime/psx/input/pad_recording.*`, `pad_phase_replay.*`, `pad_record_replay.*` | `.pad` files and phase-keyed replay |
-| Audio | `runtime/psx/audio/` (`spu_audio.*`, `spu_device.*`, `spu_beetle.*`, `xa_stream.cpp`, `audio_*`) | The SPU, its host sink, XA streaming, audio policy |
-| Movies | `runtime/psx/movie/native_fmv.*`, `movie_clock.*`, `fmv_decode.*`, `mdec_*` | FMV playback, its sector/frame clock (`movie_clock`), and the STR decode shared with `tools/fmv_export` |
-| Save states | `runtime/psx/state/` | `MachineState`, `StateFile`, device sections, `NativeStatePort` |
-| Configuration | `runtime/psx/config/config.*`, `config_var.h`, `config_vars.h`, `diagnostic_config.*`, `number_text.*` | The CVar ladder, typed accessors, `launch_setting`, number and list parsing |
-| Launch config | `runtime/psx/config/typed_config.*` | The immutable `psx::config::Config` on `game.config` |
-| Title enhancement knobs | `runtime/psx/config/enhancement_gate.h`, `stepped_range.h` | `pc_enh` gates and stepped menu rows |
-| Debug verbs | `runtime/psx/debug/debug_commands.*`, `command_args.*` | `DebugCommands`: the one table of verbs (memory, pad, capture, state, otattr, ...) both transports run, answering through a line sink, then the title's command |
-| Control channel | `runtime/psx/debug/dbg_server.*` | The loopback endpoint: `DebugChannel` hands one command to the main thread; pause/step/frame are its own verbs |
-| REPL | `runtime/psx/debug/repl.*` | The stdin transport: run/step/quit/end are its own verbs |
-| Producer census | `runtime/psx/debug/producer_census.*`, `ot_attr.*` | Primitives per guest submitter, keyed and rendered |
-| Diagnostics | `runtime/psx/debug/` (`gpu_debug.*`, `gpu_perf.*`, `memcensus.*`, `field_digest.*`, `image_writer.*`, `diagnostic_run.h`) | Dumps, counters and capture |
-| Live mods | `runtime/psx/debug/mods.*` | Per-Game player toggles (`aspect`, `ires`, `fps60`, the selector layout) and the settings file |
-| Bug report | `runtime/psx/debug/bug_report_session.*`, `vendor/bug-report` | The in-app report and its reference frame |
-| Player UI | `runtime/ui/` | The RmlUi overlay, menus, readouts, warp control |
-| Logging, layered config variables, text primitives | `vendor/lucent/` | All output; `lucent::cvar`, `lucent::text::trim` / `json_quote` |
-| CPU oracle | `tools/oracle/` | Mednafen snapshots, the full-console host, state-aligned comparison |
-| Title tooling | `tools/port/` | Engines every title runs (`README.md` there) |
-| Framework fetch | `tools/psxport_fetch.py` | A title's `external/psxport` and the Lightrec worktree; titles run it from psxport `main` |
-| Workspace bootstrap | `scripts/bootstrap_workspace.py`, `scripts/submodule_state.py`, `scripts/sync_submodules.py` | Cloning the workspace and its submodules |
-| Decompilation | `tools/decomp_pipeline.py`, `tools/decomp/` | Ghidra-backed decompilation and queries (`docs/workspace/GHIDRA.md`) |
-| Binary and MIPS tools | `tools/formats/`, `tools/mips/`, `tools/disasm.py`, `tools/discdump.cpp`, `tools/crt0_extract.cpp` | Image formats, disassembly, disc reads |
-| Build and CI | `CMakeLists.txt`, `cmake/`, `tools/build.py`, `.github/` | Composition, the Clang build, hosted build-only CI |
-| Vendored dependencies | `vendor/` (beetle-psx, lucent, rmlui, bug-report, setup-ui), `external/psycross` | Pinned forks and sources |
-
-## Where new work goes
-
-- A title-specific address, native body, frame or task policy: the title repo, through a `GameRuntime`
-  virtual or a stock-library object it binds.
-- A boot step every product shares: `TitleSession::boot`. A per-field service: `FieldTurn`.
-- A new executor stop: `runtime/cpu/execution_exit.*`. Override or original-call semantics:
-  `runtime/cpu/native_dispatch.*`. Code invalidation: `runtime/cpu/invalidation.*`.
-- Lightrec cache or code-memory internals: the pinned Lightrec fork.
-- PSX device behaviour: its `runtime/psx/<device>/` owner.
-- Anything a picture shows: `docs/presentation.md` first.
-- Environment or settings parsing: `runtime/psx/config/`.
-- Interpreter semantics or state comparison: `tools/oracle/`, never the product.
-- A decompilation becoming a build input: nowhere; that is a stop.
+- `runtime/psx/host/product_host.*`, `product_main.cpp` — the one `main`, process top level, command line, window and GPU device lifetime across sessions, quit request, title selector then title then selector loop
+- `runtime/psx/host/title_session.*` — one title's session: shared boot steps for every product, one field step, session services, load-state at first boot
+- `runtime/psx/host/picker_*`, `panel_sessions.*`, `panel_logo.*`, `pre_roll_budget.*` — in-window title picker / selector: panels, panel layout and seams, panel logo texture, one live session per panel, pre-roll budget, `pick` command
+- `runtime/psx/host/run_budget.*` — run length cap in presentation-fence steps, frame limit
+- `runtime/psx/host/first_run_setup.*`, `saved_disc.*`, `title_disc.*` — first-run disc picker (setup-ui), remembered disc image choice, a title's disc opened for one read
+- `runtime/psx/host/executable_provisioner.*` — extract and authenticate a missing boot executable (SCUS/SLUS) from the title's own disc
+- `runtime/psx/boot/run_end_report.*` — run-end report: executor ledger, guest-call census, RAM dump, title lines
+- `runtime/psx/catalog/` — title catalog, title identity (serial, hashes, disc key, executable path), single-title product, availability probe, executable selection and authentication, logo image
+- `runtime/psx/game/game_runtime.*` — the title interface: GameRuntime virtuals, FrameDriver, title audio, dev warp, host identity, control-channel line
+- `runtime/psx/game/game.*` — one machine instance: Core, devices, presenters, session wiring
+- `runtime/psx/game/session_run.*` — a title asking to end its run
+- `runtime/psx/game/title_command.*` — title command reply capture for debug verbs and the Debug tab
+- `runtime/psx/game/title_settings.h`, `mods.*` — per-Game live player settings (aspect / widescreen, internal resolution / ires, fps60, selector layout), the settings file, title-declared integer settings
+- `runtime/psx/game/crt0_boot.*`, `crt0_scan.h` — PSY-Q crt0 boot group decoded from the guest prologue and replayed natively: gp, sp, heap, InitHeap, .bss
+- `runtime/psx/game/psx_exe_image.*`, `disc_executable.*` — PS-X EXE header parse, top-level executable load and entry registers, second executable from disc (boot stub hand-off)
+- `runtime/psx/game/guest_packet_pool_windows.*` — guest packet pool / primitive arena layouts a title reports, parity pools
+- `runtime/psx/core/core.*` — Core: one PSX machine's registers, RAM, scratchpad and device ownership
+- `runtime/psx/core/guest_memory.cpp`, `mem.cpp` — guest loads and stores, MMIO dispatch, write guards, executable-write notification
+- `runtime/psx/core/guest_memory_map.h`, `guest_address_range.h` — physical memory map: main RAM and mirrors, scratchpad, hardware registers, BIOS, KSEG0/KSEG1 folds, address ranges, spans, stores
+- `runtime/psx/core/guest_abi.h` — MIPS o32 guest ABI for native overrides: stack frame, prologue spills, callee-saved registers, preserved return address `$ra`
+- `runtime/psx/core/guest_code_module.*` — runtime-loaded relocatable code module / overlay as an executable residency, identity and generation
+- `runtime/psx/core/overlay_glue.*` — hooks from the SDL_GPU present into the RmlUi overlay
+- `runtime/psx/cpu/r3000.h`, `cpu_divide.*` — R3000A register file, GPR names, COP0 numbers, context save scope, DIV/DIVU LO/HI results and divide by zero
+- `runtime/psx/cpu/gte*.h` — GTE / COP2 per Core: register file, register and command numbers, execute, rotation matrix, raw save and restore, pre-op observer
+- `runtime/psx/cpu/beetle/` — Beetle GTE adapter, register transfer to and from Lightrec, PGXP hooks off
+- `runtime/cpu/lightrec_executor.*`, `fallback_policy.h`, `segment_clock.*` — Lightrec dynarec / JIT lifetime per Core, state sync, bounded execution, store observation, fallback, segment cycle commit
+- `runtime/cpu/execution_exit.*`, `execution_control.*`, `execution_services.*`, `execution_ledger.*` — typed executor exits, budgets, break and syscall results, exit requests, executor counters ledger
+- `runtime/cpu/image_identity.*` — code image catalog: authenticated resident and module identity, generation, covered ranges
+- `runtime/cpu/native_dispatch.*`, `native_function.h`, `guest_call*.*` — native overrides / HLE by guest address, producer registration, original calls, native-to-guest call, jal call sites, call attribution
+- `runtime/cpu/resumable_guest_call.*`, `guest_call_census.*` — guest call across host turns / fields: return latch, turn cap, refusal, run census
+- `runtime/cpu/host_dispatch_cache.*`, `guest_host_dispatch_kind.h` — what a guest address is (guest code, host service, unclaimed), dispatch epoch and verdict cache
+- `runtime/cpu/invalidation.*`, `executable_write_source.h` — self-modifying code / executable writes invalidating translated blocks and dispatch verdicts
+- `runtime/cpu/override_differential*`, `machine_snapshot.*`, `side_effect_journal.*` — override differential: original vs native shadow run, O32 contract, CPU/RAM snapshot, device side-effect journal and replay
+- `runtime/cpu/function_reach.*` — reached guest functions per code image report
+- `runtime/cpu/store_observe.*` — store-instruction PC observer
+- `runtime/cpu/host_turn.*` — host turn clock: one display field owed per field period of guest time, PW_HOST
+- `cmake/lightrec_dependency.cmake` — pinned Lightrec revision and worktree
+- `runtime/psx/hle/hle.*`, `hle_heap.cpp`, `hle_interrupt.cpp`, `kernel_syscall.cpp`, `syscall_exception.*` — BIOS / kernel HLE: A0/B0/C0 tables, events, heap, interrupt chain, syscall exception entry and return
+- `runtime/psx/hle/bios_*` — BIOS libc string and memory leaves, setjmp / HookEntryInt, LoadExec / LoadAndExecute, pad work area
+- `runtime/psx/hle/platform_hle.*`, `stock_*` — PSY-Q stock library bodies a title binds: libgpu DrawSync waits, libgte projection setters, libetc VSync frame boundary, DMACallback table
+- `runtime/psx/cd/cd.*`, `stock_libcd.*`, `stock_cd_*`, `cd_stock_read_completion.*`, `cd_ready_delivery.*` — stock libcd served synchronously: CdControl / CdSync responses, work area, CdRead, ready callback and the INT1 a read still owes
+- `runtime/psx/cd/cdc_*`, `cd_drive_timing.h`, `cd_position.*` — CD controller registers 0x1F801800, command phases, deterministic drive timing, Setloc position
+- `runtime/psx/cd/disc*` — CHD disc image by LBA, ISO9660 file reader, TOC (GetTN / GetTD), disc provisioning
+- `runtime/psx/platform/dma_*` — DMA controller DPCR / DICR, channels, linked-list chain mode, DMA callbacks, DMA IRQ
+- `runtime/psx/platform/io_peripherals.*`, `irq_edge.h` — I_STAT / I_MASK interrupt lines, root counter and SIO decode
+- `runtime/psx/platform/memcard.*`, `card_syscall_log.*` — memory card device and file, card syscall counts
+- `runtime/psx/platform/coro.*` — coroutine / fiber for a guest task scheduler
+- `runtime/psx/platform/watchdog.*`, `spin_detector.*` — frame watchdog, crash and signal reporters, guest spin / hang detection
+- `runtime/psx/platform/host_clock.h`, `fs_util.*`, `blob_codec.h`, `active_low_edges.h`, `c_subsys.h` — host monotonic clock, host file I/O, little-endian byte codec, active-low button press and release edges, C-linkage for the MDEC adapter
+- `runtime/psx/frame/field_turn.*`, `logic_frame.*`, `frame_loop_shell.*`, `session_control.*` — product loop: per-field services (pause, watchdog, RAM dump, command), logic frame start, frame step, return to selector
+- `runtime/psx/frame/frame_presenter.*` — frame fence: seal the logic frame record, cut, compose, present, pace
+- `runtime/psx/frame/frame_pacer.*`, `pace_plan.h`, `field_cadence.h`, `field_rate.h`, `timing.*`, `emulated_time.*` — frame pacing, NTSC / PAL field rate, field cadence, emulated CPU clock, root counters 1 and 2
+- `runtime/psx/frame/frame_time_histogram.*`, `frame_dump_window.*` — frame time percentiles, frame dump window
+- `runtime/psx/gpu/gpu_device.*`, `gpu_display_mode.h`, `gpu_ports.*` — GPU device (Beetle gpu.c): VRAM, GP0 / GP1, display area and mode, DMA2 blocks and ordering-table walk
+- `runtime/psx/gpu/ordering_table.*` — ordering table / OT / DrawOTag node decode and walk
+- `runtime/psx/gpu/gp0_record_tap.*`, `texture_feedback.*` — GP0 work recorded per logic frame, texture cache feedback / stale VRAM reads
+- `runtime/psx/gpu/gpu_vk_record_raster.*`, `record_raster_*`, `vram_bitmap.h` — record rasteriser: gpu.c coverage rules at internal resolution on the GPU, written-region bitmaps
+- `runtime/psx/gpu/gpu_vk*`, `gpu_present_sink.h`, `runtime/psx/shaders_gpu/`, `cmake/gpu_shaders.cmake`, `tools/gen_gpu_shaders.py` — SDL3 GPU backend: window, swapchain, present mode, device, submit, readback, screenshots, shaders and SPIR-V
+- `runtime/psx/present/display_presenter.*`, `present_plan.h`, `present_ledger.*`, `video_plan.h`, `pixel_size.h` — present: guest display to screen, letterbox, fade, 24bpp, internal resolution scale, present ledger
+- `runtime/psx/present/render_mode.h`, `render_substrate.*` — render path (Record, Device), display-pass guard, per-Core host render state
+- `runtime/psx/present/frame_composer.*`, `frame_record.*`, `frame_state.*`, `state_producer.*`, `state_bytes.h`, `emission_scope.*`, `emit_memory.*`, `blend.h` — 60 fps interpolation / in-betweens: frame record, producer keys and object state, state producers, emission scope, guest or host emit memory, lerp blends
+- `runtime/psx/present/gp0_command.h`, `gp0_primitive_decode.*` — GP0 command and primitive decode: opcodes, packet sizes, draw mode E1
+- `runtime/psx/present/vram_rect.h`, `vram_pixel.h` — VRAM size, points and rects, 555 pixel and 5-to-8 expand, texpage and CLUT words, texel sampler
+- `runtime/psx/present/packet_chains.*` — packet tag chains and bucket tables walked as primitives
+- `runtime/psx/present/gte_control.*` — GTE control registers saved, blended and restored around a render
+- `runtime/psx/present/guest_widescreen_projection.*`, `viewport_layout.h`, `proj_params.*`, `picture_announce.*` — widescreen / 16:9: aspect policy, canvas margins, projection constants, picture geometry announce
+- `runtime/psx/present/pane_*`, `host_presentation.h`, `rgb24_picture.h` — one window and device per process, panes from several sessions, host pictures
+- `runtime/psx/input/host_input.*` — SDL event drain, keyboard state, gamepads, quit scope
+- `runtime/psx/input/pad_input.*`, `sio_pad.*`, `pad_delivery.h`, `stock_pad_buffers.*` — controller / pad as the guest sees it: SIO0, digital packet, fixed pad buffers
+- `runtime/psx/input/pad_recording.*`, `pad_record_replay.*`, `pad_phase_replay.*`, `input_phase.h` — `.pad` record and replay keyed on input phase
+- `runtime/psx/audio/spu_*` — SPU (Beetle spu.c) device, register file, mixer, field cadence, SDL3 audio sink
+- `runtime/psx/audio/xa_*` — XA-ADPCM CD audio streaming and push pacing
+- `runtime/psx/audio/audio_*` — audio device policy (headless means no audio), queue buffering, field report
+- `runtime/psx/movie/` — FMV / STR movie playback, MDEC (Beetle mdec.c), BS decode, movie sector clock
+- `runtime/psx/state/` — save states / machine state: state file container, device sections, Beetle device streams, native title section, load-state
+- `runtime/psx/config/config*`, `typed_config.*`, `number_text.*` — PSXPORT_* knobs / CVars, environment and .env, typed immutable launch config, strict number parsing
+- `runtime/psx/config/diagnostic_*`, `enhancement_gate.*`, `stepped_range.h` — diagnostic knobs, comparison run mode, pc_enh enhancement gates, stepped setting ranges
+- `runtime/psx/debug/debug_commands.*`, `command_args.*`, `control_surface_limits.h` — debug verbs table shared by transports, command words, reply caps
+- `runtime/psx/debug/dbg_server.*`, `repl.*` — control channel loopback server, stdin REPL
+- `runtime/psx/debug/producer_census.*`, `ot_attr.*` — primitives per guest submitter, OT / GTE submission attribution
+- `runtime/psx/debug/gpu_debug.*`, `gpu_perf.*`, `memcensus.*`, `field_digest.*`, `image_writer.*`, `snapshot.*`, `store_watch.*`, `pad_frame_probes.*`, `frame_schedule.*`, `host_backtrace.*` — diagnostics: scene dump, CPU phase profiler, memmove census, per-field digest, PNG / PPM capture, RAM snapshot, store watch, pad-frame probes, host backtrace
+- `runtime/psx/debug/bug_report_session.*` — in-app bug report
+- `runtime/ui/` — RmlUi overlay menu: document, tabs, rows, readouts, toggles, choice list, Debug tab warp and dev commands, SDL_GPU render interface, assets
+- `assets/rml/` — overlay menu markup, styles, fonts
+- `bios/`, `scripts/build_openbios.py`, `patches/openbios/` — fast-boot OpenBIOS image
+- `tools/port/` — tooling every title runs: consumer build, launcher, launch environment, capture checks
+- `tools/oracle/` — CPU oracle / reference emulator: Mednafen snapshot and trace, full-console libretro host, state and picture comparison
+- `tools/decomp_pipeline.py`, `tools/decomp/` — Ghidra headless decompilation, callers, refs
+- `tools/formats/`, `tools/mips/`, `tools/disasm.*`, `tools/discdump.cpp`, `tools/crt0_extract.cpp`, `tools/fmv_export/` — PS-X EXE reader, MIPS decode, disassembly, disc listing and extract, crt0 dump, STR export
+- `tools/dbgclient.py`, `tools/psx_pad.py`, `tools/prof_hot.py` — control-channel client, pad bit table, host profile symbols
+- `tools/psxport_fetch.py`, `scripts/bootstrap_workspace.py`, `scripts/*submodule*.py` — a title's `external/psxport` link, Lightrec worktree, workspace clone and submodules
+- `CMakeLists.txt`, `cmake/`, `tools/CMakeLists.txt`, `tools/build.py`, `tools/project.py`, `tools/automation/`, `pyproject.toml`, `uv.lock`, `.github/` — build composition, Clang / Ninja build, the locked Python environment, build-only CI
+- `vendor/` (beetle-psx, lucent, rmlui, bug-report, setup-ui), `external/psycross`, `patches/beetle-psx/` — pinned forks: Beetle devices, Lucent logging and CVars and text, RmlUi, bug report, setup UI
