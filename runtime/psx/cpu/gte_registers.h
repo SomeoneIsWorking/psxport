@@ -89,6 +89,7 @@ inline constexpr std::uint32_t kSqr = 0x4AA00428u;         // lm=1, IR squared
 inline constexpr std::uint32_t kOp = 0x4B70000Cu;          // outer product of the RT diagonal and IR
 inline constexpr std::uint32_t kGpf = 0x4B90003Du;         // MAC = IR0 * IR
 inline constexpr std::uint32_t kGpl = 0x4BA0003Eu;         // MAC += IR0 * IR
+inline constexpr std::uint32_t kGplSf = 0x4BA8003Eu;       // sf, MAC += IR0 * IR >> 12
 inline constexpr std::uint32_t kGpfSf = 0x4B98003Du;       // sf, MAC = IR0 * IR >> 12
 inline constexpr std::uint32_t kIntpl = 0x4A980011u;       // IR toward FC by IR0
 
