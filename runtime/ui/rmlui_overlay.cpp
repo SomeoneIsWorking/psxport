@@ -18,7 +18,6 @@
 #include <RmlUi/Core/Element.h>
 #include <RmlUi/Core/ElementDocument.h>
 #include <RmlUi/Core/Input.h>
-#include <RmlUi/Debugger.h>
 #include <lucent/log.h>
 #include <string>
 
@@ -49,24 +48,6 @@ void RmlOverlay::init(psx::ui::RmlUiLibrary &library, psx::present::PixelSize si
   psx::ui::AssetSet assets;
   assets.open();
 
-  constexpr const char *const kFonts[] = {
-      "FiraSans-Regular.ttf",
-      "FiraSans-Bold.ttf",
-      "FiraSansCondensed-Bold.ttf",
-  };
-  int fonts_loaded = 0;
-  for (const char *f : kFonts) {
-    std::string path;
-    if (!assets.require(f, path)) {
-      continue;
-    }
-    if (Rml::LoadFontFace(path.c_str())) {
-      fonts_loaded++;
-    } else {
-      lucent::error("rmlui", "font present but REJECTED by the font engine: {}", path);
-    }
-  }
-
   std::string doc_path;
   const bool have_doc = assets.require("menu.rml", doc_path);
   assets.report();
@@ -82,7 +63,6 @@ void RmlOverlay::init(psx::ui::RmlUiLibrary &library, psx::present::PixelSize si
     return;
   }
   mCtx = c;
-  Rml::Debugger::Initialise(c);
 
   mInited = true;
 
@@ -92,8 +72,8 @@ void RmlOverlay::init(psx::ui::RmlUiLibrary &library, psx::present::PixelSize si
                   "MENU UNAVAILABLE — the overlay is up but has NOTHING TO SHOW. {} "
                   "(fonts loaded: {}/{}; assets dir {})",
                   have_doc ? "LoadDocument(" + doc_path + ") FAILED to parse" : "menu.rml was not found",
-                  fonts_loaded,
-                  (int)(sizeof(kFonts) / sizeof(kFonts[0])),
+                  library.fontsLoaded(),
+                  psx::ui::RmlUiLibrary::kFontCount,
                   assets.dir());
     return;
   }
@@ -105,8 +85,8 @@ void RmlOverlay::init(psx::ui::RmlUiLibrary &library, psx::present::PixelSize si
                library.window() != nullptr ? "windowed" : "headless",
                sink_w,
                sink_h,
-               fonts_loaded,
-               (int)(sizeof(kFonts) / sizeof(kFonts[0])),
+               library.fontsLoaded(),
+               psx::ui::RmlUiLibrary::kFontCount,
                mMenu->tab_count(),
                mMenu->row_count());
 }
@@ -149,7 +129,7 @@ void RmlOverlay::event(const SDL_Event *e) {
     return;
   }
   if (e->type == SDL_EVENT_KEY_DOWN && !e->key.repeat && e->key.scancode == SDL_SCANCODE_F1) {
-    Rml::Debugger::SetVisible(!Rml::Debugger::IsVisible());
+    mLibrary->toggleDebugger(c);
     return;
   }
   if (!visible() || !c) {

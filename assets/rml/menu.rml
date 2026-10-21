@@ -44,7 +44,7 @@
 				<select-button toggle="ires"><key>Internal Resolution</key><value>Vanilla</value></select-button>
 				<select-button toggle="fps60"><key>60fps Interpolation</key><value>Off</value></select-button>
 				<div id="title_settings"></div>
-				<p class="hint">&#8596; switch tab &#183; &#8597; move &#183; Enter / A change &#183; Esc close</p>
+				<p class="hint">&#8592;&#8594; switch tab &#183; &#8593;&#8595; move &#183; Enter / A change &#183; Esc close</p>
 			</pane>
 
 			<pane>
@@ -62,7 +62,7 @@
 				<select-button action="flag_read"><key>Read Flag</key><value>&#8594;</value></select-button>
 				<select-button action="flag_write"><key>Write Flag</key><value>&#8594;</value></select-button>
 				<p class="hint">Sent to the game as control-channel commands and written at the next frame. A game without them answers "not supported". Results show in the line under Area Warp.</p>
-				<p class="hint">&#8596; switch tab &#183; &#8597; move &#183; Enter / A change &#183; Esc close</p>
+				<p class="hint">&#8592;&#8594; switch tab &#183; &#8593;&#8595; move &#183; Enter / A change &#183; Esc close</p>
 			</pane>
 
 			<pane>
@@ -70,7 +70,7 @@
 				<select-button action="close"><key>Resume</key><value>&#8629;</value></select-button>
 				<select-button action="return_to_selector"><key>Return to Title Selection</key><value>&#8617;</value></select-button>
 				<select-button action="quit"><key>Quit Game</key><value>&#10005;</value></select-button>
-				<p class="hint">&#8596; switch tab &#183; &#8597; move &#183; Enter / A select &#183; Esc close</p>
+				<p class="hint">&#8592;&#8594; switch tab &#183; &#8593;&#8595; move &#183; Enter / A select &#183; Esc close</p>
 			</pane>
 
 			<pane>
@@ -88,7 +88,7 @@
 				<select-button action="music_9"><key>Song 9 (field)</key><value>&#9654;</value></select-button>
 				<select-button action="music_stop"><key>Stop</key><value>&#9632;</value></select-button>
 				<p class="hint">Native PC audio engine (engine/audio/) &#183; replaces the libsnd music path.</p>
-				<p class="hint">&#8596; switch tab &#183; &#8597; move &#183; Enter / A play &#183; Esc close</p>
+				<p class="hint">&#8592;&#8594; switch tab &#183; &#8593;&#8595; move &#183; Enter / A play &#183; Esc close</p>
 			</pane>
 
 			<pane>

@@ -76,20 +76,9 @@ project — an agent — could not see or drive any of it. That is precisely the
 was sent to fix, and adopting a second stack now would double the amount of host UI that no
 instrument can capture.
 
-**So: NOT YET. What it is waiting on, concretely — the SINK PASS must exist in both legs.**
-The present backend's sink pass (`RenderState::showPresentImage`) runs only when a swapchain image is
-acquired, i.e. windowed. The one `rml_overlay.recordGpu()` call site lives in that pass. MEASURED 2026-08-06: two headless
-`PSXPORT_PRESENT_SHOT_AT=70` captures, one with the menu SHOWN and one HIDDEN, are **byte-identical**
-(md5 `f68b47bc971bed9bbfa4b27c19e7ee1c`) — even though the menu's own stylesheet paints an
-`rgba(0,0,0,82%)` scrim over the whole screen. Negative control for that instrument: frames 100/300
-match each other but frame 600 differs (md5 `df5c303f…`, 99.85% vs 90.68% non-black), so the
-instrument can distinguish two present frames and the identity above is a real negative, not a blind
-one.
-
-Once the sink pass runs in both legs (its target the swapchain windowed, a sink-sized texture
-headless) any host UI becomes capturable headless, and a second stack stops being a blind spot.
-**That pass belongs to the `present-image-sink` claim, which explicitly places the overlay in the
-windowed-only SHOW half — so it is that claim's decision to revisit, not this one's.**
+The sink pass (`RenderState::recordScreen`: the present image letterboxed, the overlay on top) draws the
+window, and `pshot` runs the same pass into an off-screen image at the sink size, so host UI is
+captured headless exactly as a player sees it.
 
 If the "not yet" holds, the operator should remove the dead vendored copy rather than leave 2.9 MB
 implying a stack that grep says does not exist (re-vendoring later is one `git clone`):

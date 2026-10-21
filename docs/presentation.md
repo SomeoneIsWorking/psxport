@@ -357,8 +357,9 @@ its build (issue 0161). The line between the two is the swapchain:
   picture upload, the letterboxed pass into the present image, and the submit of that command buffer.
   The composed frame (`FramePresenter::composedRecord`) lives only through the build.
 - **Show** (`DisplayPresenter::show` → `RenderState::show`): a command buffer that acquires the swapchain
-  image without waiting (`acquireSink`), blits the present image letterboxed with the overlay over it,
-  and submits, which presents. `GpuPerf::presented` is stamped here. The swapchain is MAILBOX, so
+  image without waiting (`acquireSink`), draws the screen into it (`recordScreen`: the present image
+  letterboxed, the overlay over it), and submits, which presents. `pshot` draws the same screen into an
+  off-screen image at the sink size and reads that back. `GpuPerf::presented` is stamped here. The swapchain is MAILBOX, so
   neither the acquire nor the submit waits for a vblank; a build left in flight on the GPU only delays
   when the shown image is scanned out, not the call.
 

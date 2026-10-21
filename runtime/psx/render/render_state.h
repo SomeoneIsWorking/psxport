@@ -60,7 +60,7 @@ public:
   void show();
   // Re-shows the last build without building anything (debug-server pause loop).
   void repaint();
-  // What the player sees, either leg.
+  // What the window shows: the letterboxed picture with the overlay, at the sink's size, either leg.
   void presentShot(const char *path);
   // The record picture, or the device's displayed VRAM.
   void shot(const char *path);
@@ -104,6 +104,8 @@ private:
   void buildPresentImage(SDL_GPUCommandBuffer *cmd, const present::PresentPlan &plan);
   void buildHostImage(SDL_GPUCommandBuffer *cmd, float fade);
   void showPresentImage(SDL_GPUCommandBuffer *cmd);
+  // The window's contents drawn into `target`: the present image letterboxed, the overlay on top.
+  void recordScreen(SDL_GPUCommandBuffer *cmd, SDL_GPUTexture *target, PixelSize size);
   // One readback of the present image: whether it holds a picture, and where.
   bool probePicture(const std::uint8_t *rgba);
 
@@ -125,6 +127,10 @@ private:
   PixelSize presentImageSize_;
   present::PaneRect viewport_{0, 0, 0, 0}; // where the picture sits in that image
   SinkIdleState sink_;
+  // The window's contents off-screen, for a present shot.
+  SDL_GPUTexture *screenImage_ = nullptr;
+  SDL_GPUTransferBuffer *screenReadback_ = nullptr;
+  PixelSize screenImageSize_;
 
   PresentTarget target_ = PresentTarget::Swapchain;
   PixelSize requestedImage_; // zero = the sink's size

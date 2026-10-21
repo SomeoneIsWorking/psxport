@@ -18,14 +18,16 @@
 
 namespace psx::render {
 
-void writePresentShot(const char *channel, const char *path, const std::uint8_t *rgba, present::PixelSize size) {
+void writePresentShot(
+    const char *channel, const char *path, const std::uint8_t *rgba, present::PixelSize size, bool bgra) {
   const std::size_t pixels = static_cast<std::size_t>(size.width) * static_cast<std::size_t>(size.height);
+  const std::size_t red = bgra ? 2 : 0;
   std::vector<unsigned char> rgb(pixels * 3);
   long nonBlack = 0;
   for (std::size_t i = 0; i < pixels; i++) {
-    rgb[i * 3 + 0] = rgba[i * 4 + 0];
+    rgb[i * 3 + 0] = rgba[i * 4 + red];
     rgb[i * 3 + 1] = rgba[i * 4 + 1];
-    rgb[i * 3 + 2] = rgba[i * 4 + 2];
+    rgb[i * 3 + 2] = rgba[i * 4 + 2 - red];
     nonBlack += (rgba[i * 4 + 0] | rgba[i * 4 + 1] | rgba[i * 4 + 2]) != 0 ? 1 : 0;
   }
   const double share = pixels > 0 ? 100.0 * static_cast<double>(nonBlack) / static_cast<double>(pixels) : 0.0;
@@ -42,13 +44,26 @@ void RenderState::presentShot(const char *path) {
     lucent::warn("present_shot", "no present image yet, nothing captured for {}", path);
     return;
   }
-  const MappedTransfer rgba = device_.download(
-      presentImage_, {0, 0, presentImageSize_.width, presentImageSize_.height}, presentReadback_, "present shot");
+  const PixelSize size = device_.sinkSize();
+  if (screenImage_ == nullptr || screenImageSize_ != size) {
+    device_.release(screenImage_);
+    device_.release(screenReadback_);
+    screenImage_ = device_.makeTexture(size, device_.sinkFormat(), SDL_GPU_TEXTUREUSAGE_COLOR_TARGET);
+    screenReadback_ = device_.makeTransferBuffer(SDL_GPU_TRANSFERBUFFERUSAGE_DOWNLOAD,
+                                                 static_cast<std::uint32_t>(size.width) * size.height * 4);
+    screenImageSize_ = size;
+  }
+  SDL_GPUCommandBuffer *cmd = device_.acquire();
+  recordScreen(cmd, screenImage_, size);
+  device_.submit(cmd, "present shot");
+  const MappedTransfer rgba =
+      device_.download(screenImage_, {0, 0, size.width, size.height}, screenReadback_, "present shot");
   if (!rgba) {
     lucent::error("present_shot", "the GPU refused the readback, nothing captured for {}", path);
     return;
   }
-  writePresentShot("present_shot", path, rgba.bytes(), presentImageSize_);
+  writePresentShot(
+      "present_shot", path, rgba.bytes(), size, device_.sinkFormat() == SDL_GPU_TEXTUREFORMAT_B8G8R8A8_UNORM);
 }
 
 void RenderState::shot(const char *path) {
