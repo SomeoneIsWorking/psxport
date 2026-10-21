@@ -8,6 +8,7 @@
 #include "fs_util.h"
 #include "game.h"
 #include "gpu_device.h"
+#include "host_clock.h"
 #include "producer_census.h"
 #include "render_mode.h"
 #include "texture_feedback.h"
@@ -36,6 +37,7 @@ bool drawsAnything(const present::FrameRecord &record) {
 
 constexpr int kDumpMax = 600;
 constexpr lucent::Channel presentDumpChannel{"fps60dump"};
+constexpr lucent::Channel presentSequenceChannel{"presentseq"};
 
 // A producer render reads saved state only; the armed display pass aborts any guest store it makes.
 std::optional<present::FrameRecord> composeGuarded(Core &core,
@@ -235,6 +237,11 @@ void FramePresenter::presentRecords(Core &core, const present::StateProducers *p
       ++stability_.backwards;
     }
   }
+  // A logic frame held for one field is one present: the next field already shows the next frame.
+  if (guestFields < 2) {
+    presentCurrent(core, producers, {guestFields, 1}, shown);
+    return;
+  }
   if (shown == nullptr || from == nullptr || !continuesTo(from->record->sequence(), shown->record->sequence())) {
     ++stability_.withoutInBetween;
     presentCurrent(core, producers, {guestFields, 1}, shown);
@@ -247,6 +254,7 @@ void FramePresenter::presentRecords(Core &core, const present::StateProducers *p
     composedStore_ =
         composeGuarded(core, base, cut ? nullptr : from->state.get(), *shown->state, present::kInBetweenAt, *producers);
   }
+  const bool composed = composedStore_.has_value();
   composed_ = composedStore_ ? &*composedStore_ : &base;
   composedAdvances_ = false;
   core.game->display.buildInBetween();
@@ -254,6 +262,7 @@ void FramePresenter::presentRecords(Core &core, const present::StateProducers *p
   composedStore_.reset();
   pace(core, {guestFields, 2});
   core.game->display.show();
+  logPresent(core, base.sequence(), from->record->sequence(), {guestFields, 2}, composed, cut);
   dumpPresent(core, true);
   presentCurrent(core, producers, {guestFields, 2}, shown);
 }
@@ -271,13 +280,40 @@ void FramePresenter::presentCurrent(Core &core,
   }
   composed_ = composedStore_ ? &*composedStore_ : nullptr;
   composedAdvances_ = composed_ != nullptr;
+  const bool composed = composedStore_.has_value();
   buildReal(core);
   composed_ = nullptr;
   composedAdvances_ = false;
   composedStore_.reset();
   pace(core, cadence);
   core.game->display.show();
+  logPresent(core,
+             shown != nullptr ? shown->record->sequence() : current_->sequence(),
+             std::nullopt,
+             cadence,
+             composed,
+             false);
   dumpPresent(core, false);
+}
+
+void FramePresenter::logPresent(Core &core,
+                                std::uint64_t shown,
+                                std::optional<std::uint64_t> from,
+                                FieldCadence cadence,
+                                bool composed,
+                                bool cut) const {
+  lucent::debug(presentSequenceChannel,
+                "at={:.3f}ms fence={} shown={} from={} t={} fields={}/{} composed={} cut={} logic={}",
+                psx::platform::hostNowMs(),
+                fence_,
+                shown,
+                from ? static_cast<long long>(*from) : -1LL,
+                from ? "0.5" : "1",
+                cadence.fields,
+                cadence.parts,
+                composed ? 1 : 0,
+                cut ? 1 : 0,
+                core.game->timing.logicFrame);
 }
 
 void FramePresenter::dumpPresent(Core &core, bool interpolated) {

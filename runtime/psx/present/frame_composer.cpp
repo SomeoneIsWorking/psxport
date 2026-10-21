@@ -3,6 +3,8 @@
 
 #include "vram_pixel.h"
 
+#include <lucent/log.h>
+
 #include <algorithm>
 #include <array>
 #include <cstddef>
@@ -14,6 +16,8 @@
 
 namespace psx::present {
 namespace {
+
+constexpr lucent::Channel composeChannel{"compose"};
 
 std::uint64_t slotKey(OtSlot slot) {
   return (std::uint64_t{slot.table} << 32) | slot.index;
@@ -168,6 +172,11 @@ std::optional<FrameRecord> composeFrame(const FrameRecord &shown,
     }
     if (!primitive->key) {
       if (inBetween) {
+        lucent::debug(composeChannel,
+                      "record={} in-between shown whole: entry {} unkeyed, packet {:#010x}",
+                      shown.sequence(),
+                      i,
+                      primitive->sourceAddress);
         return std::nullopt;
       }
       continue;
@@ -175,6 +184,11 @@ std::optional<FrameRecord> composeFrame(const FrameRecord &shown,
     const ObjectId id{primitive->key->producer, primitive->key->object};
     if (baked.contains(objectKey(id))) {
       if (inBetween) {
+        lucent::debug(composeChannel,
+                      "record={} in-between shown whole: object {:#010x}/{:#010x} baked into an upload",
+                      shown.sequence(),
+                      id.producer,
+                      id.object);
         return std::nullopt;
       }
       continue;
@@ -185,6 +199,11 @@ std::optional<FrameRecord> composeFrame(const FrameRecord &shown,
       const std::optional<std::span<const std::byte>> state = render ? to.find(id) : std::nullopt;
       if (!state) {
         if (inBetween) {
+          lucent::debug(composeChannel,
+                        "record={} in-between shown whole: object {:#010x}/{:#010x} has no render or state",
+                        shown.sequence(),
+                        id.producer,
+                        id.object);
           return std::nullopt;
         }
         continue;

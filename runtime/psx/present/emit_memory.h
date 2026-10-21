@@ -74,8 +74,11 @@ private:
   Range *find(std::uint32_t address, std::uint32_t &base);
   const std::uint32_t *overlaid(std::uint32_t wordAddress) const;
 
-  std::map<std::uint32_t, Range> ranges_;          // by kseg0 base
-  std::map<std::uint32_t, std::uint32_t> overlay_; // by kseg0 word address
+  std::map<std::uint32_t, Range> ranges_; // by kseg0 base
+  // The range the last lookup found; a body reads one range for long runs. Cleared when ranges merge.
+  mutable const Range *lastRange_ = nullptr;
+  mutable std::uint32_t lastBase_ = 0;
+  std::vector<LevelWord> overlay_; // by kseg0 word address, one entry per word
   bool keepsLevelReads_ = false;
   mutable LevelReads levelReads_;
 };
