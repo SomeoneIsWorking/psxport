@@ -99,7 +99,7 @@ void ProducerCensus::report(const char *who) const {
     return;
   }
   if (!fed_) {
-    lucent::warn("producers", "{}: the producer census was never fed (no record sealed, or PSXPORT_PRODUCERS=0)", who);
+    lucent::warn("producers", "{}: the producer census was never fed: no record sealed", who);
     return;
   }
   summary(who);
