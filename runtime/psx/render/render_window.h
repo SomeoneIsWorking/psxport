@@ -35,8 +35,8 @@ public:
   }
   // The drawable in pixels.
   present::PixelSize pixelSize() const;
-  // The refresh rate of the window's display in milli-hertz; 0 when unknown.
-  unsigned refreshMilliHz() const;
+  // The refresh period of the window's display in ms; 0 when unknown.
+  double refreshPeriodMs() const;
 
 private:
   SDL_Window *window_ = nullptr;

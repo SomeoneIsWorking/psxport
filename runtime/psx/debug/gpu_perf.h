@@ -35,8 +35,8 @@ public:
   }
   // One picture reached the window at `at`. Always on: the play check reads it at run end. It is a miss
   // when it lands over half a period past the fields it was held for, one field when nothing paced it.
-  // `refreshMilliHz` is the display's refresh rate, 0 when unknown.
-  void presented(clk_time_point at, unsigned refreshMilliHz);
+  // `vsyncPeriodMs` is the display's refresh period, 0 when unknown.
+  void presented(clk_time_point at, double vsyncPeriodMs);
   // Forget the last present, so the next one opens no interval: the gap before a run's first step
   // is boot, not presentation.
   void restartPresentSeries() {

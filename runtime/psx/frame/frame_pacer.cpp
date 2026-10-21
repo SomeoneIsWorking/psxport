@@ -4,7 +4,6 @@
 #include "field_rate.h"
 #include "game.h"
 #include "host_clock.h"
-#include "render_device.h"
 
 #include <lucent/log.h>
 
@@ -50,13 +49,12 @@ std::optional<double> FramePacer::deadline(Core &core, PaceInputs inputs, bool a
     return std::nullopt;
   }
   lucent::debug("pacer",
-                "interval={:.4f}ms sleep={:.4f}ms quota={} parts={} rate={}mHz refresh={}mHz{}",
+                "interval={:.4f}ms sleep={:.4f}ms quota={} parts={} rate={}mHz{}",
                 planned.intervalMs,
                 planned.sleepMs,
                 planned.effectiveQuota,
                 planned.effectiveParts,
                 inputs.fieldRateMilliHz,
-                inputs.refreshMilliHz,
                 planned.resync ? " RESYNC" : "");
   return planned.nextMs;
 }
@@ -75,21 +73,10 @@ PaceInputs guestInputs(const Game &game, FieldCadence cadence) {
   return {.unpaced = game.config.unpaced || game.fastForwarding(),
           .quota = cadence.fields,
           .parts = cadence.parts,
-          .fieldRateMilliHz = fieldRateMilliHz(game.timing.displayFieldRate()),
-          .refreshMilliHz = game.renderDevice.window().refreshMilliHz()};
+          .fieldRateMilliHz = fieldRateMilliHz(game.timing.displayFieldRate())};
 }
 
 } // namespace
-
-unsigned FramePacer::pacedFieldRateMilliHz(const Game &game) {
-  return psx::frame::pacedFieldRateMilliHz(fieldRateMilliHz(game.timing.displayFieldRate()),
-                                           game.renderDevice.window().refreshMilliHz());
-}
-
-double FramePacer::pacedSpeed(const Game &game) {
-  return static_cast<double>(pacedFieldRateMilliHz(game)) /
-         static_cast<double>(fieldRateMilliHz(game.timing.displayFieldRate()));
-}
 
 std::optional<double> FramePacer::subframeDeadline(Core &core, FieldCadence cadence) {
   return deadline(core, guestInputs(*core.game, cadence), true);
@@ -108,13 +95,10 @@ void FramePacer::waitPresentedFields(Core &core, FieldCadence cadence) {
 }
 
 void FramePacer::hostScreenPace(Core &core) {
-  wait(deadline(core,
-                {.unpaced = core.game->config.unpaced,
-                 .quota = 1,
-                 .parts = 1,
-                 .fieldRateMilliHz = kHostScreenFieldRateMilliHz,
-                 .refreshMilliHz = core.game->renderDevice.window().refreshMilliHz()},
-                false));
+  wait(deadline(
+      core,
+      {.unpaced = core.game->config.unpaced, .quota = 1, .parts = 1, .fieldRateMilliHz = kHostScreenFieldRateMilliHz},
+      false));
 }
 
 } // namespace psx::frame
