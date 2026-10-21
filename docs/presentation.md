@@ -189,7 +189,9 @@ The composer builds the frame at `t` from S's record:
   that object at `t` is emitted instead.
 - **Identity.** An object renders interpolated when S' and S both saved state under the same
   `(P, obj)`; saved only in S, it renders at `t = 1`; saved only in S', it is not drawn (it is not in
-  the frame). Identity is the producer, the object's guest address and the title's generation for that
+  the frame). A producer whose skipped draw is itself a state (a fade at zero) names it with
+  `StateProducer::rests`: the object saved only in S then moves from that state, and one saved only in S'
+  moves toward it, placed by slot. Identity is the producer, the object's guest address and the title's generation for that
   address (Crash Bash's `ComponentIncarnation`), never draw order, position or nearest match.
 - **Cut.** A title declares a cut from the guest's own state (camera cut, scene change, teleport);
   across a cut every object renders at `t = 1`. No distance threshold.
