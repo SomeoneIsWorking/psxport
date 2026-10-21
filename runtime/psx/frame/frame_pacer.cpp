@@ -81,6 +81,16 @@ PaceInputs guestInputs(const Game &game, FieldCadence cadence) {
 
 } // namespace
 
+unsigned FramePacer::pacedFieldRateMilliHz(const Game &game) {
+  return psx::frame::pacedFieldRateMilliHz(fieldRateMilliHz(game.timing.displayFieldRate()),
+                                           game.renderDevice.window().refreshMilliHz());
+}
+
+double FramePacer::pacedSpeed(const Game &game) {
+  return static_cast<double>(pacedFieldRateMilliHz(game)) /
+         static_cast<double>(fieldRateMilliHz(game.timing.displayFieldRate()));
+}
+
 std::optional<double> FramePacer::subframeDeadline(Core &core, FieldCadence cadence) {
   return deadline(core, guestInputs(*core.game, cadence), true);
 }
