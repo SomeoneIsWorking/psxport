@@ -364,7 +364,12 @@ aborts unless `FramePresenter::fence()` advanced by exactly one.
 deadline. The default, `FramePacer::subframeDeadline`, advances Timing, devices and the VBlank latch by the
 represented field count. A title with its own field scheduler advances `Timing::advanceDisplayFields` per
 delivered field and plans with `FramePacer::presentedFieldsDeadline`, which creates no field. In-betweens
-split the deadline of the same fields. NOPACE suppresses host waiting only. Each `Game` owns its `FramePacer`
+split the deadline of the same fields. Deadlines step at `pacedFieldRateMilliHz` (`pace_plan.h`): a whole fraction of
+the window's display refresh (`RenderWindow::refreshMilliHz`) when it lies within half the audio queue's rate trim
+of the guest's field rate, else the field rate. An NTSC title on a 60.00 Hz display so runs 0.1% fast against its
+own clock and each present meets one vblank, where pacing to 59.94 Hz left one vblank in about 1000 (every 16.7 s)
+with no new present; the audio queue's trim takes up the extra samples, and emulated time still advances by guest
+fields. The movie field grid steps at the same rate. NOPACE suppresses host waiting only. Each `Game` owns its `FramePacer`
 and deadline; `paceSubframeFields`, `waitPresentedFields` and `hostScreenPace` plan and then sleep.
 
 Each present, real or in-between, is built, then its show is scheduled for its deadline
