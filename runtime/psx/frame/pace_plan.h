@@ -2,11 +2,9 @@
 // the field rate in milli-hertz (field_rate.h).
 #pragma once
 
-#include "audio_queue_policy.h"
 #include "field_rate.h"
 
 #include <cmath>
-#include <cstdlib>
 
 namespace psx::frame {
 
@@ -20,8 +18,6 @@ struct PaceInputs {
   int parts = 1;
   // 59940 for NTSC, 50000 for PAL; zero is reported as rateUnset and never paced against.
   unsigned fieldRateMilliHz = 0;
-  // The window's display refresh; zero when unknown.
-  unsigned refreshMilliHz = 0;
   // Monotonic now, and the deadline carried from the previous paced call (unseeded: start at now).
   double nowMs = 0.0;
   double nextMs = 0.0;
@@ -41,23 +37,6 @@ struct PacePlan {
   bool resync = false;     // the deadline was more than one interval in the past: whole intervals are dropped
 };
 
-// The rate display fields are paced at: a whole fraction of the display's refresh when it lies within half the
-// audio queue's rate trim of the guest's field rate, so each present meets one vblank; otherwise the field rate.
-inline unsigned pacedFieldRateMilliHz(unsigned fieldRateMilliHz, unsigned refreshMilliHz) {
-  if (fieldRateMilliHz == 0 || refreshMilliHz == 0) {
-    return fieldRateMilliHz;
-  }
-  const unsigned refreshesPerField = (refreshMilliHz + fieldRateMilliHz / 2) / fieldRateMilliHz;
-  if (refreshesPerField == 0) {
-    return fieldRateMilliHz;
-  }
-  const unsigned locked = (refreshMilliHz + refreshesPerField / 2) / refreshesPerField;
-  const long offset = std::labs(static_cast<long>(locked) - static_cast<long>(fieldRateMilliHz));
-  const bool absorbed =
-      static_cast<double>(offset) <= static_cast<double>(fieldRateMilliHz) * AudioQueuePolicy::kMaxRateTrim / 2.0;
-  return absorbed ? locked : fieldRateMilliHz;
-}
-
 inline PacePlan pacePlan(const PaceInputs &in) {
   PacePlan p;
   p.nextMs = in.nextMs;
@@ -74,9 +53,8 @@ inline PacePlan pacePlan(const PaceInputs &in) {
   }
 
   p.paced = true;
-  p.intervalMs = fieldIntervalMs(pacedFieldRateMilliHz(in.fieldRateMilliHz, in.refreshMilliHz),
-                                 static_cast<unsigned>(p.effectiveQuota),
-                                 static_cast<unsigned>(p.effectiveParts));
+  p.intervalMs = fieldIntervalMs(
+      in.fieldRateMilliHz, static_cast<unsigned>(p.effectiveQuota), static_cast<unsigned>(p.effectiveParts));
 
   double next = (in.seeded ? in.nextMs : in.nowMs) + p.intervalMs;
   if (next > in.nowMs) {

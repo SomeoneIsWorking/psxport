@@ -7,7 +7,6 @@
 #include <optional>
 
 class Core;
-class Game;
 
 namespace psx::frame {
 
@@ -27,11 +26,6 @@ public:
 
   // One host-screen field (no guest display mode), honouring PSXPORT_NOPACE as guest pacing does.
   void hostScreenPace(Core &core);
-
-  // The rate `game`'s display fields are paced at: pacedFieldRateMilliHz of its field rate and window refresh.
-  static unsigned pacedFieldRateMilliHz(const Game &game);
-  // That rate over the guest's own field rate: how much faster than its clock the guest runs.
-  static double pacedSpeed(const Game &game);
 
   // Display fields this pacer waited for since it was created; an unpaced fast-forward adds nothing.
   unsigned long long pacedFields() const {
