@@ -350,7 +350,9 @@ std::optional<ExecutionResult> NativeDispatcher::invoke(NativeKey key) {
   }
   std::optional<present::EmissionScope::Guard> emission;
   if (const std::optional<present::Producer> &producer = entry->second.producer) {
-    emission.emplace(core_.emission, key.address, core_.r[4 + static_cast<unsigned>(producer->object)], 0u);
+    const std::uint32_t object =
+        producer->object == present::Arg::None ? 0u : core_.r[4 + static_cast<unsigned>(producer->object)];
+    emission.emplace(core_.emission, key.address, object, 0u);
   }
   if (differential_) {
     if (auto shadowed = differential_->intercept(key, entry->second.name, entry->second.function)) {
