@@ -5,6 +5,7 @@
 #include "audio_queue_policy.h"
 #include "field_rate.h"
 
+#include <cmath>
 #include <cstdlib>
 
 namespace psx::frame {
@@ -37,7 +38,7 @@ struct PacePlan {
   double intervalMs = 0.0; // the target wall-clock spacing of this (sub)frame
   double sleepMs = 0.0;    // 0 = the deadline has already passed
   double nextMs = 0.0;     // the deadline to carry forward (valid only when paced)
-  bool resync = false;     // the deadline was more than one interval in the past: the debt is dropped
+  bool resync = false;     // the deadline was more than one interval in the past: whole intervals are dropped
 };
 
 // The rate display fields are paced at: a whole fraction of the display's refresh when it lies within half the
@@ -81,8 +82,9 @@ inline PacePlan pacePlan(const PaceInputs &in) {
   if (next > in.nowMs) {
     p.sleepMs = next - in.nowMs;
   } else if (in.nowMs - next > p.intervalMs) {
-    // A host hitch: absorb the debt rather than run fast until it is repaid.
-    next = in.nowMs;
+    // A host hitch: absorb the debt in whole intervals, so the deadlines keep their place on the vblank grid.
+    next += std::ceil((in.nowMs - next) / p.intervalMs) * p.intervalMs;
+    p.sleepMs = next - in.nowMs;
     p.resync = true;
   }
   p.nextMs = next;
