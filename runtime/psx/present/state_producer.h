@@ -16,6 +16,18 @@
 
 namespace psx::present {
 
+// `place` carried by the whole-pixel step from SXY word `from` to `to`: a corner the guest offset from a
+// projected point.
+[[nodiscard]] inline GtePlace placeOffset(GtePlace place, std::uint32_t from, std::uint32_t to) {
+  const auto x = [](std::uint32_t word) {
+    return static_cast<float>(static_cast<std::int16_t>(word & 0xFFFFu));
+  };
+  const auto y = [](std::uint32_t word) {
+    return static_cast<float>(static_cast<std::int16_t>(word >> 16));
+  };
+  return {place.x + x(to) - x(from), place.y + y(to) - y(from)};
+}
+
 // Where a render puts its primitives. Positions are draw-offset relative, as the guest packet holds
 // them. The render sets the texture page, texture mode and blend mode; draw area, offset, mask,
 // texture window and interlace come from the object's own entries, and the CLUT from `clutWord`.
