@@ -5,30 +5,14 @@
 #include <utility>
 
 namespace psx::present {
-namespace {
 
-struct AxisPlacement {
-  int whole = 0;
-  float fraction = 0.0f;
-};
-
-AxisPlacement placeAxis(float position, PrimitiveKind kind) {
-  if (kind == PrimitiveKind::Polygon) {
-    const float below = std::floor(position);
-    return {static_cast<int>(below), position - below};
-  }
-  return {static_cast<int>(std::floor(position + 0.5f)), 0.0f};
-}
-
-} // namespace
-
-void placeVertex(RecordVertex &vertex, float x, float y, PrimitiveKind kind) {
-  const AxisPlacement column = placeAxis(x, kind);
-  const AxisPlacement row = placeAxis(y, kind);
-  vertex.x = column.whole;
-  vertex.subX = column.fraction;
-  vertex.y = row.whole;
-  vertex.subY = row.fraction;
+void placeVertex(RecordVertex &vertex, float x, float y) {
+  const float column = std::floor(x);
+  const float row = std::floor(y);
+  vertex.x = static_cast<int>(column);
+  vertex.subX = x - column;
+  vertex.y = static_cast<int>(row);
+  vertex.subY = y - row;
 }
 
 std::span<const std::uint16_t> FrameRecord::clut(const DrawPrimitive &primitive) const {

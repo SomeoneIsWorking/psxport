@@ -223,18 +223,22 @@ The composer builds the frame at `t` from S's record:
 - **Sub-pixel place.** The GTE keeps the unrounded place of each SXY FIFO entry as RTPS and RTPT push
   it (`Gte::projectedPlace`, from Beetle's projection push). A producer that copies a projected word
   into a packet declares that vertex's place to the sink by packet address and vertex index
-  (`PrimitiveSink::place`, or `placeCorners` for a whole polygon; `placeOffset` for a corner set a whole-pixel step from a projected point, `wholePlace` for a corner no projection made), carrying it through its own arithmetic (scratch slots, midpoints, pulls) as
-  it carries the word; `PrimitiveList` gives each polygon walked from a packet with declared places the
-  fraction past its whole pixel in `subX`/`subY`. No place is matched by value. A producer that cuts a
-  packet it already wrote reads the declared places back (`placed`). Every render declares places, so a
-  real (`t = 1`) compose and its in-betweens agree and a still object does not shift. A vertex shared by
-  two polygons is one projection, so both take one place and no seam opens; a producer that declares
-  places must declare them for every polygon it projects. The rasterizer truncates
-  `whole * scale + fraction * scale` as the GTE truncates: at 1x every projected vertex is the guest's.
-  A fraction set by `placeVertex` (a title lerping screen positions) truncates too, so at 1x a half-pixel
-  in-between draws on the lower pixel. Sprites and lines stay whole.
+  (`PrimitiveSink::place`, or `placeCorners` for every vertex of a polygon or line; `placeOffset` for a corner the
+  guest sets a genuine whole-pixel step from a projected point, `wholePlace` for a corner no projection made, read as
+  the GPU reads the word), carrying it through its own arithmetic (scratch slots, midpoints, pulls) as it carries the
+  word. A corner the guest offsets by a scaled size (a glow rim, a scaled quad's sides) takes the offset before the
+  guest truncates it, so its size changes smoothly too. `PrimitiveList` gives each polygon or line walked from a
+  packet with declared places the place's offset from its whole pixel in `subX`/`subY`; that offset lies within two
+  pixels either way, and a place farther off is a word the GPU wrapped, so that vertex keeps its whole pixel. No
+  place is matched by value. A producer that cuts a packet it already wrote reads the declared places back
+  (`placed`). Every render declares places, so a real (`t = 1`) compose and its in-betweens agree and a still
+  object does not shift. A vertex shared by two primitives is one place, so no seam opens; a producer that declares
+  places must declare them for every primitive it projects. Above native scale the rasterizer draws a vertex at
+  `whole * scale + floor(offset * scale)`; a line's pixels take the offset interpolated along it. At native scale
+  every vertex keeps the guest's pixel. Sprites take no place yet: no producer declares one, and the rasterizer
+  draws them on whole pixels (issue 0169).
 - **Exactness.** At `t = 1`, 4:3, depth testing off, a render must reproduce the entries it replaces;
-  the title's oracle compare covers the frame (at 1x; above it, projected vertices keep their fraction).
+  the title's oracle compare covers the frame (at 1x; above it, placed vertices keep their offset).
 
 `EmissionScope` binds each packet to `(P, obj)` at store time and the OT walk stamps the key on its
 entries, so the composer knows what a producer replaces. `element` and `part` are not pairing keys;
