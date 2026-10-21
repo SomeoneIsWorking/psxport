@@ -9,8 +9,9 @@
 
 namespace psx::present {
 
-// The argument register that names a producer's object.
-enum class Arg : std::uint8_t { A0, A1, A2, A3 };
+// The argument register that names a producer's object; None when each call draws one object and its
+// arguments are only parameters.
+enum class Arg : std::uint8_t { A0, A1, A2, A3, None };
 
 struct Producer {
   Arg object = Arg::A0;

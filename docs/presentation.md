@@ -141,8 +141,9 @@ present at t
   picture                    -> FrameComposer(S, State S', State S, t) drawn on the image as before S
 ```
 
-A producer is registered like any override, with the argument register that names its object, and
-has two halves: the override saves what its render needs, and the render draws from it. The title's
+A producer is registered like any override, with the argument register that names its object
+(`Arg::None` when each call draws one object and its arguments are parameters, which must then not
+split its identity), and has two halves: the override saves what its render needs, and the render draws from it. The title's
 session holds its renders in a `StateProducerTable`, and `GameRuntime::stateProducer` answers from it.
 
 ```cpp
