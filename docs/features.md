@@ -82,7 +82,7 @@ title answers there. A hop with no title entry runs on the framework alone.
 | hop | owner | title |
 |---|---|---|
 | 1 | `psx/cd/stock_libcd.cpp:StockLibcd::bind` — stock libcd entries bound at the title's addresses; `GuestInterruptLibcd` when the guest's INT1 delivers readiness | `registerOverrides` |
-| 2 | `psx/cd/cdc_native.cpp:CdController` — the CD controller over `psx/cd/disc.cpp:Disc` | |
+| 2 | `psx/cd/cdc_native.cpp:CdController` — the CD controller over `psx/cd/disc.cpp:Disc`, opened when the title boots; CHD hunks decoded ahead by `psx/cd/hunk_reader.cpp:HunkReader` | |
 | 3 | `psx/core/guest_code_module.cpp:publishLanding` → `GameRuntime::guestCodeModuleWindow` — a module landed in its window | `guestCodeModuleWindow` |
 | 4 | `psx/cd/cd_stock_read_completion.cpp:announceStockReadLanding` → `GameRuntime::stockCdReadLanded` | `stockCdReadLanded` |
 

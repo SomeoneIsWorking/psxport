@@ -1,6 +1,9 @@
-// disc.h — psx::cd::Disc: the title's CHD read by LBA, with a one-hunk cache and the parsed TOC. One per Game.
+// disc.h — psx::cd::Disc: the title's CHD read by LBA through a HunkReader, and the parsed TOC. One per Game.
 #pragma once
+#include "hunk_reader.h"
+
 #include <libchdr/chd.h>
+#include <memory>
 #include <optional>
 #include <stdint.h>
 
@@ -59,13 +62,12 @@ public:
   uint32_t frames_per_hunk = 0;
   uint32_t hunk_count = 0;
   uint32_t hunk_bytes = 0;
-  uint8_t *hunk_buf = nullptr;
-  uint32_t cached_hunk = 0xFFFFFFFFu; // cache empty
+  std::unique_ptr<HunkReader> hunks;
   // Cache denominators: hits alone cannot tell a working cache from one nothing asks.
   uint64_t lookups = 0;
   uint64_t hits = 0;
   uint64_t fills = 0;
-  uint64_t fill_ns = 0;
+  uint64_t fill_ns = 0; // the caller's time on hunks not yet decoded
   uint64_t worst_fill_ns = 0;
   const char *env_key = nullptr; // TitleIdentity::discEnvVar, set by psx::host::SavedDisc::bind
   char saved_path[1024] = {};    // the player's first-run choice (SavedDisc), read after the keys

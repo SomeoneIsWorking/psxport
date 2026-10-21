@@ -43,7 +43,7 @@ Dependency direction: title repo → `runtime/psx/game/` (the title interface) �
 - `runtime/psx/hle/platform_hle.*`, `stock_*` — PSY-Q stock library bodies a title binds: libgpu DrawSync waits, libgte projection setters, libetc VSync frame boundary, DMACallback table
 - `runtime/psx/cd/cd.*`, `stock_libcd.*`, `stock_cd_*`, `cd_stock_read_completion.*`, `cd_ready_delivery.*` — stock libcd served synchronously: CdControl / CdSync responses, work area, CdRead, ready callback and the INT1 a read still owes
 - `runtime/psx/cd/cdc_*`, `cd_drive_timing.h`, `cd_position.*` — CD controller registers 0x1F801800, command phases, sector routing (data FIFO or XA to the SPU), Setmode bits and sector framing, drive timing, BCD / MSF / LBA, raw and data sector sizes, Mode2 subheader (file, channel, submode, coding)
-- `runtime/psx/cd/disc*` — CHD disc image by LBA, ISO9660 file reader, TOC (GetTN / GetTD), disc provisioning
+- `runtime/psx/cd/disc*`, `hunk_reader.*` — CHD disc image by LBA, hunk decode ahead on worker threads, ISO9660 file reader, TOC (GetTN / GetTD), disc provisioning
 - `runtime/psx/platform/dma_*` — DMA controller DPCR / DICR, channels, linked-list chain mode, DMA callbacks, DMA IRQ
 - `runtime/psx/platform/io_peripherals.*`, `irq_edge.h` — I_STAT / I_MASK interrupt lines, root counter and SIO decode
 - `runtime/psx/platform/memcard.*`, `card_syscall_log.*` — memory card device and file, card syscall counts
