@@ -99,6 +99,12 @@ void Core::writeGuestMemory(uint32_t a, Value v, psx::cpu::ExecutableWriteSource
   if (storeWatch.armed()) {
     storeWatch.observe(*this, {a, static_cast<uint32_t>(v), width});
   }
+  // A store that will be put back binds no packet and changes no code.
+  if (p && writeRollback.armed()) {
+    writeRollback.note(p, width);
+    memcpy(p, &v, width);
+    return;
+  }
   pkt_track(this, a, width);
   emission.noteStore(a);
   if (p) {

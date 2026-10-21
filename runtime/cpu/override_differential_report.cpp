@@ -109,7 +109,7 @@ std::string journalBoundJson(const DifferentialKeyStats &stats) {
       "{{\"call\": {}, \"path\": {}, \"bound\": {}, \"effects_journaled\": {}, \"effects_refused\": {}, "
       "\"stopped_call\": {}, \"offending\": {}}}",
       stats.firstMismatchCall.value_or(0),
-      lucent::text::json_quote(violation.mode == psx::cpu::SideEffectMode::Record ? "original" : "native"),
+      lucent::text::json_quote(psx::cpu::sideEffectPathName(violation.mode)),
       psx::cpu::kMaxSideEffectsPerCall,
       violation.effects,
       violation.refused,

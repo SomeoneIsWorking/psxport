@@ -44,10 +44,11 @@ present plan / sink                           viewport, letterbox, window
 | `present/emission_scope.*` | the `(P, obj, k)` scope stack and packet-address to key map |
 | `runtime/cpu/native_dispatch.*` | `Producer{Arg}` registration; opens the emission scope around the call |
 | `present/frame_state.*` | producer states by the scope serial that saved them; per record, the states its packets came from |
-| `present/state_producer.*` | `StateProducer` (render at `t`), `PrimitiveSink`, the `StateProducers` registry on `Core` |
+| `present/state_producer.*` | `StateProducer` (render at `t`, and its `Composition` there), `PrimitiveSink`, `PrimitiveList`, `kInBetweenAt`, the `StateProducers` registry on `Core` |
+| `present/guest_redraw.*`, `core/write_rollback.h` | `GuestRedraw`: a guest draw routine run again for an in-between, every store put back, registers and GTE restored, devices and guest time held (`SideEffectMode::Discard`) |
 | `present/frame_composer.*` | the frame at `t`: S's unproduced entries plus each producer's render, by OT slot |
 | `gpu/ordering_table.*` | OT node decode and the OT walk; `OtTables`, the title-named tables whose bucket heads tag each entry's slot |
-| `present/packet_chains.*` | a body's packet chains (one chain, or a bucket table of any stride and head offset) read back as primitives under the one E1 rule |
+| `present/packet_chains.*` | a body's packet chains (one chain, or a bucket table of any stride and head offset) read back as primitives under the one E1 rule; other environment packets and no-ops skipped; `tryEmitChain` reports a packet that is not a primitive instead of aborting |
 | `frame/frame_presenter.*` | N and the last three records that drew, which record each present shows, cadence, both presents through the backend |
 | `present/display_presenter.*` | `DisplayPresenter` on `Game`: each present and in-between through its `RenderState`, the present counters, `PSXPORT_SHOT_AT`/`PRESENT_SHOT_AT`/`GPU_DUMP` captures |
 | `gpu/record_geometry.*` | the VRAM rect an entry writes; a flat rectangle's extent |
@@ -201,6 +202,18 @@ The composer builds the frame at `t` from S's record:
   table's walk order puts it. A render naming a table S never walked leaves that object as S drew it.
   An in-between (`from` set, `t < 1`) whose record holds any primitive no producer owns, or any object
   whose render cannot be placed, is not composed: S is shown whole, never a mix of two moments.
+- **Composition.** `StateProducer::composition(states)` says what the object's entries become at `t`:
+  `Render` (replaced by `render`, the default), `Recorded` (kept as the guest drew them, which is the
+  object at `t`) or `Refused` (the object cannot be drawn at `t`; an in-between is then S whole). A
+  producer that saves one in-between rather than two states answers `Render` only at `kInBetweenAt`
+  between the states it was made for.
+- **Guest redraw.** A title whose objects are drawn by guest code it does not port can run that code
+  again inside the logic frame for the in-between: `GuestRedraw` saves the CPU and GTE, arms
+  `Core::writeRollback` so every guest store is noted and put back newest first (such a store binds
+  no packet and notifies no code write), and runs the routine with devices unreached, interrupts and
+  guest time held. The title writes the in-between's inputs through `writeWord`, reads the packets the
+  routine linked with `PacketChainWalker::tryEmitChain` before the redraw ends, and saves them as the
+  object's state; a run that does not return, or reaches a device or a syscall, is refused.
 - **Environment.** A render sets texture page, texture mode and blend mode; draw area, offset,
   mask, texture window and interlace are those in effect where the primitive lands in S (the
   first recorded primitive at or after its position), and the CLUT from S's sample of the same CLUT

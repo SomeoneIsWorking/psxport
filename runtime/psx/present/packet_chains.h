@@ -7,6 +7,7 @@
 #include "state_producer.h"
 
 #include <cstdint>
+#include <optional>
 
 namespace psx::present {
 
@@ -35,18 +36,25 @@ struct BucketHeads {
   std::uint32_t headOffset = 0;
 };
 
-// Follows tag links, decoding each packet; aborts on one that is neither a draw-mode packet nor a polygon,
-// line or sprite. Link-only packets are skipped. The packet count is shared by every chain one walker visits.
+// Follows tag links, decoding each packet. Link-only and no-op packets are skipped, and so are draw environment
+// packets other than the draw mode: a composed primitive takes the environment in effect where it lands in the record.
+// The packet count is shared by every chain one walker visits.
 class PacketChainWalker {
 public:
   PacketChainWalker(const EmitMemory &memory, const PacketBound &bound) : memory_(memory), bound_(bound) {}
 
   // The chain whose first link is `link` (a head or tag word; its low 24 bits name the packet), into `slot`.
+  // Aborts at a packet that is not a polygon, line or sprite.
   void emitChain(std::uint32_t link, OtSlot slot, DrawModeTracker &drawMode, PrimitiveSink &sink);
+  // The same chain; false, having emitted the packets before it, at a packet that is not a polygon, line or sprite.
+  [[nodiscard]] bool tryEmitChain(std::uint32_t link, OtSlot slot, DrawModeTracker &drawMode, PrimitiveSink &sink);
   // Every bucket's chain under one draw mode.
   void emitBuckets(const BucketHeads &heads, DrawModeTracker &drawMode, PrimitiveSink &sink);
 
 private:
+  // The address of the first packet that is not a polygon, line or sprite, or nullopt when the chain ends.
+  std::optional<std::uint32_t> walk(std::uint32_t link, OtSlot slot, DrawModeTracker &drawMode, PrimitiveSink &sink);
+
   EmitMemory memory_;
   PacketBound bound_;
   std::uint32_t walked_ = 0;

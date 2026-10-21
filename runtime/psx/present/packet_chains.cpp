@@ -17,7 +17,8 @@ constexpr std::size_t kMaxPacketWords = 255;
 
 } // namespace
 
-void PacketChainWalker::emitChain(std::uint32_t link, OtSlot slot, DrawModeTracker &drawMode, PrimitiveSink &sink) {
+std::optional<std::uint32_t>
+PacketChainWalker::walk(std::uint32_t link, OtSlot slot, DrawModeTracker &drawMode, PrimitiveSink &sink) {
   std::array<std::uint32_t, kMaxPacketWords> words;
   for (gpu::OtNode tag(0, gpu::OtHeaderWord{link}); !tag.endsChain();) {
     const std::uint32_t packet = gpu::guestAddressOf(tag.nextRamOffset());
@@ -41,18 +42,32 @@ void PacketChainWalker::emitChain(std::uint32_t link, OtSlot slot, DrawModeTrack
     }
     const std::span<std::uint32_t> command(words.data(), count);
     memory_.readWords(packet + 4u, command);
-    if (drawMode.take(command)) {
+    const gpu::Gp0Command head(words[0]);
+    if (drawMode.take(command) || head.isDrawEnvironmentCommand() || head.isDiscardedNoOp()) {
       continue;
     }
     std::optional<DrawPrimitive> primitive = gpu::decodePacketPrimitive(command);
     if (!primitive) {
-      lucent::error(
-          "packet-chain", "the packet 0x{:08X} at 0x{:08X} is not a polygon, line or sprite", words[0], packet);
-      std::abort();
+      return packet;
     }
     drawMode.apply(*primitive);
     sink.emit(slot, *primitive);
   }
+  return std::nullopt;
+}
+
+void PacketChainWalker::emitChain(std::uint32_t link, OtSlot slot, DrawModeTracker &drawMode, PrimitiveSink &sink) {
+  if (const std::optional<std::uint32_t> packet = walk(link, slot, drawMode, sink)) {
+    lucent::error("packet-chain",
+                  "the packet 0x{:08X} at 0x{:08X} is not a polygon, line or sprite",
+                  memory_.mem_r32(*packet + 4u),
+                  *packet);
+    std::abort();
+  }
+}
+
+bool PacketChainWalker::tryEmitChain(std::uint32_t link, OtSlot slot, DrawModeTracker &drawMode, PrimitiveSink &sink) {
+  return !walk(link, slot, drawMode, sink);
 }
 
 void PacketChainWalker::emitBuckets(const BucketHeads &heads, DrawModeTracker &drawMode, PrimitiveSink &sink) {

@@ -65,10 +65,11 @@ Dependency direction: title repo → `runtime/psx/game/` (the title interface) �
 - `runtime/psx/shaders_gpu/`, `cmake/gpu_shaders.cmake`, `tools/gen_gpu_shaders.py` — shaders and SPIR-V, generated record op layout
 - `runtime/psx/present/display_presenter.*`, `present_plan.h`, `present_ledger.*`, `video_plan.h`, `pixel_size.h` — present: guest display to screen, letterbox, fade, 24bpp, internal resolution scale, present ledger
 - `runtime/psx/present/render_mode.h`, `render_substrate.*` — render path (Record, Device), display-pass guard, per-Core host render state
-- `runtime/psx/present/frame_composer.*`, `frame_record.*`, `frame_state.*`, `state_producer.*`, `state_bytes.h`, `emission_scope.*`, `emit_memory.*`, `blend.h` — 60 fps interpolation / in-betweens: frame record, producer keys and object state, state producers, emission scope, guest or host emit memory, lerp blends
+- `runtime/psx/present/frame_composer.*`, `frame_record.*`, `frame_state.*`, `state_producer.*`, `state_bytes.h`, `emission_scope.*`, `emit_memory.*`, `blend.h` — 60 fps interpolation / in-betweens: frame record, producer keys and object state, state producers and their composition, emission scope, guest or host emit memory, lerp blends
 - `runtime/psx/present/gp0_command.h`, `gp0_primitive_decode.*` — GP0 command and primitive decode: opcodes, libgpu polygon and line opcodes, packet tags and sizes, draw mode E1
 - `runtime/psx/present/vram_rect.h`, `vram_pixel.h` — VRAM size, points and rects, 555 pixel and 5-to-8 expand, texpage and CLUT words, CLUT entry count, texel sampler
 - `runtime/psx/present/packet_chains.*` — packet tag chains and bucket tables walked as primitives
+- `runtime/psx/present/guest_redraw.*`, `runtime/psx/core/write_rollback.h` — guest draw routine re-run for an in-between / redraw: store undo log, registers and GTE restored, devices held
 - `runtime/psx/present/gte_control.*` — GTE control registers saved, blended and restored around a render
 - `runtime/psx/present/guest_widescreen_projection.*`, `viewport_layout.h`, `proj_params.*`, `picture_announce.*` — widescreen / 16:9: aspect policy, canvas margins, projection constants, picture geometry announce
 - `runtime/psx/present/pane_host.h`, `rgb24_picture.h` — a session presenting into a host screen's pane, host pictures
