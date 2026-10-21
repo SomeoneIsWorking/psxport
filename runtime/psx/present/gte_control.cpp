@@ -1,5 +1,6 @@
 #include "gte_control.h"
 
+#include <algorithm>
 #include <cstring>
 
 namespace psx::present {
@@ -30,12 +31,24 @@ void writeGteControl(psx::cpu::Gte &gte, const GteControl &control) {
   }
 }
 
+gte::RotationWords rotationBetween(const gte::RotationWords &from, const gte::RotationWords &to, float t) {
+  gte::RotationWords shown{};
+  // s16 pairs.
+  for (std::uint32_t word = 0; word < gte::kRotationWords; ++word) {
+    shown[word] = lerpHalves(from[word], to[word], t);
+  }
+  return shown;
+}
+
 GteControl blendGteControl(const GteControl &from, const GteControl &to, float t) {
   GteControl blended = to;
-  // The rotation matrix as s16 pairs, then the translation as s32.
-  for (std::uint32_t reg = gte::kRotation; reg < gte::kRotation + gte::kRotationWords; ++reg) {
-    blended[reg] = lerpHalves(from[reg], to[reg], t);
-  }
+  const auto rotationOf = [](const GteControl &control) {
+    gte::RotationWords words{};
+    std::copy_n(control.begin() + gte::kRotation, gte::kRotationWords, words.begin());
+    return words;
+  };
+  const gte::RotationWords rotation = rotationBetween(rotationOf(from), rotationOf(to), t);
+  std::copy(rotation.begin(), rotation.end(), blended.begin() + gte::kRotation);
   for (std::uint32_t reg = gte::kTranslationX; reg <= gte::kTranslationZ; ++reg) {
     blended[reg] = lerpWord(from[reg], to[reg], t);
   }
