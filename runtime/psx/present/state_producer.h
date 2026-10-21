@@ -16,16 +16,18 @@
 
 namespace psx::present {
 
+// The place an SXY word names exactly: a corner no projection made.
+[[nodiscard]] inline GtePlace wholePlace(std::uint32_t word) {
+  return {static_cast<float>(static_cast<std::int16_t>(word & 0xFFFFu)),
+          static_cast<float>(static_cast<std::int16_t>(word >> 16))};
+}
+
 // `place` carried by the whole-pixel step from SXY word `from` to `to`: a corner the guest offset from a
 // projected point.
 [[nodiscard]] inline GtePlace placeOffset(GtePlace place, std::uint32_t from, std::uint32_t to) {
-  const auto x = [](std::uint32_t word) {
-    return static_cast<float>(static_cast<std::int16_t>(word & 0xFFFFu));
-  };
-  const auto y = [](std::uint32_t word) {
-    return static_cast<float>(static_cast<std::int16_t>(word >> 16));
-  };
-  return {place.x + x(to) - x(from), place.y + y(to) - y(from)};
+  const GtePlace start = wholePlace(from);
+  const GtePlace end = wholePlace(to);
+  return {place.x + end.x - start.x, place.y + end.y - start.y};
 }
 
 // Where a render puts its primitives. Positions are draw-offset relative, as the guest packet holds
