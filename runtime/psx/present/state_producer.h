@@ -3,6 +3,7 @@
 
 #include "frame_record.h"
 #include "gte_state.h"
+#include "guest_memory_map.h"
 
 #include <cstddef>
 #include <cstdint>
@@ -25,6 +26,12 @@ public:
   // The producer's unrounded screen place of polygon vertex `vertex` in the packet it wrote at `packet`, declared
   // before the packet is emitted.
   virtual void place(std::uint32_t /*packet*/, int /*vertex*/, const GtePlace & /*place*/) {}
+  // The places of every corner of the polygon packet at `packet` (any segment), in packet order.
+  void placeCorners(std::uint32_t packet, std::span<const GtePlace> corners) {
+    for (std::size_t vertex = 0; vertex < corners.size(); ++vertex) {
+      place(psx::kseg0Address(packet), static_cast<int>(vertex), corners[vertex]);
+    }
+  }
   // The place declared for that vertex, for a producer that cuts a packet it already wrote.
   [[nodiscard]] virtual std::optional<GtePlace> placed(std::uint32_t /*packet*/, int /*vertex*/) {
     return std::nullopt;
