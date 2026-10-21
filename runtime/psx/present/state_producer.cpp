@@ -53,7 +53,7 @@ std::optional<GtePlace> PrimitiveList::placed(std::uint32_t packet, int vertex) 
 
 void PrimitiveList::emit(OtSlot slot, const DrawPrimitive &primitive) {
   DrawPrimitive &kept = primitives.emplace_back(slot, primitive).second;
-  if (kept.kind == PrimitiveKind::Sprite || kept.sourceAddress == 0) {
+  if (kept.sourceAddress == 0) {
     return;
   }
   for (int i = 0; i < kept.vertexCount; ++i) {
