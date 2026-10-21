@@ -1,7 +1,8 @@
 # 0169: in-betweens snapped every projected vertex to a whole native pixel
 
-Status: fixed. Owner: `runtime/psx/present/frame_composer.cpp` `composeFrame`,
-`runtime/psx/present/precise_projection.*`, `runtime/psx/gpu/record_raster_setup.cpp` `scaledCoordinate`.
+Status: fixed for the flag intro; partial for the producers under Open. Owner: `runtime/psx/cpu/gte.h` `Gte::projectedPlace`, `runtime/psx/present/state_producer.cpp`
+`PrimitiveList`, each title producer that projects (psx-spyro sky, moby emitter, terrain passes),
+`runtime/psx/gpu/record_raster_setup.cpp` `scaledCoordinate`.
 
 ## Observed
 Spyro 1 flag intro (psx-spyro issue 0196), fps60, 16:9, 4x internal resolution: the sky in the margins,
@@ -14,16 +15,33 @@ truncated to whole native pixels. A sky turning about one pixel per logic frame 
 its in-between drew on one neighbour's pixel at any internal resolution.
 
 ## Fix
-While a frame is composed the GTE hands each projected point, unrounded, to `PreciseProjection` (Beetle's
-projection push, through `GteRegs::preciseSink`), keyed by the packed SXY it rounded to. After each render a
-polygon vertex whose word was projected keeps its fraction in `subX`/`subY`; points that round to one word share
-the first one's place, so polygons sharing a vertex stay joined. `scaledCoordinate` truncates the scaled fraction
-as the GTE truncates, so 1x is unchanged. Real presents are composed the same way, so a still object does not
-shift between presents. `docs/presentation.md` (Sub-pixel place).
+The first fix (f8575299) matched each polygon vertex to an unrounded projection by its packed SXY value. Review
+rejected it: identity guessed from a value, which two unrelated points can share. It is replaced:
+
+- The GTE keeps the unrounded place of each SXY FIFO entry (`GteRegs::places`, pushed with the FIFO by Beetle's
+  `PGXP_pushSXYZ2f`); `Gte::projectedPlace(i)` reads it.
+- A producer declares each polygon vertex's place by packet address and vertex index
+  (`PrimitiveSink::place`), carrying the place beside the word through its own slots and arithmetic. The packet
+  walker stamps `sourceAddress`, and `PrimitiveList` gives a polygon from a packet with declared places its
+  fraction in `subX`/`subY`. `placed` reads a declaration back for a producer that cuts a packet it wrote.
+- Spyro declares places in the sky (`Cyclorama`), the moby emitters (`ActorEmitter`, `LitActorEmitter`) and every
+  terrain pass (detail, translucent, far, coarse and fine split pieces with their grid pulls, crack triangles,
+  and the re-split of oversized pieces through midpoints of the declared places).
+- `scaledCoordinate` truncates the scaled fraction as the GTE truncates, so 1x is unchanged for projected
+  vertices. It also truncates a fraction a title set with `placeVertex` (Spyro's title sprites and screen
+  overlays), which rounded before: at 1x a half-pixel in-between position now draws on the lower pixel.
+
+`docs/presentation.md` (Sub-pixel place).
 
 ## Proof
-psx-spyro `scratch/judder-boot/{before4,fix4}/s0600`, stepped from boot, 40 presents from product frame 600 at
-`PSXPORT_IRES=4`: in-betweens within 15% of one neighbour on a moving 16-pixel block, 30.3% before, 4.2% after
-(with psx-spyro's fine camera angles); the margin blocks alternate 0/38 before and at most 1.9:1 after. At 1x
-every real present is pixel-identical to the previous build (20 of 20, max difference 0). All eleven title
-products build with Clang.
+psx-spyro `scratch/judder-boot/{before4,fix4,tr4}/s0600`, stepped from boot, 40 presents from product frame 600 at
+`PSXPORT_IRES=4`. Worst even/odd change ratio on a 16-pixel block: 38:1 before, 1.9:1 with the value-keyed match,
+1.9:1 with declared places (the same blocks, x=32 y=112). With places from the sky alone it was 4.4:1 along the
+sign moby and 3.0:1 on the right-hand peak, which the moby and terrain declarations closed. In-betweens within 15%
+of one neighbour on a moving block: 15-29 of ~260 per in-between, as with the value-keyed match. A 4x gameplay
+turn in Artisans (`wk4/walk`) shows no seams in the near split ground.
+
+## Open
+Spyro 1 producers that project but declare no places stay on whole native pixels above 1x: the paired actor
+(Spyro, with its water cut), the drop and moby shadows, particles, glows, the sprite queue and portals. Each needs
+its declarations at the point it copies a projected word into a packet, as the moby emitter does.

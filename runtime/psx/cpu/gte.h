@@ -51,11 +51,9 @@ public:
     loadControl(gte::kTranslationX, words);
   }
 
-  // RTPS and RTPT hand each point they project to `sink` at full precision; null stops it.
-  using PreciseSink = void (*)(void *context, std::uint32_t sxy, float x, float y);
-  void reportPrecise(PreciseSink sink, void *context) {
-    regs_.preciseSink = sink;
-    regs_.preciseContext = context;
+  // The unrounded place of SXY0..2 as the projections pushed them; a direct write to the FIFO is not followed.
+  GtePlace projectedPlace(std::uint32_t entry) const {
+    return regs_.places[entry];
   }
 
   // The whole register file and flags, copied without running a read port.
@@ -83,8 +81,7 @@ private:
       writeControl(first + i, words[i]);
     }
   }
-  template <std::size_t Count>
-  std::array<std::uint32_t, Count> storeControl(std::uint32_t first) {
+  template <std::size_t Count> std::array<std::uint32_t, Count> storeControl(std::uint32_t first) {
     std::array<std::uint32_t, Count> words{};
     for (std::uint32_t i = 0; i < Count; ++i) {
       words[i] = readControl(first + i);
