@@ -3,7 +3,6 @@
 
 #include "frame_record.h"
 #include "frame_state.h"
-#include "precise_projection.h"
 #include "state_producer.h"
 
 #include <cstdint>
@@ -18,14 +17,12 @@ namespace psx::present {
 // the object's n-th entry in it was (after its last when there are fewer), else at the slot's head, else where the
 // table's walk order puts that slot. A CLUT `shown` never sampled is read from `vram`. An object whose render names a
 // table `shown` never walked keeps its entries. Nullopt when nothing is replaced, and for an in-between that would
-// keep any primitive as `shown` drew it: the frame is `shown`. `precise` holds what the GTE projects while each
-// render runs, so a rendered polygon keeps its vertices' sub-pixel place.
+// keep any primitive as `shown` drew it: the frame is `shown`.
 std::optional<FrameRecord> composeFrame(const FrameRecord &shown,
-                                       const FrameState *from,
-                                       const FrameState &to,
-                                       float t,
-                                       const StateProducers &producers,
-                                       std::span<const std::uint16_t> vram,
-                                       PreciseProjection &precise);
+                                        const FrameState *from,
+                                        const FrameState &to,
+                                        float t,
+                                        const StateProducers &producers,
+                                        std::span<const std::uint16_t> vram);
 
 } // namespace psx::present

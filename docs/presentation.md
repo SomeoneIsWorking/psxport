@@ -44,7 +44,7 @@ present plan / sink                           viewport, letterbox, window
 | `present/emission_scope.*` | the `(P, obj, k)` scope stack and packet-address to key map |
 | `runtime/cpu/native_dispatch.*` | `Producer{Arg}` registration; opens the emission scope around the call |
 | `present/frame_state.*` | producer states by the scope serial that saved them; per record, the states its packets came from |
-| `present/state_producer.*` | `StateProducer` (render at `t`, and its `Composition` there), `PrimitiveSink`, `PrimitiveList`, `kInBetweenAt`, the `StateProducers` registry on `Core` |
+| `present/state_producer.*` | `StateProducer` (render at `t`, and its `Composition` there), `PrimitiveSink` (primitives and declared vertex places), `PrimitiveList`, `kInBetweenAt`, the `StateProducers` registry on `Core` |
 | `present/guest_redraw.*`, `core/write_rollback.h` | `GuestRedraw`: a guest draw routine run again for an in-between, every store put back, registers and GTE restored, devices and guest time held (`SideEffectMode::Discard`) |
 | `present/frame_composer.*` | the frame at `t`: S's unproduced entries plus each producer's render, by OT slot |
 | `gpu/ordering_table.*` | OT node decode and the OT walk; `OtTables`, the title-named tables whose bucket heads tag each entry's slot |
@@ -220,15 +220,19 @@ The composer builds the frame at `t` from S's record:
   mask, texture window and interlace are those in effect where the primitive lands in S (the
   first recorded primitive at or after its position), and the CLUT from S's sample of the same CLUT
   attribute (`clutWord`), or from the device VRAM when S never sampled it.
-- **Sub-pixel place.** While a frame is composed, the GTE hands every point RTPS and RTPT project to
-  `PreciseProjection` (Beetle's projection push, reaching the bound register file's sink) unrounded,
-  keyed by the packed SXY word it rounded to. After each render, a polygon vertex whose word was
-  projected keeps its fraction past that whole pixel in `subX`/`subY`; points that round to one word
-  share the first one's place, so every polygon naming the word moves together and no seam opens. The
-  rasterizer truncates `whole * scale + fraction * scale` as the GTE truncates, so at 1x every vertex
-  is the guest's and above 1x a slow camera or object moves on in-betweens instead of snapping to the
-  neighbouring field's pixel. Real (`t = 1`) composes take the same place, so a still object does not
-  shift between presents. Sprites, lines and anything not projected through the GTE stay whole.
+- **Sub-pixel place.** The GTE keeps the unrounded place of each SXY FIFO entry as RTPS and RTPT push
+  it (`Gte::projectedPlace`, from Beetle's projection push). A producer that copies a projected word
+  into a packet declares that vertex's place to the sink by packet address and vertex index
+  (`PrimitiveSink::place`), carrying it through its own arithmetic (scratch slots, midpoints, pulls) as
+  it carries the word; `PrimitiveList` gives each polygon walked from a packet with declared places the
+  fraction past its whole pixel in `subX`/`subY`. No place is matched by value. A producer that cuts a
+  packet it already wrote reads the declared places back (`placed`). Every render declares places, so a
+  real (`t = 1`) compose and its in-betweens agree and a still object does not shift. A vertex shared by
+  two polygons is one projection, so both take one place and no seam opens; a producer that declares
+  places must declare them for every polygon it projects. The rasterizer truncates
+  `whole * scale + fraction * scale` as the GTE truncates: at 1x every projected vertex is the guest's.
+  A fraction set by `placeVertex` (a title lerping screen positions) truncates too, so at 1x a half-pixel
+  in-between draws on the lower pixel. Sprites and lines stay whole.
 - **Exactness.** At `t = 1`, 4:3, depth testing off, a render must reproduce the entries it replaces;
   the title's oracle compare covers the frame (at 1x; above it, projected vertices keep their fraction).
 

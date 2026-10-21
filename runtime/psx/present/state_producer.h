@@ -2,10 +2,12 @@
 #pragma once
 
 #include "frame_record.h"
+#include "gte_state.h"
 
 #include <cstddef>
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <span>
 #include <unordered_map>
 #include <utility>
@@ -20,15 +22,31 @@ class PrimitiveSink {
 public:
   virtual ~PrimitiveSink() = default;
   virtual void emit(OtSlot slot, const DrawPrimitive &primitive) = 0;
+  // The producer's unrounded screen place of polygon vertex `vertex` in the packet it wrote at `packet`, declared
+  // before the packet is emitted.
+  virtual void place(std::uint32_t /*packet*/, int /*vertex*/, const GtePlace & /*place*/) {}
+  // The place declared for that vertex, for a producer that cuts a packet it already wrote.
+  [[nodiscard]] virtual std::optional<GtePlace> placed(std::uint32_t /*packet*/, int /*vertex*/) {
+    return std::nullopt;
+  }
 };
 
-// A sink that keeps what it is handed, in order.
+// A sink that keeps what it is handed, in order; a polygon from a packet with declared places takes their
+// fractions past its whole pixels.
 class PrimitiveList final : public PrimitiveSink {
 public:
-  void emit(OtSlot slot, const DrawPrimitive &primitive) override {
-    primitives.emplace_back(slot, primitive);
-  }
+  void emit(OtSlot slot, const DrawPrimitive &primitive) override;
+  void place(std::uint32_t packet, int vertex, const GtePlace &place) override;
+  [[nodiscard]] std::optional<GtePlace> placed(std::uint32_t packet, int vertex) override;
   std::vector<std::pair<OtSlot, DrawPrimitive>> primitives;
+
+private:
+  struct VertexPlace {
+    std::uint64_t key = 0; // packet << 2 | vertex
+    GtePlace place{};
+  };
+  std::vector<VertexPlace> places_;
+  bool placesSorted_ = true;
 };
 
 // Where between two shown records the in-between present of fps60 is drawn (FramePresenter).

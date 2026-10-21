@@ -51,6 +51,7 @@ PacketChainWalker::walk(std::uint32_t link, OtSlot slot, DrawModeTracker &drawMo
       return packet;
     }
     drawMode.apply(*primitive);
+    primitive->sourceAddress = packet;
     sink.emit(slot, *primitive);
   }
   return std::nullopt;
