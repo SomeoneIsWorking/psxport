@@ -102,6 +102,12 @@ public:
   [[nodiscard]] virtual Composition composition(const StateInterval & /*states*/) const {
     return Composition::Render;
   }
+  // Into `into`, sized as `drawn`, the state of this object in a frame whose guest skipped its draw, where
+  // that skip is a state (a fade at zero), so an in-between next to that frame moves from or toward it.
+  // False when an undrawn object has no state: it appears and vanishes on a real frame.
+  [[nodiscard]] virtual bool rests(std::span<const std::byte> /*drawn*/, std::span<std::byte> /*into*/) const {
+    return false;
+  }
 };
 
 // The renders by producer guest address. A producer without one keeps its entries as recorded.

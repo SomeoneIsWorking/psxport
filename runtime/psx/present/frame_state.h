@@ -29,6 +29,17 @@ class FrameState {
 public:
   // The object's state, nullopt when it has none or is ambiguous.
   std::optional<std::span<const std::byte>> find(ObjectId id) const;
+  // Whether the record drew the object, its state single or ambiguous.
+  bool holds(ObjectId id) const;
+  // Calls `visit(ObjectId, std::span<const std::byte>)` for each object with a single state.
+  template <class Visit> void forEachObject(Visit &&visit) const {
+    for (const Saved &saved : saved_) {
+      if (!saved.ambiguous) {
+        visit(ObjectId{static_cast<std::uint32_t>(saved.key >> 32), static_cast<std::uint32_t>(saved.key)},
+              std::span<const std::byte>(bytes_).subspan(saved.offset, saved.size));
+      }
+    }
+  }
   bool empty() const {
     return saved_.empty();
   }

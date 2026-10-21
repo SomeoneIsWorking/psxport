@@ -18,12 +18,13 @@ class FrameComposer {
 public:
   // `shown` with the entries of every object a render covers replaced by that render at `t`, placed in
   // the OT slots it emits. An object is covered when its producer has a render and `to` holds its state;
-  // `from` null (a cut) renders every object at `to`. The n-th primitive in a slot goes where the object's
-  // n-th entry in it was (after its last when there are fewer), else at the slot's head, else where the
-  // table's walk order puts that slot. A CLUT `shown` never sampled is read from `vram`. An object whose
-  // render names a table `shown` never walked keeps its entries. Null when nothing is replaced, and for an
-  // in-between that would keep any primitive as `shown` drew it: the frame is `shown`. The record is valid
-  // until the next compose.
+  // `from` null (a cut) renders every object at `to`. An object one of the two frames skipped, whose
+  // producer names the skip as a state (StateProducer::rests), moves from or toward that state. The n-th
+  // primitive in a slot goes where the object's n-th entry in it was (after its last when there are fewer),
+  // else at the slot's head, else where the table's walk order puts that slot. A CLUT `shown` never sampled
+  // is read from `vram`. An object whose render names a table `shown` never walked keeps its entries. Null
+  // when nothing is replaced, and for an in-between that would keep any primitive as `shown` drew it: the
+  // frame is `shown`. The record is valid until the next compose.
   const FrameRecord *compose(const FrameRecord &shown,
                              const FrameState *from,
                              const FrameState &to,
@@ -53,6 +54,20 @@ private:
     DrawPrimitive primitive;
   };
 
+  // What one object's render became: placed, kept as recorded, or a refusal of the in-between.
+  enum class Placement : std::uint8_t { Drawn, Kept, Refused };
+
+  // The object at `states` rendered into placed_, each primitive at its entry in `run`, else by slot. With
+  // `refuses`, a render that cannot be drawn refuses the in-between; without, the object keeps its entries.
+  Placement place(const FrameRecord &shown,
+                  ObjectId id,
+                  const StateProducer &render,
+                  const StateInterval &states,
+                  std::span<const Keyed> run,
+                  std::span<const std::uint16_t> vram,
+                  bool refuses);
+  // resting_ sized to `bytes`, for StateProducer::rests.
+  std::span<std::byte> resting(std::size_t bytes);
   // Indexes `shown`; false when an in-between must refuse it.
   bool index(const FrameRecord &shown, const FrameState &to, const StateProducers &producers, bool inBetween);
   // Where the walk puts `slot` when the object had no entry in it; false when `shown` never walked its table.
@@ -74,6 +89,7 @@ private:
   std::vector<std::pair<std::size_t, DrawPrimitive>> placed_;
   std::vector<std::pair<std::uint64_t, std::size_t>> emitted_; // primitives the object emitted, by slot
   std::vector<RecordEntry> entries_;
+  std::vector<std::byte> resting_;
   PrimitiveList sink_;
   FrameRecord output_;
   bool outputPooled_ = false;

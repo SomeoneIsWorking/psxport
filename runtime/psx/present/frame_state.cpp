@@ -20,6 +20,14 @@ std::optional<std::span<const std::byte>> FrameState::find(ObjectId id) const {
   return std::span<const std::byte>(bytes_).subspan(found->offset, found->size);
 }
 
+bool FrameState::holds(ObjectId id) const {
+  const std::uint64_t key = indexKey(id);
+  const auto found = std::lower_bound(saved_.begin(), saved_.end(), key, [](const Saved &saved, std::uint64_t k) {
+    return saved.key < k;
+  });
+  return found != saved_.end() && found->key == key;
+}
+
 void stateSizeMismatch(std::size_t saved, std::size_t read) {
   lucent::error("present", "producer state saved as {} bytes read as {}", saved, read);
   std::abort();
