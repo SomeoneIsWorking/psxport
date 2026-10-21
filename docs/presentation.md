@@ -485,9 +485,10 @@ guest submitter address, the same key the override table uses, so "has a produce
 the registrations. A run records per row the primitives drawn, how many were keyed, and how many
 carried a key another primitive of the same record also carried (ambiguous, so drawn unblended), with
 the first such key, and how many keyed primitives had no render (no `StateProducer` at the key's producer, or no state saved for its object, so they show as drawn); the unkeyed rows ranked by primitive count are the producer work queue. Owners: `debug/producer_census.*` (the
-per-run table, fed from each sealed record) and `debug/ot_attr.*` (guest packet to submitter). The
-REPL `census` command prints the table so far, and every run logs its report (the keyed, unkeyed,
-without-render and duplicated totals, then the ranked rows) at shutdown.
+per-run table, fed from each sealed record) and `debug/ot_attr.*` (guest packet to submitter). The census is a
+diagnostic: it books every guest store, so it runs only with `PSXPORT_PRODUCERS=1` and the player's product never
+pays it; nothing a composed frame needs reads it. Armed, the REPL `census` command prints the table so far, and the
+run logs its report (the keyed, unkeyed, without-render and duplicated totals, then the ranked rows) at shutdown.
 
 A keyed primitive counts under its key's producer. An unkeyed one counts under the first frame of the
 storing call chain that is a registered producer, else the span's emitter; with none it is counted as

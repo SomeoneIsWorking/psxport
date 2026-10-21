@@ -95,6 +95,9 @@ void ProducerCensus::summary(const char *who) const {
 }
 
 void ProducerCensus::report(const char *who) const {
+  if (!g_producer_census_armed) {
+    return;
+  }
   if (!fed_) {
     lucent::warn("producers", "{}: the producer census was never fed (no record sealed, or PSXPORT_PRODUCERS=0)", who);
     return;

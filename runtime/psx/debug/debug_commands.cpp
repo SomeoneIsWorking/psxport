@@ -286,7 +286,7 @@ void guestLedger(const Call &call) {
 
 void census(const Call &call) {
   call.core.rsub.census.report("census");
-  call.reply("census reported to the log");
+  call.reply(g_producer_census_armed ? "census reported to the log" : "the census is off; PSXPORT_PRODUCERS=1 arms it");
 }
 
 void renderPath(const Call &call) {
