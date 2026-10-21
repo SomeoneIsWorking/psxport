@@ -29,7 +29,7 @@ public:
   RmlOverlay(const RmlOverlay &) = delete;
   RmlOverlay &operator=(const RmlOverlay &) = delete;
 
-  // A context laid out for `sink` on `library`, whose window (null headless) feeds input only. No-op once up.
+  // A context laid out for `sink` on `library`, whose window feeds input only. No-op once up.
   void init(psx::ui::RmlUiLibrary &library, psx::present::PixelSize sink);
   void shutdown();
 

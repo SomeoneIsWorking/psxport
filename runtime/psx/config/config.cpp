@@ -40,8 +40,7 @@ Var<long> cv_spin_runs("PSXPORT_SPIN_RUNS", 48, kRunOnly);
 Var<long> cv_watchdog_boot("PSXPORT_WATCHDOG_BOOT", -1, kRunOnly);
 Var<long> cv_native_frames("PSXPORT_NATIVE_FRAMES", 0, kRunOnly);
 Var<std::string> cv_asset_dir("PSXPORT_ASSET_DIR", "", kRunOnly);
-Var<bool> cv_vk_window("PSXPORT_VK_WINDOW", false, kRunOnly);
-Var<bool> cv_vk_headless("PSXPORT_VK_HEADLESS", false, kRunOnly);
+Var<bool> cv_show_window("PSXPORT_SHOW_WINDOW", false, kRunOnly);
 Var<std::string> cv_settings_path("PSXPORT_SETTINGS", "psxport_settings.ini", kRunOnly);
 // Off stops the producer DB recording; it prices the census, it fixes nothing.
 Var<bool> cv_producers("PSXPORT_PRODUCERS", true, kRunOnly);
@@ -89,8 +88,7 @@ const Registration kRegistration{
     cv_watchdog_boot,
     cv_native_frames,
     cv_asset_dir,
-    cv_vk_window,
-    cv_vk_headless,
+    cv_show_window,
     cv_settings_path,
     cv_producers,
     cv_render_path,
@@ -179,12 +177,12 @@ const char *layer_name(Layer layer) {
   return "?";
 }
 
-bool windowRequested() {
-  return cv_vk_window.get() && !cv_vk_headless.get();
+bool show_window() {
+  return cv_show_window.get();
 }
 
 void applyPackagedDefaults(const std::filesystem::path &packageRoot) {
-  cv_vk_window.set(true, Layer::Default);
+  cv_show_window.set(true, Layer::Default);
   cv_asset_dir.set((packageRoot / "usr" / "share" / "psxport").string(), Layer::Default);
 }
 

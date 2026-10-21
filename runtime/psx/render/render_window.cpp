@@ -9,15 +9,33 @@
 
 namespace psx::render {
 
-void RenderWindow::create(bool headless, const char *title) {
-  if (headless) {
-    return;
-  }
+void RenderWindow::create(bool shown, const char *title, present::PixelSize size, bool exactPixels) {
   // HIGH_PIXEL_DENSITY sizes the swapchain and the UI in physical pixels on a scaled display.
-  const SDL_WindowFlags flags = SDL_WINDOW_HIGH_PIXEL_DENSITY |
-                                (psx::config::fullscreen_requested() ? SDL_WINDOW_FULLSCREEN : SDL_WINDOW_RESIZABLE);
-  window_ = SDL_CreateWindow(title, kWindowSize.width, kWindowSize.height, flags);
+  SDL_WindowFlags flags = exactPixels ? 0 : SDL_WINDOW_HIGH_PIXEL_DENSITY;
+  const SDL_PropertiesID props = SDL_CreateProperties();
+  if (shown) {
+    flags |= psx::config::fullscreen_requested() ? SDL_WINDOW_FULLSCREEN : SDL_WINDOW_RESIZABLE;
+  } else if (SDL_strcmp(SDL_GetCurrentVideoDriver(), "wayland") == 0) {
+    // SDL_GPU gives an SDL-hidden window no swapchain image; a roleless surface counts as shown to SDL and the
+    // compositor never maps it.
+    SDL_SetBooleanProperty(props, SDL_PROP_WINDOW_CREATE_WAYLAND_SURFACE_ROLE_CUSTOM_BOOLEAN, true);
+  } else {
+    flags |= SDL_WINDOW_HIDDEN;
+  }
+  SDL_SetStringProperty(props, SDL_PROP_WINDOW_CREATE_TITLE_STRING, title);
+  SDL_SetNumberProperty(props, SDL_PROP_WINDOW_CREATE_WIDTH_NUMBER, size.width);
+  SDL_SetNumberProperty(props, SDL_PROP_WINDOW_CREATE_HEIGHT_NUMBER, size.height);
+  SDL_SetNumberProperty(props, SDL_PROP_WINDOW_CREATE_FLAGS_NUMBER, static_cast<Sint64>(flags));
+  window_ = SDL_CreateWindowWithProperties(props);
+  SDL_DestroyProperties(props);
   GPUCHK(window_, "SDL_CreateWindow");
+  const present::PixelSize pixels = pixelSize();
+  lucent::info("render",
+               "window {}x{} pixels {} (video driver {})",
+               pixels.width,
+               pixels.height,
+               shown ? "shown" : ((flags & SDL_WINDOW_HIDDEN) != 0 ? "hidden" : "roleless, never mapped"),
+               SDL_GetCurrentVideoDriver());
 }
 
 void RenderWindow::claim(SDL_GPUDevice *device) {
@@ -55,16 +73,11 @@ void RenderWindow::destroy() {
 present::PixelSize RenderWindow::pixelSize() const {
   int width = 0;
   int height = 0;
-  if (window_ != nullptr) {
-    SDL_GetWindowSizeInPixels(window_, &width, &height);
-  }
-  return {width > 0 ? width : 320, height > 0 ? height : 240};
+  SDL_GetWindowSizeInPixels(window_, &width, &height);
+  return {width, height};
 }
 
 double RenderWindow::refreshPeriodMs() const {
-  if (window_ == nullptr) {
-    return 0.0;
-  }
   const SDL_DisplayMode *mode = SDL_GetCurrentDisplayMode(SDL_GetDisplayForWindow(window_));
   return mode != nullptr && mode->refresh_rate > 0.0f ? 1000.0 / static_cast<double>(mode->refresh_rate) : 0.0;
 }

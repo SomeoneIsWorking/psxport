@@ -32,7 +32,6 @@ public:
   RmlRenderInterfaceGpu &renderer() const {
     return *renderer_;
   }
-  // Null headless.
   SDL_Window *window() const {
     return window_;
   }

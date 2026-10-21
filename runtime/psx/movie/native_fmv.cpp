@@ -79,7 +79,7 @@ void Fmv::learnLayout() {
 
 // Headless and an unclaimed session open no device.
 void Fmv::audioOpen(int freq) {
-  if (!game->spu_audio.output().mayOpen(game->renderDevice.windowed())) {
+  if (!game->spu_audio.output().mayOpen(game->renderDevice.shown())) {
     return;
   }
   if (audio_.isOpen() && audio_.rateHz() == freq) {

@@ -14,9 +14,7 @@ namespace psx::ui {
 
 RmlUiLibrary::RmlUiLibrary(render::RenderDevice &device)
     : window_(device.window().window()), renderer_(std::make_unique<RmlRenderInterfaceGpu>(device)) {
-  // RmlUi's SDL system interface needs a window; headless, the base interface supplies the clock.
-  system_ =
-      window_ != nullptr ? std::make_unique<SystemInterface_SDL>(window_) : std::make_unique<Rml::SystemInterface>();
+  system_ = std::make_unique<SystemInterface_SDL>(window_);
   Rml::SetSystemInterface(system_.get());
   Rml::SetRenderInterface(renderer_.get());
   ready_ = Rml::Initialise();

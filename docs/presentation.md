@@ -363,8 +363,19 @@ its build (issue 0161). The line between the two is the swapchain:
   neither the acquire nor the submit waits for a vblank; a build left in flight on the GPU only delays
   when the shown image is scanned out, not the call.
 
-A headless build, or a pane build with no host attached, leaves nothing to show, and `show` does
-nothing. Unpaced presents (the boot black, a movie's end, a boot card's last frame) build and show at
+A pane build with no host attached leaves nothing to show, and `show` does nothing.
+
+**The window** (`RenderWindow`) is one path for players and tools. `PSXPORT_SHOW_WINDOW=1` (the player
+launcher, a packaged run) maps it; unset or 0 creates the same window unmapped, claims it with the same
+present mode and runs the same build, pace and show, so a tool run stamps `GpuPerf::presented` and its
+`[playcheck] presents:` line measures real pacing. On Wayland the tool window is a roleless surface: SDL
+counts it as shown, the compositor never maps it, and its swapchain presents (MAILBOX) without waiting. Elsewhere
+it is `SDL_WINDOW_HIDDEN`, for which SDL_GPU's acquire returns success with no texture before Vulkan is
+asked (`VULKAN_INTERNAL_AcquireSwapchainTexture`, SDL 3.4), so every show is skipped and logged once
+(`[sinkidle]`) and the run reports `intervals=0`. Host input, the audio device and the default pad
+recording follow `RenderDevice::shown()`; presenting never does. `PSXPORT_PRESENT_SINK=WxH` creates the
+window with exactly that drawable in pixels; otherwise it is `kWindowSize` in display units. Check: the log's `[render] window ... roleless, never mapped` line, and KWin's window list
+(`qdbus --literal org.kde.KWin /WindowsRunner org.kde.krunner1.Match <title>`) never names it. Unpaced presents (the boot black, a movie's end, a boot card's last frame) build and show at
 once. A movie frame is decoded and built before its field wait and shown after it (`Fmv::buildFrame`,
 `showFrame`); Tomba's SCEA card builds its host picture, paces, then shows.
 

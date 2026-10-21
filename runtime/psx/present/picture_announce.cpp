@@ -24,7 +24,7 @@ WideOutcome classifyWide(
   if (!recordPath) {
     return WideOutcome::RefusedDevice;
   }
-  // AUTO before the rest: it resolves to the sink, and a headless sink is 4:3.
+  // AUTO before the rest: it resolves to the sink, and the default window is 4:3.
   if (aspect == present::PresentationAspect::MatchSink) {
     return WideOutcome::RefusedAuto;
   }

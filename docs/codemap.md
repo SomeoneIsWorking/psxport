@@ -60,7 +60,7 @@ Dependency direction: title repo → `runtime/psx/game/` (the title interface) �
 - `runtime/psx/gpu/gp0_record_tap.*`, `texture_feedback.*` — GP0 work recorded per logic frame, texture cache feedback / stale VRAM reads
 - `runtime/psx/gpu/record_geometry.*`, `record_raster_*`, `vram_bitmap.h` — record raster plan: entry write rects, gpu.c coverage per primitive at internal resolution, canvas margins, written-region bitmaps
 - `runtime/psx/render/record_rasterizer.*`, `record_present.cpp` — record raster on the GPU: ops into VRAM image and canvases, Record-path present, recordcheck, record shot
-- `runtime/psx/render/render_device.*`, `render_window.*`, `render_submit.cpp`, `render_shader.*`, `render_check.h`, `present_sink.h`, `present_mode.h` — SDL3 GPU device (RenderDevice): window, swapchain, present mode, samplers, pipelines, upload, download, submit
+- `runtime/psx/render/render_device.*`, `render_window.*`, `render_submit.cpp`, `render_shader.*`, `render_check.h`, `present_sink.h`, `present_mode.h` — SDL3 GPU device (RenderDevice): window shown or unmapped (PSXPORT_SHOW_WINDOW, hidden tool window), swapchain, present mode, samplers, pipelines, upload, download, submit
 - `runtime/psx/render/render_state.h`, `render_present.cpp`, `render_panes.cpp`, `render_pane.h`, `render_screen.cpp`, `render_readback.cpp`, `render_api.cpp`, `render.h` — per-Game present (RenderState): present image build and show, panes built into the present image, pane target, present and device shots, VRAM captures, video status
 - `runtime/psx/shaders_gpu/`, `cmake/gpu_shaders.cmake`, `tools/gen_gpu_shaders.py` — shaders and SPIR-V, generated record op layout
 - `runtime/psx/present/display_presenter.*`, `present_plan.h`, `present_ledger.*`, `video_plan.h`, `pixel_size.h` — present: guest display to screen, letterbox, fade, 24bpp, internal resolution scale, present ledger
@@ -79,7 +79,7 @@ Dependency direction: title repo → `runtime/psx/game/` (the title interface) �
 - `runtime/psx/audio/spu_*` — SPU (Beetle spu.c) device, register file, mixer, field cadence, per-field host feed
 - `runtime/psx/audio/xa_adpcm.*` — XA coding-byte format and ADPCM sector decode (the one decoder for SPU, FMV and tools)
 - `runtime/psx/audio/xa_state.h`, `xa_stream.cpp`, `xa_push_pacing.h` — XA streaming into the SPU CD ring, push and pull modes, clip playback (also the REPL xadump), pacing
-- `runtime/psx/audio/host_audio_output.*` — the SDL3 audio stream and the session claim on it (headless means no audio)
+- `runtime/psx/audio/host_audio_output.*` — the SDL3 audio stream and the session claim on it (a hidden window means no audio)
 - `runtime/psx/audio/audio_queue_policy.h`, `wav_writer.*` — host queue buffering targets, WAV capture
 - `runtime/psx/movie/mdec_device.*` — MDEC (Beetle mdec.c) device: ports, DMA in/out
 - `runtime/psx/movie/fmv_decode.*`, `native_fmv.*`, `movie_clock.h` — STR frame assembly, BS decode, MDEC tables once per movie, macroblocks tiled to RGB24 or RGBA32, native movie playback and its sector clock

@@ -80,7 +80,7 @@ std::string FirstRunSetup::judge(const std::filesystem::path &image) const {
   return {};
 }
 
-FirstRunSetup::Outcome FirstRunSetup::run(bool windowed) const {
+FirstRunSetup::Outcome FirstRunSetup::run(bool shown) const {
   const std::string name(title_.displayName);
   setup_ui::Config config;
   config.title = name + " setup";
@@ -107,17 +107,17 @@ FirstRunSetup::Outcome FirstRunSetup::run(bool windowed) const {
       });
   setup_ui::ViewOptions options;
   options.window_title = config.title;
-  options.offscreen = !windowed;
+  options.offscreen = !shown;
   setup_ui::View view(session, options);
   if (!view.open()) {
     lucent::error("setup", "the {} setup screen could not open: {}", name, view.last_error());
     return Outcome::Unavailable;
   }
-  if (!windowed) {
+  if (!shown) {
     view.frame();
     view.close();
     lucent::error("setup",
-                  "{} has no disc: set {} or PSXPORT_DISC, or run windowed to choose one",
+                  "{} has no disc: set {} or PSXPORT_DISC, or set PSXPORT_SHOW_WINDOW=1 to choose one",
                   name,
                   title_.discEnvVar != nullptr ? title_.discEnvVar : "PSXPORT_DISC");
     return Outcome::Unavailable;

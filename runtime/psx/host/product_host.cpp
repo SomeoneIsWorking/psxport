@@ -136,7 +136,7 @@ int ProductHost::runOnlyTitle() {
   }
   const std::filesystem::path executable = only.defaultExecutable(catalog_.provisioningRoot());
   if (provisionExecutable(only, executable) == Provisioning::Unavailable) {
-    switch (FirstRunSetup(only).run(psx::config::windowRequested())) {
+    switch (FirstRunSetup(only).run(psx::config::show_window())) {
     case FirstRunSetup::Outcome::Accepted:
       break;
     case FirstRunSetup::Outcome::Declined:

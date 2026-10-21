@@ -76,8 +76,8 @@ void PadRecordReplay::openSink(const PadSessionConfig &config, const CardIdentit
   if (path == "0") {
     return; // explicit disable
   }
-  // The default sink records windowed runs, never a replay; a resume records so it can be resumed again.
-  if (path.empty() && config.replayPath.empty() && config.windowed) {
+  // The default sink records shown runs, never a replay; a resume records so it can be resumed again.
+  if (path.empty() && config.replayPath.empty() && config.shown) {
     path = kDefaultSink;
     defaultSink = true;
     rotateDefaultSink();

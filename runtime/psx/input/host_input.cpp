@@ -175,9 +175,9 @@ void psx::input::HostInput::rescanControllers() {
   SDL_free(instances);
 }
 
-std::uint16_t psx::input::HostInput::poll(bool windowAvailable) {
+std::uint16_t psx::input::HostInput::poll(bool shown) {
   drainEvents();
-  if (!windowAvailable) {
+  if (!shown) {
     mPauseRequested = false;
     mFrameStepRequested = false;
     mBugReportRequested = false;
@@ -268,7 +268,8 @@ std::uint16_t psx::input::HostInput::poll(bool windowAvailable) {
   // analog stick in "analog mode") is the input, not the keyboard. Active-low, so a CHANGED direction
   // bit is a cleared one. PSXPORT_PAD_NOPAD=1 is the documented way out when it cannot be unplugged.
   if (!mPadDirsWarned) {
-    if ((keyboardMask & psx::input::kButtonDirections) == psx::input::kButtonDirections && (mask & psx::input::kButtonDirections) != psx::input::kButtonDirections) {
+    if ((keyboardMask & psx::input::kButtonDirections) == psx::input::kButtonDirections &&
+        (mask & psx::input::kButtonDirections) != psx::input::kButtonDirections) {
       lucent::info("pad",
                    "a game controller is driving DIRECTIONS (host pad mask=0x{:04x}). If WASD seems dead, an analog "
                    "stick / phantom pad is the input. Set PSXPORT_PAD_NOPAD=1 to use the keyboard only.",
@@ -283,8 +284,8 @@ std::uint16_t psx::input::HostInput::poll(bool windowAvailable) {
 
 // No host input at all in a build without SDL: there is no window to read and no controller to open,
 // so the mask is "nothing pressed" and no debug-key edge can exist.
-std::uint16_t psx::input::HostInput::poll(bool windowAvailable) {
-  (void)windowAvailable;
+std::uint16_t psx::input::HostInput::poll(bool shown) {
+  (void)shown;
   drainEvents();
   mPauseRequested = false;
   mFrameStepRequested = false;

@@ -2,8 +2,8 @@
 
 #include "config_vars.h"
 
-#include <lucent/log.h>
 #include <SDL3/SDL.h>
+#include <lucent/log.h>
 
 namespace psx::audio {
 
@@ -15,8 +15,8 @@ void HostAudioOutput::setClaimed(bool claimed) {
   lucent::info("audio", "host output {} by this session", claimed ? "claimed" : "released");
 }
 
-bool HostAudioOutput::mayOpen(bool windowed) const {
-  return claimed_ && !psx::config::no_audio() && windowed;
+bool HostAudioOutput::mayOpen(bool shown) const {
+  return claimed_ && !psx::config::no_audio() && shown;
 }
 
 HostAudioOutput::Stream::~Stream() {

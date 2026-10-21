@@ -12,10 +12,10 @@ RunBudget RunBudget::decide(const RunBudgetInputs &inputs) {
   if (inputs.explicitCap > 0) {
     return RunBudget(static_cast<std::uint64_t>(inputs.explicitCap));
   }
-  if (inputs.padRecording || inputs.repl || inputs.clientLive || inputs.windowed) {
+  if (inputs.padRecording || inputs.repl || inputs.clientLive || inputs.shown) {
     return RunBudget(0);
   }
-  return RunBudget(kHeadlessDefaultSteps);
+  return RunBudget(kHiddenDefaultSteps);
 }
 
 RunBudget RunBudget::fromConfig(const psx::config::Config &config) {
@@ -24,7 +24,7 @@ RunBudget RunBudget::fromConfig(const psx::config::Config &config) {
   inputs.padRecording = !psx::config::pad_replay_path().empty() || !psx::config::pad_resume_path().empty();
   inputs.repl = config.repl;
   inputs.clientLive = psx::debug::debugServerLive();
-  inputs.windowed = psx::config::windowRequested();
+  inputs.shown = psx::config::show_window();
   const RunBudget budget = decide(inputs);
   lucent::info("run", "run budget: {} fence step(s)", budget.cap() != 0 ? std::to_string(budget.cap()) : "uncapped");
   return budget;

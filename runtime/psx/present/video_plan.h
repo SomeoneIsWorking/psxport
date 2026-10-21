@@ -1,5 +1,4 @@
-// video_plan.h — the internal-resolution scale as a pure function of the presentation sink, which both
-// legs have, so headless and windowed runs pick the same scale.
+// video_plan.h — the internal-resolution scale as a pure function of the presentation sink.
 #pragma once
 
 #include <cmath>

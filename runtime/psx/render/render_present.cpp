@@ -95,8 +95,7 @@ void RenderState::ensurePresentImage(PixelSize size) {
   presentReadback_ = device_.makeTransferBuffer(SDL_GPU_TRANSFERBUFFERUSAGE_DOWNLOAD,
                                                 static_cast<std::uint32_t>(size.width) * size.height * 4);
   presentImageSize_ = size;
-  lucent::info(
-      "render", "present image {}x{} ({} sink)", size.width, size.height, device_.windowed() ? "windowed" : "headless");
+  lucent::info("render", "present image {}x{}", size.width, size.height);
 }
 
 void RenderState::ensureHostImage(PixelSize size) {
@@ -148,15 +147,14 @@ void RenderState::buildDisplay(gpu::VramRect display) {
   if (!presentsRecord_) {
     uploadDeviceVram(cmd, game_.core.gpuDevice().vram());
   }
-  const present::PresentPlan plan = present::planPresent(inputs, !device_.windowed());
+  const present::PresentPlan plan = present::planPresent(inputs);
   viewport_ = plan.viewport;
   ++presentSerial_;
   lucent::debug("present",
-                "sink {}x{} pane={} swapchain={} src_ires={} rgb24={} disp={},{},{},{} viewport={},{},{},{}",
+                "sink {}x{} pane={} src_ires={} rgb24={} disp={},{},{},{} viewport={},{},{},{}",
                 plan.sink_w,
                 plan.sink_h,
                 target_ == PresentTarget::Pane ? "yes" : "no",
-                plan.to_swapchain ? "yes" : "no",
                 plan.src_ires,
                 plan.fmt[0],
                 plan.disp[0],
@@ -173,7 +171,7 @@ void RenderState::buildDisplay(gpu::VramRect display) {
   device_.submit(cmd, "present build");
   // A pane's window belongs to the host compositing it, so the host composites here and shows at show().
   const bool toPaneHost = target_ == PresentTarget::Pane && paneHost_.attached();
-  showPending_ = toPaneHost || (plan.to_swapchain && target_ == PresentTarget::Swapchain);
+  showPending_ = toPaneHost || (plan.build && target_ == PresentTarget::Swapchain);
   if (toPaneHost) {
     paneHost_.built();
   }
@@ -247,7 +245,7 @@ void RenderState::recordScreen(SDL_GPUCommandBuffer *cmd, SDL_GPUTexture *target
 }
 
 void RenderState::repaint() {
-  if (!device_.enabled() || !device_.up() || !device_.windowed()) {
+  if (!device_.enabled() || !device_.up()) {
     return;
   }
   showPresentImage(device_.acquire());
@@ -278,7 +276,7 @@ void RenderState::buildImage(const std::uint8_t *rgba, PixelSize size, float fad
   device_.upload(cmd, hostUpload_, {rgba, static_cast<std::size_t>(size.width) * size.height * 4}, hostImage_, size);
   buildHostImage(cmd, std::clamp(fade, 0.0f, 1.0f));
   device_.submit(cmd, "host image build");
-  showPending_ = device_.windowed() && target_ == PresentTarget::Swapchain;
+  showPending_ = target_ == PresentTarget::Swapchain;
 }
 
 void RenderState::preseqArm(int count, const char *dir) {

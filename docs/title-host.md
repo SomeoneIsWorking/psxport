@@ -72,8 +72,8 @@ sets the first and third on a `DiscState`; `TitleSession::boot` and `TitleDisc` 
 
 With no argument a one-title product provisions its executable. If it is neither there nor extractable, `FirstRunSetup` shows the shared setup-ui screen (one judged image, adopted, not
 copied): the chosen image must open as a CHD and its `discExecutablePath` must authenticate as the
-title; an accepted path is saved and provisioning runs again. Closing the screen exits 0. Without a
-window (`psx::config::windowRequested()` false) it renders one offscreen frame, logs the key to set and
+title; an accepted path is saved and provisioning runs again. Closing the screen exits 0. With the
+window not shown (`psx::config::show_window()` false) it renders one offscreen frame, logs the key to set and
 exits 2, so a test run never waits on a player. The selector has no first-run screen yet.
 
 A packaged run (`Config::packageRoot`, the AppImage's absolute `APPDIR`) applies
@@ -176,7 +176,7 @@ run came from it, and end the process under `runExecutable`.
 
 `RunBudget` bounds a whole run, counted in presentation-fence steps: one per product step and one per
 selector frame. An explicit `PSXPORT_NATIVE_FRAMES` wins; otherwise a pad replay or resume, the REPL or
-a live control client leaves it uncapped, a windowed run is uncapped and a headless one stops at 120.
+a live control client leaves it uncapped, a shown window is uncapped and a hidden one stops at 120.
 This is the only place the live-client rule lives: `DbgServer::start` opens the channel and answers
 no cap, and `ProductHost` takes the process's cap from `RunBudget::fromConfig`.
 It never counts a panel's pre-roll steps, and panels never print a run-end report, apply configured

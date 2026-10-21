@@ -23,7 +23,8 @@ product does not carry a second windowing or graphics stack.
 
 - Preserve the 16-bit PSX VRAM representation, CLUT decode, semitransparency modes, primitive order,
   display-region selection, letterboxing, fades, and bounded readback.
-- Headless and windowed execution use the same rendering pipeline. Only the final sink differs.
+- A tool run and a player run use the same window, swapchain and rendering pipeline; only the window's
+  visibility differs (`PSXPORT_SHOW_WINDOW`, `presentation.md`).
 - Build-owned generated headers are namespaced by consumer so configuring or cleaning one build
   cannot affect another.
 - Apple shader delivery uses SDL_shadercross from the same authored shader sources; platform-specific

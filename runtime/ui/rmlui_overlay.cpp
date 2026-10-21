@@ -81,8 +81,7 @@ void RmlOverlay::init(psx::ui::RmlUiLibrary &library, psx::present::PixelSize si
   mMenu = std::make_unique<psx::ui::MenuDocument>(c, d, game);
 
   lucent::info("rmlui",
-               "overlay up ({} sink {}x{}, {}/{} fonts, {} tabs / {} rows, ESC to toggle)",
-               library.window() != nullptr ? "windowed" : "headless",
+               "overlay up (sink {}x{}, {}/{} fonts, {} tabs / {} rows, ESC to toggle)",
                sink_w,
                sink_h,
                library.fontsLoaded(),
@@ -234,8 +233,7 @@ void RmlOverlay::newFrame() {
   }
   // dp follows the window's display scale, so the UI keeps its physical size on a scaled display.
   // Read each frame rather than on SDL's scale-change event, which a hidden menu never receives.
-  SDL_Window *window = mLibrary->window();
-  c->SetDensityIndependentPixelRatio(window != nullptr ? SDL_GetWindowDisplayScale(window) : 1.0f);
+  c->SetDensityIndependentPixelRatio(SDL_GetWindowDisplayScale(mLibrary->window()));
   if (mMenu) {
     mMenu->update(); // no-op while hidden
   }
