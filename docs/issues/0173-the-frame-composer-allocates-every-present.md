@@ -4,7 +4,9 @@ Status: open. Owner: `runtime/psx/present/frame_composer.cpp` `composeFrame`, `r
 
 ## Observed
 Review of psx-spyro issue 0196 pass 3: `composeFrame` builds its working containers afresh on every present, real
-and in-between.
+and in-between. Review of pass 4: every producer save and render allocates too. Spyro's twelve producer saves (Spyro 1's flame
+`drawFlame` among them) build a `LevelReads` (an `unordered_map`) and its `words()` vector on each save, and each
+render builds a `HostMemory` (a `std::map` of byte vectors) inside `actors::InBetween`.
 
 ## Cause
 Per call it constructs `covered` (each object with an entry vector and an `unordered_map` of slot vectors),
@@ -17,4 +19,6 @@ Per call it constructs `covered` (each object with an entry vector and an `unord
 A `FrameComposer` owned by `FramePresenter` that keeps every container as a member, cleared per compose, replaces
 the node-allocating maps with sorted vectors, and composes into a kept `FrameRecord` whose vectors keep their
 capacity (`replaceEntries` taking a span). Record sealing and `FrameState` also allocate per frame; the same
-treatment applies there.
+treatment applies there. Producers get the same: one `LevelReads` and one `HostMemory` per producer, kept by the
+title's session and cleared per use, `LevelReads` noting into a vector sorted and deduplicated in place (its
+`words()` a span over it) and `HostMemory` keeping its ranges in a sorted vector whose byte buffers are reused.

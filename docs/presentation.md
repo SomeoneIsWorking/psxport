@@ -44,7 +44,7 @@ present plan / sink                           viewport, letterbox, window
 | `present/emission_scope.*` | the `(P, obj, k)` scope stack and packet-address to key map |
 | `runtime/cpu/native_dispatch.*` | `Producer{Arg}` registration; opens the emission scope around the call |
 | `present/frame_state.*` | producer states by the scope serial that saved them; per record, the states its packets came from |
-| `present/state_producer.*` | `StateProducer` (render at `t`, and its `Composition` there), `PrimitiveSink` (primitives and declared vertex places), `PrimitiveList`, `kInBetweenAt`, the `StateProducers` registry on `Core` |
+| `present/state_producer.*` | `StateProducer` (render at `t`, and its `Composition` there), `PrimitiveSink` (primitives and declared vertex places), `PrimitiveList`, the `StateProducers` registry on `Core` |
 | `present/guest_redraw.*`, `core/write_rollback.h` | `GuestRedraw`: a guest draw routine run again for an in-between, every store put back, registers and GTE restored, devices and guest time held (`SideEffectMode::Discard`) |
 | `present/frame_composer.*` | the frame at `t`: S's unproduced entries plus each producer's render, by OT slot |
 | `gpu/ordering_table.*` | OT node decode and the OT walk; `OtTables`, the title-named tables whose bucket heads tag each entry's slot |
@@ -210,8 +210,8 @@ The composer builds the frame at `t` from S's record:
 - **Composition.** `StateProducer::composition(states)` says what the object's entries become at `t`:
   `Render` (replaced by `render`, the default), `Recorded` (kept as the guest drew them, which is the
   object at `t`) or `Refused` (the object cannot be drawn at `t`; an in-between is then S whole). A
-  producer that saves one in-between rather than two states answers `Render` only at `kInBetweenAt`
-  between the states it was made for.
+  producer that saves its in-betweens rather than two states answers `Render` only at the `t` it saved
+  (`inBetweenAt`, the presenter's points), and refuses a frame whose length it did not save them for.
 - **Guest redraw.** A title whose objects are drawn by guest code it does not port can run that code
   again inside the logic frame for the in-between: `GuestRedraw` saves the CPU and GTE, arms
   `Core::writeRollback` so every guest store is noted and put back newest first (such a store binds
@@ -263,8 +263,9 @@ there are no per-vertex keys. An in-between with nothing produced is the shown r
   device's (`FramePresenter::shownRecord`). Records that drew nothing are not held, so their writes are
   kept as rects with their sequence until they are older than the oldest held drawing record
   (`holdUndrawnWrites`). The presenter remembers which record each present showed.
-- **Cadence.** With the title's 60 fps on, each logic frame of two or more fields gets two presents, at
-  `t = 0.5` and `t = 1`; a one-field frame, or any frame with it off, gets one at `t = 1`. The
+- **Cadence.** With the title's 60 fps on, a logic frame of n >= 2 fields gets n presents one field apart, at
+  `t = k / n` for k = 1..n (`FramePresenter::presentRecords`), so each vblank of a display at the field rate
+  shows the frame a field further on; a one-field frame, or any frame with it off, gets one at `t = 1`. The
   `presentseq` debug channel logs each present as it is shown: host time, record shown (-1 for the
   displayed VRAM as it stands, with no record composed), from, `t`, fields, and the deadline it was scheduled
   for (`due`). With no record drawing the displayed buffer, S' unknown, or a
@@ -370,10 +371,12 @@ represented field count. A title with its own field scheduler advances `Timing::
 delivered field and plans with `FramePacer::presentedFieldsDeadline`, which creates no field. In-betweens
 split the deadline of the same fields. Deadlines step at `pacedFieldRateMilliHz` (`pace_plan.h`): a whole fraction of
 the window's display refresh (`RenderWindow::refreshMilliHz`) when it lies within half the audio queue's rate trim
-of the guest's field rate, else the field rate. An NTSC title on a 60.00 Hz display so runs 0.1% fast against its
-own clock and each present meets one vblank, where pacing to 59.94 Hz left one vblank in about 1000 (every 16.7 s)
-with no new present; the audio queue's trim takes up the extra samples, and emulated time still advances by guest
-fields. The movie field grid steps at the same rate. NOPACE suppresses host waiting only. Each `Game` owns its `FramePacer`
+of the guest's field rate, else the field rate (`FramePacer::pacedFieldRateMilliHz`). An NTSC title on a 60.00 Hz
+display so runs 0.1% fast against its own clock and each present meets one vblank; emulated time still advances by
+guest fields. A field that overruns its deadline by more than an interval drops the debt in whole intervals
+(`pacePlan`), so later deadlines keep their place on the vblank grid. The audio device consumes at that same speed (`FramePacer::pacedSpeed` is the base of
+`AudioQueuePolicy::consumptionRatio`), so the queue holds its 90 ms target and the full trim stays for jitter; a
+hidden window opens no audio device, so only a shown run exercises this. The movie field grid steps at the same rate. NOPACE suppresses host waiting only. Each `Game` owns its `FramePacer`
 and deadline; `paceSubframeFields`, `waitPresentedFields` and `hostScreenPace` plan and then sleep.
 
 Each present, real or in-between, is built, then its show is scheduled for its deadline
