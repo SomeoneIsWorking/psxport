@@ -1,6 +1,6 @@
 # 0172: the producer census runs in the player's product
 
-Status: open, the operator's call. Owner: `runtime/psx/config/config.cpp` `cv_producers`, `runtime/psx/debug/ot_attr.h`.
+Status: fixed (psx-spyro 0196 pass 4). Owner: `runtime/psx/config/config.cpp` `cv_producers`, `runtime/psx/debug/ot_attr.h`.
 
 ## Observed
 Review of psx-spyro issue 0196 pass 3: the boot-handover field's profile (issue 0171) spent samples in
@@ -12,7 +12,14 @@ Review of psx-spyro issue 0196 pass 3: the boot-handover field's profile (issue 
 records its price on an unpaced 3D field: 18% of the run (`resolveClaimedFrame` 13.3% + `trackStoreSlow` 3.9%).
 Issue 0171 only made a block store pay it once per span.
 
-## Proper fix
-Arm the census only where it is read: diagnostic runs and the census tools (`agent_environment` or the tool that
-reads it sets `PSXPORT_PRODUCERS=1`), with the player's default off. `ot_attr.h` notes the census was armed by
-default on purpose because ordinary play is the data source that matters, so this is left to the operator.
+## Fix
+`cv_producers` defaults to false: the census runs only under `PSXPORT_PRODUCERS=1`, `census` says it is off
+otherwise, and the run-end report is skipped unarmed. `OtAttr::trackStore` keeps the gate open while a watch is
+registered, which the armed census used to do for it. Nothing a composed frame needs reads the census: only
+`ProducerCensus` reads `OtAttr` spans, and no tool parses its report.
+
+## Proof
+Spyro 1, `warp 10`, `gate-teleport 0 0`, HOLD=left, 4 presents at 3840x2160 (psx-spyro
+`scratch/judder-pass4/b-on` armed against `c-x4` unarmed): pixel-identical, 0 differing pixels in each. The 141 s
+judgement run from boot unarmed (`run2`) composed 3618 in-betweens of 4830 presents with 2 without, against 3606 of
+4818 and 2 armed (`base0`).

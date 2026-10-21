@@ -68,42 +68,9 @@ class Core;
 // channel-name-lookup form.
 inline constexpr lucent::Channel g_otattr_channel{"otattr"};
 
-// THE SECOND REASON TO TRACK SPANS: the graphics-producer DB's GUEST leg needs the same attribution the
-// `otattr` channel produces, but during ORDINARY PLAY with no debug channel on — the DB's whole premise
-// is that playing populates it. So the hot-path gate opens for
-// EITHER reason. This is a plain bool rather than a Channel because it is not a diagnostic the user
-// enables; it is armed by the census's own wiring, and it is read on every guest store, so the cost of
-// widening the gate is MEASURED and recorded next to the arming call — not assumed to be free. The
-// existing comment below records what the out-of-line version cost (2.54% of total CPU) and is the
-// number any change here has to beat.
-// DEFAULT ON, and that is a measured decision rather than an optimistic one. The DB's premise is that
-// ORDINARY PLAY populates it, so an opt-in flag would leave exactly the data source that matters
-// uncounted.
-//
-// THE "+0.26%" PRICE RECORDED HERE WAS WRONG, and is corrected rather than deleted so nobody
-// re-derives it. It read:
-//     gate closed (before): 77.7 / 77.6 / 77.7 s
-//     gate open  (armed)  : 77.9 / 77.9 / 77.7 s     => +0.26%
-// 300 frames in 77.7 s is 3.9 fps — a workload so dominated by something else that almost any fixed
-// cost measures as free. Re-priced 2026-08-20 on an UNPACED 3D field scene (1,100 frames of
-// replays/bugs/ingame-options-page.pad, clang, three runs each), using the PSXPORT_PRODUCERS knob
-// that had to be added because the arm was a hardcoded `inline bool = true` with no way to A/B it:
-//     armed   5.662 / 5.789 / 5.757 s   mean 5.736
-//     off     4.784 / 4.631 / 4.695 s   mean 4.703     => the census costs 18.0%
-// A host profile of the same scene agrees independently: OtAttr::resolveClaimedFrame 13.31% +
-// trackStoreSlow 3.91% = 17.2%. Two methods, one answer.
-//
-// This is NOT an argument for deleting the census — the USER asked for the producer database, and a
-// diagnostic that answers "which native producer drew this" is worth real time. It is an argument for
-// knowing what it costs, and for being able to switch it off when measuring something else.
-// against the 2.54% of total CPU the OUT-OF-LINE version of this gate once cost (see below). And the
-// work is real, not optimised away: the same run records 10,188 spans with 0 overflow, which is printed
-// at run end precisely so "no cost" can never be mistaken for "no work happened".
-// Set once per Game construction from PSXPORT_PRODUCERS (game.cpp), which defaults TRUE so behaviour
-// is unchanged; Game's constructor is on every runtime's boot route. It stays a plain global rather than a CVar read
-// because trackStore's inline gate is on the path of EVERY guest store — the whole point of that gate is that it is two
-// relaxed loads.
-inline bool g_producer_census_armed = true;
+// The producer census also opens the store gate. It is a diagnostic: PSXPORT_PRODUCERS (off by default) arms it per
+// Game (game.cpp), and armed it costs about 18% of an unpaced 3D field (resolveClaimedFrame, trackStoreSlow).
+inline bool g_producer_census_armed = false;
 
 class OtAttr {
 public:
@@ -140,8 +107,8 @@ public:
   // common case is a load and a compare with no call.
   void trackStoreSlow(Core *c, GuestSpan store);
   inline void trackStore(Core *c, GuestSpan store) {
-    // Steady state with both off: two relaxed loads and two compares, still no call.
-    if (!g_otattr_channel && !g_producer_census_armed) {
+    // A registered watch keeps the gate open with both off.
+    if (!g_otattr_channel && !g_producer_census_armed && mWatchCount == 0) {
       return;
     }
     trackStoreSlow(c, store);

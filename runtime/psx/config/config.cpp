@@ -42,8 +42,8 @@ Var<long> cv_native_frames("PSXPORT_NATIVE_FRAMES", 0, kRunOnly);
 Var<std::string> cv_asset_dir("PSXPORT_ASSET_DIR", "", kRunOnly);
 Var<bool> cv_show_window("PSXPORT_SHOW_WINDOW", false, kRunOnly);
 Var<std::string> cv_settings_path("PSXPORT_SETTINGS", "psxport_settings.ini", kRunOnly);
-// Off stops the producer DB recording; it prices the census, it fixes nothing.
-Var<bool> cv_producers("PSXPORT_PRODUCERS", true, kRunOnly);
+// Arms the producer census, a diagnostic the player's product never pays for (ot_attr.h).
+Var<bool> cv_producers("PSXPORT_PRODUCERS", false, kRunOnly);
 Var<std::string> cv_render_path("PSXPORT_RENDER_PATH", "record", kSaved);
 Var<long> cv_lightrec_fallback_block_limit("PSXPORT_LIGHTREC_FALLBACK_BLOCK_LIMIT",
                                            static_cast<long>(psx::cpu::kDefaultMaxFallbackBlocksPerExecution),
