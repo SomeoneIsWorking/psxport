@@ -381,7 +381,9 @@ and deadline; `paceSubframeFields`, `waitPresentedFields` and `hostScreenPace` p
 
 Each present, real or in-between, is built, then its show is scheduled for its deadline
 (`DisplayPresenter::showAt`). The show happens at the first executor segment boundary past the deadline
-(`LightrecExecutor` calls `DisplayPresenter::showIfDue` after every segment), or, waiting for the deadline,
+(`LightrecExecutor` calls `DisplayPresenter::showIfDue` after every segment), at the next ordering-table node or
+GPU DMA block when a DMA2 transfer straddles it (`gpu::submitOrderingTable`, `gpu::dma2Block`: one Spyro DrawOTag
+is 2-3 ms of host work inside a single segment), or, waiting for the deadline,
 before the next build, show, repaint or pacer plan (`finishShow`), and `FramePresenter::commit` finishes it
 before the next frame's composition starts. So the t = 1 present of frame N lands on time while frame N+1's
 guest logic runs, and a frame's guest logic, the in-between's composition and build and the t = 1 build share

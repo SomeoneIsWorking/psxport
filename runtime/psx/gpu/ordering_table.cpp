@@ -1,6 +1,7 @@
 #include "ordering_table.h"
 
 #include "core.h"
+#include "game.h"
 #include "gpu_device.h"
 
 namespace psx::gpu {
@@ -85,6 +86,8 @@ void submitOrderingTable(Core &core, GpuDevice &device, std::uint32_t rootGuestA
   const OtTables &tables = core.otTables;
   device.enterSlot(std::nullopt, true);
   do {
+    // A walk is milliseconds of host work inside one executor segment; a present due meanwhile lands now.
+    core.game->display.showIfDue();
     const OtNode &node = walk.node();
     std::optional<present::OtSlot> slot = tables.slotOf(node.guestAddress());
     if (!slot && node.carriesPrimitive()) {

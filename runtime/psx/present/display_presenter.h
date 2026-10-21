@@ -48,10 +48,11 @@ public:
   void buildPanes(std::span<const render::Pane> panes);
   // Shows the last build in the window now.
   void show();
-  // Shows the last build at host time `dueMs` (now when unset): at the first executor boundary past it, or
-  // before anything else is built, shown or paced, whichever comes first. Guest work runs while it waits.
+  // Shows the last build at host time `dueMs` (now when unset): at the first executor boundary, ordering-table
+  // node or GPU DMA block past it, or before anything else is built, shown or paced, whichever comes first. Guest
+  // work runs while it waits.
   void showAt(std::optional<double> dueMs, const PresentNote &note);
-  // At an executor boundary: shows the scheduled build once its deadline has passed.
+  // At an executor boundary or a step of a GPU DMA: shows the scheduled build once its deadline has passed.
   void showIfDue();
   // Waits for the scheduled build's deadline and shows it.
   void finishShow();

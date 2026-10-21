@@ -21,9 +21,14 @@ void dma2LinkedList(Core &core, std::uint32_t madr) {
   submitOrderingTable(core, core.gpuDevice(), madr);
 }
 
-void dma2Block(Core &core, GuestSpan block, bool toGpu) {
+void dma2Block(Core &core, GuestSpan block, std::uint32_t blockWords, bool toGpu) {
   const std::uint32_t base = mainRamOffsetOf(block.address);
   for (std::uint32_t i = 0; i < block.bytes / 4u; i++) {
+    // A long upload is milliseconds of host work inside one executor segment; a present due meanwhile lands
+    // between DMA blocks.
+    if (blockWords != 0 && i % blockWords == 0) {
+      core.game->display.showIfDue();
+    }
     const std::uint32_t address = base + i * 4u;
     if (toGpu) {
       core.gpuDevice().gp0(core.mem_r32(address), {.sourceAddress = guestAddressOf(address)});
