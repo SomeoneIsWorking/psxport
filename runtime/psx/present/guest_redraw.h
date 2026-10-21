@@ -5,6 +5,7 @@
 // The routine is the guest's own code, so its projection is the GTE's and its topology the guest's; the
 // title decides which inputs move (camera, object positions and angles) and pairs each object by its guest
 // address. Nothing the run does outlives the GuestRedraw: memory, registers and GTE are as they were.
+// The run cannot suspend at a turn's end, so an override's original call inside it gets the run's budget.
 #pragma once
 
 #include "core.h"

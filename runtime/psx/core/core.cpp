@@ -45,6 +45,10 @@ psx::cpu::ExecutionControl &Core::executionControl() {
   return *executionControl_;
 }
 
+const psx::cpu::ExecutionControl &Core::executionControl() const {
+  return *executionControl_;
+}
+
 psx::cpu::ImageCatalog &Core::imageCatalog() {
   return *imageCatalog_;
 }

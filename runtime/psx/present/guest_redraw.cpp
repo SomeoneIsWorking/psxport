@@ -1,6 +1,7 @@
 #include "guest_redraw.h"
 
 #include "emulated_time.h"
+#include "execution_control.h"
 #include "execution_exit.h"
 #include "native_dispatch.h"
 
@@ -32,9 +33,10 @@ void GuestRedraw::writeWord(std::uint32_t address, std::uint32_t word) {
 
 bool GuestRedraw::run(std::uint32_t entry, std::span<const std::uint32_t> arguments) {
   std::copy(arguments.begin(), arguments.end(), core_.r + cpu::kA0);
-  // It cannot suspend at a turn's end as the real call does; a second of guest time only stops a runaway.
-  const cpu::ExecutionResult result =
-      cpu::callOriginal(core_, entry, cpu::ExecutionBudget::fromCycles(frame::kNominalPsxCpuHz));
+  // No call inside it can suspend at a turn's end; a second of guest time only stops a runaway.
+  const cpu::ExecutionBudget runaway = cpu::ExecutionBudget::fromCycles(frame::kNominalPsxCpuHz);
+  const cpu::ExecutionControl::Unsuspendable unsuspendable(core_.executionControl(), runaway);
+  const cpu::ExecutionResult result = cpu::callOriginal(core_, entry, runaway);
   if (!result.returned()) {
     lucent::warn("redraw",
                  "the redraw of 0x{:08X} stopped: {} at 0x{:08X}",

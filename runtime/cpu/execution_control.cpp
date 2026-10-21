@@ -31,6 +31,15 @@ const std::optional<ExecutionResult> &ExecutionControl::pending() const {
   return pending_;
 }
 
+ExecutionControl::Unsuspendable::Unsuspendable(ExecutionControl &control, ExecutionBudget budget)
+    : control_(control), outer_(control.unsuspendable_) {
+  control_.unsuspendable_ = budget;
+}
+
+ExecutionControl::Unsuspendable::~Unsuspendable() {
+  control_.unsuspendable_ = outer_;
+}
+
 void requestExecutionExit(Core &core, ExecutionExitReason reason) {
   requestExecutionExit(core, ExecutionResult{reason, 0, 0, {}});
 }
