@@ -23,6 +23,10 @@ std::vector<LevelWord> LevelReads::words() const {
 
 const HostMemory::Range *HostMemory::find(std::uint32_t address, std::uint32_t &base) const {
   const std::uint32_t at = kseg0Address(address);
+  if (lastRange_ != nullptr && at - lastBase_ < lastRange_->size()) {
+    base = lastBase_;
+    return lastRange_;
+  }
   auto next = ranges_.upper_bound(at);
   if (next == ranges_.begin()) {
     return nullptr;
@@ -32,7 +36,9 @@ const HostMemory::Range *HostMemory::find(std::uint32_t address, std::uint32_t &
     return nullptr;
   }
   base = held->first;
-  return &held->second;
+  lastBase_ = held->first;
+  lastRange_ = &held->second;
+  return lastRange_;
 }
 
 HostMemory::Range *HostMemory::find(std::uint32_t address, std::uint32_t &base) {
@@ -40,6 +46,7 @@ HostMemory::Range *HostMemory::find(std::uint32_t address, std::uint32_t &base) 
 }
 
 std::byte *HostMemory::place(std::uint32_t base, std::uint32_t size) {
+  lastRange_ = nullptr;
   std::uint32_t mergedBase = base;
   std::uint32_t mergedEnd = base + size;
   auto first = ranges_.lower_bound(base);
@@ -106,11 +113,12 @@ void HostMemory::mapGuest(Core &guest, std::uint32_t address, std::uint32_t size
       }
     }
     const std::uint32_t gapEnd = gap.address + gap.bytes;
-    for (auto word = overlay_.lower_bound(gap.address & ~3u); word != overlay_.end() && word->first < gapEnd; ++word) {
+    auto word = std::ranges::lower_bound(overlay_, gap.address & ~3u, {}, &LevelWord::address);
+    for (; word != overlay_.end() && word->address < gapEnd; ++word) {
       for (std::uint32_t byte = 0; byte < 4u; ++byte) {
-        const std::uint32_t target = word->first + byte;
+        const std::uint32_t target = word->address + byte;
         if (target >= gap.address && target < gapEnd) {
-          out[target - gap.address] = static_cast<std::byte>(word->second >> (8u * byte));
+          out[target - gap.address] = static_cast<std::byte>(word->value >> (8u * byte));
         }
       }
     }
@@ -118,14 +126,21 @@ void HostMemory::mapGuest(Core &guest, std::uint32_t address, std::uint32_t size
 }
 
 void HostMemory::overlay(std::span<const LevelWord> words) {
+  overlay_.reserve(overlay_.size() + words.size());
   for (const LevelWord &word : words) {
-    overlay_[kseg0Address(word.address) & ~3u] = word.value;
+    overlay_.push_back({kseg0Address(word.address) & ~3u, word.value});
   }
+  // A later value for a word replaces the earlier one.
+  std::ranges::stable_sort(overlay_, {}, &LevelWord::address);
+  const auto kept = std::unique(overlay_.rbegin(), overlay_.rend(), [](const LevelWord &a, const LevelWord &b) {
+    return a.address == b.address;
+  });
+  overlay_.erase(overlay_.begin(), kept.base());
 }
 
 const std::uint32_t *HostMemory::overlaid(std::uint32_t wordAddress) const {
-  const auto found = overlay_.find(wordAddress);
-  return found == overlay_.end() ? nullptr : &found->second;
+  const auto found = std::ranges::lower_bound(overlay_, wordAddress, {}, &LevelWord::address);
+  return found == overlay_.end() || found->address != wordAddress ? nullptr : &found->value;
 }
 
 bool HostMemory::read(std::uint32_t address, void *out, std::uint32_t size) const {

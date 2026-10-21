@@ -202,6 +202,7 @@ The composer builds the frame at `t` from S's record:
   table's walk order puts it. A render naming a table S never walked leaves that object as S drew it.
   An in-between (`from` set, `t < 1`) whose record holds any primitive no producer owns, or any object
   whose render cannot be placed, is not composed: S is shown whole, never a mix of two moments.
+  The `compose` debug channel names why: the unkeyed packet's address, or the baked or unrendered object.
 - **Composition.** `StateProducer::composition(states)` says what the object's entries become at `t`:
   `Render` (replaced by `render`, the default), `Recorded` (kept as the guest drew them, which is the
   object at `t`) or `Refused` (the object cannot be drawn at `t`; an in-between is then S whole). A
@@ -240,8 +241,9 @@ there are no per-vertex keys. An in-between with nothing produced is the shown r
   device's (`FramePresenter::shownRecord`). Records that drew nothing are not held, so their writes are
   kept as rects with their sequence until they are older than the oldest held drawing record
   (`holdUndrawnWrites`). The presenter remembers which record each present showed.
-- **Cadence.** With the title's 60 fps on, each logic frame gets two presents, at `t = 0.5` and
-  `t = 1`; with it off, one at `t = 1`. With no record drawing the displayed buffer, S' unknown, or a
+- **Cadence.** With the title's 60 fps on, each logic frame of two or more fields gets two presents, at
+  `t = 0.5` and `t = 1`; a one-field frame, or any frame with it off, gets one at `t = 1`. The
+  `presentseq` debug channel logs each present: host time, record shown, from, `t`, fields. With no record drawing the displayed buffer, S' unknown, or a
   record after S' missing or incomplete, the present is `t = 1`.
 - **Base state.** The composed frame is drawn onto VRAM as it was before S: the image when S = N, the
   rasterizer's kept pre-state when S is the last applied record with entries. Each plane keeps one
