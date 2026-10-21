@@ -1,5 +1,6 @@
 #include "resumable_guest_call.h"
 
+#include "blob_codec.h"
 #include "core.h"
 #include "guest_call.h"
 #include "guest_call_census.h"
@@ -7,6 +8,8 @@
 
 #include <cstdlib>
 #include <lucent/log.h>
+#include <span>
+#include <vector>
 
 namespace psx::cpu {
 namespace {
@@ -101,6 +104,39 @@ CallStep ResumableGuestCall::advance(const std::optional<NativeKey> &original, s
   resumePc_ = result.guestPc;
   suspended_ = static_cast<const R3000 &>(core);
   return CallStep{CallOutcome::Suspended, result.guestPc, turns_, cycles_, 0u, {}, result.reason};
+}
+
+void ResumableGuestCall::save(psx::platform::BlobWriter &out) const {
+  out.blob(std::span<const std::uint8_t>(reinterpret_cast<const std::uint8_t *>(owner_.data()), owner_.size()));
+  out.u32(entry_);
+  out.u32(returnPc_);
+  out.u32(resumePc_);
+  out.u32(turnCap_);
+  out.u32(turns_);
+  out.u64(cycles_);
+  out.value(suspended_);
+  out.boolean(pending_);
+}
+
+bool ResumableGuestCall::load(Core &core, psx::platform::BlobReader &in, std::string &error) {
+  std::vector<std::uint8_t> owner;
+  in.blob(owner);
+  ResumableGuestCall call;
+  call.core_ = &core;
+  call.owner_.assign(owner.begin(), owner.end());
+  call.entry_ = in.u32();
+  call.returnPc_ = in.u32();
+  call.resumePc_ = in.u32();
+  call.turnCap_ = in.u32();
+  call.turns_ = in.u32();
+  call.cycles_ = in.u64();
+  call.suspended_ = in.value<R3000>();
+  call.pending_ = in.boolean();
+  if (!in.decoded("guest call", error)) {
+    return false;
+  }
+  *this = std::move(call);
+  return true;
 }
 
 std::uint32_t ResumableGuestCall::callToReturn(const std::optional<NativeKey> &original) {
