@@ -43,9 +43,10 @@ std::optional<present::FrameRecord> composeGuarded(Core &core,
                                                    const present::FrameState *from,
                                                    const present::FrameState &to,
                                                    float t,
-                                                   const present::StateProducers &producers) {
+                                                   const present::StateProducers &producers,
+                                                   present::PrimitiveList &sink) {
   const present::DisplayPassGuard guard(core.rsub.mode);
-  return present::composeFrame(shown, from, to, t, producers, core.gpuDevice().vram());
+  return present::composeFrame(shown, from, to, t, producers, core.gpuDevice().vram(), sink);
 }
 
 gpu::RecordRect displayedBuffer(Core &core) {
@@ -255,8 +256,13 @@ void FramePresenter::presentRecords(Core &core, const present::StateProducers *p
   const bool cut = cutBetween(from->record->sequence(), shown->record->sequence());
   const present::FrameRecord &base = *shown->record;
   if (producers != nullptr) {
-    composedStore_ =
-        composeGuarded(core, base, cut ? nullptr : from->state.get(), *shown->state, present::kInBetweenAt, *producers);
+    composedStore_ = composeGuarded(core,
+                                    base,
+                                    cut ? nullptr : from->state.get(),
+                                    *shown->state,
+                                    present::kInBetweenAt,
+                                    *producers,
+                                    renderScratch_);
   }
   const bool composed = composedStore_.has_value();
   composed_ = composedStore_ ? &*composedStore_ : &base;
@@ -283,7 +289,7 @@ void FramePresenter::presentCurrent(Core &core,
                                     FieldCadence cadence,
                                     const SealedRecord *shown) {
   if (shown != nullptr && producers != nullptr) {
-    composedStore_ = composeGuarded(core, *shown->record, nullptr, *shown->state, 1.0f, *producers);
+    composedStore_ = composeGuarded(core, *shown->record, nullptr, *shown->state, 1.0f, *producers, renderScratch_);
     if (composedStore_) {
       ledger_.reconcile(*shown->record, *composedStore_, fence_, psx::config::gate_presentation());
     }

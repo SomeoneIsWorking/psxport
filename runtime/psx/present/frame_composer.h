@@ -17,12 +17,14 @@ namespace psx::present {
 // the object's n-th entry in it was (after its last when there are fewer), else at the slot's head, else where the
 // table's walk order puts that slot. A CLUT `shown` never sampled is read from `vram`. An object whose render names a
 // table `shown` never walked keeps its entries. Nullopt when nothing is replaced, and for an in-between that would
-// keep any primitive as `shown` drew it: the frame is `shown`.
+// keep any primitive as `shown` drew it: the frame is `shown`. Each render emits into `sink`, cleared first, whose
+// storage the caller keeps across presents.
 std::optional<FrameRecord> composeFrame(const FrameRecord &shown,
                                         const FrameState *from,
                                         const FrameState &to,
                                         float t,
                                         const StateProducers &producers,
-                                        std::span<const std::uint16_t> vram);
+                                        std::span<const std::uint16_t> vram,
+                                        PrimitiveList &sink);
 
 } // namespace psx::present
