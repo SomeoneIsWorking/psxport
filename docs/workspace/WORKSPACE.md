@@ -83,7 +83,8 @@ Products: `spyro_port`, `toystory2_port`, `crashbash_port`, `crash_port`, `ctr_p
 - Every judgement run plays the way the player does: `ires=0` (auto, 8x on this sink), `fps60=1`,
   `PSXPORT_PRESENT_SINK=3840x2160`. The
   unmapped window never scans out, so simulate the player's 60.00 Hz display from the `presentseq` times: each
-  vblank shows the newest present before it, and a present shown twice or never is a judder.
+  vblank shows the newest present before it, and a present shown twice or never is a judder, except the one
+  repeat about every 16.7 s from pacing at the guest's 59.94 Hz, which is accepted.
 - To reach a screen, level or state for exploration, add a title-owned debug option modelled on Tomba 2's
   `warp` (`psx-tomba/game/core/debug/dev_warp.cpp`): a control-channel command arms a request and the frame
   driver applies it at a frame boundary through the game's own transition/load owners. Player paths stay
