@@ -35,7 +35,7 @@ bool samplesClut(const DrawPrimitive &primitive) {
 std::uint32_t appendClutFromVram(FrameRecord &record, const DrawPrimitive &primitive, std::span<const std::uint16_t> vram) {
   const gpu::VramPoint at = gpu::decodeClut(primitive.clutWord);
   std::array<std::uint16_t, 256> entries{};
-  const std::size_t count = primitive.state.texMode == 1 ? 256u : 16u;
+  const std::size_t count = gpu::clutEntryCount(static_cast<gpu::TexDepth>(primitive.state.texMode));
   for (std::size_t i = 0; i < count; i++) {
     entries[i] = gpu::vramHalfWord(vram, {at.x + static_cast<int>(i), at.y});
   }
@@ -163,22 +163,27 @@ std::optional<FrameRecord> composeFrame(const FrameRecord &shown,
       baked.insert(objectKey({upload->key->producer, upload->key->object}));
     }
   }
-  std::size_t primitives = 0;
-  std::size_t owned = 0;
+  // An in-between keeping any primitive as S drew it would mix two moments: S is shown whole instead.
+  const bool inBetween = from != nullptr && t < 1.0f;
   for (std::size_t i = 0; i < entries.size(); i++) {
     const auto *primitive = std::get_if<DrawPrimitive>(&entries[i]);
     if (primitive == nullptr) {
       continue;
     }
-    ++primitives;
     if (samplesClut(*primitive) && primitive->clutOffset != kNoClut) {
       clutOffsets.try_emplace(clutKey(*primitive), primitive->clutOffset);
     }
     if (!primitive->key) {
+      if (inBetween) {
+        return std::nullopt;
+      }
       continue;
     }
     const ObjectId id{primitive->key->producer, primitive->key->object};
     if (baked.contains(objectKey(id))) {
+      if (inBetween) {
+        return std::nullopt;
+      }
       continue;
     }
     auto found = coveredIndex.find(objectKey(id));
@@ -186,26 +191,27 @@ std::optional<FrameRecord> composeFrame(const FrameRecord &shown,
       const StateProducer *render = producers.find(id.producer);
       const std::optional<std::span<const std::byte>> state = render ? to.find(id) : std::nullopt;
       if (!state) {
+        if (inBetween) {
+          return std::nullopt;
+        }
         continue;
       }
       found = coveredIndex.emplace(objectKey(id), covered.size()).first;
       covered.push_back({id, render, *state, {}, {}});
     }
     Covered &object = covered[found->second];
-    ++owned;
     object.entries.push_back(i);
     if (primitive->slot) {
       object.inSlot[slotKey(*primitive->slot)].push_back(i);
     }
   }
-  // An in-between keeping any primitive as S drew it would mix two moments: S is shown whole instead.
-  const bool inBetween = from != nullptr && t < 1.0f;
-  if (covered.empty() || (inBetween && owned != primitives)) {
+  if (covered.empty()) {
     return std::nullopt;
   }
   const SlotPlacement placement(shown);
   const std::vector<const RecordDrawState *> environments = environmentsAt(entries);
-  FrameRecord out = shown;
+  // Copied from `shown` only once a VRAM CLUT or a replacement needs it.
+  std::optional<FrameRecord> out;
 
   bool replaced = false;
   std::vector<bool> removed(entries.size(), false);
@@ -233,7 +239,10 @@ std::optional<FrameRecord> composeFrame(const FrameRecord &shown,
       if (samplesClut(primitive)) {
         auto clut = clutOffsets.find(clutKey(primitive));
         if (clut == clutOffsets.end()) {
-          const std::uint32_t offset = appendClutFromVram(out, primitive, vram);
+          if (!out) {
+            out.emplace(shown);
+          }
+          const std::uint32_t offset = appendClutFromVram(*out, primitive, vram);
           if (offset == kNoClut) {
             drawable = false;
             break;
@@ -275,7 +284,10 @@ std::optional<FrameRecord> composeFrame(const FrameRecord &shown,
       composed.push_back(entries[i]);
     }
   }
-  out.replaceEntries(std::move(composed));
+  if (!out) {
+    out.emplace(shown);
+  }
+  out->replaceEntries(std::move(composed));
   return out;
 }
 

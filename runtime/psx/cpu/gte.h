@@ -5,6 +5,8 @@
 #include "gte_registers.h"
 #include "gte_state.h"
 
+#include <array>
+#include <cstddef>
 #include <cstdint>
 #include <span>
 
@@ -32,16 +34,21 @@ public:
 
   // The rotation matrix, CR0..CR4.
   void loadRotation(std::span<const std::uint32_t, gte::kRotationWords> words) {
-    for (std::uint32_t i = 0; i < gte::kRotationWords; ++i) {
-      writeControl(gte::kRotation + i, words[i]);
-    }
+    loadControl(gte::kRotation, words);
   }
   gte::RotationWords storeRotation() {
-    gte::RotationWords words{};
-    for (std::uint32_t i = 0; i < gte::kRotationWords; ++i) {
-      words[i] = readControl(gte::kRotation + i);
-    }
-    return words;
+    return storeControl<gte::kRotationWords>(gte::kRotation);
+  }
+  // The light matrix, CR8..CR12, packed as the rotation is.
+  void loadLight(std::span<const std::uint32_t, gte::kRotationWords> words) {
+    loadControl(gte::kLight0, words);
+  }
+  gte::RotationWords storeLight() {
+    return storeControl<gte::kRotationWords>(gte::kLight0);
+  }
+  // The translation vector, CR5..CR7.
+  void loadTranslation(const gte::TranslationWords &words) {
+    loadControl(gte::kTranslationX, words);
   }
 
   // The whole register file and flags, copied without running a read port.
@@ -64,6 +71,20 @@ public:
   }
 
 private:
+  void loadControl(std::uint32_t first, std::span<const std::uint32_t> words) {
+    for (std::uint32_t i = 0; i < words.size(); ++i) {
+      writeControl(first + i, words[i]);
+    }
+  }
+  template <std::size_t Count>
+  std::array<std::uint32_t, Count> storeControl(std::uint32_t first) {
+    std::array<std::uint32_t, Count> words{};
+    for (std::uint32_t i = 0; i < Count; ++i) {
+      words[i] = readControl(first + i);
+    }
+    return words;
+  }
+
   Core &core_;
   GteRegs regs_{};
   GtePreOpObserver observer_;
