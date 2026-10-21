@@ -92,7 +92,10 @@ name is refused with a warning and the Core stays on `record`.
   snapshot of the image; an op whose reads overlap pixels `gpu.c` wrote at 1x earlier in its batch
   starts a new batch, so at 1x reads see VRAM as the device did. Which ops exist and where batches
   split come from the 1x walk at every S: the `record_plan` line's ops and batches for one frame are
-  equal at every S, and only its quads (and the GPU's pixels) grow. A batch's snapshot refresh
+  equal at every S, and only its quads (and the GPU's pixels) grow. The one exception is a triangle whose
+  declared places give it area where its words give none, such as a sliver a clip cut between two crossings
+  that round to one word: above 1x it draws and writes the native pixels its quads reach (`addTriangle`); without
+  it the pieces either side of the sliver leave a seam. A batch's snapshot refresh
   covers every scaled pixel its quads can reach.
 - **Scale.** S is the internal-resolution setting (`setires`, `mods.ires`). Vertices and the draw
   area scale; texels and CLUTs stay on the native grid; sprites, lines and fills cover
