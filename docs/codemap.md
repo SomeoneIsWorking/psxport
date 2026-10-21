@@ -24,7 +24,7 @@ Dependency direction: title repo → `runtime/psx/game/` (the title interface) �
 - `runtime/psx/core/guest_abi.h` — MIPS o32 guest ABI for native overrides: stack frame, prologue spills, callee-saved registers, preserved return address `$ra`
 - `runtime/psx/core/guest_code_module.*` — runtime-loaded relocatable code module / overlay as an executable residency, identity and generation
 - `runtime/psx/cpu/r3000.h`, `cpu_divide.*` — R3000A register file, GPR names, COP0 numbers, context save scope, DIV/DIVU LO/HI results and divide by zero
-- `runtime/psx/cpu/gte*.h` — GTE / COP2 per Core: register file, register and command numbers, execute, rotation matrix, raw save and restore, pre-op observer
+- `runtime/psx/cpu/gte*.h` — GTE / COP2 per Core: register file, register and command numbers, execute, rotation, light matrix and translation load/store, raw save and restore, pre-op observer
 - `runtime/psx/cpu/beetle/` — Beetle GTE adapter, register transfer to and from Lightrec, PGXP hooks off
 - `runtime/cpu/lightrec_executor.*`, `fallback_policy.h`, `segment_clock.*` — Lightrec dynarec / JIT lifetime per Core, state sync, bounded execution, store observation, fallback, segment cycle commit
 - `runtime/cpu/execution_exit.*`, `execution_control.*`, `execution_services.*`, `execution_ledger.*` — typed executor exits, budgets, break and syscall results, exit requests, executor counters ledger
@@ -66,8 +66,8 @@ Dependency direction: title repo → `runtime/psx/game/` (the title interface) �
 - `runtime/psx/present/display_presenter.*`, `present_plan.h`, `present_ledger.*`, `video_plan.h`, `pixel_size.h` — present: guest display to screen, letterbox, fade, 24bpp, internal resolution scale, present ledger
 - `runtime/psx/present/render_mode.h`, `render_substrate.*` — render path (Record, Device), display-pass guard, per-Core host render state
 - `runtime/psx/present/frame_composer.*`, `frame_record.*`, `frame_state.*`, `state_producer.*`, `state_bytes.h`, `emission_scope.*`, `emit_memory.*`, `blend.h` — 60 fps interpolation / in-betweens: frame record, producer keys and object state, state producers, emission scope, guest or host emit memory, lerp blends
-- `runtime/psx/present/gp0_command.h`, `gp0_primitive_decode.*` — GP0 command and primitive decode: opcodes, packet sizes, draw mode E1
-- `runtime/psx/present/vram_rect.h`, `vram_pixel.h` — VRAM size, points and rects, 555 pixel and 5-to-8 expand, texpage and CLUT words, texel sampler
+- `runtime/psx/present/gp0_command.h`, `gp0_primitive_decode.*` — GP0 command and primitive decode: opcodes, libgpu polygon and line opcodes, packet tags and sizes, draw mode E1
+- `runtime/psx/present/vram_rect.h`, `vram_pixel.h` — VRAM size, points and rects, 555 pixel and 5-to-8 expand, texpage and CLUT words, CLUT entry count, texel sampler
 - `runtime/psx/present/packet_chains.*` — packet tag chains and bucket tables walked as primitives
 - `runtime/psx/present/gte_control.*` — GTE control registers saved, blended and restored around a render
 - `runtime/psx/present/guest_widescreen_projection.*`, `viewport_layout.h`, `proj_params.*`, `picture_announce.*` — widescreen / 16:9: aspect policy, canvas margins, projection constants, picture geometry announce

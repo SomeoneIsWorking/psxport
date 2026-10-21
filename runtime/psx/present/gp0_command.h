@@ -391,4 +391,8 @@ inline constexpr std::uint8_t kPolyG4 = Gp0Command::polygonOpcode({.quad = true,
 inline constexpr std::uint8_t kPolyGt3 = Gp0Command::polygonOpcode({.gouraud = true, .textured = true});
 inline constexpr std::uint8_t kPolyGt4 = Gp0Command::polygonOpcode({.quad = true, .gouraud = true, .textured = true});
 
+// The opaque line opcodes, by libgpu name.
+inline constexpr std::uint8_t kLineF2 = static_cast<std::uint8_t>(Gp0Opcode::Line);
+inline constexpr std::uint8_t kLineG2 = kLineF2 | Gp0Command::kFlagGouraud;
+
 } // namespace psx::gpu

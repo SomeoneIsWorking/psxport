@@ -205,8 +205,7 @@ std::uint32_t Gp0RecordTap::captureClut(const DeviceProbe &probe) {
     return present::kNoClut;
   }
   if (probe.clutTag != clutTag_ || clutOffset_ == present::kNoClut) {
-    const std::size_t count = probe.state.texMode == 1 ? 256u : 16u;
-    clutOffset_ = record_.appendClut(probe.clut.first(count));
+    clutOffset_ = record_.appendClut(probe.clut.first(clutEntryCount(static_cast<TexDepth>(probe.state.texMode))));
     clutTag_ = probe.clutTag;
   }
   return clutOffset_;

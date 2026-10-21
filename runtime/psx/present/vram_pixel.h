@@ -59,6 +59,11 @@ constexpr VramPoint decodeClut(std::uint16_t clut) {
   return VramPoint{static_cast<int>(clut & 0x3Fu) * 16, static_cast<int>((clut >> 6) & 0x1FFu)};
 }
 
+// The palette entries an indexed texture mode samples: 16 at 4bpp, 256 at 8bpp.
+constexpr std::size_t clutEntryCount(TexDepth depth) {
+  return depth == TexDepth::Indexed8 ? 256u : 16u;
+}
+
 // One VRAM halfword, both axes wrapped as the hardware wraps them.
 constexpr std::uint16_t vramHalfWord(std::span<const std::uint16_t> vram, VramPoint at) {
   const auto column = static_cast<std::size_t>(at.x & (kVramWidth - 1));
