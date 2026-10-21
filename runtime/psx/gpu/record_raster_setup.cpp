@@ -239,7 +239,8 @@ struct TriangleWalk {
   TrianglePart parts[2];
 };
 
-std::optional<TriangleWalk> walkTriangle(const TriVertex input[3], int s) {
+// gpu.c skips a polygon with an edge as long as VRAM in either axis.
+bool withinVramSpan(const TriVertex input[3], int s) {
   const auto spanY = static_cast<std::int64_t>(kVramHeight) * s;
   const auto spanX = static_cast<std::int64_t>(kVramWidth) * s;
   for (int a = 0; a < 3; a++) {
@@ -247,8 +248,15 @@ std::optional<TriangleWalk> walkTriangle(const TriVertex input[3], int s) {
     const TriVertex &q = input[(a + 1) % 3];
     if (std::llabs(static_cast<long long>(q.y) - p.y) >= spanY ||
         std::llabs(static_cast<long long>(q.x) - p.x) >= spanX) {
-      return std::nullopt;
+      return false;
     }
+  }
+  return true;
+}
+
+std::optional<TriangleWalk> walkTriangle(const TriVertex input[3], int s) {
+  if (!withinVramSpan(input, s)) {
+    return std::nullopt;
   }
   TriangleWalk walk;
   TriVertex *vertices = walk.vertices;
@@ -676,11 +684,13 @@ void RecordPlanner::Builder::addTriangle(
     const TriVertex scaled[3], const TriVertex native[3], const DrawPrimitive &primitive, bool offU, bool offV) {
   const int s = plan_.scale;
   const std::optional<TriangleWalk> walk = walkTriangle(scaled, s);
-  // The native walk decides what the op writes, so ops and batches are the same at every scale.
-  const std::optional<TriangleWalk> nativeWalk = s == 1 ? walk : walkTriangle(native, 1);
-  if (!walk || !nativeWalk) {
+  if (!walk || !withinVramSpan(native, 1)) {
     return;
   }
+  // The native walk decides what the op writes, so ops and batches are the same at every scale. A triangle whose
+  // declared places give it area where its words give none (a sliver a clip cut) writes the native pixels its quads
+  // reach.
+  const std::optional<TriangleWalk> nativeWalk = s == 1 ? walk : walkTriangle(native, 1);
   const TriVertex *vertices = walk->vertices;
   TriangleSetup setup;
   std::int32_t TriVertex::*const channels[5] = {
@@ -724,7 +734,14 @@ void RecordPlanner::Builder::addTriangle(
                  .x1 = covered.x1,
                  .y1 = covered.y1,
                  .param = static_cast<std::uint32_t>(i)});
+          if (!nativeWalk) {
+            reaches_ = true;
+            markWritten({covered.x0 / s, covered.y0 / s, (covered.x1 + s - 1) / s, (covered.y1 + s - 1) / s});
+          }
         }
+      }
+      if (!nativeWalk) {
+        continue;
       }
       const TrianglePart &nativePart = nativeWalk->parts[i];
       const int nativeLow = std::max(nativePart.rowLow, clip.y0);
