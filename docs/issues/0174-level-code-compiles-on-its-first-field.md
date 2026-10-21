@@ -21,6 +21,15 @@ Spyro 2 and 3 (psx-spyro 0196 pass 6): the load field of `warp 21` (fence 1982, 
 after its due time and `warp 10` on Spyro 3 (fence 2543, `judge-s3`) 58.65 ms after; the simulated display holds the
 picture before each 2-3 vblanks longer. Whether that picture moves was not checked.
 
+Review of pass 6 (all late presents, not only the load field): `review-s2` also has fence 1987 (4/1) 59.3 ms late
+after 1982 (40.0 ms); `judge-s3` has 1680 (2/2, front end) 6.46 ms late and `review-s3` 665 4.2 ms late. Builds
+`7b6f31f+psxport-de34a6cf`: Spyro 1 `fix-s1` (load 0.94-1.83) 4078 held for its planned 3 fields, then 4079 12.14 ms
+and the first in-between 4080 10.04 ms late, one repeat and one drop on the simulated display, on the level's
+near-black fade-in; Spyro 2 `fix-s2` (load 0.50-0.75) 1982 38.49 ms and 1987 58.60 ms late, no repeat or drop
+from them; Spyro 3 `fix-s3` (load 0.50-0.82) 2543 16.76 ms late with one repeat, and 669 4.75 ms late at the boot
+prefix's return into the main loop (cold main-loop code, the same compile). Every one lands on a load or on the
+first fields of newly loaded code.
+
 ## Cause
 `lightrec_execute`, called from `executeWithBoundary`, compiles each cold block synchronously on the guest thread.
 The WAD load invalidates the level image, so the load field runs the level's code cold and compiles it. Perf

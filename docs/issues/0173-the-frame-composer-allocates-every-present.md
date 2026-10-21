@@ -45,4 +45,10 @@ not committed). Spyro 1 `warp 10` on the final build (`alloc-s1c`, load 1.84-3.1
 `HostMemory`, `LevelReads`, `OtTables`, any producer or the terrain, where the first run (`alloc-s1`, before the OT and terrain
 changes) had 26120 from `OtTables::assign` and 78 from the terrain in-between's bin list. Spyro 2 `warp 21` (`alloc-s2`):
 8 from `FrameComposer::compose` and `FrameRecord::replaceEntries`, capacity growth to a larger frame, none from the
-producers. What still allocates is guest execution, issue 0175.
+producers. Guest execution still allocates (issue 0175), and so did the host present path: `alloc-s1c` also shows 188
+`SDL_strdup` calls from `SDL_GetDisplayForWindow`, reached by `RenderWindow::refreshPeriodMs` on every
+`RenderState::showPresentImage`. Review fix: `RenderWindow` reads the period at creation and from an SDL event watch
+on `SDL_EVENT_WINDOW_DISPLAY_CHANGED`/`SDL_EVENT_DISPLAY_CURRENT_MODE_CHANGED`; `fix-alloc-s1` (build
+`7b6f31f+psxport-de34a6cf`, load 1.16-1.20) has none from it. `LevelReads` starts each probe from the high bits
+of the Fibonacci product: word addresses keep their two low zero bits, so the low bits started every probe at a slot
+divisible by 4.
