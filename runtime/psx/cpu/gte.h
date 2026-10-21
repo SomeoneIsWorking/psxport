@@ -51,6 +51,13 @@ public:
     loadControl(gte::kTranslationX, words);
   }
 
+  // RTPS and RTPT hand each point they project to `sink` at full precision; null stops it.
+  using PreciseSink = void (*)(void *context, std::uint32_t sxy, float x, float y);
+  void reportPrecise(PreciseSink sink, void *context) {
+    regs_.preciseSink = sink;
+    regs_.preciseContext = context;
+  }
+
   // The whole register file and flags, copied without running a read port.
   GteRawState saveRaw() const;
   void restoreRaw(const GteRawState &state);

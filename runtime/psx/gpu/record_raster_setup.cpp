@@ -136,8 +136,9 @@ void adjustUv(TriVertex vertices[3], int one, bool &offU, bool &offV) {
   }
 }
 
+// Truncated as the GTE truncates a projection, so at 1x every vertex lands where the guest's would.
 std::int32_t scaledCoordinate(int whole, float fraction, int scale) {
-  return whole * scale + static_cast<std::int32_t>(std::floor(fraction * static_cast<float>(scale) + 0.5f));
+  return whole * scale + static_cast<std::int32_t>(std::floor(fraction * static_cast<float>(scale)));
 }
 
 TriVertex scaledVertex(const present::RecordVertex &vertex, int scale) {
