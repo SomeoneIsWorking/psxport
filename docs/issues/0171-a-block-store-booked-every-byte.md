@@ -26,3 +26,5 @@ Same route, `scratch/judder-pass3/hand1` (load 17.7..22.9): fence 437 4.3 ms lat
 the field, one in store bookkeeping (`memmove` of the block). The rest of that field is Lightrec's first
 translation of the loaded code (about 12 samples) and the image's SHA-256 (2..3). With the host this loaded the
 lateness figures are no pacing evidence; the sample counts are.
+On an idle host (`scratch/judder-pass3/final2`, load 1.9..2.7) fences 436, 437 and 438 are 3.02, 0.74 and
+0.21 ms late; `prof1` (load 2.7..8.3) 0.44, 1.32 and 0.29 ms.
