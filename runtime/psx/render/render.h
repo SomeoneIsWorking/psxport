@@ -28,7 +28,9 @@ void vramRegion(Core &core, const char *path, gpu::VramRect rect);
 void vramWords(Core &core, gpu::VramPoint at, std::span<std::uint16_t> out);
 void vramRaw(Core &core, const char *path);
 
-// An RGBA8 readback of a presented image written as RGB24 and logged on `channel` with its non-black share.
-void writePresentShot(const char *channel, const char *path, const std::uint8_t *rgba, present::PixelSize size);
+// An RGBA8 (BGRA8 when `bgra`) readback of a presented image written as RGB24 and logged on `channel` with its
+// non-black share.
+void writePresentShot(
+    const char *channel, const char *path, const std::uint8_t *rgba, present::PixelSize size, bool bgra);
 
 } // namespace psx::render

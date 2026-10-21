@@ -47,10 +47,10 @@ RenderState::~RenderState() {
     return;
   }
   record_.reset();
-  for (SDL_GPUTexture **texture : {&vramTexture_, &hostImage_, &presentImage_, &filled_}) {
+  for (SDL_GPUTexture **texture : {&vramTexture_, &hostImage_, &presentImage_, &filled_, &screenImage_}) {
     device_.release(*texture);
   }
-  for (SDL_GPUTransferBuffer **buffer : {&vramUpload_, &hostUpload_, &presentReadback_}) {
+  for (SDL_GPUTransferBuffer **buffer : {&vramUpload_, &hostUpload_, &presentReadback_, &screenReadback_}) {
     device_.release(*buffer);
   }
 }
@@ -224,8 +224,14 @@ void RenderState::showPresentImage(SDL_GPUCommandBuffer *cmd) {
     game_.hostInput.drainEvents();
     return;
   }
-  const PixelSize window{static_cast<int>(width), static_cast<int>(height)};
-  SDL_GPURenderPass *pass = beginClearedPass(cmd, swapchain);
+  recordScreen(cmd, swapchain, {static_cast<int>(width), static_cast<int>(height)});
+  device_.submit(cmd, "show");
+  game_.perf.presented(std::chrono::steady_clock::now(), device_.window().refreshPeriodMs());
+  game_.hostInput.drainEvents();
+}
+
+void RenderState::recordScreen(SDL_GPUCommandBuffer *cmd, SDL_GPUTexture *target, PixelSize size) {
+  SDL_GPURenderPass *pass = beginClearedPass(cmd, target);
   if (presentImage_ != nullptr) {
     // Letterbox, never stretch: a resize can leave the built image a different shape from the window.
     drawFullscreen(cmd,
@@ -233,15 +239,11 @@ void RenderState::showPresentImage(SDL_GPUCommandBuffer *cmd) {
                    device_.sinkPipeline(),
                    {presentImage_, device_.nearestSampler()},
                    bytesOf(ImageUniform{{1.0f, 0.0f, 0.0f, 0.0f}}),
-                   present::letterbox(presentImageSize_.width, presentImageSize_.height, window.width, window.height),
-                   window);
+                   present::letterbox(presentImageSize_.width, presentImageSize_.height, size.width, size.height),
+                   size);
   }
-  // Host UI belongs to the sink, not to the picture a present shot reads.
-  game_.rml_overlay.recordGpu(cmd, pass, window.width, window.height);
+  game_.rml_overlay.recordGpu(cmd, pass, size.width, size.height);
   SDL_EndGPURenderPass(pass);
-  device_.submit(cmd, "show");
-  game_.perf.presented(std::chrono::steady_clock::now(), device_.window().refreshPeriodMs());
-  game_.hostInput.drainEvents();
 }
 
 void RenderState::repaint() {
