@@ -16,9 +16,9 @@ std::uint64_t placeKey(std::uint32_t packet, int vertex) {
   return (static_cast<std::uint64_t>(packet) << 2) | static_cast<std::uint64_t>(vertex);
 }
 
-// The GTE truncates, so the place lies in [whole, whole + 1); the float divide can stray past either end.
-float fractionPast(int whole, float place) {
-  return std::clamp(place - static_cast<float>(whole), 0.0f, std::nextafter(1.0f, 0.0f));
+// A place lies within one rounding of its whole pixel each way; farther, the GPU wrapped the 11-bit word.
+bool placesWhole(int whole, float place) {
+  return std::abs(place - static_cast<float>(whole)) < 2.0f;
 }
 
 } // namespace
@@ -27,6 +27,12 @@ void PrimitiveList::place(std::uint32_t packet, int vertex, const GtePlace &plac
   const std::uint64_t key = placeKey(packet, vertex);
   placesSorted_ = placesSorted_ && (places_.empty() || places_.back().key < key);
   places_.push_back({key, place});
+}
+
+void PrimitiveList::clear() {
+  primitives.clear();
+  places_.clear();
+  placesSorted_ = true;
 }
 
 std::optional<GtePlace> PrimitiveList::placed(std::uint32_t packet, int vertex) {
@@ -47,7 +53,7 @@ std::optional<GtePlace> PrimitiveList::placed(std::uint32_t packet, int vertex) 
 
 void PrimitiveList::emit(OtSlot slot, const DrawPrimitive &primitive) {
   DrawPrimitive &kept = primitives.emplace_back(slot, primitive).second;
-  if (kept.kind != PrimitiveKind::Polygon || kept.sourceAddress == 0) {
+  if (kept.kind == PrimitiveKind::Sprite || kept.sourceAddress == 0) {
     return;
   }
   for (int i = 0; i < kept.vertexCount; ++i) {
@@ -56,8 +62,11 @@ void PrimitiveList::emit(OtSlot slot, const DrawPrimitive &primitive) {
       continue;
     }
     RecordVertex &vertex = kept.vertices[static_cast<std::size_t>(i)];
-    vertex.subX = fractionPast(vertex.x, place->x);
-    vertex.subY = fractionPast(vertex.y, place->y);
+    if (!placesWhole(vertex.x, place->x) || !placesWhole(vertex.y, place->y)) {
+      continue;
+    }
+    vertex.subX = place->x - static_cast<float>(vertex.x);
+    vertex.subY = place->y - static_cast<float>(vertex.y);
   }
 }
 

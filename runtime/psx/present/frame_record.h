@@ -80,7 +80,7 @@ struct RecordVertex {
   std::uint8_t b = 0;
   std::uint8_t u = 0;
   std::uint8_t v = 0;
-  // Polygon only: the fraction of a pixel an in-between position lies past x/y, in [0, 1).
+  // Polygons and lines: where the vertex lies past x/y above native scale, under two pixels either way.
   float subX = 0.0f;
   float subY = 0.0f;
 
@@ -89,9 +89,8 @@ struct RecordVertex {
 
 enum class PrimitiveKind : std::uint8_t { Polygon, Line, Sprite };
 
-// Sets x/y from a fractional position: polygons keep the fraction in subX/subY, sprites and lines step
-// on the native grid and round.
-void placeVertex(RecordVertex &vertex, float x, float y, PrimitiveKind kind);
+// Sets x/y from a fractional position, the fraction in subX/subY.
+void placeVertex(RecordVertex &vertex, float x, float y);
 
 inline constexpr std::uint32_t kNoClut = 0xFFFFFFFFu;
 

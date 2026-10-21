@@ -136,9 +136,14 @@ void adjustUv(TriVertex vertices[3], int one, bool &offU, bool &offV) {
   }
 }
 
-// Truncated as the GTE truncates a projection, so at 1x every vertex lands where the guest's would.
-std::int32_t scaledCoordinate(int whole, float fraction, int scale) {
-  return whole * scale + static_cast<std::int32_t>(std::floor(fraction * static_cast<float>(scale)));
+// Target pixels a vertex's place lies past its whole pixel, truncated as the GTE truncates; native scale keeps the
+// guest's pixel.
+std::int32_t placeOffset(float sub, int scale) {
+  return scale == 1 ? 0 : static_cast<std::int32_t>(std::floor(sub * static_cast<float>(scale)));
+}
+
+std::int32_t scaledCoordinate(int whole, float sub, int scale) {
+  return whole * scale + placeOffset(sub, scale);
 }
 
 TriVertex scaledVertex(const present::RecordVertex &vertex, int scale) {
@@ -876,7 +881,12 @@ void RecordPlanner::Builder::addLine(const DrawPrimitive &primitive) {
   std::uint32_t g = (static_cast<std::uint32_t>(p0.g) << 12) | 2048u;
   std::uint32_t b = (static_cast<std::uint32_t>(p0.b) << 12) | 2048u;
   const PlaneClips clips = planeClips(primitive.state);
+  const int s = plan_.scale;
   for (int i = 0; i <= k; i++) {
+    // Each native pixel of the walk drawn at the line's place there.
+    const float along = k == 0 ? 0.0f : static_cast<float>(i) / static_cast<float>(k);
+    const std::int32_t shiftX = placeOffset(p0.subX + (p1.subX - p0.subX) * along, s);
+    const std::int32_t shiftY = placeOffset(p0.subY + (p1.subY - p0.subY) * along, s);
     const int px = static_cast<int>((x >> 32) & 2047u);
     const int py = static_cast<int>((y >> 32) & 2047u);
     if (!skipsRow(primitive.state, py)) {
@@ -891,7 +901,16 @@ void RecordPlanner::Builder::addLine(const DrawPrimitive &primitive) {
         const Clip &clip = planeClip.clip;
         if (nx >= clip.x0 && nx <= clip.x1 && ny >= clip.y0 && ny <= clip.y1) {
           target(planeClip.plane);
-          emit({nx, ny, nx + 1, ny + 1}, colour);
+          const RecordQuad quad{.x0 = std::max(nx * s + shiftX, clip.x0 * s),
+                                .y0 = std::max(ny * s + shiftY, clip.y0 * s),
+                                .x1 = std::min((nx + 1) * s + shiftX, (clip.x1 + 1) * s),
+                                .y1 = std::min((ny + 1) * s + shiftY, (clip.y1 + 1) * s),
+                                .param = colour};
+          if (quad.x0 < quad.x1 && quad.y0 < quad.y1) {
+            place(quad);
+          }
+          markWritten({nx, ny, nx + 1, ny + 1});
+          reaches_ = true;
         }
       }
     }

@@ -2,6 +2,7 @@
 #pragma once
 
 #include "frame_record.h"
+#include "gp0_command.h"
 #include "gte_state.h"
 #include "guest_memory_map.h"
 
@@ -16,10 +17,10 @@
 
 namespace psx::present {
 
-// The place an SXY word names exactly: a corner no projection made.
+// The place a packet vertex word names exactly, as the GPU reads it: a corner no projection made.
 [[nodiscard]] inline GtePlace wholePlace(std::uint32_t word) {
-  return {static_cast<float>(static_cast<std::int16_t>(word & 0xFFFFu)),
-          static_cast<float>(static_cast<std::int16_t>(word >> 16))};
+  const gpu::Gp0VertexPos position = gpu::Gp0Command(word).vertexPos();
+  return {static_cast<float>(position.x), static_cast<float>(position.y)};
 }
 
 // `place` carried by the whole-pixel step from SXY word `from` to `to`: a corner the guest offset from a
@@ -37,10 +38,10 @@ class PrimitiveSink {
 public:
   virtual ~PrimitiveSink() = default;
   virtual void emit(OtSlot slot, const DrawPrimitive &primitive) = 0;
-  // The producer's unrounded screen place of polygon vertex `vertex` in the packet it wrote at `packet`, declared
-  // before the packet is emitted.
+  // The producer's unrounded screen place of polygon or line vertex `vertex` in the packet it wrote at `packet`,
+  // declared before the packet is emitted.
   virtual void place(std::uint32_t /*packet*/, int /*vertex*/, const GtePlace & /*place*/) {}
-  // The places of every corner of the polygon packet at `packet` (any segment), in packet order.
+  // The places of every vertex of the packet at `packet` (any segment), in packet order.
   void placeCorners(std::uint32_t packet, std::span<const GtePlace> corners) {
     for (std::size_t vertex = 0; vertex < corners.size(); ++vertex) {
       place(psx::kseg0Address(packet), static_cast<int>(vertex), corners[vertex]);
@@ -52,13 +53,14 @@ public:
   }
 };
 
-// A sink that keeps what it is handed, in order; a polygon from a packet with declared places takes their
-// fractions past its whole pixels.
+// A sink that keeps what it is handed, in order; a polygon or line from a packet with declared places takes
+// their offsets from its whole pixels. `clear` keeps the storage for the next render.
 class PrimitiveList final : public PrimitiveSink {
 public:
   void emit(OtSlot slot, const DrawPrimitive &primitive) override;
   void place(std::uint32_t packet, int vertex, const GtePlace &place) override;
   [[nodiscard]] std::optional<GtePlace> placed(std::uint32_t packet, int vertex) override;
+  void clear();
   std::vector<std::pair<OtSlot, DrawPrimitive>> primitives;
 
 private:

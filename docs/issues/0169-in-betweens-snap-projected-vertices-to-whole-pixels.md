@@ -1,8 +1,8 @@
 # 0169: in-betweens snapped every projected vertex to a whole native pixel
 
-Status: fixed for the flag intro and every Spyro 1 projecting producer listed under Open; open for sprites and lines.
-`PrimitiveList`, each title producer that projects (psx-spyro sky, moby emitter, terrain passes),
-`runtime/psx/gpu/record_raster_setup.cpp` `scaledCoordinate`.
+Status: fixed for polygons and lines, the flag intro, the title screen and every Spyro 1 producer below; open for
+sprites (Open). Owner: `PrimitiveList`, each title producer that projects (psx-spyro sky, moby emitter, terrain
+passes and the gameplay producers below), `runtime/psx/gpu/record_raster_setup.cpp` `scaledCoordinate` and `addLine`.
 
 ## Observed
 Spyro 1 flag intro (psx-spyro issue 0196), fps60, 16:9, 4x internal resolution: the sky in the margins,
@@ -44,12 +44,37 @@ turn in Artisans (`wk4/walk`) shows no seams in the near split ground.
 ## Spyro 1 gameplay producers (2026-10-21)
 The paired actor (Spyro, with its water cut), the sprite queue, particles, the drop and moby shadows, the glow
 fans and the portals now declare their places where they copy a projected word into a packet. Corners a drawer
-offsets from a projected point by whole pixels (scaled particle quads, glow rims, moby shadow nudges, the near
-portal outline's push) take `placeOffset`; corners no projection made (the portal fill's screen triangles) take
+offsets from a projected point by a genuine whole-pixel step (moby shadow nudges, the near portal outline's push,
+particle dots) take `placeOffset`; glow rims and scaled particle quads take their unrounded offsets (below); corners no projection made (the portal fill's screen triangles) take
 `wholePlace`; crossings the drawer computes (the water cut, the portal clip) are recomputed on the unrounded
 places. psxport `686de8d2`, `1e945b7a`, `e0355be4`; psx-spyro issue 0196 has the per-producer proof.
 
+## Review of pass 3 (2026-10-21)
+- The places were fractions clamped into the vertex's own pixel, which a corner offset by a scaled size cannot
+  respect: a glow rim is the centre plus `size / depth` times a rim vector, and the guest truncates both, so the
+  unrounded rim lies up to two pixels from the guest's. `placeOffset` carried only the centre's fraction, so glow
+  rims and scaled particle quads changed size in whole native pixels (8-pixel steps at 8x). `subX`/`subY` now hold
+  the place's offset from the whole pixel, within two pixels either way (`PrimitiveList::emit`; a place farther off
+  is a word the GPU wrapped, and keeps the whole pixel). Native scale keeps the guest's pixel
+  (`record_raster_setup.cpp:placeOffset`), so 1x is unchanged: psx-spyro `scratch/judder-pass3/r2-x1-{head,new}`,
+  `warp 10` turning, 20 presents pixel-identical to the previous build at 1x. Spyro 1's glow rims and scaled quads
+  declare the offset before the guest truncates it (psx-spyro issue 0196).
+- Lines and dots stepped on whole native pixels: `PrimitiveList::emit` applied places to polygons only and
+  `addLine` drew each native pixel of the walk on the native grid. `emit` now applies places to lines, and `addLine`
+  draws each pixel of the walk at the offset interpolated between the two ends' places (still one quad per native
+  pixel, so the CPU cost does not scale with the resolution).
+- `wholePlace` decoded a vertex word as two int16 halves; the GPU and `PrimitiveList` read it as 11-bit signed
+  (`Gp0Command::vertexPos`), so a coordinate of 1024 or more disagreed. `wholePlace` now reads the word through
+  `Gp0Command::vertexPos`.
+- `composeFrame` built a fresh `PrimitiveList` per object per present, so declared places allocated every present.
+  It renders into a caller-owned list (`FramePresenter::renderScratch_`) that `clear` empties without freeing. The
+  composer's other per-present containers predate this issue: issue 0173.
+- The title sprites were listed here as stepping whole; they do not. Spyro 1's `TitleSprite` (POLY_FT4 packets)
+  places its in-between corners with fractions through `placeVertex`, and psx-spyro 0196 measured the logo's lowest
+  edge moving 4..7 rows per present at 4x.
+
 ## Open
-- Sprites and lines stay whole by design (`PrimitiveList` gives sub-pixel fractions to polygons only): Spyro 1's
-  sparkle stars, particle lines and dots and the title sprites step on whole native pixels above 1x.
+- Sprites (GP0 0x60-0x7F) draw on whole native pixels: no producer declares a sprite place, and
+  `RecordPlanner::Builder::addSprite` and `record.frag` place a sprite by its whole origin. No Spyro 1 producer emits
+  a sprite; a title whose producer does needs `addSprite` to shift the quad and the texel origin by the place.
 - Spyro 1's flame `0x80058D64` has no producer, so it is not a place gap but a whole-frame one (psx-spyro 0196).
