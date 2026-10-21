@@ -23,8 +23,8 @@ enum class PresentCompletion : std::uint8_t { MainFrame, Transition };
 // The record path's account of a present, logged on the presentseq channel when it is shown.
 struct PresentNote {
   std::uint64_t fence = 0;
-  std::uint64_t shown = 0;           // the record whose picture it shows
-  std::optional<std::uint64_t> from; // an in-between's earlier record
+  std::optional<std::uint64_t> shown; // the record whose picture it shows; none for the displayed VRAM as it stands
+  std::optional<std::uint64_t> from;  // an in-between's earlier record
   float t = 1.0f;
   int fields = 0;
   int parts = 1;

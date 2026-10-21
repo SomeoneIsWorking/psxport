@@ -253,8 +253,9 @@ there are no per-vertex keys. An in-between with nothing produced is the shown r
   (`holdUndrawnWrites`). The presenter remembers which record each present showed.
 - **Cadence.** With the title's 60 fps on, each logic frame of two or more fields gets two presents, at
   `t = 0.5` and `t = 1`; a one-field frame, or any frame with it off, gets one at `t = 1`. The
-  `presentseq` debug channel logs each present as it is shown: host time, record shown, from, `t`, fields,
-  and the deadline it was scheduled for (`due`). With no record drawing the displayed buffer, S' unknown, or a
+  `presentseq` debug channel logs each present as it is shown: host time, record shown (-1 for the
+  displayed VRAM as it stands, with no record composed), from, `t`, fields, and the deadline it was scheduled
+  for (`due`). With no record drawing the displayed buffer, S' unknown, or a
   record after S' missing or incomplete, the present is `t = 1`.
 - **Base state.** The composed frame is drawn onto VRAM as it was before S: the image when S = N, the
   rasterizer's kept pre-state when S is the last applied record with entries. Each plane keeps one

@@ -301,7 +301,7 @@ void FramePresenter::presentCurrent(Core &core,
   schedule(core,
            cadence,
            {.fence = fence_,
-            .shown = shown != nullptr ? shown->record->sequence() : current_->sequence(),
+            .shown = shown != nullptr ? std::optional(shown->record->sequence()) : std::nullopt,
             .composed = composed});
 }
 
