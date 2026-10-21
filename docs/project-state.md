@@ -30,7 +30,7 @@ translated control flow without restoring an offline dispatch substrate.
 | S020 | Record rendering and title-owned enhancements | partial | S017 | G003 |
 | S021 | Portable desktop and Android delivery | missing | S012, S019, S020 | G003, G004 |
 | S022 | Mechanical structure/config/logging/tooling policy | partial | — | G002, G004 |
-| S023 | Whole-machine save states (title-neutral; a title adds native state via `GameRuntime::nativeState(Core &)`, and adopts RAM-derived state in `NativeStatePort::restored` after every section is restored) | verified | S012, S017 | G003 |
+| S023 | Whole-machine save states (title-neutral; a title adds native state via `GameRuntime::nativeState(Core &)`, and adopts RAM-derived state in `NativeStatePort::restored` after every section is restored; a frame driver whose `ResumableGuestCall` spans steps saves it with `ResumableGuestCall::save`) | verified | S012, S017 | G003 |
 | S024 | In-app bug report (B key: freeze, present shot + GPU device render of the same frame, pad recording + start card, replay command, RmlUi form) | partial | S017, S020 | G003 |
 
 ### S012 — Per-`Core` dynarec-default Lightrec backend

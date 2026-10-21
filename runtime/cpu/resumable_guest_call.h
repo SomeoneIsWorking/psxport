@@ -15,6 +15,11 @@
 
 class Core;
 
+namespace psx::platform {
+class BlobReader;
+class BlobWriter;
+} // namespace psx::platform
+
 namespace psx::cpu {
 
 // A turn cap that states no cap: the caller (a title's frame driver) is the thing bounding the call.
@@ -63,6 +68,11 @@ public:
   // owner, the entry, the return address, the turn and the reason: a caller that wanted a completed
   // guest call has none. Use `advance` when a refusal is something to report rather than to die on.
   std::uint32_t callToReturn(const std::optional<NativeKey> &original = std::nullopt);
+
+  // The call for a machine state; a pending call resumes from the saved turn's registers and PC.
+  void save(psx::platform::BlobWriter &out) const;
+  // False with `error` set and nothing changed when `in` does not decode.
+  bool load(Core &core, psx::platform::BlobReader &in, std::string &error);
 
   [[nodiscard]] bool pending() const {
     return pending_;
