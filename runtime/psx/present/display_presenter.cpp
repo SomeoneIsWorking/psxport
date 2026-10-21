@@ -126,7 +126,7 @@ void DisplayPresenter::showScheduled() {
                 "at={:.3f}ms fence={} shown={} from={} t={} fields={}/{} composed={} cut={} logic={} due={:.3f}ms",
                 psx::platform::hostNowMs(),
                 note.fence,
-                note.shown,
+                note.shown ? static_cast<long long>(*note.shown) : -1LL,
                 note.from ? static_cast<long long>(*note.from) : -1LL,
                 note.t,
                 note.fields,
