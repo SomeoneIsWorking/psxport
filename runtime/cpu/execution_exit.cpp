@@ -2,15 +2,21 @@
 
 #include "core.h"
 #include "emulated_time.h"
+#include "execution_control.h"
 #include "field_rate.h"
 #include "game.h"
 
 #include <lucent/log.h>
 
+#include <optional>
+
 namespace psx::cpu {
 
-// One display field of guest cycles at the core's display rate.
+// One display field of guest cycles at the core's display rate, or the budget of a call that cannot suspend.
 ExecutionBudget ExecutionBudget::currentTurn(const Core &core) {
+  if (const std::optional<ExecutionBudget> &held = core.executionControl().unsuspendable()) {
+    return *held;
+  }
   const psx::frame::DisplayFieldRate rate =
       core.game != nullptr ? core.game->timing.displayFieldRate() : psx::frame::DISPLAY_FIELD_RATE_NTSC;
   return fromCycles(psx::frame::displayFieldCpuTicks(1, 1, psx::frame::fieldRateMilliHz(rate)));

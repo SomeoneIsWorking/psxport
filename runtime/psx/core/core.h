@@ -117,6 +117,7 @@ public:
   ~Core();
 
   psx::cpu::ExecutionControl &executionControl();
+  const psx::cpu::ExecutionControl &executionControl() const;
   psx::cpu::ImageCatalog &imageCatalog();
   const psx::cpu::ImageCatalog &imageCatalog() const;
   psx::cpu::LightrecExecutor &lightrecExecutor();
