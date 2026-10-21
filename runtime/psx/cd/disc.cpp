@@ -7,7 +7,6 @@
 #include "number_text.h"
 #include <libchdr/chd.h>
 #include <lucent/log.h>
-#include <stdlib.h>
 #include <string.h>
 
 #include <algorithm>
@@ -23,16 +22,14 @@ Disc::~Disc() {
 }
 
 void Disc::close() {
+  hunks.reset();
   if (chd) {
     chd_close(chd);
     chd = nullptr;
   }
-  free(hunk_buf);
-  hunk_buf = nullptr;
   frames_per_hunk = 0;
   hunk_count = 0;
   hunk_bytes = 0;
-  cached_hunk = 0xFFFFFFFFu;
   memset(tracks, 0, sizeof tracks);
   track_count = 0;
 }
@@ -151,6 +148,7 @@ bool Disc::open() {
 }
 
 bool Disc::openImage(const char *path) {
+  const uint64_t started = psx::platform::hostNowNs();
   if (chd_open(path, CHD_OPEN_READ, 0, &chd) != CHDERR_NONE) {
     lucent::error("disc", "failed to open CHD: {}", path);
     return false;
@@ -159,9 +157,8 @@ bool Disc::openImage(const char *path) {
   hunk_bytes = h->hunkbytes;
   frames_per_hunk = h->hunkbytes / kRawFrame;
   hunk_count = h->totalhunks;
-  hunk_buf = (uint8_t *)malloc(hunk_bytes);
-  if (!hunk_buf || frames_per_hunk == 0) {
-    lucent::error("disc", "invalid CHD hunk geometry or allocation failure: {}", path);
+  if (frames_per_hunk == 0) {
+    lucent::error("disc", "invalid CHD hunk geometry: {}", path);
     close();
     return false;
   }
@@ -197,7 +194,13 @@ bool Disc::openImage(const char *path) {
     close();
     return false;
   }
-  lucent::info("disc", "opened {} ({} hunks, {} frames/hunk)", path, hunk_count, frames_per_hunk);
+  hunks = std::make_unique<HunkReader>(chd, path);
+  lucent::info("disc",
+               "opened {} ({} hunks, {} frames/hunk) in {} us",
+               path,
+               hunk_count,
+               frames_per_hunk,
+               (psx::platform::hostNowNs() - started) / 1000);
   return true;
 }
 
@@ -229,16 +232,14 @@ bool Disc::subqPosition(uint32_t lba, uint8_t out[8]) {
   return true;
 }
 
-// The one place a hunk becomes resident; it counts lookups, hits, fills and time in chd_read.
+// The one place a hunk is read; it counts lookups, hits (decoded ahead), fills and the caller's time on fills.
 const uint8_t *Disc::residentHunk(uint32_t hunk, uint32_t lba, const char *reader) {
   lookups++;
-  if (hunk == cached_hunk) {
-    hits++;
-    return hunk_buf;
-  }
   const uint64_t started = psx::platform::hostNowNs();
-  if (chd_read(chd, hunk, hunk_buf) != CHDERR_NONE) {
-    return nullptr;
+  const HunkReader::Fetch fetched = hunks->hunk(hunk);
+  if (fetched.resident) {
+    hits++;
+    return fetched.data;
   }
   const uint64_t elapsed = psx::platform::hostNowNs() - started;
   fills++;
@@ -246,8 +247,7 @@ const uint8_t *Disc::residentHunk(uint32_t hunk, uint32_t lba, const char *reade
   if (elapsed > worst_fill_ns) {
     worst_fill_ns = elapsed;
   }
-  cached_hunk = hunk;
-  // The hunk sequence is the working set a cache size is chosen from.
+  // The hunk sequence is the working set the read-ahead is sized from.
   lucent::debug("dischunk",
                 "fill hunk={} lba={} by={} us={} lookups={} fills={}",
                 hunk,
@@ -256,12 +256,12 @@ const uint8_t *Disc::residentHunk(uint32_t hunk, uint32_t lba, const char *reade
                 elapsed / 1000,
                 lookups,
                 fills);
-  return hunk_buf;
+  return fetched.data;
 }
 
 void Disc::readReport(const char *when) const {
   lucent::info("disc",
-               "{}: {} hunk lookup(s), {} hit(s), {} fill(s) ({:.1f}% miss), {:.1f} ms in chd_read, "
+               "{}: {} hunk lookup(s), {} hit(s), {} fill(s) ({:.1f}% miss), {:.1f} ms waiting on fills, "
                "worst fill {:.1f} ms",
                when,
                lookups,

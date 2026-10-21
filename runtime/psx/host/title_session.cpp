@@ -97,6 +97,8 @@ bool TitleSession::boot() {
   }
 
   SavedDisc(*title_.identity).bind(game.disc);
+  // Open now, so the first guest read does not pay for the image's hunk map inside a field.
+  game.disc.open();
   const psx::cpu::PsxExeLoadResult admitted = runtime.admitExecutable(core, title_.bytes);
   if (!admitted) {
     lucent::error("boot",

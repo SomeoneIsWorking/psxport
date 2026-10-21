@@ -151,6 +151,7 @@ set(PSXPORT_FRAMEWORK_SRC
   ${PSXPORT_ROOT}/runtime/psx/cd/stock_cd_work_area.cpp
   ${PSXPORT_ROOT}/runtime/psx/cd/stock_libcd.cpp
   ${PSXPORT_ROOT}/runtime/psx/cd/disc_toc.cpp
+  ${PSXPORT_ROOT}/runtime/psx/cd/hunk_reader.cpp
   ${PSXPORT_ROOT}/runtime/psx/cd/stock_cd_response.cpp
   ${PSXPORT_ROOT}/runtime/psx/cd/cdc_command_phase.cpp
   ${PSXPORT_ROOT}/runtime/psx/cd/cdc_native.cpp
