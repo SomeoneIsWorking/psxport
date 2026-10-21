@@ -219,8 +219,17 @@ The composer builds the frame at `t` from S's record:
   mask, texture window and interlace are those in effect where the primitive lands in S (the
   first recorded primitive at or after its position), and the CLUT from S's sample of the same CLUT
   attribute (`clutWord`), or from the device VRAM when S never sampled it.
+- **Sub-pixel place.** While a frame is composed, the GTE hands every point RTPS and RTPT project to
+  `PreciseProjection` (Beetle's projection push, reaching the bound register file's sink) unrounded,
+  keyed by the packed SXY word it rounded to. After each render, a polygon vertex whose word was
+  projected keeps its fraction past that whole pixel in `subX`/`subY`; points that round to one word
+  share the first one's place, so every polygon naming the word moves together and no seam opens. The
+  rasterizer truncates `whole * scale + fraction * scale` as the GTE truncates, so at 1x every vertex
+  is the guest's and above 1x a slow camera or object moves on in-betweens instead of snapping to the
+  neighbouring field's pixel. Real (`t = 1`) composes take the same place, so a still object does not
+  shift between presents. Sprites, lines and anything not projected through the GTE stay whole.
 - **Exactness.** At `t = 1`, 4:3, depth testing off, a render must reproduce the entries it replaces;
-  the title's oracle compare covers the frame.
+  the title's oracle compare covers the frame (at 1x; above it, projected vertices keep their fraction).
 
 `EmissionScope` binds each packet to `(P, obj)` at store time and the OT walk stamps the key on its
 entries, so the composer knows what a producer replaces. `element` and `part` are not pairing keys;

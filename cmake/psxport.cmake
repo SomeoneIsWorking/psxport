@@ -128,6 +128,7 @@ set(PSXPORT_FRAMEWORK_SRC
   ${PSXPORT_ROOT}/runtime/psx/present/gte_control.cpp # the GTE control registers a render runs under
   ${PSXPORT_ROOT}/runtime/psx/present/packet_chains.cpp # packets a body linked into tag chains, as primitives
   ${PSXPORT_ROOT}/runtime/psx/present/frame_composer.cpp # the frame at t from a record and producer renders
+  ${PSXPORT_ROOT}/runtime/psx/present/precise_projection.cpp # sub-pixel place of each point a render projects
   ${PSXPORT_ROOT}/runtime/psx/present/guest_redraw.cpp # a guest draw routine re-run for an in-between, then undone
   ${PSXPORT_ROOT}/vendor/beetle-psx/mednafen/psx/mdec.c
   ${PSXPORT_ROOT}/runtime/psx/movie/mdec_device.cpp

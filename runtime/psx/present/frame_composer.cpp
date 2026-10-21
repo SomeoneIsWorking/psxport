@@ -145,7 +145,8 @@ std::optional<FrameRecord> composeFrame(const FrameRecord &shown,
                                         const FrameState &to,
                                         float t,
                                         const StateProducers &producers,
-                                        std::span<const std::uint16_t> vram) {
+                                        std::span<const std::uint16_t> vram,
+                                        PreciseProjection &precise) {
   if (to.empty()) {
     return std::nullopt;
   }
@@ -242,6 +243,7 @@ std::optional<FrameRecord> composeFrame(const FrameRecord &shown,
       continue;
     }
     PrimitiveList sink;
+    precise.clear();
     object.render->render(states, sink);
     std::vector<std::pair<std::size_t, DrawPrimitive>> placed;
     placed.reserve(sink.primitives.size());
@@ -274,6 +276,7 @@ std::optional<FrameRecord> composeFrame(const FrameRecord &shown,
         }
         primitive.clutOffset = clut->second;
       }
+      precise.refine(primitive);
       applyEnvironment(primitive, *environments[*position]);
       primitive.key = RecordKey{object.id.producer, object.id.object, 0, 0};
       primitive.slot = slot;

@@ -4,6 +4,7 @@
 #include "field_cadence.h"
 #include "frame_record.h"
 #include "frame_state.h"
+#include "precise_projection.h"
 #include "present_ledger.h"
 #include "record_geometry.h"
 #include "state_producer.h"
@@ -127,6 +128,7 @@ private:
   // The record whose picture the last present showed.
   std::optional<std::uint64_t> shownSequence_;
   std::optional<present::FrameRecord> composedStore_;
+  present::PreciseProjection precise_;
   const present::FrameRecord *composed_ = nullptr;
   bool composedAdvances_ = false;
   PresentStability stability_;
