@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: GPL-3.0-or-later
 // One title's own logo as the picker draws it: an RGBA image and its lazily uploaded texture.
 #pragma once
 
