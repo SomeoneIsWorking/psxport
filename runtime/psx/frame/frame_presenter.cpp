@@ -255,31 +255,31 @@ void FramePresenter::presentRecords(Core &core, const present::StateProducers *p
   ++stability_.inBetweens;
   const bool cut = cutBetween(from->record->sequence(), shown->record->sequence());
   const present::FrameRecord &base = *shown->record;
-  if (producers != nullptr) {
-    composedStore_ = composeGuarded(core,
-                                    base,
-                                    cut ? nullptr : from->state.get(),
-                                    *shown->state,
-                                    present::kInBetweenAt,
-                                    *producers,
-                                    renderScratch_);
+  // One present per field, so each vblank of a display at the field rate shows the frame a field further on.
+  const FieldCadence cadence{guestFields, guestFields};
+  for (int field = 1; field < guestFields; ++field) {
+    const float t = present::inBetweenAt(field, guestFields);
+    if (producers != nullptr) {
+      composedStore_ = composeGuarded(
+          core, base, cut ? nullptr : from->state.get(), *shown->state, t, *producers, renderScratch_);
+    }
+    const bool composed = composedStore_.has_value();
+    composed_ = composedStore_ ? &*composedStore_ : &base;
+    composedAdvances_ = false;
+    core.game->display.buildInBetween();
+    composed_ = nullptr;
+    composedStore_.reset();
+    dumpPresent(core, true);
+    schedule(core,
+             cadence,
+             {.fence = fence_,
+              .shown = base.sequence(),
+              .from = from->record->sequence(),
+              .t = t,
+              .composed = composed,
+              .cut = cut});
   }
-  const bool composed = composedStore_.has_value();
-  composed_ = composedStore_ ? &*composedStore_ : &base;
-  composedAdvances_ = false;
-  core.game->display.buildInBetween();
-  composed_ = nullptr;
-  composedStore_.reset();
-  dumpPresent(core, true);
-  schedule(core,
-           {guestFields, 2},
-           {.fence = fence_,
-            .shown = base.sequence(),
-            .from = from->record->sequence(),
-            .t = present::kInBetweenAt,
-            .composed = composed,
-            .cut = cut});
-  presentCurrent(core, producers, {guestFields, 2}, shown);
+  presentCurrent(core, producers, cadence, shown);
 }
 
 // A present is build, then a show scheduled for its deadline: only the show waits, so it lands on time whatever

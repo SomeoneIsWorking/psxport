@@ -103,7 +103,8 @@ private:
   // Every drawing record after `from` up to `to` is held, follows its predecessor and is no cut.
   bool continuesTo(std::uint64_t from, std::uint64_t to) const;
   bool cutBetween(std::uint64_t from, std::uint64_t to) const;
-  // The record path at 60 fps: the shown record at t = 0.5 from the one shown before, then at t = 1.
+  // The record path at 60 fps: a frame of n fields is n presents, the shown record at t = k / n from the one
+  // shown before.
   void presentRecords(Core &core, const present::StateProducers *producers, int guestFields);
   // N's present; with `shown`, the shown record composed at t = 1.
   void

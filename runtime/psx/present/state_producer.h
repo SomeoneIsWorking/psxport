@@ -72,8 +72,10 @@ private:
   bool placesSorted_ = true;
 };
 
-// Where between two shown records the in-between present of fps60 is drawn (FramePresenter).
-inline constexpr float kInBetweenAt = 0.5f;
+// The `t` of present `field` (1..fields) of a logic frame of `fields` fields: one present a field (FramePresenter).
+[[nodiscard]] inline float inBetweenAt(int field, int fields) {
+  return static_cast<float>(field) / static_cast<float>(fields);
+}
 
 // An object's two saved states and the point `t` between them. With no earlier state (birth, cut),
 // `from` is `to`.
