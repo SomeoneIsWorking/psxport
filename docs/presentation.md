@@ -223,7 +223,7 @@ The composer builds the frame at `t` from S's record:
 - **Sub-pixel place.** The GTE keeps the unrounded place of each SXY FIFO entry as RTPS and RTPT push
   it (`Gte::projectedPlace`, from Beetle's projection push). A producer that copies a projected word
   into a packet declares that vertex's place to the sink by packet address and vertex index
-  (`PrimitiveSink::place`), carrying it through its own arithmetic (scratch slots, midpoints, pulls) as
+  (`PrimitiveSink::place`, or `placeCorners` for a whole polygon), carrying it through its own arithmetic (scratch slots, midpoints, pulls) as
   it carries the word; `PrimitiveList` gives each polygon walked from a packet with declared places the
   fraction past its whole pixel in `subX`/`subY`. No place is matched by value. A producer that cuts a
   packet it already wrote reads the declared places back (`placed`). Every render declares places, so a
