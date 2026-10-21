@@ -108,13 +108,6 @@ private:
   // N's present; with `shown`, the shown record composed at t = 1.
   void
   presentCurrent(Core &core, const present::StateProducers *producers, FieldCadence cadence, const SealedRecord *shown);
-  // presentseq: one line per present, after its show: which record, from which, at what t, held how long.
-  void logPresent(Core &core,
-                  std::uint64_t shown,
-                  std::optional<std::uint64_t> from,
-                  FieldCadence cadence,
-                  bool composed,
-                  bool cut) const;
   // fps60dump: every present, real or in-between, from PSXPORT_FPS60_DUMP_FROM up to a cap.
   void dumpPresent(Core &core, bool interpolated);
 

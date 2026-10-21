@@ -173,9 +173,9 @@ public:
     (void)core;
     return false;
   }
-  // Delivers simulated fields and waits for their deadline; a title whose field scheduler already
-  // advances the devices only waits.
-  virtual void pacePresentation(Core &core, frame::FieldCadence cadence);
+  // The host deadline a present representing `cadence` is shown at, delivering its simulated fields; a title
+  // whose field scheduler already advances the devices only plans it. nullopt when unpaced.
+  virtual std::optional<double> presentDeadline(Core &core, frame::FieldCadence cadence);
   // Lines the guest scans out, or 0 when the decoded display height is right.
   virtual int displayHeight() const {
     return 0;

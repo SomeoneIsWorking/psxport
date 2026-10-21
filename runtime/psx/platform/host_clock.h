@@ -3,6 +3,7 @@
 
 #include <chrono>
 #include <cstdint>
+#include <thread>
 
 namespace psx::platform {
 
@@ -15,6 +16,14 @@ inline std::uint64_t hostNowNs() {
 
 inline double hostNowMs() {
   return std::chrono::duration<double, std::milli>(HostClock::now().time_since_epoch()).count();
+}
+
+// Sleeps until the host clock reaches `dueMs`; a deadline already passed returns at once.
+inline void sleepUntilMs(double dueMs) {
+  const double waitMs = dueMs - hostNowMs();
+  if (waitMs > 0.0) {
+    std::this_thread::sleep_for(std::chrono::duration<double, std::milli>(waitMs));
+  }
 }
 
 inline double msBetween(HostClock::time_point from, HostClock::time_point to) {

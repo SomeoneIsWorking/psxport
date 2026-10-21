@@ -24,7 +24,7 @@ title answers there. A hop with no title entry runs on the framework alone.
 | 2 | `FrameDriver::stepFrame` — one guest turn and exactly one `FramePresenter::commit` | `createFrameDriver` |
 | 3 | `psx/platform/coro.h:Coro` — the continuation a title's own task scheduler runs on, stepped by its frame driver | session member |
 | 4 | `psx/boot/run_end_report.cpp:RunEndReport::emit` → `GameRuntime::reportRun` | `reportRun` |
-| 5 | `psx/frame/frame_presenter.cpp:FramePresenter::commit` → `GameRuntime::pacePresentation` (default `psx/frame/frame_pacer.cpp:FramePacer::paceSubframeFields`) | `pacePresentation` |
+| 5 | `psx/frame/frame_presenter.cpp:FramePresenter::commit` → `GameRuntime::presentDeadline` (default `psx/frame/frame_pacer.cpp:FramePacer::subframeDeadline`) → `psx/present/display_presenter.cpp:DisplayPresenter::showAt` | `presentDeadline` |
 
 ## F-INPUT — host pad to guest
 
