@@ -77,9 +77,13 @@ present::PixelSize RenderWindow::pixelSize() const {
   return {width, height};
 }
 
-double RenderWindow::refreshPeriodMs() const {
+unsigned RenderWindow::refreshMilliHz() const {
   const SDL_DisplayMode *mode = SDL_GetCurrentDisplayMode(SDL_GetDisplayForWindow(window_));
-  return mode != nullptr && mode->refresh_rate > 0.0f ? 1000.0 / static_cast<double>(mode->refresh_rate) : 0.0;
+  if (mode == nullptr || mode->refresh_rate_numerator <= 0 || mode->refresh_rate_denominator <= 0) {
+    return 0;
+  }
+  return static_cast<unsigned>((static_cast<long long>(mode->refresh_rate_numerator) * 1000) /
+                               mode->refresh_rate_denominator);
 }
 
 } // namespace psx::render

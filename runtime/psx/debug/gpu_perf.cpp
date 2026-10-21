@@ -2,6 +2,9 @@
 // The phases are the ones gpu_perf.h defines and the title's FrameDriver brackets; nothing here times the GPU.
 
 #include "gpu_perf.h"
+
+#include "field_rate.h"
+
 #include <cstdio>
 #include <format>
 #include <lucent/log.h>
@@ -133,7 +136,7 @@ void GpuPerf::frameEnd() {
   mAcc = Acc{};
 }
 
-void GpuPerf::presented(clk_time_point at, double vsyncPeriodMs) {
+void GpuPerf::presented(clk_time_point at, unsigned refreshMilliHz) {
   const double heldFields = mHeldFields > 0.0 ? mHeldFields : 1.0;
   mHeldFields = 0.0;
   if (!mHavePresent) {
@@ -145,8 +148,8 @@ void GpuPerf::presented(clk_time_point at, double vsyncPeriodMs) {
   mLastPresent = at;
   mFrames.add(interval);
   ++mPresents.intervals;
-  if (vsyncPeriodMs > 0.0) {
-    mPresents.vsyncPeriodMs = vsyncPeriodMs;
+  if (refreshMilliHz != 0) {
+    mPresents.vsyncPeriodMs = psx::frame::fieldIntervalMs(refreshMilliHz, 1, 1);
   }
   if (mPresents.vsyncPeriodMs > 0.0 && interval > (heldFields + 0.5) * mPresents.vsyncPeriodMs) {
     ++mPresents.missed;

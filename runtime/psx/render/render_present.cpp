@@ -224,7 +224,7 @@ void RenderState::showPresentImage(SDL_GPUCommandBuffer *cmd) {
   }
   recordScreen(cmd, swapchain, {static_cast<int>(width), static_cast<int>(height)});
   device_.submit(cmd, "show");
-  game_.perf.presented(std::chrono::steady_clock::now(), device_.window().refreshPeriodMs());
+  game_.perf.presented(std::chrono::steady_clock::now(), device_.window().refreshMilliHz());
   game_.hostInput.drainEvents();
 }
 

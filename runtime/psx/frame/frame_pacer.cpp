@@ -4,6 +4,7 @@
 #include "field_rate.h"
 #include "game.h"
 #include "host_clock.h"
+#include "render_device.h"
 
 #include <lucent/log.h>
 
@@ -49,12 +50,13 @@ std::optional<double> FramePacer::deadline(Core &core, PaceInputs inputs, bool a
     return std::nullopt;
   }
   lucent::debug("pacer",
-                "interval={:.4f}ms sleep={:.4f}ms quota={} parts={} rate={}mHz{}",
+                "interval={:.4f}ms sleep={:.4f}ms quota={} parts={} rate={}mHz refresh={}mHz{}",
                 planned.intervalMs,
                 planned.sleepMs,
                 planned.effectiveQuota,
                 planned.effectiveParts,
                 inputs.fieldRateMilliHz,
+                inputs.refreshMilliHz,
                 planned.resync ? " RESYNC" : "");
   return planned.nextMs;
 }
@@ -73,7 +75,8 @@ PaceInputs guestInputs(const Game &game, FieldCadence cadence) {
   return {.unpaced = game.config.unpaced || game.fastForwarding(),
           .quota = cadence.fields,
           .parts = cadence.parts,
-          .fieldRateMilliHz = fieldRateMilliHz(game.timing.displayFieldRate())};
+          .fieldRateMilliHz = fieldRateMilliHz(game.timing.displayFieldRate()),
+          .refreshMilliHz = game.renderDevice.window().refreshMilliHz()};
 }
 
 } // namespace
@@ -95,10 +98,13 @@ void FramePacer::waitPresentedFields(Core &core, FieldCadence cadence) {
 }
 
 void FramePacer::hostScreenPace(Core &core) {
-  wait(deadline(
-      core,
-      {.unpaced = core.game->config.unpaced, .quota = 1, .parts = 1, .fieldRateMilliHz = kHostScreenFieldRateMilliHz},
-      false));
+  wait(deadline(core,
+                {.unpaced = core.game->config.unpaced,
+                 .quota = 1,
+                 .parts = 1,
+                 .fieldRateMilliHz = kHostScreenFieldRateMilliHz,
+                 .refreshMilliHz = core.game->renderDevice.window().refreshMilliHz()},
+                false));
 }
 
 } // namespace psx::frame
