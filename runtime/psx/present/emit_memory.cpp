@@ -8,17 +8,87 @@
 #include <cstdlib>
 #include <cstring>
 #include <iterator>
+#include <tuple>
 #include <utility>
 
 namespace psx::present {
 
-std::vector<LevelWord> LevelReads::words() const {
-  std::vector<LevelWord> words;
-  words.reserve(words_.size());
-  for (const auto &[address, value] : words_) {
-    words.push_back(LevelWord{address, value});
+void LevelReads::note(std::uint32_t wordAddress, std::uint32_t value) {
+  if ((words_.size() + 1) * 2 > slots_.size()) {
+    grow();
   }
-  return words;
+  const std::size_t mask = slots_.size() - 1;
+  for (std::size_t at = (wordAddress * 0x9E3779B1u) & mask;; at = (at + 1) & mask) {
+    Slot &slot = slots_[at];
+    if (slot.stamp != stamp_) {
+      slot = {stamp_, static_cast<std::uint32_t>(words_.size())};
+      words_.push_back({wordAddress, value});
+      return;
+    }
+    if (words_[slot.word].address == wordAddress) {
+      return;
+    }
+  }
+}
+
+void LevelReads::clear() {
+  words_.clear();
+  if (++stamp_ == 0) {
+    std::fill(slots_.begin(), slots_.end(), Slot{});
+    stamp_ = 1;
+  }
+}
+
+void LevelReads::grow() {
+  slots_.assign(std::max<std::size_t>(64, slots_.size() * 2), Slot{});
+  stamp_ = 1;
+  const std::size_t mask = slots_.size() - 1;
+  for (std::uint32_t word = 0; word < words_.size(); ++word) {
+    std::size_t at = (words_[word].address * 0x9E3779B1u) & mask;
+    while (slots_[at].stamp == stamp_) {
+      at = (at + 1) & mask;
+    }
+    slots_[at] = {stamp_, word};
+  }
+}
+
+void abortKeptScratchInUse() {
+  lucent::error("emit-memory", "a kept scratch object was taken while another use held it");
+  std::abort();
+}
+
+void HostMemory::clear() {
+  for (Held &held : ranges_) {
+    spares_.push_back(std::move(held.bytes));
+  }
+  ranges_.clear();
+  lastRange_ = nullptr;
+  overlay_.clear();
+  keepsLevelReads_ = false;
+  levelReads_.clear();
+}
+
+HostMemory::Range HostMemory::takeBuffer(std::size_t size) {
+  // The smallest spare that holds `size`, else the largest, which grows.
+  auto best = spares_.end();
+  for (auto spare = spares_.begin(); spare != spares_.end(); ++spare) {
+    if (best == spares_.end()) {
+      best = spare;
+    } else if (spare->capacity() >= size) {
+      if (best->capacity() < size || spare->capacity() < best->capacity()) {
+        best = spare;
+      }
+    } else if (best->capacity() < size && spare->capacity() > best->capacity()) {
+      best = spare;
+    }
+  }
+  Range buffer;
+  if (best != spares_.end()) {
+    buffer = std::move(*best);
+    spares_.erase(best);
+  }
+  buffer.assign(size, std::byte{0});
+  return buffer;
 }
 
 const HostMemory::Range *HostMemory::find(std::uint32_t address, std::uint32_t &base) const {
@@ -27,17 +97,19 @@ const HostMemory::Range *HostMemory::find(std::uint32_t address, std::uint32_t &
     base = lastBase_;
     return lastRange_;
   }
-  auto next = ranges_.upper_bound(at);
+  const auto next = std::upper_bound(ranges_.begin(), ranges_.end(), at, [](std::uint32_t a, const Held &held) {
+    return a < held.base;
+  });
   if (next == ranges_.begin()) {
     return nullptr;
   }
   const auto held = std::prev(next);
-  if (at - held->first >= held->second.size()) {
+  if (at - held->base >= held->bytes.size()) {
     return nullptr;
   }
-  base = held->first;
-  lastBase_ = held->first;
-  lastRange_ = &held->second;
+  base = held->base;
+  lastBase_ = held->base;
+  lastRange_ = &held->bytes;
   return lastRange_;
 }
 
@@ -49,26 +121,29 @@ std::byte *HostMemory::place(std::uint32_t base, std::uint32_t size) {
   lastRange_ = nullptr;
   std::uint32_t mergedBase = base;
   std::uint32_t mergedEnd = base + size;
-  auto first = ranges_.lower_bound(base);
-  if (first != ranges_.begin() && std::prev(first)->first + std::prev(first)->second.size() >= base) {
+  auto first = std::lower_bound(ranges_.begin(), ranges_.end(), base, [](const Held &held, std::uint32_t a) {
+    return held.base < a;
+  });
+  if (first != ranges_.begin() && std::prev(first)->base + std::prev(first)->bytes.size() >= base) {
     first = std::prev(first);
   }
   auto last = first;
-  while (last != ranges_.end() && last->first <= mergedEnd) {
-    mergedBase = std::min(mergedBase, last->first);
-    mergedEnd = std::max(mergedEnd, last->first + static_cast<std::uint32_t>(last->second.size()));
+  while (last != ranges_.end() && last->base <= mergedEnd) {
+    mergedBase = std::min(mergedBase, last->base);
+    mergedEnd = std::max(mergedEnd, last->base + static_cast<std::uint32_t>(last->bytes.size()));
     ++last;
   }
-  if (first == last || first->first != mergedBase || std::next(first) != last ||
-      first->second.size() != mergedEnd - mergedBase) {
-    Range merged(mergedEnd - mergedBase);
+  if (first == last || first->base != mergedBase || std::next(first) != last ||
+      first->bytes.size() != mergedEnd - mergedBase) {
+    Range merged = takeBuffer(mergedEnd - mergedBase);
     for (auto held = first; held != last; ++held) {
-      std::copy(held->second.begin(), held->second.end(), merged.begin() + (held->first - mergedBase));
+      std::copy(held->bytes.begin(), held->bytes.end(), merged.begin() + (held->base - mergedBase));
+      spares_.push_back(std::move(held->bytes));
     }
-    ranges_.erase(first, last);
-    first = ranges_.emplace(mergedBase, std::move(merged)).first;
+    first = ranges_.erase(first, last);
+    first = ranges_.insert(first, Held{mergedBase, std::move(merged)});
   }
-  return first->second.data() + (base - mergedBase);
+  return first->bytes.data() + (base - mergedBase);
 }
 
 void HostMemory::provide(std::uint32_t address, std::span<const std::byte> bytes) {
@@ -83,27 +158,29 @@ void HostMemory::mapGuest(Core &guest, std::uint32_t address, std::uint32_t size
   const std::uint32_t base = kseg0Address(address);
   const std::uint32_t end = base + size;
   // The parts no range holds yet, found before the merge hides them.
-  std::vector<GuestSpan> gaps;
+  gaps_.clear();
   std::uint32_t at = base;
-  auto held = ranges_.upper_bound(base);
+  auto held = std::upper_bound(ranges_.begin(), ranges_.end(), base, [](std::uint32_t a, const Held &h) {
+    return a < h.base;
+  });
   if (held != ranges_.begin()) {
     held = std::prev(held);
   }
-  for (; held != ranges_.end() && held->first < end && at < end; ++held) {
-    const std::uint32_t heldEnd = held->first + static_cast<std::uint32_t>(held->second.size());
+  for (; held != ranges_.end() && held->base < end && at < end; ++held) {
+    const std::uint32_t heldEnd = held->base + static_cast<std::uint32_t>(held->bytes.size());
     if (heldEnd <= at) {
       continue;
     }
-    if (held->first > at) {
-      gaps.push_back({at, held->first - at});
+    if (held->base > at) {
+      gaps_.push_back({at, held->base - at});
     }
     at = std::max(at, heldEnd);
   }
   if (at < end) {
-    gaps.push_back({at, end - at});
+    gaps_.push_back({at, end - at});
   }
   std::byte *bytes = place(base, size);
-  for (const GuestSpan &gap : gaps) {
+  for (const GuestSpan &gap : gaps_) {
     std::byte *out = bytes + (gap.address - base);
     if (const std::optional<GuestAddressRange> ram = guest.mappedMainRamRange(gap.address, gap.bytes)) {
       std::memcpy(out, guest.ram + ram->begin, gap.bytes);
@@ -125,17 +202,26 @@ void HostMemory::mapGuest(Core &guest, std::uint32_t address, std::uint32_t size
   }
 }
 
-void HostMemory::overlay(std::span<const LevelWord> words) {
-  overlay_.reserve(overlay_.size() + words.size());
-  for (const LevelWord &word : words) {
-    overlay_.push_back({kseg0Address(word.address) & ~3u, word.value});
+void HostMemory::overlay(std::span<const std::byte> packedWords) {
+  overlayNotes_.clear();
+  for (const LevelWord &word : overlay_) {
+    overlayNotes_.push_back({word.address, static_cast<std::uint32_t>(overlayNotes_.size()), word.value});
   }
-  // A later value for a word replaces the earlier one.
-  std::ranges::stable_sort(overlay_, {}, &LevelWord::address);
-  const auto kept = std::unique(overlay_.rbegin(), overlay_.rend(), [](const LevelWord &a, const LevelWord &b) {
-    return a.address == b.address;
+  for (std::size_t at = 0; at + sizeof(LevelWord) <= packedWords.size(); at += sizeof(LevelWord)) {
+    LevelWord word;
+    std::memcpy(&word, packedWords.data() + at, sizeof(LevelWord));
+    overlayNotes_.push_back(
+        {kseg0Address(word.address) & ~3u, static_cast<std::uint32_t>(overlayNotes_.size()), word.value});
+  }
+  std::sort(overlayNotes_.begin(), overlayNotes_.end(), [](const OverlayNote &a, const OverlayNote &b) {
+    return std::tie(a.address, a.order) < std::tie(b.address, b.order);
   });
-  overlay_.erase(overlay_.begin(), kept.base());
+  overlay_.clear();
+  for (std::size_t i = 0; i < overlayNotes_.size(); ++i) {
+    if (i + 1 == overlayNotes_.size() || overlayNotes_[i + 1].address != overlayNotes_[i].address) {
+      overlay_.push_back({overlayNotes_[i].address, overlayNotes_[i].value});
+    }
+  }
 }
 
 const std::uint32_t *HostMemory::overlaid(std::uint32_t wordAddress) const {

@@ -7,7 +7,6 @@
 
 #include <cstdint>
 #include <optional>
-#include <unordered_map>
 #include <vector>
 
 class Core;
@@ -116,7 +115,9 @@ public:
   void clear();
   // The bucket whose head node is at `nodeGuestAddress`.
   std::optional<present::OtSlot> slotOf(std::uint32_t nodeGuestAddress) const;
-  // The bucket the title assigned the packet at `packetGuestAddress`.
+  // A walk begins: the assignments so far are what `assigned` answers from.
+  void beginWalk();
+  // The bucket the title last assigned the packet at `packetGuestAddress`.
   std::optional<present::OtSlot> assigned(std::uint32_t packetGuestAddress) const;
   // Whether `table` is walked from its high buckets down; true for a table never named.
   bool descending(std::uint16_t table) const;
@@ -132,7 +133,13 @@ private:
     OtWalk walk = OtWalk::HighToLow;
   };
   std::vector<Area> areas_;
-  std::unordered_map<std::uint32_t, present::OtSlot> assigned_; // by packet main-RAM offset
+  struct Assigned {
+    std::uint32_t offset = 0; // packet main-RAM offset
+    std::uint32_t order = 0;
+    present::OtSlot slot;
+  };
+  std::vector<Assigned> assigned_; // by offset, then order, from beginWalk
+  bool sorted_ = true;
 };
 
 // DMA2 linked-list mode: every node's GP0 words into the device, in link order.

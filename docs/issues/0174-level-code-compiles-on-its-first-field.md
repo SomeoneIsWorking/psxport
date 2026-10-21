@@ -17,6 +17,10 @@ fields before the load. The load field shows the level's first near-black fade-i
 late in-between of the earlier runs fell in that fade (0.7-1.9). Retail shows that card for the whole CD load, so holding it 50-70 ms
 longer moves nothing on screen.
 
+Spyro 2 and 3 (psx-spyro 0196 pass 6): the load field of `warp 21` (fence 1982, `judge-s2`) is presented 42.67 ms
+after its due time and `warp 10` on Spyro 3 (fence 2543, `judge-s3`) 58.65 ms after; the simulated display holds the
+picture before each 2-3 vblanks longer. Whether that picture moves was not checked.
+
 ## Cause
 `lightrec_execute`, called from `executeWithBoundary`, compiles each cold block synchronously on the guest thread.
 The WAD load invalidates the level image, so the load field runs the level's code cold and compiles it. Perf

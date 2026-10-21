@@ -310,8 +310,8 @@ uint32_t GpuDevice::status(frame::CpuTicks now) {
   return value;
 }
 
-present::FrameRecord GpuDevice::sealRecord() {
-  return mTap.seal();
+void GpuDevice::sealRecord(present::FrameRecord &into) {
+  mTap.seal(into);
 }
 
 bool GpuDevice::hasUnsealedWork() const {

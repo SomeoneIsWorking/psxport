@@ -34,6 +34,15 @@ std::span<const std::uint16_t> FrameRecord::pixels(const VramUpload &upload) con
   return std::span<const std::uint16_t>(uploadPixels_).subspan(upload.pixelOffset, count);
 }
 
+void FrameRecord::reset(std::uint64_t sequence, bool complete) {
+  sequence_ = sequence;
+  complete_ = complete;
+  entries_.clear();
+  clutPool_.clear();
+  uploadPixels_.clear();
+  slotStarts_.clear();
+}
+
 void FrameRecord::append(const RecordEntry &entry) {
   if (!complete_) {
     return;
@@ -119,11 +128,20 @@ void FrameRecord::beginSlot(OtSlot slot, bool descending) {
   slotStarts_.push_back({slot, entries_.size(), descending});
 }
 
-void FrameRecord::replaceEntries(std::vector<RecordEntry> entries) {
+void FrameRecord::replaceEntries(std::span<const RecordEntry> entries) {
   if (!complete_) {
     return;
   }
-  entries_ = std::move(entries);
+  entries_.assign(entries.begin(), entries.end());
+  slotStarts_.clear();
+}
+
+void FrameRecord::assignPools(const FrameRecord &other) {
+  sequence_ = other.sequence_;
+  complete_ = other.complete_;
+  entries_.clear();
+  clutPool_.assign(other.clutPool_.begin(), other.clutPool_.end());
+  uploadPixels_.assign(other.uploadPixels_.begin(), other.uploadPixels_.end());
   slotStarts_.clear();
 }
 

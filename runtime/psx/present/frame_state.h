@@ -9,7 +9,6 @@
 #include <optional>
 #include <span>
 #include <type_traits>
-#include <unordered_map>
 #include <vector>
 
 namespace psx::present {
@@ -24,7 +23,8 @@ struct ObjectId {
 };
 
 // The states of the objects one record draws. An object whose packets came from two scopes, or whose
-// scope saved twice, names no single state and is ambiguous.
+// scope saved twice, names no single state and is ambiguous. Collected into kept storage, so a steady
+// stream of records allocates nothing.
 class FrameState {
 public:
   // The object's state, nullopt when it has none or is ambiguous.
@@ -32,10 +32,15 @@ public:
   bool empty() const {
     return saved_.empty();
   }
+  void clear() {
+    saved_.clear();
+    bytes_.clear();
+  }
 
 private:
   friend class FrameStates;
   struct Saved {
+    std::uint64_t key = 0; // producer << 32 | object
     std::uint32_t serial = 0;
     std::size_t offset = 0;
     std::size_t size = 0;
@@ -44,27 +49,32 @@ private:
   static std::uint64_t indexKey(ObjectId id) {
     return (std::uint64_t{id.producer} << 32) | id.object;
   }
-  void add(ObjectId id, std::uint32_t serial, std::span<const std::byte> state, bool ambiguous);
 
-  std::unordered_map<std::uint64_t, Saved> saved_;
+  std::vector<Saved> saved_; // by key
   std::vector<std::byte> bytes_;
 };
 
 // The states producers saved, each under the scope whose packets it describes. A packet is often built in
 // one logic frame and walked in the next, so a state is kept for a few frames and collected by the record
-// that draws its packets.
+// that draws its packets. Saved into kept storage, so a steady stream of saves allocates nothing.
 class FrameStates {
 public:
   static constexpr std::uint32_t kRetainedFrames = 4;
 
-  // Saves `state` for the scope `owner` (EmissionScope::current()).
-  void save(const RecordKey &owner, std::span<const std::byte> state);
-  template <class T> void save(const RecordKey &owner, const T &state) {
-    static_assert(std::is_trivially_copyable_v<T>);
+  // Saves the concatenation of `parts` for the scope `owner` (EmissionScope::current()).
+  void save(const RecordKey &owner, std::span<const std::span<const std::byte>> parts);
+  void save(const RecordKey &owner, std::span<const std::byte> state) {
+    save(owner, std::span<const std::span<const std::byte>>(&state, 1));
+  }
+  // One trivially copyable value; a range of parts or bytes takes the overloads above.
+  template <class T>
+    requires(std::is_trivially_copyable_v<T> && !std::is_convertible_v<const T &, std::span<const std::byte>> &&
+             !std::is_convertible_v<const T &, std::span<const std::span<const std::byte>>>)
+  void save(const RecordKey &owner, const T &state) {
     save(owner, std::span<const std::byte>(std::as_bytes(std::span<const T, 1>(&state, 1))));
   }
-  // The states of the objects `record` draws, by the serial each keyed primitive carries.
-  FrameState collect(const FrameRecord &record) const;
+  // The states of the objects `record` draws, by the serial each keyed primitive carries, into `into`.
+  void collect(const FrameRecord &record, FrameState &into) const;
   // A logic frame ended; states older than kRetainedFrames are dropped.
   void endFrame();
   // A savestate load: nothing saved so far describes the machine.
@@ -72,12 +82,18 @@ public:
 
 private:
   struct Saved {
+    std::uint32_t serial = 0;
     ObjectId id;
     std::uint32_t frame = 0;
     bool ambiguous = false;
-    std::vector<std::byte> bytes;
+    std::size_t offset = 0;
+    std::size_t size = 0;
   };
-  std::unordered_map<std::uint32_t, Saved> bySerial_;
+  const Saved *find(std::uint32_t serial) const;
+
+  std::vector<Saved> bySerial_; // by serial
+  std::vector<std::byte> bytes_;
+  std::vector<std::byte> spareBytes_; // the arena endFrame compacts into
   std::uint32_t frame_ = 0;
 };
 
