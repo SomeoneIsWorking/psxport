@@ -385,6 +385,7 @@ private:
 // The opaque polygon opcodes, by libgpu name.
 inline constexpr std::uint8_t kPolyF3 = Gp0Command::polygonOpcode({});
 inline constexpr std::uint8_t kPolyF4 = Gp0Command::polygonOpcode({.quad = true});
+inline constexpr std::uint8_t kPolyFt3 = Gp0Command::polygonOpcode({.textured = true});
 inline constexpr std::uint8_t kPolyFt4 = Gp0Command::polygonOpcode({.quad = true, .textured = true});
 inline constexpr std::uint8_t kPolyG3 = Gp0Command::polygonOpcode({.gouraud = true});
 inline constexpr std::uint8_t kPolyG4 = Gp0Command::polygonOpcode({.quad = true, .gouraud = true});
