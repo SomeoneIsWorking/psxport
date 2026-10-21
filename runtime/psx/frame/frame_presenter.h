@@ -127,6 +127,7 @@ private:
   // The record whose picture the last present showed.
   std::optional<std::uint64_t> shownSequence_;
   std::optional<present::FrameRecord> composedStore_;
+  present::PrimitiveList renderScratch_; // the composer's render storage, kept across presents
   const present::FrameRecord *composed_ = nullptr;
   bool composedAdvances_ = false;
   PresentStability stability_;

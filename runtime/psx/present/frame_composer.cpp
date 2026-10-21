@@ -145,7 +145,8 @@ std::optional<FrameRecord> composeFrame(const FrameRecord &shown,
                                         const FrameState &to,
                                         float t,
                                         const StateProducers &producers,
-                                        std::span<const std::uint16_t> vram) {
+                                        std::span<const std::uint16_t> vram,
+                                        PrimitiveList &sink) {
   if (to.empty()) {
     return std::nullopt;
   }
@@ -241,7 +242,7 @@ std::optional<FrameRecord> composeFrame(const FrameRecord &shown,
       }
       continue;
     }
-    PrimitiveList sink;
+    sink.clear();
     object.render->render(states, sink);
     std::vector<std::pair<std::size_t, DrawPrimitive>> placed;
     placed.reserve(sink.primitives.size());
