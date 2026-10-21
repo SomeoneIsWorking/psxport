@@ -727,9 +727,17 @@ void Core::io_write(uint32_t a, uint32_t v, uint32_t bytes) {
         psx::gpu::dma2LinkedList(*this, dma.of(DmaChannel::Gpu).madr); // ordering-table linked list — full walk
       } else if (sync == 1) {
         // block: BC = blocks*size words
-        psx::gpu::dma2Block(*this, {dma.of(DmaChannel::Gpu).madr, (dma.of(DmaChannel::Gpu).bcr & 0xFFFF) * (dma.of(DmaChannel::Gpu).bcr >> 16) * 4u}, to_gpu != 0);
+        psx::gpu::dma2Block(*this,
+                            {dma.of(DmaChannel::Gpu).madr,
+                             (dma.of(DmaChannel::Gpu).bcr & 0xFFFF) * (dma.of(DmaChannel::Gpu).bcr >> 16) * 4u},
+                            dma.of(DmaChannel::Gpu).bcr & 0xFFFF,
+                            to_gpu != 0);
       } else {
-        psx::gpu::dma2Block(*this, {dma.of(DmaChannel::Gpu).madr, (dma.of(DmaChannel::Gpu).bcr & 0xFFFF) * 4u}, to_gpu != 0); // immediate
+        // immediate: one block
+        psx::gpu::dma2Block(*this,
+                            {dma.of(DmaChannel::Gpu).madr, (dma.of(DmaChannel::Gpu).bcr & 0xFFFF) * 4u},
+                            dma.of(DmaChannel::Gpu).bcr & 0xFFFF,
+                            to_gpu != 0);
       }
       dma.of(DmaChannel::Gpu).chcr &= ~0x01000000u; // clear busy -> game's DMA-done poll passes
       if (dma_completed(dma, DmaChannel::Gpu)) {

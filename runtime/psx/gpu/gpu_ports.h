@@ -13,7 +13,8 @@ namespace psx::gpu {
 void gp1Write(Core &core, std::uint32_t word);
 // DMA2 sync mode 2: walk the ordering table at `madr` into GP0.
 void dma2LinkedList(Core &core, std::uint32_t madr);
-// DMA2 sync modes 0/1: the words of `block` between RAM and GP0 (toGpu) or GPUREAD.
-void dma2Block(Core &core, GuestSpan block, bool toGpu);
+// DMA2 sync modes 0/1: the words of `block` between RAM and GP0 (toGpu) or GPUREAD, in DMA blocks of
+// `blockWords`.
+void dma2Block(Core &core, GuestSpan block, std::uint32_t blockWords, bool toGpu);
 
 } // namespace psx::gpu
