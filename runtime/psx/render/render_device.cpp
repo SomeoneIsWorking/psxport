@@ -64,38 +64,34 @@ RenderDevice::~RenderDevice() {
   }
 }
 
-bool RenderDevice::windowed() {
-  if (!legResolved_) {
-    // Headless unless a window is asked for, so a forgotten flag never pops a window.
-    headless_ = !psx::config::windowRequested();
-    legResolved_ = true;
-  }
-  return enabled_ && !headless_;
+bool RenderDevice::shown() const {
+  return enabled_ && psx::config::show_window();
 }
 
 PixelSize RenderDevice::sinkSize() {
-  if (windowed()) {
+  if (window_.window() != nullptr) {
     return window_.pixelSize();
   }
-  if (headlessSink_.width == 0) {
-    headlessSink_ = kWindowSize;
+  if (creationSize_.width == 0) {
+    creationSize_ = kWindowSize;
     const std::string sink = psx::config::present_sink();
     const std::optional<psx::config::NumberPair> size = psx::config::parsePair(sink, psx::config::kDimensions);
     if (size && size->first > 0 && size->second > 0 && size->first <= kMaxSinkSide && size->second <= kMaxSinkSide) {
-      headlessSink_ = {static_cast<int>(size->first), static_cast<int>(size->second)};
+      creationSize_ = {static_cast<int>(size->first), static_cast<int>(size->second)};
+      namedSink_ = true;
     } else if (!sink.empty()) {
       lucent::warn("render",
                    "PSXPORT_PRESENT_SINK=\"{}\" is not WxH, using {}x{}",
                    sink,
-                   headlessSink_.width,
-                   headlessSink_.height);
+                   creationSize_.width,
+                   creationSize_.height);
     }
   }
-  return headlessSink_;
+  return creationSize_;
 }
 
-SDL_GPUTextureFormat RenderDevice::sinkFormat() {
-  return windowed() ? window_.swapchainFormat() : kPresentImageFormat;
+SDL_GPUTextureFormat RenderDevice::sinkFormat() const {
+  return window_.swapchainFormat();
 }
 
 SDL_GPUSampler *RenderDevice::makeSampler(SDL_GPUFilter filter) {
@@ -115,13 +111,11 @@ void RenderDevice::bringUp() {
   if (device_ != nullptr) {
     return;
   }
-  const bool onWindow = windowed();
-  // SDL_GPU needs the video subsystem even headless.
   if (!SDL_Init(SDL_INIT_VIDEO)) {
     lucent::error("render", "SDL_Init(VIDEO) failed: {}", SDL_GetError());
     std::exit(2);
   }
-  window_.create(!onWindow, windowTitle_ != nullptr ? windowTitle_ : "psxport (untitled game)");
+  window_.create(shown(), windowTitle_ != nullptr ? windowTitle_ : "psxport (untitled game)", sinkSize(), namedSink_);
   if (!faultPreflight()) {
     std::exit(3);
   }
@@ -129,9 +123,7 @@ void RenderDevice::bringUp() {
   GPUCHK(device_, "SDL_CreateGPUDevice");
   const char *driver = SDL_GetGPUDeviceDriver(device_);
   lucent::info("render", "SDL_GPU device up (driver: {})", driver != nullptr ? driver : "(null)");
-  if (onWindow) {
-    window_.claim(device_);
-  }
+  window_.claim(device_);
   nearest_ = makeSampler(SDL_GPU_FILTER_NEAREST);
   linear_ = makeSampler(SDL_GPU_FILTER_LINEAR);
   presentPipeline_ = makePipeline(kFullscreenVertex, kPresentFragment, kPresentImageFormat);
@@ -149,7 +141,7 @@ void RenderDevice::bringUp() {
   const std::uint8_t white[4] = {255, 255, 255, 255};
   whiteTexture_ = makeFilledTexture({1, 1}, white);
   rmlUi_ = std::make_unique<ui::RmlUiLibrary>(*this);
-  lucent::info("render", "{} renderer up", onWindow ? "windowed" : "headless");
+  lucent::info("render", "renderer up");
 }
 
 SDL_GPUCommandBuffer *RenderDevice::acquire() {

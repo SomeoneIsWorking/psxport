@@ -52,8 +52,8 @@ public:
   bool claimed() const {
     return claimed_;
   }
-  // A device may open: audio is not disabled, the run has a real window, and this session is claimed.
-  bool mayOpen(bool windowed) const;
+  // A device may open: audio is not disabled, the window is shown, and this session is claimed.
+  bool mayOpen(bool shown) const;
 
 private:
   bool claimed_ = true;

@@ -1,5 +1,4 @@
-// present_plan.h — what the player sees, decided in one pure place, identically in both legs.
-// For identical inputs, the windowed and headless plans differ only in `to_swapchain`.
+// present_plan.h — what the player sees, decided in one pure place.
 #pragma once
 
 #include "viewport_layout.h"
@@ -8,7 +7,7 @@
 
 namespace psx::present {
 
-// Everything outside the renderer's own state that the presented picture depends on; none of it depends on the leg.
+// Everything outside the renderer's own state that the presented picture depends on.
 struct PresentInputs {
   int sink_w, sink_h; // presented-image size in pixels
   int sx, sy;         // display origin in VRAM
@@ -26,7 +25,6 @@ struct PresentInputs {
 
 struct PresentPlan {
   bool build;         // run the composite pass at all
-  bool to_swapchain;  // blit the built image into the window: the only leg difference
   int sink_w, sink_h; // the sink this plan was computed for; the renderer never re-reads it
   PaneRect viewport;  // where the picture lands inside the sink
   int disp[4];        // fragment uniform: sampled source rect (scaled when presenting from ires)
@@ -62,7 +60,7 @@ inline Rgb8 fadeRgb(const int fade[4], Rgb8 colour) {
   return colour;
 }
 
-inline PresentPlan planPresent(const PresentInputs &in, bool headless) {
+inline PresentPlan planPresent(const PresentInputs &in) {
   PresentPlan p{};
   // No sink, nothing to compose into: the one case that builds nothing.
   if (in.sink_w <= 0 || in.sink_h <= 0) {
@@ -70,7 +68,6 @@ inline PresentPlan planPresent(const PresentInputs &in, bool headless) {
   }
 
   p.build = true;
-  p.to_swapchain = !headless;
   p.sink_w = in.sink_w;
   p.sink_h = in.sink_h;
 

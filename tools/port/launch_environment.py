@@ -12,10 +12,12 @@ from collections.abc import Mapping
 from pathlib import Path
 
 AGENT_RUNTIME_KEYS = (
-    "PSXPORT_VK_HEADLESS",
     "PSXPORT_NOAUDIO",
     "PSXPORT_NOPACE",
 )
+
+# The player's window is shown; every other run keeps the same window unmapped.
+SHOW_WINDOW = "PSXPORT_SHOW_WINDOW"
 
 # Memory-card path key (runtime/psx/platform/memcard.cpp).
 CARD_ENV = "PSXPORT_CARD"
@@ -35,7 +37,7 @@ def player_environment(environment: Mapping[str, str], *,
     result = dict(environment)
     for key in AGENT_RUNTIME_KEYS:
         result.pop(key, None)
-    result["PSXPORT_VK_WINDOW"] = "1"
+    result[SHOW_WINDOW] = "1"
     result.setdefault("PSXPORT_ASSET_DIR", str(FRAMEWORK_ROOT))
     if settings is not None and "PSXPORT_SETTINGS" not in result:
         chosen = Path(settings)
@@ -96,7 +98,7 @@ def agent_environment(environment: Mapping[str, str],
     product its working-directory discovery. ``card`` starts the run on a blank memory card.
     """
     result = dict(environment)
-    result.pop("PSXPORT_VK_WINDOW", None)
+    result[SHOW_WINDOW] = "0"
     for key in AGENT_RUNTIME_KEYS:
         result[key] = "1"
     result.setdefault("PSXPORT_ASSET_DIR", str(FRAMEWORK_ROOT))

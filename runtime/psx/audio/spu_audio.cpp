@@ -85,8 +85,7 @@ void SpuAudio::init() {
 }
 
 void SpuAudio::openHostDevice() {
-  if (!output_.mayOpen(game->renderDevice.windowed()) ||
-      !mStream.open(static_cast<int>(SpuFieldCadence::kSampleRateHz))) {
+  if (!output_.mayOpen(game->renderDevice.shown()) || !mStream.open(static_cast<int>(SpuFieldCadence::kSampleRateHz))) {
     mState = -1;
   }
 }

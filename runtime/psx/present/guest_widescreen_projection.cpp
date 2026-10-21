@@ -14,7 +14,8 @@
 namespace psx::present {
 
 PresentationAspect presentationAspectFor(const Mods &mods) {
-  // ASPECT_AUTO is resolved against the live sink by the plan builder, so a headless run stays 4:3.
+  // ASPECT_AUTO is resolved against the live sink by the plan builder, so a tool window at its 4:3 creation size stays
+  // 4:3.
   switch (mods.aspect) {
   case ASPECT_4_3:
   case ASPECT_16_9:

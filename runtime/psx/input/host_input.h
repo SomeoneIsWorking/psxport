@@ -75,10 +75,9 @@ public:
   // The active-low PSX button mask for this frame, from the host keyboard and every connected
   // controller, additive so both work at once. Drains first, so a caller only ever has to pump here.
   //
-  // `windowAvailable` is the caller's answer to "is a live on-screen window up". A leg with no window
-  // has no host input at all, so it answers kNoButtons and drops any pending debug-key edge rather
-  // than resolving one from a keyboard no window is reading.
-  std::uint16_t poll(bool windowAvailable);
+  // `shown` says the window is mapped for a player. An unmapped tool window takes no host input, so it
+  // answers kNoButtons and drops any pending debug-key edge; a connected controller never steers a tool run.
+  std::uint16_t poll(bool shown);
 
   // Take the P (pause / resume) edge the last poll detected, and the '.' (freeze, advance one frame)
   // edge. Edge-detected once per poll and latched until taken, so one press is one action no matter

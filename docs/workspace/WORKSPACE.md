@@ -77,6 +77,9 @@ Products: `spyro_port`, `toystory2_port`, `crashbash_port`, `crash_port`, `ctr_p
   Sweep only your own `scratch/<activity>/`.
 - Disc images live under `/mnt/Boy/ROM/PSX CHD/`; each repo's `.env` points at its disc.
 - One game instance at a time unless isolated; kill by PID, never `pkill`.
+- Agent runs keep the product's window unmapped: `PSXPORT_SHOW_WINDOW` unset or 0 (`agent_environment` sets 0), never
+  1. It is the player's window, presented at real speed, so a run without `PSXPORT_NOPACE` measures pacing
+  (`[playcheck] presents:`); it needs the user's Wayland session (`psxport/docs/presentation.md`).
 - To reach a screen, level or state for exploration, add a title-owned debug option modelled on Tomba 2's
   `warp` (`psx-tomba/game/core/debug/dev_warp.cpp`): a control-channel command arms a request and the frame
   driver applies it at a frame boundary through the game's own transition/load owners. Player paths stay

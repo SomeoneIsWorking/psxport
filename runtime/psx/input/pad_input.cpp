@@ -11,12 +11,12 @@ void Pad::init() {
   buttons = psx::input::kNoButtons;
 }
 
-// A leg with no window keeps whatever forced or replayed mask it resolves; the drain still runs so a close ends the
-// run.
+// An unmapped tool window keeps whatever forced or replayed mask it resolves; the drain still runs so a close ends
+// the run.
 void Pad::pollHostInput() {
-  const bool windowed = game->renderDevice.windowed();
-  const uint16_t hostMask = mHost.poll(windowed);
-  if (!windowed) {
+  const bool shown = game->renderDevice.shown();
+  const uint16_t hostMask = mHost.poll(shown);
+  if (!shown) {
     return;
   }
   buttons = hostMask;
@@ -52,7 +52,7 @@ void Pad::driveRelease() {
 
 void Pad::serviceFrame() {
   Core *c = &game->core;
-  const bool windowed = game->renderDevice.windowed();
+  const bool shown = game->renderDevice.shown();
   pollHostInput();
 
   if (!mForcedRead) {
@@ -91,7 +91,7 @@ void Pad::serviceFrame() {
         .recordPath = psx::config::pad_record_path(),
         .replayPath = psx::config::pad_replay_path(),
         .resumePath = psx::config::pad_resume_path(),
-        .windowed = windowed,
+        .shown = shown,
         .liveInputOnly = mLiveInputOnly,
         .card =
             [this] {

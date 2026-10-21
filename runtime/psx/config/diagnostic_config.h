@@ -39,14 +39,14 @@ long gpu_scene_dump_frame();                  // PSXPORT_SCENEDUMP (-1 off)
 
 bool gpu_validation();      // PSXPORT_GPU_DEBUG
 bool gpu_fault_override();  // PSXPORT_GPU_FAULT_OVERRIDE
-std::string present_sink(); // PSXPORT_PRESENT_SINK: "WxH"
+std::string present_sink(); // PSXPORT_PRESENT_SINK: "WxH", the window's drawable in pixels
 
 std::string movie_fps(); // PSXPORT_FMV_FPS: "0" uncaps
 long movie_max_frames(); // PSXPORT_FMV_MAXFRAMES (0 all)
 bool movie_dc_only();    // PSXPORT_FMV_DCONLY
 bool movie_dump_codes(); // PSXPORT_FMV_DUMPCODES
 
-std::string wav_capture_path();    // PSXPORT_WAV
+std::string wav_capture_path();                     // PSXPORT_WAV
 std::optional<std::uint32_t> spu_write_backtrace(); // PSXPORT_SPUBT: hex SPU register offset
 
 // PSXPORT_GUEST_POKE: "addr:val[:1|2|4],..." (hex) rewritten every frame; nullopt if any entry is malformed.

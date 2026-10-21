@@ -15,7 +15,7 @@ struct RunBudgetInputs {
   bool padRecording = false;    // PSXPORT_PAD_REPLAY or PSXPORT_PAD_RESUME
   bool repl = false;            // PSXPORT_REPL drives the run with `run N`
   bool clientLive = false;      // PSXPORT_DEBUG_SERVER: a client steers the run and ends it with `quit`
-  bool windowed = false;
+  bool shown = false;
 };
 
 // The cap for a whole process run, counted in presentation-fence steps: one per product step, since a
@@ -23,11 +23,11 @@ struct RunBudgetInputs {
 // pre-roll is not counted; that is PreRollBudget's, which bounds wall time inside one selector frame.
 class RunBudget {
 public:
-  // Headless with nothing else asked: a smoke run, bounded.
-  static constexpr std::uint64_t kHeadlessDefaultSteps = 120;
+  // An unmapped tool window with nothing else asked: a smoke run, bounded.
+  static constexpr std::uint64_t kHiddenDefaultSteps = 120;
 
   // An explicit cap wins; then a pad recording lifts the cap; then a live client or the REPL means
-  // uncapped; then headless means kHeadlessDefaultSteps and windowed means uncapped.
+  // uncapped; then a hidden window means kHiddenDefaultSteps and a shown one uncapped.
   static RunBudget decide(const RunBudgetInputs &inputs);
   // The same decision from this process's configuration.
   static RunBudget fromConfig(const psx::config::Config &config);

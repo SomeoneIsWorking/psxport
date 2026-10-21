@@ -19,7 +19,7 @@ namespace psx::render {
 
 using present::PixelSize;
 
-// The presented-picture format: fixed so it exists identically windowed and headless.
+// The presented-picture format: fixed, whatever the swapchain's format.
 inline constexpr SDL_GPUTextureFormat kPresentImageFormat = SDL_GPU_TEXTUREFORMAT_R8G8B8A8_UNORM;
 
 // A download's bytes, mapped until this is destroyed.
@@ -60,17 +60,15 @@ public:
   void disable() {
     enabled_ = false;
   }
-  // Is a live on-screen window up (or about to be)? Resolves the leg from config on the first ask.
-  bool windowed();
-  bool headless() {
-    return !windowed();
-  }
+  // Is the window mapped for a player? Host input, audio and the default pad recording follow it; presenting does not.
+  bool shown() const;
   bool up() const {
     return device_ != nullptr;
   }
   // Window, device, samplers, present pipelines and the RmlUi library. Idempotent; exits when no device can be made.
   void bringUp();
-  // The live drawable windowed, PSXPORT_PRESENT_SINK (default the window size) headless.
+  // The window's drawable; before the window exists, the size it is created at: PSXPORT_PRESENT_SINK in pixels,
+  // else kWindowSize in display units.
   PixelSize sinkSize();
 
   // The host names the window before the first present; null names it generically.
@@ -87,8 +85,8 @@ public:
   const RenderWindow &window() const {
     return window_;
   }
-  // The format of the pass the sink records into: the swapchain's windowed, the present image's headless.
-  SDL_GPUTextureFormat sinkFormat();
+  // The swapchain's format, which the sink pass records into.
+  SDL_GPUTextureFormat sinkFormat() const;
   SDL_GPUSampler *nearestSampler() const {
     return nearest_;
   }
@@ -159,11 +157,11 @@ private:
   SDL_GPUSampler *makeSampler(SDL_GPUFilter filter);
 
   bool enabled_ = true;
-  bool legResolved_ = false;
-  bool headless_ = true;
   bool faulted_ = false;
   const char *windowTitle_ = nullptr;
-  PixelSize headlessSink_;
+  PixelSize creationSize_;
+  // PSXPORT_PRESENT_SINK named the drawable in pixels.
+  bool namedSink_ = false;
   RenderWindow window_;
   SDL_GPUDevice *device_ = nullptr;
   SDL_GPUSampler *nearest_ = nullptr;

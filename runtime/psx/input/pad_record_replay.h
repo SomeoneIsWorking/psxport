@@ -5,7 +5,7 @@
 // receives while recording every frame:
 //
 //   - the in-memory recording (always on) is what the debug server's `padrec save` cuts a replay from;
-//   - the file sink (PSXPORT_PAD_RECORD, or the windowed default) streams the same frames to disk;
+//   - the file sink (PSXPORT_PAD_RECORD, or the shown-window default) streams the same frames to disk;
 //   - a replay (PSXPORT_PAD_REPLAY) or resume (PSXPORT_PAD_RESUME) drives the pad through PhaseReplay.
 //
 // Every recording carries the identity of the memory-card image it started from. A REPLAY whose card
@@ -28,13 +28,13 @@
 namespace psx::input {
 
 // Where a pad session's configuration comes from. The paths are the knob values (empty = unset);
-// `card` reads the memory-card image the run starts with, and `windowed` says whether the
+// `card` reads the memory-card image the run starts with, and `shown` says whether the
 // default recording sink applies.
 struct PadSessionConfig {
   std::string recordPath;
   std::string replayPath;
   std::string resumePath;
-  bool windowed = false;
+  bool shown = false;
   // A host-only screen that runs before a game (a title picker) wants the live input sources and
   // nothing a session owns: no sink at all, so the default one cannot rotate the player's real
   // capture, and no replay or resume, which belong to the title started after it. The in-memory
@@ -45,7 +45,7 @@ struct PadSessionConfig {
 
 class PadRecordReplay {
 public:
-  // Rotated default sink used by windowed runs that name no PSXPORT_PAD_RECORD path.
+  // Rotated default sink used by shown-window runs that name no PSXPORT_PAD_RECORD path.
   static constexpr const char *kDefaultSink = "scratch/bin/pad_session.pad";
 
   // Resolve the session from `config` (first serviced frame only). Separate from service() so a

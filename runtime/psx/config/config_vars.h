@@ -41,8 +41,8 @@ long native_frames(); // PSXPORT_NATIVE_FRAMES: run cap in presentation-fence st
 
 std::string asset_dir(); // PSXPORT_ASSET_DIR: the directory containing assets/, empty for cwd
 
-// PSXPORT_VK_WINDOW unless PSXPORT_VK_HEADLESS.
-bool windowRequested();
+// PSXPORT_SHOW_WINDOW: map the window for a player; off, the same window stays unmapped for tools.
+bool show_window();
 // A packaged product's defaults: a window, and the assets under `<packageRoot>/usr/share/psxport`.
 void applyPackagedDefaults(const std::filesystem::path &packageRoot);
 
