@@ -29,6 +29,8 @@ void RenderWindow::create(bool shown, const char *title, present::PixelSize size
   window_ = SDL_CreateWindowWithProperties(props);
   SDL_DestroyProperties(props);
   GPUCHK(window_, "SDL_CreateWindow");
+  readRefreshPeriod();
+  GPUCHK(SDL_AddEventWatch(&RenderWindow::watchDisplay, this), "SDL_AddEventWatch");
   const present::PixelSize pixels = pixelSize();
   lucent::info("render",
                "window {}x{} pixels {} (video driver {})",
@@ -64,9 +66,11 @@ void RenderWindow::releaseDevice(SDL_GPUDevice *device) {
 
 void RenderWindow::destroy() {
   if (window_ != nullptr) {
+    SDL_RemoveEventWatch(&RenderWindow::watchDisplay, this);
     SDL_DestroyWindow(window_);
     window_ = nullptr;
   }
+  refreshPeriodMs_ = 0.0;
   swapchainFormat_ = SDL_GPU_TEXTUREFORMAT_INVALID;
 }
 
@@ -77,9 +81,20 @@ present::PixelSize RenderWindow::pixelSize() const {
   return {width, height};
 }
 
-double RenderWindow::refreshPeriodMs() const {
+void RenderWindow::readRefreshPeriod() {
   const SDL_DisplayMode *mode = SDL_GetCurrentDisplayMode(SDL_GetDisplayForWindow(window_));
-  return mode != nullptr && mode->refresh_rate > 0.0f ? 1000.0 / static_cast<double>(mode->refresh_rate) : 0.0;
+  refreshPeriodMs_ =
+      mode != nullptr && mode->refresh_rate > 0.0f ? 1000.0 / static_cast<double>(mode->refresh_rate) : 0.0;
+}
+
+bool SDLCALL RenderWindow::watchDisplay(void *self, SDL_Event *event) {
+  auto &owner = *static_cast<RenderWindow *>(self);
+  const bool windowMoved =
+      event->type == SDL_EVENT_WINDOW_DISPLAY_CHANGED && event->window.windowID == SDL_GetWindowID(owner.window_);
+  if (windowMoved || event->type == SDL_EVENT_DISPLAY_CURRENT_MODE_CHANGED) {
+    owner.readRefreshPeriod();
+  }
+  return true;
 }
 
 } // namespace psx::render

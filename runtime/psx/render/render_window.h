@@ -36,10 +36,17 @@ public:
   // The drawable in pixels.
   present::PixelSize pixelSize() const;
   // The refresh period of the window's display in ms; 0 when unknown.
-  double refreshPeriodMs() const;
+  double refreshPeriodMs() const {
+    return refreshPeriodMs_;
+  }
 
 private:
+  // Read at creation and again when the window changes display or the display changes mode.
+  void readRefreshPeriod();
+  static bool SDLCALL watchDisplay(void *self, SDL_Event *event);
+
   SDL_Window *window_ = nullptr;
+  double refreshPeriodMs_ = 0.0;
   SDL_GPUTextureFormat swapchainFormat_ = SDL_GPU_TEXTUREFORMAT_INVALID;
 };
 
