@@ -1,6 +1,6 @@
 # 0169: in-betweens snapped every projected vertex to a whole native pixel
 
-Status: fixed for the flag intro; partial for the producers under Open. Owner: `runtime/psx/cpu/gte.h` `Gte::projectedPlace`, `runtime/psx/present/state_producer.cpp`
+Status: fixed for the flag intro and every Spyro 1 projecting producer listed under Open; open for sprites and lines.
 `PrimitiveList`, each title producer that projects (psx-spyro sky, moby emitter, terrain passes),
 `runtime/psx/gpu/record_raster_setup.cpp` `scaledCoordinate`.
 
@@ -41,7 +41,15 @@ sign moby and 3.0:1 on the right-hand peak, which the moby and terrain declarati
 of one neighbour on a moving block: 15-29 of ~260 per in-between, as with the value-keyed match. A 4x gameplay
 turn in Artisans (`wk4/walk`) shows no seams in the near split ground.
 
+## Spyro 1 gameplay producers (2026-10-21)
+The paired actor (Spyro, with its water cut), the sprite queue, particles, the drop and moby shadows, the glow
+fans and the portals now declare their places where they copy a projected word into a packet. Corners a drawer
+offsets from a projected point by whole pixels (scaled particle quads, glow rims, moby shadow nudges, the near
+portal outline's push) take `placeOffset`; corners no projection made (the portal fill's screen triangles) take
+`wholePlace`; crossings the drawer computes (the water cut, the portal clip) are recomputed on the unrounded
+places. psxport `686de8d2`, `1e945b7a`, `e0355be4`; psx-spyro issue 0196 has the per-producer proof.
+
 ## Open
-Spyro 1 producers that project but declare no places stay on whole native pixels above 1x: the paired actor
-(Spyro, with its water cut), the drop and moby shadows, particles, glows, the sprite queue and portals. Each needs
-its declarations at the point it copies a projected word into a packet, as the moby emitter does.
+- Sprites and lines stay whole by design (`PrimitiveList` gives sub-pixel fractions to polygons only): Spyro 1's
+  sparkle stars, particle lines and dots and the title sprites step on whole native pixels above 1x.
+- Spyro 1's flame `0x80058D64` has no producer, so it is not a place gap but a whole-frame one (psx-spyro 0196).
