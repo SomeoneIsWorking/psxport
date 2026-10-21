@@ -1,7 +1,7 @@
 // write_rollback.h — the guest bytes a run overwrote and what they held, so the run can be undone.
 #pragma once
 
-#include <array>
+#include <cstddef>
 #include <cstdint>
 #include <cstring>
 #include <vector>
@@ -17,18 +17,19 @@ public:
   }
   void arm() {
     entries_.clear();
+    held_.clear();
     armed_ = true;
   }
   void note(std::uint8_t *at, std::uint32_t width) {
-    Entry entry{.at = at, .width = width};
-    std::memcpy(entry.held.data(), at, width);
-    entries_.push_back(entry);
+    entries_.push_back(Entry{.at = at, .width = width, .held = held_.size()});
+    held_.insert(held_.end(), at, at + width);
   }
   void rollBack() {
     for (auto entry = entries_.rbegin(); entry != entries_.rend(); ++entry) {
-      std::memcpy(entry->at, entry->held.data(), entry->width);
+      std::memcpy(entry->at, held_.data() + entry->held, entry->width);
     }
     entries_.clear();
+    held_.clear();
     armed_ = false;
   }
 
@@ -36,9 +37,10 @@ private:
   struct Entry {
     std::uint8_t *at = nullptr;
     std::uint32_t width = 0;
-    std::array<std::uint8_t, 4> held{};
+    std::size_t held = 0; // offset of the old bytes in held_
   };
   std::vector<Entry> entries_;
+  std::vector<std::uint8_t> held_;
   bool armed_ = false;
 };
 

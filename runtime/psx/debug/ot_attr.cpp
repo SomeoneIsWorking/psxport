@@ -368,7 +368,7 @@ void OtAttr::trackStoreSlow(Core *c, GuestSpan store) {
     mPoolStale = true;
     return;
   }
-  if (!mPool.contains(k)) {
+  if (!mPool.overlaps({k, bytes})) {
     return;
   }
 

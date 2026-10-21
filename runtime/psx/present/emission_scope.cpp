@@ -74,15 +74,20 @@ void EmissionScope::pop() {
   stack_.pop_back();
 }
 
-void EmissionScope::noteStore(std::uint32_t address) {
-  const std::optional<std::uint32_t> word = mainRamWord(address);
-  if (!word) {
+void EmissionScope::noteStore(GuestSpan store) {
+  const std::optional<std::uint32_t> first = mainRamWord(store.address);
+  const std::optional<std::uint32_t> last = mainRamWord(store.address + store.bytes - 1u);
+  if (!first || !last || *last < *first) {
     return;
   }
+  const auto begin = words_.begin() + *first;
+  const auto end = words_.begin() + *last + 1;
   if (stack_.empty()) {
-    words_[*word].producer = 0;
+    std::for_each(begin, end, [](RecordKey &key) {
+      key.producer = 0;
+    });
   } else {
-    words_[*word] = stack_.back();
+    std::fill(begin, end, stack_.back());
   }
 }
 
@@ -91,7 +96,7 @@ void EmissionScope::bindPacket(std::uint32_t packetAddress) {
     lucent::error("emission", "bindPacket(0x{:08X}) with no producer scope open", packetAddress);
     std::abort();
   }
-  noteStore(packetAddress + 4u);
+  noteStore({packetAddress + 4u, 4u});
 }
 
 std::optional<RecordKey> EmissionScope::keyFor(std::uint32_t packetAddress) const {

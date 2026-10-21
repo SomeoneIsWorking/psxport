@@ -91,6 +91,18 @@ void display_pass_write_guard(Core *c, GuestStore store) {
 
 } // namespace
 
+// The bookkeeping of one store into guest storage at `p` (null for a device); false when the write rollback will put
+// it back, so it binds no packet and changes no code.
+bool Core::bookStore(uint8_t *p, GuestSpan store) {
+  if (p && writeRollback.armed()) {
+    writeRollback.note(p, store.bytes);
+    return false;
+  }
+  pkt_track(this, store.address, store.bytes);
+  emission.noteStore(store);
+  return true;
+}
+
 template <class Value, bool NotifyExecutable>
 void Core::writeGuestMemory(uint32_t a, Value v, psx::cpu::ExecutableWriteSource source) {
   constexpr auto width = static_cast<uint32_t>(sizeof(Value));
@@ -99,21 +111,16 @@ void Core::writeGuestMemory(uint32_t a, Value v, psx::cpu::ExecutableWriteSource
   if (storeWatch.armed()) {
     storeWatch.observe(*this, {a, static_cast<uint32_t>(v), width});
   }
-  // A store that will be put back binds no packet and changes no code.
-  if (p && writeRollback.armed()) {
-    writeRollback.note(p, width);
-    memcpy(p, &v, width);
+  const bool booked = bookStore(p, {a, width});
+  if (!p) {
+    deviceWrite(a, v, width);
     return;
   }
-  pkt_track(this, a, width);
-  emission.noteStore(a);
-  if (p) {
-    memcpy(p, &v, width);
-    if constexpr (NotifyExecutable) {
+  memcpy(p, &v, width);
+  if constexpr (NotifyExecutable) {
+    if (booked) {
       psx::cpu::notifyExecutableWrite(*this, {a, a + width}, source);
     }
-  } else {
-    deviceWrite(a, v, width);
   }
 }
 
@@ -133,8 +140,28 @@ void Core::mem_w32_unnotified(uint32_t a, uint32_t v) {
   writeGuestMemory<uint32_t, false>(a, v, psx::cpu::ExecutableWriteSource::MappedStore);
 }
 void Core::mem_write(uint32_t a, std::span<const uint8_t> bytes, psx::cpu::ExecutableWriteSource source) {
-  for (std::size_t i = 0; i < bytes.size(); i++) {
-    mem_w8_unnotified(a + static_cast<uint32_t>(i), bytes[i]);
+  if (bytes.empty()) {
+    return;
   }
-  psx::cpu::notifyExecutableWrite(*this, {a, a + static_cast<uint32_t>(bytes.size())}, source);
+  const auto size = static_cast<uint32_t>(bytes.size());
+  uint8_t *p = host_ptr({a, size});
+  if (!p) {
+    // Device registers, or a span leaving its region, take one store per byte.
+    for (uint32_t i = 0; i < size; i++) {
+      mem_w8_unnotified(a + i, bytes[i]);
+    }
+    psx::cpu::notifyExecutableWrite(*this, {a, a + size}, source);
+    return;
+  }
+  display_pass_write_guard(this, {a, bytes[0], size});
+  if (storeWatch.armed()) {
+    for (uint32_t i = 0; i < size; i++) {
+      storeWatch.observe(*this, {a + i, bytes[i], 1});
+    }
+  }
+  const bool booked = bookStore(p, {a, size});
+  memcpy(p, bytes.data(), size);
+  if (booked) {
+    psx::cpu::notifyExecutableWrite(*this, {a, a + size}, source);
+  }
 }

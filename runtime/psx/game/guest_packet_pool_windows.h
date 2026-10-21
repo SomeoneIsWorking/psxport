@@ -17,7 +17,8 @@ struct PacketPoolExtent {
   std::uint32_t count = 0;
   std::array<std::uint32_t, 4> sources{};
 
-  bool contains(std::uint32_t address) const;
+  // Whether any byte of `store` (KSEG0) lies in a pool.
+  bool overlaps(GuestSpan store) const;
   // Whether `store` rewrites a bound this extent was read from.
   bool readFrom(GuestSpan store) const;
 };

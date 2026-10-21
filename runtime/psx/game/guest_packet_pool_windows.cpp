@@ -21,9 +21,9 @@ void add(PacketPoolExtent &extent, std::uint32_t low, std::uint32_t high) {
 
 } // namespace
 
-bool PacketPoolExtent::contains(std::uint32_t address) const {
+bool PacketPoolExtent::overlaps(GuestSpan store) const {
   for (std::uint32_t pool = 0; pool < count; ++pool) {
-    if (address >= low[pool] && address < high[pool]) {
+    if (store.address < high[pool] && low[pool] < store.address + store.bytes) {
       return true;
     }
   }
