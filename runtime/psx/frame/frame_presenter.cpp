@@ -8,7 +8,6 @@
 #include "fs_util.h"
 #include "game.h"
 #include "gpu_device.h"
-#include "host_clock.h"
 #include "producer_census.h"
 #include "render_mode.h"
 #include "texture_feedback.h"
@@ -37,7 +36,6 @@ bool drawsAnything(const present::FrameRecord &record) {
 
 constexpr int kDumpMax = 600;
 constexpr lucent::Channel presentDumpChannel{"fps60dump"};
-constexpr lucent::Channel presentSequenceChannel{"presentseq"};
 
 // A producer render reads saved state only; the armed display pass aborts any guest store it makes.
 std::optional<present::FrameRecord> composeGuarded(Core &core,
@@ -58,8 +56,12 @@ void buildReal(Core &core) {
   core.game->display.build(present::PresentCompletion::MainFrame);
 }
 
-void pace(Core &core, FieldCadence cadence) {
-  core.runtime.pacePresentation(core, cadence);
+// The built present is shown at its paced deadline; the guest runs on until then.
+void schedule(Core &core, FieldCadence cadence, present::PresentNote note) {
+  note.fields = cadence.fields;
+  note.parts = cadence.parts;
+  note.logic = core.game->timing.logicFrame;
+  core.game->display.showAt(core.runtime.presentDeadline(core, cadence), note);
 }
 
 } // namespace
@@ -73,6 +75,8 @@ void FramePresenter::commit(Core *core, int guestFields) {
     lucent::error("presentation", "FramePresenter::commit requires a bound Core/Game");
     std::abort();
   }
+  // The last frame's present lands on its deadline before this frame's composition starts.
+  core->game->display.finishShow();
   present::FrameRecord sealed = core->gpuDevice().sealRecord();
   present::FrameState state = core->frameStates.collect(sealed);
   psx::debug::censusRecord(*core, sealed, state);
@@ -260,14 +264,20 @@ void FramePresenter::presentRecords(Core &core, const present::StateProducers *p
   core.game->display.buildInBetween();
   composed_ = nullptr;
   composedStore_.reset();
-  pace(core, {guestFields, 2});
-  core.game->display.show();
-  logPresent(core, base.sequence(), from->record->sequence(), {guestFields, 2}, composed, cut);
   dumpPresent(core, true);
+  schedule(core,
+           {guestFields, 2},
+           {.fence = fence_,
+            .shown = base.sequence(),
+            .from = from->record->sequence(),
+            .t = present::kInBetweenAt,
+            .composed = composed,
+            .cut = cut});
   presentCurrent(core, producers, {guestFields, 2}, shown);
 }
 
-// A present is build, pace, show: only the show waits, so it lands on its deadline whatever the build cost.
+// A present is build, then a show scheduled for its deadline: only the show waits, so it lands on time whatever
+// the build cost, and the next logic frame's guest work runs while it waits.
 void FramePresenter::presentCurrent(Core &core,
                                     const present::StateProducers *producers,
                                     FieldCadence cadence,
@@ -285,35 +295,12 @@ void FramePresenter::presentCurrent(Core &core,
   composed_ = nullptr;
   composedAdvances_ = false;
   composedStore_.reset();
-  pace(core, cadence);
-  core.game->display.show();
-  logPresent(core,
-             shown != nullptr ? shown->record->sequence() : current_->sequence(),
-             std::nullopt,
-             cadence,
-             composed,
-             false);
   dumpPresent(core, false);
-}
-
-void FramePresenter::logPresent(Core &core,
-                                std::uint64_t shown,
-                                std::optional<std::uint64_t> from,
-                                FieldCadence cadence,
-                                bool composed,
-                                bool cut) const {
-  lucent::debug(presentSequenceChannel,
-                "at={:.3f}ms fence={} shown={} from={} t={} fields={}/{} composed={} cut={} logic={}",
-                psx::platform::hostNowMs(),
-                fence_,
-                shown,
-                from ? static_cast<long long>(*from) : -1LL,
-                from ? "0.5" : "1",
-                cadence.fields,
-                cadence.parts,
-                composed ? 1 : 0,
-                cut ? 1 : 0,
-                core.game->timing.logicFrame);
+  schedule(core,
+           cadence,
+           {.fence = fence_,
+            .shown = shown != nullptr ? shown->record->sequence() : current_->sequence(),
+            .composed = composed});
 }
 
 void FramePresenter::dumpPresent(Core &core, bool interpolated) {

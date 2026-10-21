@@ -17,8 +17,8 @@ std::unique_ptr<FrameDriver> GameRuntime::createFrameDriver(Game &) {
   return nullptr;
 }
 
-void GameRuntime::pacePresentation(Core &core, frame::FieldCadence cadence) {
-  core.game->framePacer.paceSubframeFields(core, cadence);
+std::optional<double> GameRuntime::presentDeadline(Core &core, frame::FieldCadence cadence) {
+  return core.game->framePacer.subframeDeadline(core, cadence);
 }
 
 } // namespace psx::game

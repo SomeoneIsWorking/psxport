@@ -7,6 +7,7 @@
 #include "fs_util.h"
 #include "game.h"
 #include "gpu_device.h"
+#include "host_clock.h"
 #include "image_writer.h"
 #include "number_text.h"
 #include "picture_announce.h"
@@ -21,6 +22,8 @@
 
 namespace psx::present {
 namespace {
+
+constexpr lucent::Channel presentSequenceChannel{"presentseq"};
 
 // "dir[:every]": a trailing all-digit component is the interval, anything else is part of the path.
 void parseDumpDir(const std::string &text, std::string &dir, int &every) {
@@ -64,6 +67,7 @@ void DisplayPresenter::buildDisplay() {
 }
 
 void DisplayPresenter::build(PresentCompletion completion) {
+  finishShow();
   logVramScan();
   buildDisplay();
   dumpDisplay();
@@ -72,20 +76,68 @@ void DisplayPresenter::build(PresentCompletion completion) {
 }
 
 void DisplayPresenter::buildInBetween() {
+  finishShow();
   buildDisplay();
   interpolated_++;
 }
 
 void DisplayPresenter::buildHostPicture(const std::uint8_t *rgba, PixelSize size, float fade) {
+  finishShow();
   core_.game->render().buildImage(rgba, size, fade);
 }
 
 void DisplayPresenter::buildPanes(std::span<const render::Pane> panes) {
+  finishShow();
   core_.game->rml_overlay.newFrame();
   core_.game->render().buildPanes(panes);
 }
 
 void DisplayPresenter::show() {
+  finishShow();
+  showBuilt();
+}
+
+void DisplayPresenter::showAt(std::optional<double> dueMs, const PresentNote &note) {
+  finishShow();
+  scheduled_ = ScheduledShow{dueMs.value_or(psx::platform::hostNowMs()), note};
+  showIfDue();
+}
+
+void DisplayPresenter::showIfDue() {
+  if (scheduled_ && psx::platform::hostNowMs() >= scheduled_->dueMs) {
+    showScheduled();
+  }
+}
+
+void DisplayPresenter::finishShow() {
+  if (!scheduled_) {
+    return;
+  }
+  psx::platform::sleepUntilMs(scheduled_->dueMs);
+  showScheduled();
+}
+
+void DisplayPresenter::showScheduled() {
+  const ScheduledShow scheduled = *scheduled_;
+  scheduled_.reset();
+  showBuilt();
+  const PresentNote &note = scheduled.note;
+  lucent::debug(presentSequenceChannel,
+                "at={:.3f}ms fence={} shown={} from={} t={} fields={}/{} composed={} cut={} logic={} due={:.3f}ms",
+                psx::platform::hostNowMs(),
+                note.fence,
+                note.shown,
+                note.from ? static_cast<long long>(*note.from) : -1LL,
+                note.t,
+                note.fields,
+                note.parts,
+                note.composed ? 1 : 0,
+                note.cut ? 1 : 0,
+                note.logic,
+                scheduled.dueMs);
+}
+
+void DisplayPresenter::showBuilt() {
   core_.game->render().show();
   if (!pendingCompletion_) {
     return;
@@ -100,6 +152,7 @@ void DisplayPresenter::show() {
 
 // The overlay stays interactive while the game is frozen.
 void DisplayPresenter::repaint() {
+  finishShow();
   core_.game->rml_overlay.newFrame();
   core_.game->render().repaint();
 }

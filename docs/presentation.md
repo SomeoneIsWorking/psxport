@@ -243,7 +243,8 @@ there are no per-vertex keys. An in-between with nothing produced is the shown r
   (`holdUndrawnWrites`). The presenter remembers which record each present showed.
 - **Cadence.** With the title's 60 fps on, each logic frame of two or more fields gets two presents, at
   `t = 0.5` and `t = 1`; a one-field frame, or any frame with it off, gets one at `t = 1`. The
-  `presentseq` debug channel logs each present: host time, record shown, from, `t`, fields. With no record drawing the displayed buffer, S' unknown, or a
+  `presentseq` debug channel logs each present as it is shown: host time, record shown, from, `t`, fields,
+  and the deadline it was scheduled for (`due`). With no record drawing the displayed buffer, S' unknown, or a
   record after S' missing or incomplete, the present is `t = 1`.
 - **Base state.** The composed frame is drawn onto VRAM as it was before S: the image when S = N, the
   rasterizer's kept pre-state when S is the last applied record with entries. Each plane keeps one
@@ -340,18 +341,22 @@ nonnegative `VSync(n)` returns one field's HBlanks (263 NTSC, 314 PAL) in `$v0`.
 per frame, `guestFields` being the measured guest display fields it covered (no default). The shell
 aborts unless `FramePresenter::fence()` advanced by exactly one.
 
-`GameRuntime::pacePresentation` decides who advances simulated display time. The default,
-`FramePacer::paceSubframeFields`, advances Timing, devices and the VBlank latch by the represented field
-count, then waits for the host deadline. A title with its own field scheduler advances
-`Timing::advanceDisplayFields` per delivered field and paces with `FramePacer::waitPresentedFields`,
-which waits without creating a field. In-betweens split the host wait of the same fields. NOPACE
-suppresses host waiting only. Each `Game` owns its `FramePacer` and deadline.
+`GameRuntime::presentDeadline` decides who advances simulated display time and returns the present's host
+deadline. The default, `FramePacer::subframeDeadline`, advances Timing, devices and the VBlank latch by the
+represented field count. A title with its own field scheduler advances `Timing::advanceDisplayFields` per
+delivered field and plans with `FramePacer::presentedFieldsDeadline`, which creates no field. In-betweens
+split the deadline of the same fields. NOPACE suppresses host waiting only. Each `Game` owns its `FramePacer`
+and deadline; `paceSubframeFields`, `waitPresentedFields` and `hostScreenPace` plan and then sleep.
 
-Each present, real or in-between, is built, then paced, then shown (`FramePresenter::presentCurrent`:
-`DisplayPresenter::build` or `buildInBetween`, the pace, `show`), so the show lands on its deadline whatever guest step, composition
-or build came before it. Showing before the wait offsets the present by that work, and the two presents
-of a 30 Hz frame then alternate short and long intervals; building after the wait makes a present late by
-its build (issue 0161). The line between the two is the swapchain:
+Each present, real or in-between, is built, then its show is scheduled for its deadline
+(`DisplayPresenter::showAt`). The show happens at the first executor segment boundary past the deadline
+(`LightrecExecutor` calls `DisplayPresenter::showIfDue` after every segment), or, waiting for the deadline,
+before the next build, show, repaint or pacer plan (`finishShow`), and `FramePresenter::commit` finishes it
+before the next frame's composition starts. So the t = 1 present of frame N lands on time while frame N+1's
+guest logic runs, and a frame's guest logic, the in-between's composition and build and the t = 1 build share
+the whole logic-frame period: no half carries the logic alone (issue 0168). Showing before the wait offsets
+the present by that work, and the two presents of a 30 Hz frame then alternate short and long intervals;
+building after the wait makes a present late by its build (issue 0161). The line between the two is the swapchain:
 
 - **Build** (`DisplayPresenter::build`, `buildInBetween`, `buildHostPicture` → `RenderState::buildDisplay`
   or `buildImage`): the overlay's CPU frame, the record raster (`presentRecord` →

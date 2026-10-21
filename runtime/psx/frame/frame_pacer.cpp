@@ -7,8 +7,7 @@
 
 #include <lucent/log.h>
 
-#include <chrono>
-#include <thread>
+#include <optional>
 
 namespace psx::frame {
 
@@ -32,8 +31,10 @@ PacePlan FramePacer::plan(PaceInputs inputs) {
   return result;
 }
 
-void FramePacer::pace(Core &core, PaceInputs inputs, bool advanceClock) {
+std::optional<double> FramePacer::deadline(Core &core, PaceInputs inputs, bool advanceClock) {
   Game &game = *core.game;
+  // Every earlier scheduled present reaches the screen before the next deadline is planned.
+  game.display.finishShow();
   inputs.nowMs = psx::platform::hostNowMs();
   const PacePlan planned = plan(inputs);
   if (advanceClock && !planned.rateUnset) {
@@ -45,7 +46,7 @@ void FramePacer::pace(Core &core, PaceInputs inputs, bool advanceClock) {
   // The play check judges the next present against the fields this plan holds it for, paced or not.
   game.perf.heldFor(static_cast<double>(planned.effectiveQuota) / static_cast<double>(planned.effectiveParts));
   if (!planned.paced) {
-    return;
+    return std::nullopt;
   }
   lucent::debug("pacer",
                 "interval={:.4f}ms sleep={:.4f}ms quota={} parts={} rate={}mHz{}",
@@ -55,8 +56,12 @@ void FramePacer::pace(Core &core, PaceInputs inputs, bool advanceClock) {
                 planned.effectiveParts,
                 inputs.fieldRateMilliHz,
                 planned.resync ? " RESYNC" : "");
-  if (planned.sleepMs > 0.0) {
-    std::this_thread::sleep_for(std::chrono::duration<double, std::milli>(planned.sleepMs));
+  return planned.nextMs;
+}
+
+void FramePacer::wait(std::optional<double> dueMs) {
+  if (dueMs) {
+    psx::platform::sleepUntilMs(*dueMs);
   }
 }
 
@@ -73,18 +78,27 @@ PaceInputs guestInputs(const Game &game, FieldCadence cadence) {
 
 } // namespace
 
+std::optional<double> FramePacer::subframeDeadline(Core &core, FieldCadence cadence) {
+  return deadline(core, guestInputs(*core.game, cadence), true);
+}
+
+std::optional<double> FramePacer::presentedFieldsDeadline(Core &core, FieldCadence cadence) {
+  return deadline(core, guestInputs(*core.game, cadence), false);
+}
+
 void FramePacer::paceSubframeFields(Core &core, FieldCadence cadence) {
-  pace(core, guestInputs(*core.game, cadence), true);
+  wait(subframeDeadline(core, cadence));
 }
 
 void FramePacer::waitPresentedFields(Core &core, FieldCadence cadence) {
-  pace(core, guestInputs(*core.game, cadence), false);
+  wait(presentedFieldsDeadline(core, cadence));
 }
 
 void FramePacer::hostScreenPace(Core &core) {
-  pace(core,
-       {.unpaced = core.game->config.unpaced, .quota = 1, .parts = 1, .fieldRateMilliHz = kHostScreenFieldRateMilliHz},
-       false);
+  wait(deadline(
+      core,
+      {.unpaced = core.game->config.unpaced, .quota = 1, .parts = 1, .fieldRateMilliHz = kHostScreenFieldRateMilliHz},
+      false));
 }
 
 } // namespace psx::frame

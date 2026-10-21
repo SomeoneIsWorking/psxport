@@ -617,6 +617,7 @@ ExecutionResult LightrecExecutor::executeWithBoundary(std::uint32_t guestAddress
       // The exact instruction count, less what device-access commits already charged.
       accountExecutedInstructions(
           impl.core, impl.segmentClock.uncommitted(executedInstructionCount(after) - executedInstructionCount(before)));
+      impl.core.game->display.showIfDue();
     }
 
     const std::uint32_t flags = lightrec_exit_flags(impl.state);

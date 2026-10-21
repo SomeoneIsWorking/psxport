@@ -40,6 +40,14 @@ private:
 // not change while an object lives), or to an overlaid word; a write outside them aborts.
 class HostMemory {
 public:
+  HostMemory() = default;
+  ~HostMemory() = default;
+  // The last-lookup cache points into this object's own ranges.
+  HostMemory(const HostMemory &) = delete;
+  HostMemory &operator=(const HostMemory &) = delete;
+  HostMemory(HostMemory &&) = delete;
+  HostMemory &operator=(HostMemory &&) = delete;
+
   // A range holding a copy of `bytes`.
   void provide(std::uint32_t address, std::span<const std::byte> bytes);
   // A range of `size` zero bytes.
