@@ -2,6 +2,7 @@
 #pragma once
 
 #include "frame_record.h"
+#include "guest_address_range.h"
 
 #include <cstdint>
 #include <optional>
@@ -57,7 +58,8 @@ public:
   }
   // The innermost open scope's key; aborts with none open.
   const RecordKey &current() const;
-  void noteStore(std::uint32_t address);
+  // Binds every main-RAM word `store` touches to the innermost open scope, or unbinds them with none open.
+  void noteStore(GuestSpan store);
   // Names the packet at `packetAddress` by the innermost open scope, for a producer that keys packets its
   // guest body already wrote.
   void bindPacket(std::uint32_t packetAddress);

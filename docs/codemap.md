@@ -19,7 +19,7 @@ Dependency direction: title repo → `runtime/psx/game/` (the title interface) �
 - `runtime/psx/game/psx_exe_image.*`, `disc_executable.*` — PS-X EXE header parse, top-level executable load and entry registers, second executable from disc (boot stub hand-off)
 - `runtime/psx/game/guest_packet_pool_windows.*` — guest packet pool / primitive arena layouts a title reports, parity pools
 - `runtime/psx/core/core.*` — Core: one PSX machine's registers, RAM, scratchpad and device ownership
-- `runtime/psx/core/guest_memory.cpp`, `mem.cpp` — guest loads and stores, MMIO dispatch, write guards, executable-write notification
+- `runtime/psx/core/guest_memory.cpp`, `mem.cpp` — guest loads and stores, span (block) stores, MMIO dispatch, write guards, executable-write notification
 - `runtime/psx/core/guest_memory_map.h`, `guest_address_range.h` — physical memory map: main RAM and mirrors, scratchpad, hardware registers, BIOS, KSEG0/KSEG1 folds, address ranges, spans, stores
 - `runtime/psx/core/guest_abi.h` — MIPS o32 guest ABI for native overrides: stack frame, prologue spills (`enterGuestFrame`, also the frame for a mid-function guest entry), callee-saved registers, preserved return address `$ra`
 - `runtime/psx/core/guest_code_module.*` — runtime-loaded relocatable code module / overlay as an executable residency, identity and generation

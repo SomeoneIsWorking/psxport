@@ -191,6 +191,7 @@ private:
   // Every unmapped access, native or translated, passes here so the differential journal sees it.
   uint32_t deviceRead(uint32_t a, uint32_t bytes);
   void deviceWrite(uint32_t a, uint32_t v, uint32_t bytes);
+  bool bookStore(uint8_t *p, GuestSpan store);
   template <class Value, bool NotifyExecutable = true>
   void writeGuestMemory(uint32_t address, Value value, psx::cpu::ExecutableWriteSource source);
 

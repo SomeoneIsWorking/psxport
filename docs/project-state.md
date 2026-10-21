@@ -79,8 +79,9 @@ with device traffic replayed, continues from the original, and writes its report
 
 Range normalization, image generations, dispatch revocation, counters, and explicit Lightrec
 range/full-cache calls exist. A translated self-modifying RAM store proves a cached block is missed,
-retranslated, and changes behavior without fallback. Public `Core::mem_w8/16/32` and translated CPU
-stores share one post-write notification owner in `guest_memory.cpp`; 36 real-JIT rewrite cases
+retranslated, and changes behavior without fallback. Public `Core::mem_w8/16/32`, the span store
+`Core::mem_write` (CD and archive loads: bookkeeping and rollback once over the span, one copy) and
+translated CPU stores share one post-write notification owner in `guest_memory.cpp`; 36 real-JIT rewrite cases
 cover all three widths across KUSEG/KSEG0/KSEG1 and all four RAM mirrors, with unchanged/unrelated
 write controls and zero fallback. Gap: complete DMA/debugger/savestate mutation coverage still
 requires proof.
