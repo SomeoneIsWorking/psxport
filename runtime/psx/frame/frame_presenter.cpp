@@ -45,7 +45,7 @@ std::optional<present::FrameRecord> composeGuarded(Core &core,
                                                    float t,
                                                    const present::StateProducers &producers) {
   const present::DisplayPassGuard guard(core.rsub.mode);
-  return present::composeFrame(shown, from, to, t, producers);
+  return present::composeFrame(shown, from, to, t, producers, core.gpuDevice().vram());
 }
 
 gpu::RecordRect displayedBuffer(Core &core) {

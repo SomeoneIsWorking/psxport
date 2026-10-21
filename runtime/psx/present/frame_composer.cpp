@@ -1,7 +1,10 @@
 // frame_composer.cpp — replacing a produced object's entries with its render, by OT slot.
 #include "frame_composer.h"
 
+#include "vram_pixel.h"
+
 #include <algorithm>
+#include <array>
 #include <cstddef>
 #include <unordered_map>
 #include <unordered_set>
@@ -26,6 +29,17 @@ std::uint32_t clutKey(const DrawPrimitive &primitive) {
 
 bool samplesClut(const DrawPrimitive &primitive) {
   return primitive.textured && primitive.state.texMode < 2;
+}
+
+// The CLUT a primitive samples, read from `vram` into `record`'s pool; kNoClut when the pool is full.
+std::uint32_t appendClutFromVram(FrameRecord &record, const DrawPrimitive &primitive, std::span<const std::uint16_t> vram) {
+  const gpu::VramPoint at = gpu::decodeClut(primitive.clutWord);
+  std::array<std::uint16_t, 256> entries{};
+  const std::size_t count = primitive.state.texMode == 1 ? 256u : 16u;
+  for (std::size_t i = 0; i < count; i++) {
+    entries[i] = gpu::vramHalfWord(vram, {at.x + static_cast<int>(i), at.y});
+  }
+  return record.appendClut(std::span<const std::uint16_t>(entries.data(), count));
 }
 
 struct Covered {
@@ -129,8 +143,12 @@ std::vector<const RecordDrawState *> environmentsAt(std::span<const RecordEntry>
 
 } // namespace
 
-std::optional<FrameRecord> composeFrame(
-    const FrameRecord &shown, const FrameState *from, const FrameState &to, float t, const StateProducers &producers) {
+std::optional<FrameRecord> composeFrame(const FrameRecord &shown,
+                                       const FrameState *from,
+                                       const FrameState &to,
+                                       float t,
+                                       const StateProducers &producers,
+                                       std::span<const std::uint16_t> vram) {
   if (to.empty()) {
     return std::nullopt;
   }
@@ -145,11 +163,14 @@ std::optional<FrameRecord> composeFrame(
       baked.insert(objectKey({upload->key->producer, upload->key->object}));
     }
   }
+  std::size_t primitives = 0;
+  std::size_t owned = 0;
   for (std::size_t i = 0; i < entries.size(); i++) {
     const auto *primitive = std::get_if<DrawPrimitive>(&entries[i]);
     if (primitive == nullptr) {
       continue;
     }
+    ++primitives;
     if (samplesClut(*primitive) && primitive->clutOffset != kNoClut) {
       clutOffsets.try_emplace(clutKey(*primitive), primitive->clutOffset);
     }
@@ -171,16 +192,20 @@ std::optional<FrameRecord> composeFrame(
       covered.push_back({id, render, *state, {}, {}});
     }
     Covered &object = covered[found->second];
+    ++owned;
     object.entries.push_back(i);
     if (primitive->slot) {
       object.inSlot[slotKey(*primitive->slot)].push_back(i);
     }
   }
-  if (covered.empty()) {
+  // An in-between keeping any primitive as S drew it would mix two moments: S is shown whole instead.
+  const bool inBetween = from != nullptr && t < 1.0f;
+  if (covered.empty() || (inBetween && owned != primitives)) {
     return std::nullopt;
   }
   const SlotPlacement placement(shown);
   const std::vector<const RecordDrawState *> environments = environmentsAt(entries);
+  FrameRecord out = shown;
 
   bool replaced = false;
   std::vector<bool> removed(entries.size(), false);
@@ -206,10 +231,14 @@ std::optional<FrameRecord> composeFrame(
         break;
       }
       if (samplesClut(primitive)) {
-        const auto clut = clutOffsets.find(clutKey(primitive));
+        auto clut = clutOffsets.find(clutKey(primitive));
         if (clut == clutOffsets.end()) {
-          drawable = false;
-          break;
+          const std::uint32_t offset = appendClutFromVram(out, primitive, vram);
+          if (offset == kNoClut) {
+            drawable = false;
+            break;
+          }
+          clut = clutOffsets.emplace(clutKey(primitive), offset).first;
         }
         primitive.clutOffset = clut->second;
       }
@@ -219,6 +248,9 @@ std::optional<FrameRecord> composeFrame(
       placed.emplace_back(*position, primitive);
     }
     if (!drawable) {
+      if (inBetween) {
+        return std::nullopt;
+      }
       continue;
     }
     replaced = true;
@@ -243,7 +275,6 @@ std::optional<FrameRecord> composeFrame(
       composed.push_back(entries[i]);
     }
   }
-  FrameRecord out = shown;
   out.replaceEntries(std::move(composed));
   return out;
 }

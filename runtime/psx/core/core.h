@@ -161,6 +161,8 @@ public:
   void mem_write(uint32_t a, std::span<const uint8_t> bytes, psx::cpu::ExecutableWriteSource source);
   // A NUL-terminated guest string into `out`, at most cap-1 bytes, always terminated.
   void readCString(uint32_t address, char *out, size_t cap);
+  // The guest bytes at `address` into `out`; one copy when they are guest storage.
+  void readBytes(uint32_t address, std::span<std::byte> out);
 
   // Folds pending peripheral edges into I_STAT, then reads it.
   uint32_t irqStatLatch();

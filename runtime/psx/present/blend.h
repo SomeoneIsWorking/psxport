@@ -17,6 +17,16 @@ inline std::uint32_t lerpWord(std::uint32_t from, std::uint32_t to, float t) {
   return static_cast<std::uint32_t>(lerpInt(static_cast<std::int32_t>(from), static_cast<std::int32_t>(to), t));
 }
 
+// An angle of `bits` bits at `t` from `from` to `to` the short way round, wrapped into the turn.
+inline std::uint32_t lerpTurn(std::uint32_t from, std::uint32_t to, unsigned bits, float t) {
+  const std::uint32_t mask = (1u << bits) - 1u;
+  auto step = static_cast<std::int32_t>((to - from) & mask);
+  if (step > static_cast<std::int32_t>((mask >> 1) + 1u)) {
+    step -= static_cast<std::int32_t>(mask + 1u);
+  }
+  return (from + static_cast<std::uint32_t>(lerpInt(0, step, t))) & mask;
+}
+
 enum class Halfword : unsigned { Low = 0, High = 16 };
 
 // One halfword of two words, blended, as an unsigned halfword.
