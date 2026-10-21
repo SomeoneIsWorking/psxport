@@ -23,6 +23,15 @@ void Core::readCString(uint32_t address, char *out, size_t cap) {
   }
   out[i < cap ? i : cap - 1] = 0;
 }
+void Core::readBytes(uint32_t address, std::span<std::byte> out) {
+  if (const uint8_t *p = host_ptr({address, static_cast<uint32_t>(out.size())})) {
+    memcpy(out.data(), p, out.size());
+    return;
+  }
+  for (size_t i = 0; i < out.size(); i++) {
+    out[i] = static_cast<std::byte>(mem_r8(address + static_cast<uint32_t>(i)));
+  }
+}
 uint16_t Core::mem_r16(uint32_t a) {
   uint8_t *p = host_ptr({a, 2});
   if (!p) {

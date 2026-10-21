@@ -198,12 +198,13 @@ The composer builds the frame at `t` from S's record:
   A producer's primitives go where its entries were in that slot in S (the n-th at the object's n-th
   entry there, so guest draw-mode changes between them stay where the guest put them), or, in a slot it
   did not use in S, at the slot's head, where the last `AddPrim` into it lands; in a bucket S left empty, where the
-  table's walk order puts it. A render naming a table S never walked, or a CLUT S never sampled, leaves
-  that object as S drew it.
+  table's walk order puts it. A render naming a table S never walked leaves that object as S drew it.
+  An in-between (`from` set, `t < 1`) whose record holds any primitive no producer owns, or any object
+  whose render cannot be placed, is not composed: S is shown whole, never a mix of two moments.
 - **Environment.** A render sets texture page, texture mode and blend mode; draw area, offset,
   mask, texture window and interlace are those in effect where the primitive lands in S (the
   first recorded primitive at or after its position), and the CLUT from S's sample of the same CLUT
-  attribute (`clutWord`).
+  attribute (`clutWord`), or from the device VRAM when S never sampled it.
 - **Exactness.** At `t = 1`, 4:3, depth testing off, a render must reproduce the entries it replaces;
   the title's oracle compare covers the frame.
 
