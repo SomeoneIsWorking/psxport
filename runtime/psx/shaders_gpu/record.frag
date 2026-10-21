@@ -166,8 +166,11 @@ void main() {
         } else {
             int du = (flags & kOpFlipX) != 0u ? -1 : 1;
             int dv = (flags & kOpFlipY) != 0u ? -1 : 1;
-            u = uint(int(word(kOpSourceX)) + (n.x - int(word(kOpOriginX))) * du) & 0xFFu;
-            v = uint(int(word(kOpSourceY)) + (n.y - int(word(kOpOriginY))) * dv) & 0xFFu;
+            // The native pixel of the sprite this fragment shows, the sprite moved by its place.
+            ivec2 shift = ivec2(int(word(kOpShiftX)), int(word(kOpShiftY)));
+            ivec2 m = (p - shift + kVramWidth * S) / S - kVramWidth;
+            u = uint(int(word(kOpSourceX)) + (m.x - int(word(kOpOriginX))) * du) & 0xFFu;
+            v = uint(int(word(kOpSourceY)) + (m.y - int(word(kOpOriginY))) * dv) & 0xFFu;
         }
         if (textured) {
             fore = texel(u, v, flags);

@@ -32,9 +32,11 @@ enum RecordOpField : std::uint8_t {
   kOpWindowXAdd = 3, // gpu.c SUCV.TWX_ADD
   kOpWindowYAnd = 4,
   kOpWindowYAdd = 5,
-  kOpClut = 6,     // halfword index into the CLUT pool
-  kOpBase = 7,     // r, g, b, u, v interpolant bases (7..11)
-  kOpDx = 12,      // per-pixel x deltas (12..16)
+  kOpClut = 6,    // halfword index into the CLUT pool
+  kOpBase = 7,    // r, g, b, u, v interpolant bases (7..11)
+  kOpDx = 12,     // per-pixel x deltas (12..16)
+  kOpShiftX = 12, // sprite: its declared place past its whole pixel, target pixels
+  kOpShiftY = 13,
   kOpDy = 17,      // per-row y deltas (17..21)
   kOpOriginX = 22, // sprite/upload/copy destination origin, native pixels
   kOpOriginY = 23,

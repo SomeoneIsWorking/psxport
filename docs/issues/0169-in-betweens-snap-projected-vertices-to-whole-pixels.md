@@ -1,7 +1,7 @@
 # 0169: in-betweens snapped every projected vertex to a whole native pixel
 
-Status: fixed for polygons and lines, the flag intro, the title screen and every Spyro 1 producer below; open for
-sprites (Open). Owner: `PrimitiveList`, each title producer that projects (psx-spyro sky, moby emitter, terrain
+Status: fixed for polygons, lines and sprites, the flag intro, the title screen and every Spyro 1 producer below.
+Owner: `PrimitiveList`, each title producer that projects (psx-spyro sky, moby emitter, terrain
 passes and the gameplay producers below), `runtime/psx/gpu/record_raster_setup.cpp` `scaledCoordinate` and `addLine`.
 
 ## Observed
@@ -73,8 +73,13 @@ places. psxport `686de8d2`, `1e945b7a`, `e0355be4`; psx-spyro issue 0196 has the
   places its in-between corners with fractions through `placeVertex`, and psx-spyro 0196 measured the logo's lowest
   edge moving 4..7 rows per present at 4x.
 
-## Open
-- Sprites (GP0 0x60-0x7F) draw on whole native pixels: no producer declares a sprite place, and
-  `RecordPlanner::Builder::addSprite` and `record.frag` place a sprite by its whole origin. No Spyro 1 producer emits
-  a sprite; a title whose producer does needs `addSprite` to shift the quad and the texel origin by the place.
-- Spyro 1's flame `0x80058D64` has no producer, so it is not a place gap but a whole-frame one (psx-spyro 0196).
+## Sprites and the flame (psx-spyro 0196 pass 4, 2026-10-21)
+- Sprites (GP0 0x60-0x7F): `PrimitiveList::emit` now gives a sprite's origin its declared place like any vertex, and
+  `RecordPlanner::Builder::addSprite` moves the sprite's quads by `placeOffset` while `record.frag` takes the texel
+  of the native pixel the shifted fragment shows (`kOpShiftX`/`kOpShiftY`), so the image slides whole without
+  resampling. Native scale has no offset, so 1x is unchanged; the native pixels a moved quad reaches are marked
+  written (`nativeReach`). No producer in this workspace declares a sprite place yet, so no picture changes: psx-spyro
+  `scratch/judder-pass4/e-x` against `c-x4` (`warp 10`, `gate-teleport 0 0`, 8x), 4 presents, 0 pixels differ. The
+  first title that needs it is one whose producer re-runs a sprite drawer with a moved origin (Tomba 2's tile grid
+  `TileGridLayer::emitGrid` steps whole pixels at its in-between scroll).
+- Spyro 1's flame `0x80058D64` now has a producer that declares its tip and ribbon places (psx-spyro 0196).

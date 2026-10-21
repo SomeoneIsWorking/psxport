@@ -16,6 +16,18 @@ inline int positiveMod(int value, int modulus) {
   return wrapped < 0 ? wrapped + modulus : wrapped;
 }
 
+inline int floorDivide(int value, int divisor) {
+  return (value - positiveMod(value, divisor)) / divisor;
+}
+
+// The native pixels a rect of scaled pixels reaches.
+inline RecordRect nativeReach(const RecordRect &scaled, int scale) {
+  return {floorDivide(scaled.x0, scale),
+          floorDivide(scaled.y0, scale),
+          floorDivide(scaled.x1 + scale - 1, scale),
+          floorDivide(scaled.y1 + scale - 1, scale)};
+}
+
 // At most N values, held inline.
 template <typename T, std::size_t N> class FixedList {
 public:

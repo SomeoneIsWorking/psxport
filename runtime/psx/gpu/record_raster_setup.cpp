@@ -736,7 +736,7 @@ void RecordPlanner::Builder::addTriangle(
                  .param = static_cast<std::uint32_t>(i)});
           if (!nativeWalk) {
             reaches_ = true;
-            markWritten({covered.x0 / s, covered.y0 / s, (covered.x1 + s - 1) / s, (covered.y1 + s - 1) / s});
+            markWritten(nativeReach(covered, s));
           }
         }
       }
@@ -830,22 +830,30 @@ void RecordPlanner::Builder::addSprite(const DrawPrimitive &primitive) {
       range.cover(last);
     }
   };
+  // The sprite moves whole by its place; native scale keeps the guest's pixels.
+  const int s = plan_.scale;
+  const std::int32_t shiftX = placeOffset(vertex.subX, s);
+  const std::int32_t shiftY = placeOffset(vertex.subY, s);
   for (const PlaneClip &planeClip : planeClips(primitive.state)) {
     const Clip &clip = planeClip.clip;
-    const int xStart = std::max(vertex.x, clip.x0);
-    const int yStart = std::max(vertex.y, clip.y0);
-    const int xBound = std::min(vertex.x + primitive.width, clip.x1 + 1);
-    const int yBound = std::min(vertex.y + primitive.height, clip.y1 + 1);
-    if (xBound <= xStart || yBound <= yStart) {
+    const RecordRect covered{std::max(vertex.x * s + shiftX, clip.x0 * s),
+                             std::max(vertex.y * s + shiftY, clip.y0 * s),
+                             std::min((vertex.x + primitive.width) * s + shiftX, (clip.x1 + 1) * s),
+                             std::min((vertex.y + primitive.height) * s + shiftY, (clip.y1 + 1) * s)};
+    if (covered.x1 <= covered.x0 || covered.y1 <= covered.y0) {
       continue;
     }
     target(planeClip.plane);
-    emit({xStart, yStart, xBound, yBound});
+    place({.x0 = covered.x0, .y0 = covered.y0, .x1 = covered.x1, .y1 = covered.y1});
+    markWritten(nativeReach(covered, s));
+    reaches_ = true;
     if (primitive.textured) {
+      const int xStart = floorDivide(covered.x0 - shiftX, s);
+      const int yStart = floorDivide(covered.y0 - shiftY, s);
       const auto u0 = static_cast<std::uint8_t>(u + (xStart - vertex.x) * uIncrement);
       const auto v0 = static_cast<std::uint8_t>(v + (yStart - vertex.y) * vIncrement);
-      texels(uRange, u0, xBound - xStart, uIncrement);
-      texels(vRange, v0, yBound - yStart, vIncrement);
+      texels(uRange, u0, floorDivide(covered.x1 - 1 - shiftX, s) + 1 - xStart, uIncrement);
+      texels(vRange, v0, floorDivide(covered.y1 - 1 - shiftY, s) + 1 - yStart, vIncrement);
     }
   }
   target(0);
@@ -854,6 +862,8 @@ void RecordPlanner::Builder::addSprite(const DrawPrimitive &primitive) {
   op[kOpOriginY] = static_cast<std::uint32_t>(vertex.y);
   op[kOpSourceX] = u;
   op[kOpSourceY] = v;
+  op[kOpShiftX] = static_cast<std::uint32_t>(shiftX);
+  op[kOpShiftY] = static_cast<std::uint32_t>(shiftY);
   if (primitive.textured) {
     textureReads(primitive.state, uRange, vRange);
   }

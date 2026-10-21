@@ -238,8 +238,9 @@ The composer builds the frame at `t` from S's record:
   object does not shift. A vertex shared by two primitives is one place, so no seam opens; a producer that declares
   places must declare them for every primitive it projects. Above native scale the rasterizer draws a vertex at
   `whole * scale + floor(offset * scale)`; a line's pixels take the offset interpolated along it. At native scale
-  every vertex keeps the guest's pixel. Sprites take no place yet: no producer declares one, and the rasterizer
-  draws them on whole pixels (issue 0169).
+  every vertex keeps the guest's pixel. A sprite (GP0 0x60-0x7F) takes its origin's place the same way: above
+  native scale its quad and the texel lookup move by `floor(offset * scale)` together, so the image slides without
+  resampling (`addSprite`, `record.frag`).
 - **Exactness.** At `t = 1`, 4:3, depth testing off, a render must reproduce the entries it replaces;
   the title's oracle compare covers the frame (at 1x; above it, placed vertices keep their offset).
 
