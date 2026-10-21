@@ -8,6 +8,8 @@
 #include <memory>
 #include <span>
 #include <unordered_map>
+#include <utility>
+#include <vector>
 
 namespace psx::present {
 
@@ -19,6 +21,18 @@ public:
   virtual ~PrimitiveSink() = default;
   virtual void emit(OtSlot slot, const DrawPrimitive &primitive) = 0;
 };
+
+// A sink that keeps what it is handed, in order.
+class PrimitiveList final : public PrimitiveSink {
+public:
+  void emit(OtSlot slot, const DrawPrimitive &primitive) override {
+    primitives.emplace_back(slot, primitive);
+  }
+  std::vector<std::pair<OtSlot, DrawPrimitive>> primitives;
+};
+
+// Where between two shown records the in-between present of fps60 is drawn (FramePresenter).
+inline constexpr float kInBetweenAt = 0.5f;
 
 // An object's two saved states and the point `t` between them. With no earlier state (birth, cut),
 // `from` is `to`.
@@ -33,8 +47,18 @@ struct StateInterval {
 // primitives its guest packets drew.
 class StateProducer {
 public:
+  // What the object's entries become in the frame at `states`.
+  enum class Composition : std::uint8_t {
+    Render,   // replaced by `render`
+    Recorded, // kept as the guest drew them, which is the object at `t`
+    Refused,  // the object cannot be drawn at `t`, so the frame is shown as S whole
+  };
+
   virtual ~StateProducer() = default;
   virtual void render(const StateInterval &states, PrimitiveSink &sink) const = 0;
+  [[nodiscard]] virtual Composition composition(const StateInterval & /*states*/) const {
+    return Composition::Render;
+  }
 };
 
 // The renders by producer guest address. A producer without one keeps its entries as recorded.

@@ -244,7 +244,8 @@ void FramePresenter::presentRecords(Core &core, const present::StateProducers *p
   const bool cut = cutBetween(from->record->sequence(), shown->record->sequence());
   const present::FrameRecord &base = *shown->record;
   if (producers != nullptr) {
-    composedStore_ = composeGuarded(core, base, cut ? nullptr : from->state.get(), *shown->state, 0.5f, *producers);
+    composedStore_ =
+        composeGuarded(core, base, cut ? nullptr : from->state.get(), *shown->state, present::kInBetweenAt, *producers);
   }
   composed_ = composedStore_ ? &*composedStore_ : &base;
   composedAdvances_ = false;

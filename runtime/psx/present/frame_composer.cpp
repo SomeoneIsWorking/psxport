@@ -32,7 +32,8 @@ bool samplesClut(const DrawPrimitive &primitive) {
 }
 
 // The CLUT a primitive samples, read from `vram` into `record`'s pool; kNoClut when the pool is full.
-std::uint32_t appendClutFromVram(FrameRecord &record, const DrawPrimitive &primitive, std::span<const std::uint16_t> vram) {
+std::uint32_t
+appendClutFromVram(FrameRecord &record, const DrawPrimitive &primitive, std::span<const std::uint16_t> vram) {
   const gpu::VramPoint at = gpu::decodeClut(primitive.clutWord);
   std::array<std::uint16_t, 256> entries{};
   const std::size_t count = gpu::clutEntryCount(static_cast<gpu::TexDepth>(primitive.state.texMode));
@@ -48,14 +49,6 @@ struct Covered {
   std::span<const std::byte> to;
   std::vector<std::size_t> entries;
   std::unordered_map<std::uint64_t, std::vector<std::size_t>> inSlot; // entry indices, by slot, in record order
-};
-
-class CollectingSink final : public PrimitiveSink {
-public:
-  void emit(OtSlot slot, const DrawPrimitive &primitive) override {
-    emitted.emplace_back(slot, primitive);
-  }
-  std::vector<std::pair<OtSlot, DrawPrimitive>> emitted;
 };
 
 // Where a primitive in `slot` goes when no entry of the object was in it: the head of `slot` when the
@@ -144,11 +137,11 @@ std::vector<const RecordDrawState *> environmentsAt(std::span<const RecordEntry>
 } // namespace
 
 std::optional<FrameRecord> composeFrame(const FrameRecord &shown,
-                                       const FrameState *from,
-                                       const FrameState &to,
-                                       float t,
-                                       const StateProducers &producers,
-                                       std::span<const std::uint16_t> vram) {
+                                        const FrameState *from,
+                                        const FrameState &to,
+                                        float t,
+                                        const StateProducers &producers,
+                                        std::span<const std::uint16_t> vram) {
   if (to.empty()) {
     return std::nullopt;
   }
@@ -218,13 +211,24 @@ std::optional<FrameRecord> composeFrame(const FrameRecord &shown,
   std::vector<std::vector<DrawPrimitive>> inserted(entries.size() + 1);
   for (const Covered &object : covered) {
     const std::optional<std::span<const std::byte>> earlier = from ? from->find(object.id) : std::nullopt;
-    CollectingSink sink;
-    object.render->render({.from = earlier.value_or(object.to), .to = object.to, .t = earlier ? t : 1.0f}, sink);
+    const StateInterval states{.from = earlier.value_or(object.to), .to = object.to, .t = earlier ? t : 1.0f};
+    const StateProducer::Composition composition = object.render->composition(states);
+    if (composition == StateProducer::Composition::Recorded) {
+      continue;
+    }
+    if (composition == StateProducer::Composition::Refused) {
+      if (inBetween) {
+        return std::nullopt;
+      }
+      continue;
+    }
+    PrimitiveList sink;
+    object.render->render(states, sink);
     std::vector<std::pair<std::size_t, DrawPrimitive>> placed;
-    placed.reserve(sink.emitted.size());
+    placed.reserve(sink.primitives.size());
     std::unordered_map<std::uint64_t, std::size_t> emittedInSlot;
     bool drawable = true;
-    for (auto &[slot, primitive] : sink.emitted) {
+    for (auto &[slot, primitive] : sink.primitives) {
       // The n-th primitive in a slot lands where the object's n-th entry there was, so the draw state
       // between them is the one the guest drew under; beyond its last entry, after it.
       const auto own = object.inSlot.find(slotKey(slot));

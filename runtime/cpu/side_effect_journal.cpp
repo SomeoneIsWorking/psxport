@@ -31,11 +31,23 @@ const char *sideEffectKindName(SideEffectKind kind) {
   return "unknown";
 }
 
+const char *sideEffectPathName(SideEffectMode mode) {
+  switch (mode) {
+  case SideEffectMode::Record:
+    return "original";
+  case SideEffectMode::Replay:
+    return "native";
+  case SideEffectMode::Discard:
+    return "discarded";
+  }
+  return "unknown";
+}
+
 std::string JournalBoundViolation::describe() const {
   // The path is named from the mode, because "the call produced too many effects" does not say WHICH
   // of the two paths did: a live-path overrun is the original being pathological, a shadow-path overrun
   // is the override being pathological, and those are different findings for whoever reads the gate.
-  const char *const path = mode == SideEffectMode::Record ? "original" : "native";
+  const char *const path = sideEffectPathName(mode);
   return lucent::format("{} path reached the {}-effect per-call side-effect journal bound at {} after {} "
                         "journaled effect(s); {} further effect(s) were refused and are NOT in the log; "
                         "the call {}stopped and the run continues from the original. A call that reaches "
@@ -83,8 +95,12 @@ SideEffectJournal::Scope::~Scope() {
 }
 
 std::optional<std::uint32_t> SideEffectJournal::replayDeviceRead(std::uint32_t address, std::uint32_t width) {
-  if (mode_ != SideEffectMode::Replay) {
+  if (mode_ == SideEffectMode::Record) {
     return std::nullopt;
+  }
+  if (mode_ == SideEffectMode::Discard) {
+    append({SideEffectKind::DeviceRead, address, width, 0});
+    return 0u;
   }
   const std::size_t index = effects_.size();
   // Served from the recorded read AT THE SAME POSITION when it is the same access. After a divergence
@@ -118,26 +134,27 @@ bool SideEffectJournal::admitHostService(SideEffectKind kind, std::uint32_t gues
   const SideEffect effect{kind, guestAddress, 0, selector};
   const std::size_t index = effects_.size();
   append(effect);
+  if (mode_ == SideEffectMode::Discard) {
+    return true;
+  }
   if (kind == SideEffectKind::NestedOverride) {
     // Executes on the live path, and on the shadow path only where the live path did the same thing at
     // the same position: an override the original never reached must not run against live devices.
     return mode_ == SideEffectMode::Record || matchesRecordedAt(index, effect);
   }
-  markUnreplayable(lucent::format(
-      "{} path performed {}", mode_ == SideEffectMode::Record ? "original" : "native", describeSideEffect(effect)));
+  markUnreplayable(lucent::format("{} path performed {}", sideEffectPathName(mode_), describeSideEffect(effect)));
   return mode_ == SideEffectMode::Record;
 }
 
 bool SideEffectJournal::admitSyscall(std::uint32_t code, std::uint32_t instructionPc) {
   const SideEffect effect{SideEffectKind::Syscall, instructionPc, 0, code};
   append(effect);
-  markUnreplayable(lucent::format(
-      "{} path performed {}", mode_ == SideEffectMode::Record ? "original" : "native", describeSideEffect(effect)));
+  markUnreplayable(lucent::format("{} path performed {}", sideEffectPathName(mode_), describeSideEffect(effect)));
   return mode_ == SideEffectMode::Record;
 }
 
 bool SideEffectJournal::admitPendingWork() {
-  if (mode_ == SideEffectMode::Replay) {
+  if (mode_ != SideEffectMode::Record) {
     ++withheldPendingWork_;
     return false;
   }
@@ -147,7 +164,7 @@ bool SideEffectJournal::admitPendingWork() {
 }
 
 bool SideEffectJournal::withholdsGuestTime() const {
-  return mode_ == SideEffectMode::Replay;
+  return mode_ != SideEffectMode::Record;
 }
 
 SideEffectMode SideEffectJournal::mode() const {

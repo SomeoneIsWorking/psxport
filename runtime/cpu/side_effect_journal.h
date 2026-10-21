@@ -51,9 +51,14 @@ enum class SideEffectKind : std::uint8_t {
 enum class SideEffectMode : std::uint8_t {
   Record, // the live path: accesses reach the devices and are logged
   Replay, // the shadow path: accesses are logged and served from, or checked against, `recorded`
+  // A run whose memory the caller puts back (present/guest_redraw.h): services execute, devices are
+  // never reached (a read is served 0), guest time and pending work are held; the log says what it touched.
+  Discard,
 };
 
 const char *sideEffectKindName(SideEffectKind kind);
+// The path a journal of `mode` logs, as reports name it.
+const char *sideEffectPathName(SideEffectMode mode);
 
 struct SideEffect {
   SideEffectKind kind = SideEffectKind::DeviceRead;

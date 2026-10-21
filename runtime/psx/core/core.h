@@ -12,6 +12,7 @@
 #include "spin_detector.h"
 #include "state_producer.h"
 #include "store_watch.h"
+#include "write_rollback.h"
 #include <stddef.h>
 #include <stdint.h>
 
@@ -97,6 +98,8 @@ public:
   // state). Non-owning; set and restored only by `psx::cpu::SideEffectJournal::Scope`. The device
   // funnel below, host-service dispatch, syscalls, pending work and guest-time accounting consult it.
   psx::cpu::SideEffectJournal *sideEffectJournal = nullptr;
+  // Armed while a run whose stores are put back afterwards executes (present/guest_redraw.h).
+  psx::WriteRollback writeRollback;
 
   // Deferred work checked at guest-service points: PW_IRQ an interrupt may be deliverable, PW_HOST
   // the host field clock owes a turn.
