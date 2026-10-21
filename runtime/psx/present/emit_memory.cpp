@@ -5,6 +5,7 @@
 #include <lucent/log.h>
 
 #include <algorithm>
+#include <bit>
 #include <cstdlib>
 #include <cstring>
 #include <iterator>
@@ -18,7 +19,7 @@ void LevelReads::note(std::uint32_t wordAddress, std::uint32_t value) {
     grow();
   }
   const std::size_t mask = slots_.size() - 1;
-  for (std::size_t at = (wordAddress * 0x9E3779B1u) & mask;; at = (at + 1) & mask) {
+  for (std::size_t at = startSlot(wordAddress);; at = (at + 1) & mask) {
     Slot &slot = slots_[at];
     if (slot.stamp != stamp_) {
       slot = {stamp_, static_cast<std::uint32_t>(words_.size())};
@@ -39,12 +40,17 @@ void LevelReads::clear() {
   }
 }
 
+std::size_t LevelReads::startSlot(std::uint32_t wordAddress) const {
+  // The product's high bits, which every address bit reaches; word addresses keep their low two zero.
+  return (wordAddress * 0x9E3779B1u) >> (32 - std::countr_zero(slots_.size()));
+}
+
 void LevelReads::grow() {
   slots_.assign(std::max<std::size_t>(64, slots_.size() * 2), Slot{});
   stamp_ = 1;
   const std::size_t mask = slots_.size() - 1;
   for (std::uint32_t word = 0; word < words_.size(); ++word) {
-    std::size_t at = (words_[word].address * 0x9E3779B1u) & mask;
+    std::size_t at = startSlot(words_[word].address);
     while (slots_[at].stamp == stamp_) {
       at = (at + 1) & mask;
     }

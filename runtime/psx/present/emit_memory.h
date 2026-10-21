@@ -35,6 +35,7 @@ private:
     std::uint32_t stamp = 0;
     std::uint32_t word = 0;
   };
+  std::size_t startSlot(std::uint32_t wordAddress) const;
   void grow();
 
   std::vector<LevelWord> words_;
