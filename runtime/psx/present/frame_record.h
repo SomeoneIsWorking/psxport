@@ -178,6 +178,8 @@ public:
 
   FrameRecord() = default;
   explicit FrameRecord(std::uint64_t sequence, bool complete) : sequence_(sequence), complete_(complete) {}
+  // Empty, as FrameRecord(sequence, complete), in this record's storage.
+  void reset(std::uint64_t sequence, bool complete);
 
   std::uint64_t sequence() const {
     return sequence_;
@@ -224,7 +226,9 @@ public:
   void markIncomplete();
   void beginSlot(OtSlot slot, bool descending);
   // Keeps the pools, which `entries` index as this record's did; drops the slot starts.
-  void replaceEntries(std::vector<RecordEntry> entries);
+  void replaceEntries(std::span<const RecordEntry> entries);
+  // Becomes `other` without its entries and slot starts, in this record's storage.
+  void assignPools(const FrameRecord &other);
 
   bool operator==(const FrameRecord &) const = default;
 

@@ -67,7 +67,7 @@ title answers there. A hop with no title entry runs on the framework alone.
 |---|---|---|
 | 1 | `psx/frame/frame_presenter.cpp:composeGuarded` → `GameRuntime::stateProducer` — the render for a producer key | `stateProducer` |
 | 2 | `psx/frame/frame_presenter.cpp:FramePresenter::commitSealed` → `GameRuntime::sealedFrameIsCut` — no in-between across a cut | `sealedFrameIsCut` |
-| 3 | `psx/present/frame_composer.h:composeFrame` — the in-between: producer renders at `t` on the shown record | |
+| 3 | `psx/present/frame_composer.h:FrameComposer::compose` — the in-between: producer renders at `t` on the shown record, into storage kept across presents | |
 | 4 | `psx/game/game.cpp:Game::wireRuntimeMembers` → `GameRuntime::interpolates`; `psx/debug/mods.h:Mods::fps60` | `interpolates` |
 
 ## F-FMV — movies

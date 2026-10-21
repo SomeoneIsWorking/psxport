@@ -4,6 +4,12 @@
 #include "game.h"
 #include "gpu_device.h"
 
+#include <lucent/log.h>
+
+#include <algorithm>
+#include <cstdlib>
+#include <iterator>
+
 namespace psx::gpu {
 
 namespace {
@@ -41,12 +47,16 @@ void OtTables::name(
 }
 
 void OtTables::assign(std::uint32_t packetGuestAddress, present::OtSlot slot) {
-  assigned_[mainRamOffsetOf(packetGuestAddress)] = slot;
+  assigned_.push_back({.offset = mainRamOffsetOf(packetGuestAddress),
+                       .order = static_cast<std::uint32_t>(assigned_.size()),
+                       .slot = slot});
+  sorted_ = false;
 }
 
 void OtTables::clear() {
   areas_.clear();
   assigned_.clear();
+  sorted_ = true;
 }
 
 std::optional<present::OtSlot> OtTables::slotOf(std::uint32_t nodeGuestAddress) const {
@@ -60,12 +70,28 @@ std::optional<present::OtSlot> OtTables::slotOf(std::uint32_t nodeGuestAddress) 
   return std::nullopt;
 }
 
+void OtTables::beginWalk() {
+  // A packet's last assignment ends its run.
+  std::sort(assigned_.begin(), assigned_.end(), [](const Assigned &a, const Assigned &b) {
+    return a.offset != b.offset ? a.offset < b.offset : a.order < b.order;
+  });
+  sorted_ = true;
+}
+
 std::optional<present::OtSlot> OtTables::assigned(std::uint32_t packetGuestAddress) const {
-  const auto found = assigned_.find(mainRamOffsetOf(packetGuestAddress));
-  if (found == assigned_.end()) {
+  if (!sorted_) {
+    lucent::error("ot", "an assigned bucket was asked for outside a walk");
+    std::abort();
+  }
+  const std::uint32_t offset = mainRamOffsetOf(packetGuestAddress);
+  const auto after =
+      std::upper_bound(assigned_.begin(), assigned_.end(), offset, [](std::uint32_t key, const Assigned &entry) {
+        return key < entry.offset;
+      });
+  if (after == assigned_.begin() || std::prev(after)->offset != offset) {
     return std::nullopt;
   }
-  return found->second;
+  return std::prev(after)->slot;
 }
 
 bool OtTables::descending(std::uint16_t table) const {
@@ -79,10 +105,12 @@ bool OtTables::descending(std::uint16_t table) const {
 
 void OtTables::endWalk() {
   assigned_.clear();
+  sorted_ = true;
 }
 
 void submitOrderingTable(Core &core, GpuDevice &device, std::uint32_t rootGuestAddress) {
   OrderingTableCursor walk(core, rootGuestAddress);
+  core.otTables.beginWalk();
   const OtTables &tables = core.otTables;
   device.enterSlot(std::nullopt, true);
   do {

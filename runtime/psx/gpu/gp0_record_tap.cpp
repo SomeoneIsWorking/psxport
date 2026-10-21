@@ -130,17 +130,16 @@ void Gp0RecordTap::onStateReplaced(const DeviceProbe &probe) {
   resyncIfIdle(probe);
 }
 
-present::FrameRecord Gp0RecordTap::seal() {
-  present::FrameRecord sealed = std::move(record_);
+void Gp0RecordTap::seal(present::FrameRecord &into) {
+  std::swap(into, record_);
   if (mode_ == Mode::Upload && !uploadPixels_.empty()) {
-    sealed.markIncomplete();
+    into.markIncomplete();
   }
   // A quad's second triangle cannot be replayed without its first.
-  record_ = present::FrameRecord(nextSequence_++, synced_ && mode_ != Mode::QuadTail);
+  record_.reset(nextSequence_++, synced_ && mode_ != Mode::QuadTail);
   clutTag_ = kInvalidClutTag;
   clutOffset_ = present::kNoClut;
   lastKey_.reset();
-  return sealed;
 }
 
 void Gp0RecordTap::beginPacket() {

@@ -58,8 +58,9 @@ public:
   std::vector<uint8_t> saveState();
   bool loadState(std::span<const uint8_t> bytes);
 
-  // The GP0 work executed since the previous call, in execution order.
-  present::FrameRecord sealRecord();
+  // The GP0 work executed since the previous call, in execution order, into `into`, whose storage the next
+  // record reuses.
+  void sealRecord(present::FrameRecord &into);
   // True when GP0 work executed since the last sealRecord().
   bool hasUnsealedWork() const;
 

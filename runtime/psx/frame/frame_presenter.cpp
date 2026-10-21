@@ -38,15 +38,15 @@ constexpr int kDumpMax = 600;
 constexpr lucent::Channel presentDumpChannel{"fps60dump"};
 
 // A producer render reads saved state only; the armed display pass aborts any guest store it makes.
-std::optional<present::FrameRecord> composeGuarded(Core &core,
-                                                   const present::FrameRecord &shown,
-                                                   const present::FrameState *from,
-                                                   const present::FrameState &to,
-                                                   float t,
-                                                   const present::StateProducers &producers,
-                                                   present::PrimitiveList &sink) {
+const present::FrameRecord *composeGuarded(Core &core,
+                                           present::FrameComposer &composer,
+                                           const present::FrameRecord &shown,
+                                           const present::FrameState *from,
+                                           const present::FrameState &to,
+                                           float t,
+                                           const present::StateProducers &producers) {
   const present::DisplayPassGuard guard(core.rsub.mode);
-  return present::composeFrame(shown, from, to, t, producers, core.gpuDevice().vram(), sink);
+  return composer.compose(shown, from, to, t, producers, core.gpuDevice().vram());
 }
 
 gpu::RecordRect displayedBuffer(Core &core) {
@@ -78,34 +78,48 @@ void FramePresenter::commit(Core *core, int guestFields) {
   }
   // The last frame's present lands on its deadline before this frame's composition starts.
   core->game->display.finishShow();
-  present::FrameRecord sealed = core->gpuDevice().sealRecord();
-  present::FrameState state = core->frameStates.collect(sealed);
-  psx::debug::censusRecord(*core, sealed, state);
+  RecordSlot &slot = freeSlot();
+  core->gpuDevice().sealRecord(slot.record);
+  core->frameStates.collect(slot.record, slot.state);
+  psx::debug::censusRecord(*core, slot.record, slot.state);
   core->frameStates.endFrame();
-  commitSealed(*core, std::move(sealed), std::move(state), guestFields);
+  commitSealed(*core, slot, guestFields);
+}
+
+FramePresenter::RecordSlot &FramePresenter::freeSlot() {
+  for (RecordSlot &slot : slots_) {
+    const bool held =
+        &slot.record == current_ || std::any_of(history_.begin(), history_.end(), [&slot](const SealedRecord &entry) {
+          return entry.record == &slot.record;
+        });
+    if (!held) {
+      return slot;
+    }
+  }
+  lucent::error("presentation", "every record slot is held");
+  std::abort();
 }
 
 void FramePresenter::commitUnpresented() {
   ++fence_;
 }
 
-void FramePresenter::commitSealed(Core &core, present::FrameRecord sealed, present::FrameState state, int guestFields) {
+void FramePresenter::commitSealed(Core &core, const RecordSlot &sealed, int guestFields) {
   const bool recordPath = core.rsub.mode.path() == present::RenderPath::Record;
   const bool interpolates = recordPath && core.game->mods.fps60 != 0;
   const bool cut = interpolates && core.runtime.sealedFrameIsCut(core);
   const RuntimeStateProducers runtimeProducers(core);
   const present::StateProducers *producers = recordPath ? &runtimeProducers : nullptr;
   // Only a title with state producers saves state, so an empty state has nothing to compose.
-  const bool savedState = !state.empty();
-  const bool gap = !lastSequence_ || sealed.sequence() != *lastSequence_ + 1u;
-  lastSequence_ = sealed.sequence();
-  current_ = std::make_shared<const present::FrameRecord>(std::move(sealed));
+  const bool savedState = !sealed.state.empty();
+  const bool gap = !lastSequence_ || sealed.record.sequence() != *lastSequence_ + 1u;
+  lastSequence_ = sealed.record.sequence();
+  current_ = &sealed.record;
   pendingCut_ = pendingCut_ || cut;
   pendingBreak_ = pendingBreak_ || gap || !current_->complete();
   if (drawsAnything(*current_)) {
     std::move(history_.begin() + 1, history_.end(), history_.begin());
-    history_.back() = {
-        current_, std::make_shared<const present::FrameState>(std::move(state)), pendingCut_, !pendingBreak_};
+    history_.back() = {current_, &sealed.state, pendingCut_, !pendingBreak_};
     pendingCut_ = false;
     pendingBreak_ = false;
   }
@@ -259,16 +273,15 @@ void FramePresenter::presentRecords(Core &core, const present::StateProducers *p
   const FieldCadence cadence{guestFields, guestFields};
   for (int field = 1; field < guestFields; ++field) {
     const float t = present::inBetweenAt(field, guestFields);
-    if (producers != nullptr) {
-      composedStore_ = composeGuarded(
-          core, base, cut ? nullptr : from->state.get(), *shown->state, t, *producers, renderScratch_);
-    }
-    const bool composed = composedStore_.has_value();
-    composed_ = composedStore_ ? &*composedStore_ : &base;
+    const present::FrameRecord *composedFrame =
+        producers != nullptr
+            ? composeGuarded(core, composer_, base, cut ? nullptr : from->state, *shown->state, t, *producers)
+            : nullptr;
+    const bool composed = composedFrame != nullptr;
+    composed_ = composed ? composedFrame : &base;
     composedAdvances_ = false;
     core.game->display.buildInBetween();
     composed_ = nullptr;
-    composedStore_.reset();
     dumpPresent(core, true);
     schedule(core,
              cadence,
@@ -288,19 +301,19 @@ void FramePresenter::presentCurrent(Core &core,
                                     const present::StateProducers *producers,
                                     FieldCadence cadence,
                                     const SealedRecord *shown) {
-  if (shown != nullptr && producers != nullptr) {
-    composedStore_ = composeGuarded(core, *shown->record, nullptr, *shown->state, 1.0f, *producers, renderScratch_);
-    if (composedStore_) {
-      ledger_.reconcile(*shown->record, *composedStore_, fence_, psx::config::gate_presentation());
-    }
+  const present::FrameRecord *composedFrame =
+      shown != nullptr && producers != nullptr
+          ? composeGuarded(core, composer_, *shown->record, nullptr, *shown->state, 1.0f, *producers)
+          : nullptr;
+  if (composedFrame != nullptr) {
+    ledger_.reconcile(*shown->record, *composedFrame, fence_, psx::config::gate_presentation());
   }
-  composed_ = composedStore_ ? &*composedStore_ : nullptr;
+  composed_ = composedFrame;
   composedAdvances_ = composed_ != nullptr;
-  const bool composed = composedStore_.has_value();
+  const bool composed = composedFrame != nullptr;
   buildReal(core);
   composed_ = nullptr;
   composedAdvances_ = false;
-  composedStore_.reset();
   dumpPresent(core, false);
   schedule(core,
            cadence,

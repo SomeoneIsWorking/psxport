@@ -2,6 +2,7 @@
 #pragma once
 
 #include "field_cadence.h"
+#include "frame_composer.h"
 #include "frame_record.h"
 #include "frame_state.h"
 #include "present_ledger.h"
@@ -11,7 +12,6 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
-#include <memory>
 #include <optional>
 #include <vector>
 
@@ -81,16 +81,24 @@ public:
   void reportStability() const;
 
 private:
-  void commitSealed(Core &core, present::FrameRecord sealed, present::FrameState state, int guestFields);
   // The last three records that drew: a double-buffered display shows the one before the newest, whose
   // in-between blends from the one before that. Records that drew nothing are not pictures.
   static constexpr std::size_t kRecordHistory = 3;
+  // A sealed record and the producer states its packets were drawn from, in storage kept across frames.
+  struct RecordSlot {
+    present::FrameRecord record;
+    present::FrameState state;
+  };
   struct SealedRecord {
-    std::shared_ptr<const present::FrameRecord> record;
-    std::shared_ptr<const present::FrameState> state; // the producer states its packets were drawn from
-    bool cut = false;                                 // a cut was sealed since the drawing record before it
+    const present::FrameRecord *record = nullptr;
+    const present::FrameState *state = nullptr;
+    bool cut = false;     // a cut was sealed since the drawing record before it
     bool follows = false; // every record since the drawing record before it was committed and complete
   };
+
+  // A slot neither the current record nor the history holds.
+  RecordSlot &freeSlot();
+  void commitSealed(Core &core, const RecordSlot &sealed, int guestFields);
 
   // Records `record`'s VRAM writes when it drew nothing, and drops writes older than the oldest held drawing record.
   void holdUndrawnWrites(const present::FrameRecord &record);
@@ -114,7 +122,9 @@ private:
 
   uint64_t fence_ = 0;
   int dumpSequence_ = 0;
-  std::shared_ptr<const present::FrameRecord> current_ = std::make_shared<const present::FrameRecord>();
+  // The history, the current record and the one being sealed.
+  std::array<RecordSlot, kRecordHistory + 2> slots_;
+  const present::FrameRecord *current_ = &slots_.front().record;
   std::array<SealedRecord, kRecordHistory> history_; // drawing records, oldest first
   // VRAM written by records that drew nothing, since the oldest held drawing record: the latest sequence per rect.
   struct UndrawnWrite {
@@ -127,8 +137,7 @@ private:
   bool pendingBreak_ = false;
   // The record whose picture the last present showed.
   std::optional<std::uint64_t> shownSequence_;
-  std::optional<present::FrameRecord> composedStore_;
-  present::PrimitiveList renderScratch_; // the composer's render storage, kept across presents
+  present::FrameComposer composer_;
   const present::FrameRecord *composed_ = nullptr;
   bool composedAdvances_ = false;
   PresentStability stability_;

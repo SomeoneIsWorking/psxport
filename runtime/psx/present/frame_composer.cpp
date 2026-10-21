@@ -8,8 +8,8 @@
 #include <algorithm>
 #include <array>
 #include <cstddef>
-#include <unordered_map>
-#include <unordered_set>
+#include <optional>
+#include <tuple>
 #include <utility>
 #include <variant>
 #include <vector>
@@ -47,56 +47,6 @@ appendClutFromVram(FrameRecord &record, const DrawPrimitive &primitive, std::spa
   return record.appendClut(std::span<const std::uint16_t>(entries.data(), count));
 }
 
-struct Covered {
-  ObjectId id;
-  const StateProducer *render = nullptr;
-  std::span<const std::byte> to;
-  std::vector<std::size_t> entries;
-  std::unordered_map<std::uint64_t, std::vector<std::size_t>> inSlot; // entry indices, by slot, in record order
-};
-
-// Where a primitive in `slot` goes when no entry of the object was in it: the head of `slot` when the
-// walk passed it, else before the first slot the walk reaches after it, else after the table's last
-// entry. Nullopt when the record never walked the table.
-class SlotPlacement {
-public:
-  explicit SlotPlacement(const FrameRecord &record) {
-    for (const SlotStart &start : record.slotStarts()) {
-      heads_.try_emplace(slotKey(start.slot), start.entry);
-      starts_[start.slot.table].push_back(start);
-    }
-    const std::span<const RecordEntry> entries = record.entries();
-    for (std::size_t i = 0; i < entries.size(); i++) {
-      const auto *primitive = std::get_if<DrawPrimitive>(&entries[i]);
-      if (primitive != nullptr && primitive->slot) {
-        tableEnds_[primitive->slot->table] = i + 1;
-      }
-    }
-  }
-
-  std::optional<std::size_t> position(OtSlot slot) const {
-    if (const auto head = heads_.find(slotKey(slot)); head != heads_.end()) {
-      return head->second;
-    }
-    const auto starts = starts_.find(slot.table);
-    if (starts == starts_.end()) {
-      return std::nullopt;
-    }
-    for (const SlotStart &start : starts->second) {
-      if (start.descending ? start.slot.index < slot.index : start.slot.index > slot.index) {
-        return start.entry;
-      }
-    }
-    const auto end = tableEnds_.find(slot.table);
-    return end != tableEnds_.end() ? end->second : starts->second.back().entry;
-  }
-
-private:
-  std::unordered_map<std::uint64_t, std::size_t> heads_;
-  std::unordered_map<std::uint16_t, std::vector<SlotStart>> starts_;
-  std::unordered_map<std::uint16_t, std::size_t> tableEnds_;
-};
-
 // The draw environment in effect where a rendered primitive lands, onto it.
 void applyEnvironment(DrawPrimitive &primitive, const RecordDrawState &environment) {
   RecordDrawState &state = primitive.state;
@@ -120,56 +70,42 @@ void applyEnvironment(DrawPrimitive &primitive, const RecordDrawState &environme
   }
 }
 
-// The draw state in effect at each position: that of the first primitive at or after it, else the last one.
-std::vector<const RecordDrawState *> environmentsAt(std::span<const RecordEntry> entries) {
-  std::vector<const RecordDrawState *> at(entries.size() + 1, nullptr);
-  const RecordDrawState *next = nullptr;
-  for (std::size_t i = entries.size(); i-- > 0;) {
-    if (const auto *primitive = std::get_if<DrawPrimitive>(&entries[i])) {
-      next = &primitive->state;
-    }
-    at[i] = next;
-  }
-  for (std::size_t i = 1; i < at.size(); i++) {
-    if (at[i] == nullptr) {
-      at[i] = at[i - 1];
-    }
-  }
-  return at;
-}
+constexpr std::uint64_t kNoSlot = ~std::uint64_t{0};
 
 } // namespace
 
-std::optional<FrameRecord> composeFrame(const FrameRecord &shown,
-                                        const FrameState *from,
-                                        const FrameState &to,
-                                        float t,
-                                        const StateProducers &producers,
-                                        std::span<const std::uint16_t> vram,
-                                        PrimitiveList &sink) {
-  if (to.empty()) {
-    return std::nullopt;
-  }
+bool FrameComposer::index(const FrameRecord &shown,
+                          const FrameState &to,
+                          const StateProducers &producers,
+                          bool inBetween) {
   const std::span<const RecordEntry> entries = shown.entries();
-  std::vector<Covered> covered;
-  std::unordered_map<std::uint64_t, std::size_t> coveredIndex;
-  std::unordered_map<std::uint32_t, std::uint32_t> clutOffsets;
-  // Objects with a primitive baked into an upload: their pixels are in the record, so a render would draw them twice.
-  std::unordered_set<std::uint64_t> baked;
+  baked_.clear();
   for (const RecordEntry &entry : entries) {
     if (const auto *upload = std::get_if<VramUpload>(&entry); upload != nullptr && upload->key) {
-      baked.insert(objectKey({upload->key->producer, upload->key->object}));
+      baked_.push_back(objectKey({upload->key->producer, upload->key->object}));
     }
   }
-  // An in-between keeping any primitive as S drew it would mix two moments: S is shown whole instead.
-  const bool inBetween = from != nullptr && t < 1.0f;
+  std::sort(baked_.begin(), baked_.end());
+  clutOffsets_.clear();
+  keyed_.clear();
+  tableEnds_.clear();
   for (std::size_t i = 0; i < entries.size(); i++) {
     const auto *primitive = std::get_if<DrawPrimitive>(&entries[i]);
     if (primitive == nullptr) {
       continue;
     }
+    if (primitive->slot) {
+      const auto end = std::find_if(tableEnds_.begin(), tableEnds_.end(), [primitive](const auto &tableEnd) {
+        return tableEnd.first == primitive->slot->table;
+      });
+      if (end != tableEnds_.end()) {
+        end->second = i + 1;
+      } else {
+        tableEnds_.emplace_back(primitive->slot->table, i + 1);
+      }
+    }
     if (samplesClut(*primitive) && primitive->clutOffset != kNoClut) {
-      clutOffsets.try_emplace(clutKey(*primitive), primitive->clutOffset);
+      clutOffsets_.emplace_back(clutKey(*primitive), primitive->clutOffset);
     }
     if (!primitive->key) {
       if (inBetween) {
@@ -178,58 +114,164 @@ std::optional<FrameRecord> composeFrame(const FrameRecord &shown,
                       shown.sequence(),
                       i,
                       primitive->sourceAddress);
-        return std::nullopt;
+        return false;
       }
       continue;
     }
-    const ObjectId id{primitive->key->producer, primitive->key->object};
-    if (baked.contains(objectKey(id))) {
+    const std::uint64_t object = objectKey({primitive->key->producer, primitive->key->object});
+    if (std::binary_search(baked_.begin(), baked_.end(), object)) {
       if (inBetween) {
         lucent::debug(composeChannel,
                       "record={} in-between shown whole: object {:#010x}/{:#010x} baked into an upload",
                       shown.sequence(),
-                      id.producer,
-                      id.object);
-        return std::nullopt;
+                      primitive->key->producer,
+                      primitive->key->object);
+        return false;
       }
       continue;
     }
-    auto found = coveredIndex.find(objectKey(id));
-    if (found == coveredIndex.end()) {
-      const StateProducer *render = producers.find(id.producer);
-      const std::optional<std::span<const std::byte>> state = render ? to.find(id) : std::nullopt;
-      if (!state) {
-        if (inBetween) {
-          lucent::debug(composeChannel,
-                        "record={} in-between shown whole: object {:#010x}/{:#010x} has no render or state",
-                        shown.sequence(),
-                        id.producer,
-                        id.object);
-          return std::nullopt;
-        }
-        continue;
-      }
-      found = coveredIndex.emplace(objectKey(id), covered.size()).first;
-      covered.push_back({id, render, *state, {}, {}});
-    }
-    Covered &object = covered[found->second];
-    object.entries.push_back(i);
-    if (primitive->slot) {
-      object.inSlot[slotKey(*primitive->slot)].push_back(i);
-    }
+    keyed_.push_back({object, primitive->slot ? slotKey(*primitive->slot) : kNoSlot, i});
   }
-  if (covered.empty()) {
-    return std::nullopt;
-  }
-  const SlotPlacement placement(shown);
-  const std::vector<const RecordDrawState *> environments = environmentsAt(entries);
-  // Copied from `shown` only once a VRAM CLUT or a replacement needs it.
-  std::optional<FrameRecord> out;
+  // The first offset pooled for a CLUT, the lowest, is the one the composed frame samples.
+  std::sort(clutOffsets_.begin(), clutOffsets_.end());
+  clutOffsets_.erase(std::unique(clutOffsets_.begin(),
+                                 clutOffsets_.end(),
+                                 [](const auto &a, const auto &b) {
+                                   return a.first == b.first;
+                                 }),
+                     clutOffsets_.end());
 
+  std::sort(keyed_.begin(), keyed_.end(), [](const Keyed &a, const Keyed &b) {
+    return std::tie(a.object, a.slot, a.entry) < std::tie(b.object, b.slot, b.entry);
+  });
+  covered_.clear();
+  for (std::size_t begin = 0; begin < keyed_.size();) {
+    std::size_t end = begin + 1;
+    std::size_t firstEntry = keyed_[begin].entry;
+    while (end < keyed_.size() && keyed_[end].object == keyed_[begin].object) {
+      firstEntry = std::min(firstEntry, keyed_[end].entry);
+      ++end;
+    }
+    const ObjectId id{static_cast<std::uint32_t>(keyed_[begin].object >> 32),
+                      static_cast<std::uint32_t>(keyed_[begin].object)};
+    const StateProducer *render = producers.find(id.producer);
+    const std::optional<std::span<const std::byte>> state = render ? to.find(id) : std::nullopt;
+    if (state) {
+      covered_.push_back({id, render, *state, begin, end, firstEntry});
+    } else if (inBetween) {
+      lucent::debug(composeChannel,
+                    "record={} in-between shown whole: object {:#010x}/{:#010x} has no render or state",
+                    shown.sequence(),
+                    id.producer,
+                    id.object);
+      return false;
+    }
+    begin = end;
+  }
+  // Objects render in the order the record first drew them.
+  std::sort(covered_.begin(), covered_.end(), [](const Covered &a, const Covered &b) {
+    return a.firstEntry < b.firstEntry;
+  });
+  return true;
+}
+
+bool FrameComposer::slotPosition(const FrameRecord &shown, OtSlot slot, std::size_t &position) const {
+  const std::span<const SlotStart> starts = shown.slotStarts();
+  const auto head =
+      std::lower_bound(heads_.begin(), heads_.end(), std::pair<std::uint64_t, std::size_t>{slotKey(slot), 0});
+  if (head != heads_.end() && head->first == slotKey(slot)) {
+    position = starts[head->second].entry;
+    return true;
+  }
+  const auto first = std::partition_point(tableStarts_.begin(), tableStarts_.end(), [&](std::size_t i) {
+    return starts[i].slot.table < slot.table;
+  });
+  const auto last = std::partition_point(first, tableStarts_.end(), [&](std::size_t i) {
+    return starts[i].slot.table == slot.table;
+  });
+  if (first == last) {
+    return false;
+  }
+  for (auto at = first; at != last; ++at) {
+    const SlotStart &start = starts[*at];
+    if (start.descending ? start.slot.index < slot.index : start.slot.index > slot.index) {
+      position = start.entry;
+      return true;
+    }
+  }
+  const auto end = std::find_if(tableEnds_.begin(), tableEnds_.end(), [slot](const auto &tableEnd) {
+    return tableEnd.first == slot.table;
+  });
+  position = end != tableEnds_.end() ? end->second : starts[*(last - 1)].entry;
+  return true;
+}
+
+std::uint32_t *FrameComposer::clutOffset(std::uint32_t key) {
+  const auto at =
+      std::lower_bound(clutOffsets_.begin(), clutOffsets_.end(), key, [](const auto &entry, std::uint32_t k) {
+        return entry.first < k;
+      });
+  return at != clutOffsets_.end() && at->first == key ? &at->second : nullptr;
+}
+
+FrameRecord &FrameComposer::output(const FrameRecord &shown) {
+  if (!outputPooled_) {
+    output_.assignPools(shown);
+    outputPooled_ = true;
+  }
+  return output_;
+}
+
+const FrameRecord *FrameComposer::compose(const FrameRecord &shown,
+                                          const FrameState *from,
+                                          const FrameState &to,
+                                          float t,
+                                          const StateProducers &producers,
+                                          std::span<const std::uint16_t> vram) {
+  if (to.empty()) {
+    lucent::debug(composeChannel, "record={} shown whole: no state saved", shown.sequence());
+    return nullptr;
+  }
+  // An in-between keeping any primitive as S drew it would mix two moments: S is shown whole instead.
+  const bool inBetween = from != nullptr && t < 1.0f;
+  if (!index(shown, to, producers, inBetween)) {
+    return nullptr;
+  }
+  if (covered_.empty()) {
+    lucent::debug(composeChannel, "record={} shown whole: no keyed object", shown.sequence());
+    return nullptr;
+  }
+  const std::span<const RecordEntry> entries = shown.entries();
+  const std::span<const SlotStart> starts = shown.slotStarts();
+  heads_.clear();
+  tableStarts_.clear();
+  for (std::size_t i = 0; i < starts.size(); i++) {
+    heads_.emplace_back(slotKey(starts[i].slot), i);
+    tableStarts_.push_back(i);
+  }
+  std::sort(heads_.begin(), heads_.end());
+  std::sort(tableStarts_.begin(), tableStarts_.end(), [&starts](std::size_t a, std::size_t b) {
+    return std::tie(starts[a].slot.table, a) < std::tie(starts[b].slot.table, b);
+  });
+  // The draw state in effect at each position: that of the first primitive at or after it, else the last one.
+  environments_.assign(entries.size() + 1, nullptr);
+  const RecordDrawState *next = nullptr;
+  for (std::size_t i = entries.size(); i-- > 0;) {
+    if (const auto *primitive = std::get_if<DrawPrimitive>(&entries[i])) {
+      next = &primitive->state;
+    }
+    environments_[i] = next;
+  }
+  for (std::size_t i = 1; i < environments_.size(); i++) {
+    if (environments_[i] == nullptr) {
+      environments_[i] = environments_[i - 1];
+    }
+  }
+  outputPooled_ = false;
+  removed_.assign(entries.size(), false);
+  inserted_.clear();
   bool replaced = false;
-  std::vector<bool> removed(entries.size(), false);
-  std::vector<std::vector<DrawPrimitive>> inserted(entries.size() + 1);
-  for (const Covered &object : covered) {
+  for (const Covered &object : covered_) {
     const std::optional<std::span<const std::byte>> earlier = from ? from->find(object.id) : std::nullopt;
     const StateInterval states{.from = earlier.value_or(object.to), .to = object.to, .t = earlier ? t : 1.0f};
     const StateProducer::Composition composition = object.render->composition(states);
@@ -238,81 +280,106 @@ std::optional<FrameRecord> composeFrame(const FrameRecord &shown,
     }
     if (composition == StateProducer::Composition::Refused) {
       if (inBetween) {
-        return std::nullopt;
+        lucent::debug(composeChannel,
+                      "record={} in-between shown whole: object {:#010x}/{:#010x} refused t={}",
+                      shown.sequence(),
+                      object.id.producer,
+                      object.id.object,
+                      t);
+        return nullptr;
       }
       continue;
     }
-    sink.clear();
-    object.render->render(states, sink);
-    std::vector<std::pair<std::size_t, DrawPrimitive>> placed;
-    placed.reserve(sink.primitives.size());
-    std::unordered_map<std::uint64_t, std::size_t> emittedInSlot;
+    sink_.clear();
+    object.render->render(states, sink_);
+    placed_.clear();
+    emitted_.clear();
+    const auto run = std::span<const Keyed>(keyed_).subspan(object.begin, object.end - object.begin);
     bool drawable = true;
-    for (auto &[slot, primitive] : sink.primitives) {
+    for (auto &[slot, primitive] : sink_.primitives) {
       // The n-th primitive in a slot lands where the object's n-th entry there was, so the draw state
       // between them is the one the guest drew under; beyond its last entry, after it.
-      const auto own = object.inSlot.find(slotKey(slot));
-      const std::size_t nth = emittedInSlot[slotKey(slot)]++;
-      const std::optional<std::size_t> position =
-          own != object.inSlot.end() ? std::optional<std::size_t>(own->second[std::min(nth, own->second.size() - 1)])
-                                     : placement.position(slot);
-      if (!position) {
+      const std::uint64_t key = slotKey(slot);
+      auto count = std::find_if(emitted_.begin(), emitted_.end(), [key](const auto &e) {
+        return e.first == key;
+      });
+      if (count == emitted_.end()) {
+        emitted_.emplace_back(key, 0);
+        count = emitted_.end() - 1;
+      }
+      const std::size_t nth = count->second++;
+      const auto own =
+          std::equal_range(run.begin(), run.end(), Keyed{object.begin, key, 0}, [](const Keyed &a, const Keyed &b) {
+            return a.slot < b.slot;
+          });
+      std::size_t position = 0;
+      if (own.first != own.second) {
+        const auto inSlot = static_cast<std::size_t>(own.second - own.first);
+        position = own.first[static_cast<std::ptrdiff_t>(std::min(nth, inSlot - 1))].entry;
+      } else if (!slotPosition(shown, slot, position)) {
         drawable = false;
         break;
       }
       if (samplesClut(primitive)) {
-        auto clut = clutOffsets.find(clutKey(primitive));
-        if (clut == clutOffsets.end()) {
-          if (!out) {
-            out.emplace(shown);
-          }
-          const std::uint32_t offset = appendClutFromVram(*out, primitive, vram);
-          if (offset == kNoClut) {
+        std::uint32_t *offset = clutOffset(clutKey(primitive));
+        if (offset == nullptr) {
+          const std::uint32_t appended = appendClutFromVram(output(shown), primitive, vram);
+          if (appended == kNoClut) {
             drawable = false;
             break;
           }
-          clut = clutOffsets.emplace(clutKey(primitive), offset).first;
+          const auto at = std::lower_bound(
+              clutOffsets_.begin(), clutOffsets_.end(), clutKey(primitive), [](const auto &entry, std::uint32_t k) {
+                return entry.first < k;
+              });
+          offset = &clutOffsets_.insert(at, {clutKey(primitive), appended})->second;
         }
-        primitive.clutOffset = clut->second;
+        primitive.clutOffset = *offset;
       }
-      applyEnvironment(primitive, *environments[*position]);
+      applyEnvironment(primitive, *environments_[position]);
       primitive.key = RecordKey{object.id.producer, object.id.object, 0, 0};
       primitive.slot = slot;
-      placed.emplace_back(*position, primitive);
+      placed_.emplace_back(position, primitive);
     }
     if (!drawable) {
       if (inBetween) {
-        return std::nullopt;
+        lucent::debug(composeChannel,
+                      "record={} in-between shown whole: object {:#010x}/{:#010x} has no place or CLUT",
+                      shown.sequence(),
+                      object.id.producer,
+                      object.id.object);
+        return nullptr;
       }
       continue;
     }
     replaced = true;
-    for (const std::size_t entry : object.entries) {
-      removed[entry] = true;
+    for (const Keyed &keyed : run) {
+      removed_[keyed.entry] = true;
     }
-    for (auto &[position, primitive] : placed) {
-      inserted[position].push_back(primitive);
+    for (auto &[position, primitive] : placed_) {
+      inserted_.push_back({position, inserted_.size(), primitive});
     }
   }
   if (!replaced) {
-    return std::nullopt;
+    return nullptr;
   }
 
-  std::vector<RecordEntry> composed;
-  composed.reserve(entries.size());
+  std::sort(inserted_.begin(), inserted_.end(), [](const Insert &a, const Insert &b) {
+    return std::tie(a.position, a.order) < std::tie(b.position, b.order);
+  });
+  entries_.clear();
+  auto insert = inserted_.begin();
   for (std::size_t i = 0; i <= entries.size(); i++) {
-    for (DrawPrimitive &primitive : inserted[i]) {
-      composed.emplace_back(primitive);
+    for (; insert != inserted_.end() && insert->position == i; ++insert) {
+      entries_.emplace_back(insert->primitive);
     }
-    if (i < entries.size() && !removed[i]) {
-      composed.push_back(entries[i]);
+    if (i < entries.size() && !removed_[i]) {
+      entries_.push_back(entries[i]);
     }
   }
-  if (!out) {
-    out.emplace(shown);
-  }
-  out->replaceEntries(std::move(composed));
-  return out;
+  FrameRecord &composed = output(shown);
+  composed.replaceEntries(entries_);
+  return &composed;
 }
 
 } // namespace psx::present

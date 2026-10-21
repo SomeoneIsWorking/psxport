@@ -58,8 +58,8 @@ public:
   // The device's whole state was replaced; nothing recorded so far describes it.
   void onStateReplaced(const DeviceProbe &probe);
 
-  // Seals the current record and starts the next.
-  present::FrameRecord seal();
+  // Seals the current record into `into` and starts the next in `into`'s old storage.
+  void seal(present::FrameRecord &into);
   // True when the device executed work since the last seal.
   bool hasPendingWork() const;
 

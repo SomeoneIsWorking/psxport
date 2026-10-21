@@ -6,10 +6,8 @@
 
 #include <cstddef>
 #include <cstdint>
-#include <map>
 #include <new>
 #include <span>
-#include <unordered_map>
 #include <vector>
 
 namespace psx::present {
@@ -20,19 +18,68 @@ struct LevelWord {
   std::uint32_t value = 0;
 };
 
-// The guest words a run read, each with the value it held at the first read.
+// The guest words a run read, each with the value it held at the first read. Kept across runs and cleared
+// per run, so a steady stream of runs allocates nothing.
 class LevelReads {
 public:
-  void note(std::uint32_t wordAddress, std::uint32_t value) {
-    words_.try_emplace(wordAddress, value);
+  void note(std::uint32_t wordAddress, std::uint32_t value);
+  // In first-read order.
+  std::span<const LevelWord> words() const {
+    return words_;
   }
-  std::vector<LevelWord> words() const;
-  void clear() {
-    words_.clear();
-  }
+  void clear();
 
 private:
-  std::unordered_map<std::uint32_t, std::uint32_t> words_;
+  // Open addressing over words_ indices; a slot is live when its stamp is the current one.
+  struct Slot {
+    std::uint32_t stamp = 0;
+    std::uint32_t word = 0;
+  };
+  void grow();
+
+  std::vector<LevelWord> words_;
+  std::vector<Slot> slots_;
+  std::uint32_t stamp_ = 1;
+};
+
+// Aborts: a kept scratch object was taken while a use already held it.
+[[noreturn]] void abortKeptScratchInUse();
+
+// A scratch object kept across runs, so a steady stream of runs allocates nothing; one run holds it at a time.
+template <class Scratch> class Kept {
+public:
+  // The scratch, cleared, until the use ends; aborts while another use holds it.
+  class Use {
+  public:
+    explicit Use(Kept &kept) : kept_(kept) {
+      if (kept_.inUse_) {
+        abortKeptScratchInUse();
+      }
+      kept_.inUse_ = true;
+      kept_.scratch_.clear();
+    }
+    ~Use() {
+      kept_.inUse_ = false;
+    }
+    Use(const Use &) = delete;
+    Use &operator=(const Use &) = delete;
+    Use(Use &&) = delete;
+    Use &operator=(Use &&) = delete;
+
+    Scratch &operator*() const {
+      return kept_.scratch_;
+    }
+    Scratch *operator->() const {
+      return &kept_.scratch_;
+    }
+
+  private:
+    Kept &kept_;
+  };
+
+private:
+  Scratch scratch_;
+  bool inUse_ = false;
 };
 
 // Host bytes standing in for ranges of guest memory, one store under every name of an address. Ranges that
@@ -48,14 +95,17 @@ public:
   HostMemory(HostMemory &&) = delete;
   HostMemory &operator=(HostMemory &&) = delete;
 
+  // Drops every range, overlay and noted read, keeping the storage.
+  void clear();
   // A range holding a copy of `bytes`.
   void provide(std::uint32_t address, std::span<const std::byte> bytes);
   // A range of `size` zero bytes.
   void zero(std::uint32_t address, std::uint32_t size);
   // A range of `size` bytes seeded from the guest (through the overlay) where no range already holds them.
   void mapGuest(Core &guest, std::uint32_t address, std::uint32_t size);
-  // Fall-through reads of these words take the overlaid value in place of the guest's.
-  void overlay(std::span<const LevelWord> words);
+  // Fall-through reads of these words, packed LevelWords, take the overlaid value in place of the guest's; a
+  // later value for a word replaces the earlier one.
+  void overlay(std::span<const std::byte> packedWords);
   // From now on, every word a read falls through to is noted with the value it gave.
   void keepLevelReads() {
     keepsLevelReads_ = true;
@@ -74,6 +124,15 @@ public:
 
 private:
   using Range = std::vector<std::byte>;
+  struct Held {
+    std::uint32_t base = 0; // kseg0
+    Range bytes;
+  };
+  struct OverlayNote {
+    std::uint32_t address = 0;
+    std::uint32_t order = 0;
+    std::uint32_t value = 0;
+  };
   // [base, base + size) at kseg0 `base`, merged with every range it overlaps or touches, which keep their
   // bytes; returns the merged range's bytes from `base` on.
   std::byte *place(std::uint32_t base, std::uint32_t size);
@@ -81,12 +140,17 @@ private:
   const Range *find(std::uint32_t address, std::uint32_t &base) const;
   Range *find(std::uint32_t address, std::uint32_t &base);
   const std::uint32_t *overlaid(std::uint32_t wordAddress) const;
+  // A buffer of `size` bytes from the spares.
+  Range takeBuffer(std::size_t size);
 
-  std::map<std::uint32_t, Range> ranges_; // by kseg0 base
-  // The range the last lookup found; a body reads one range for long runs. Cleared when ranges merge.
+  std::vector<Held> ranges_; // by base
+  std::vector<Range> spares_;
+  // The range the last lookup found; a body reads one range for long runs. Cleared when ranges change.
   mutable const Range *lastRange_ = nullptr;
   mutable std::uint32_t lastBase_ = 0;
   std::vector<LevelWord> overlay_; // by kseg0 word address, one entry per word
+  std::vector<OverlayNote> overlayNotes_;
+  std::vector<GuestSpan> gaps_;
   bool keepsLevelReads_ = false;
   mutable LevelReads levelReads_;
 };
