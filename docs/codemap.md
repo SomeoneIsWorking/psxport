@@ -21,7 +21,7 @@ Dependency direction: title repo → `runtime/psx/game/` (the title interface) �
 - `runtime/psx/core/core.*` — Core: one PSX machine's registers, RAM, scratchpad and device ownership
 - `runtime/psx/core/guest_memory.cpp`, `mem.cpp` — guest loads and stores, MMIO dispatch, write guards, executable-write notification
 - `runtime/psx/core/guest_memory_map.h`, `guest_address_range.h` — physical memory map: main RAM and mirrors, scratchpad, hardware registers, BIOS, KSEG0/KSEG1 folds, address ranges, spans, stores
-- `runtime/psx/core/guest_abi.h` — MIPS o32 guest ABI for native overrides: stack frame, prologue spills, callee-saved registers, preserved return address `$ra`
+- `runtime/psx/core/guest_abi.h` — MIPS o32 guest ABI for native overrides: stack frame, prologue spills (`enterGuestFrame`, also the frame for a mid-function guest entry), callee-saved registers, preserved return address `$ra`
 - `runtime/psx/core/guest_code_module.*` — runtime-loaded relocatable code module / overlay as an executable residency, identity and generation
 - `runtime/psx/cpu/r3000.h`, `cpu_divide.*` — R3000A register file, GPR names, COP0 numbers, context save scope, DIV/DIVU LO/HI results and divide by zero
 - `runtime/psx/cpu/gte*.h` — GTE / COP2 per Core: register file, register and command numbers, execute, rotation, light matrix and translation load/store, raw save and restore, pre-op observer

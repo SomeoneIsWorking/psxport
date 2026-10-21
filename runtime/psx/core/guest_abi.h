@@ -3,6 +3,9 @@
 #pragma once
 #include "core.h"
 
+#include <cstdint>
+#include <span>
+
 // A callee-saved register held as a local: every access is c->r[N], so a nested guest call spills
 // the live value.
 template <int N> struct GuestReg {
@@ -36,21 +39,28 @@ struct GuestFrameSpill {
   int offset;
 };
 
+namespace psx::cpu {
+
+// A guest prologue: lowers sp by the frame size and spills each register at its offset.
+inline void enterGuestFrame(Core &core,
+                            std::uint32_t frameSize,
+                            std::span<const GuestFrameSpill> spills) {
+  core.r[kSp] -= frameSize;
+  for (const GuestFrameSpill &spill : spills) {
+    core.mem_w32(core.r[kSp] + static_cast<std::uint32_t>(spill.offset), core.r[spill.reg]);
+  }
+}
+
+} // namespace psx::cpu
+
 // The guest's stack frame: lowers sp and spills on entry, reloads and raises sp on exit.
 // GuestFrame<0, 0> is a leaf with no frame.
 template <int FrameSize, int NumSpills> struct GuestFrame {
   Core *c;
   const GuestFrameSpill (&spills)[NumSpills];
-  uint32_t saved[NumSpills];
 
   GuestFrame(Core *c_, const GuestFrameSpill (&spills_)[NumSpills]) : c(c_), spills(spills_) {
-    for (int i = 0; i < NumSpills; i++) {
-      saved[i] = c->r[spills[i].reg];
-    }
-    c->r[psx::cpu::kSp] -= FrameSize;
-    for (int i = 0; i < NumSpills; i++) {
-      c->mem_w32(c->r[psx::cpu::kSp] + (uint32_t)spills[i].offset, saved[i]);
-    }
+    psx::cpu::enterGuestFrame(*c, FrameSize, spills);
   }
   ~GuestFrame() {
     for (int i = 0; i < NumSpills; i++) {
