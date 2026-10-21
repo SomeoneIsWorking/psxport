@@ -2,6 +2,7 @@
 #include "audio_queue_policy.h"
 #include "config_vars.h"
 #include "diagnostic_config.h"
+#include "frame_pacer.h"
 #include "game.h"
 #include "gpu_device.h"
 #include "host_clock.h"
@@ -227,11 +228,12 @@ void SpuAudio::feedHost(const int16_t *buf, int frames) {
   }
   mStream.put(buf, frames);
   queuedBytes = mStream.queuedBytes();
+  const double pacedSpeed = psx::frame::FramePacer::pacedSpeed(*game);
   if (mStreamStarted) {
-    mStream.setConsumptionRatio(mSteer.observe(queuedBytes));
+    mStream.setConsumptionRatio(mSteer.observe(queuedBytes, pacedSpeed));
   } else if (AudioQueuePolicy::readyToStart(queuedBytes)) {
     mSteer.reset(queuedBytes);
-    mStream.setConsumptionRatio(1.0);
+    mStream.setConsumptionRatio(pacedSpeed);
     mStream.resume();
     mStreamStarted = true;
   }

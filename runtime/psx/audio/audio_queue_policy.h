@@ -33,11 +33,12 @@ public:
     return started && queuedBytes == 0;
   }
 
-  // Device consumption ratio for a smoothed queue level: 1 at the target, the full trim at an empty
-  // queue (slower) or at the drop limit (faster).
-  [[nodiscard]] static constexpr double consumptionRatio(double smoothedQueuedBytes) {
+  // Device consumption ratio for a smoothed queue level: `pacedSpeed` (fields paced over the guest's field rate,
+  // so samples are consumed as fast as they are made) at the target, trimmed by up to kMaxRateTrim toward an
+  // empty queue (slower) or the drop limit (faster).
+  [[nodiscard]] static constexpr double consumptionRatio(double smoothedQueuedBytes, double pacedSpeed) {
     const double error = (smoothedQueuedBytes - kPlaybackTargetBytes) / kPlaybackTargetBytes;
-    return 1.0 + kMaxRateTrim * std::clamp(error, -1.0, 1.0);
+    return pacedSpeed * (1.0 + kMaxRateTrim * std::clamp(error, -1.0, 1.0));
   }
 };
 
@@ -52,9 +53,9 @@ public:
   }
 
   // One reading per put, taken after the put. Returns the ratio to hand the device stream.
-  double observe(int queuedBytes) {
+  double observe(int queuedBytes, double pacedSpeed) {
     mLevel += (queuedBytes - mLevel) * kSmoothing;
-    return AudioQueuePolicy::consumptionRatio(mLevel);
+    return AudioQueuePolicy::consumptionRatio(mLevel, pacedSpeed);
   }
 
   [[nodiscard]] double level() const {

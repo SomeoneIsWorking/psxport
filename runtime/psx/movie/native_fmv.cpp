@@ -4,10 +4,10 @@
 #include "core.h"
 #include "diagnostic_config.h"
 #include "field_rate.h"
+#include "frame_pacer.h"
 #include "game.h"
 #include "host_input.h"
 #include "number_text.h"
-#include "pace_plan.h"
 #include "render_device.h"
 #include "watchdog.h"
 #include <algorithm>
@@ -220,11 +220,8 @@ bool Fmv::begin(psx::movie::SectorSource &source, uint32_t lba, uint32_t size_by
   game->pad.resetButtonEdges(game->pad.buttons);
   lucent::info("fmv", "begin: LBA {}, {} bytes ({} sectors)", lba, size_bytes, sector_count_);
   learnLayout();
-  grid_ = psx::movie::MovieFieldGrid(psx::frame::fieldIntervalMs(
-      psx::frame::pacedFieldRateMilliHz(psx::frame::fieldRateMilliHz(game->timing.displayFieldRate()),
-                                        game->renderDevice.window().refreshMilliHz()),
-      1,
-      1));
+  grid_ = psx::movie::MovieFieldGrid(
+      psx::frame::fieldIntervalMs(psx::frame::FramePacer::pacedFieldRateMilliHz(*game), 1, 1));
   audio_lag_ = {};
   intervals_at_begin_ = game->perf.presentSeries().intervals;
   missed_at_begin_ = game->perf.presentSeries().missed;
