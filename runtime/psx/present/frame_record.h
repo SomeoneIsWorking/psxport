@@ -89,9 +89,6 @@ struct RecordVertex {
 
 enum class PrimitiveKind : std::uint8_t { Polygon, Line, Sprite };
 
-// Sets x/y from a fractional position, the fraction in subX/subY.
-void placeVertex(RecordVertex &vertex, float x, float y);
-
 inline constexpr std::uint32_t kNoClut = 0xFFFFFFFFu;
 
 struct DrawPrimitive {

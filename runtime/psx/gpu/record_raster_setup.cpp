@@ -694,7 +694,7 @@ void RecordPlanner::Builder::addTriangle(
     return;
   }
   // The native walk decides what the op writes, so ops and batches are the same at every scale. A triangle whose
-  // declared places give it area where its words give none (a sliver a clip cut) writes the native pixels its quads
+  // places give it area where its words give none (a sliver a clip cut) writes the native pixels its quads
   // reach.
   const std::optional<TriangleWalk> nativeWalk = s == 1 ? walk : walkTriangle(native, 1);
   const TriVertex *vertices = walk->vertices;

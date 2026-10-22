@@ -63,9 +63,30 @@ void abortKeptScratchInUse() {
   std::abort();
 }
 
+namespace {
+
+std::uint32_t wordOf(std::uint32_t kseg0) {
+  return kseg0 & ~3u;
+}
+
+// The word holding `kseg0`, counted from the word holding `base`.
+std::size_t wordIndex(std::uint32_t base, std::uint32_t kseg0) {
+  return (wordOf(kseg0) - wordOf(base)) / 4u;
+}
+
+// The words a span of `bytes` at `base` touches.
+std::size_t wordCount(std::uint32_t base, std::size_t bytes) {
+  return wordIndex(base, base + static_cast<std::uint32_t>(bytes) + 3u);
+}
+
+} // namespace
+
 void HostMemory::clear() {
   for (Held &held : ranges_) {
     spares_.push_back(std::move(held.bytes));
+    if (held.places.capacity() != 0) {
+      placeSpares_.push_back(std::move(held.places));
+    }
   }
   ranges_.clear();
   lastRange_ = nullptr;
@@ -97,10 +118,9 @@ HostMemory::Range HostMemory::takeBuffer(std::size_t size) {
   return buffer;
 }
 
-const HostMemory::Range *HostMemory::find(std::uint32_t address, std::uint32_t &base) const {
+const HostMemory::Held *HostMemory::find(std::uint32_t address) const {
   const std::uint32_t at = kseg0Address(address);
-  if (lastRange_ != nullptr && at - lastBase_ < lastRange_->size()) {
-    base = lastBase_;
+  if (lastRange_ != nullptr && at - lastRange_->base < lastRange_->bytes.size()) {
     return lastRange_;
   }
   const auto next = std::upper_bound(ranges_.begin(), ranges_.end(), at, [](std::uint32_t a, const Held &held) {
@@ -113,14 +133,23 @@ const HostMemory::Range *HostMemory::find(std::uint32_t address, std::uint32_t &
   if (at - held->base >= held->bytes.size()) {
     return nullptr;
   }
-  base = held->base;
-  lastBase_ = held->base;
-  lastRange_ = &held->bytes;
+  lastRange_ = &*held;
   return lastRange_;
 }
 
-HostMemory::Range *HostMemory::find(std::uint32_t address, std::uint32_t &base) {
-  return const_cast<Range *>(std::as_const(*this).find(address, base));
+HostMemory::Held *HostMemory::find(std::uint32_t address) {
+  return const_cast<Held *>(std::as_const(*this).find(address));
+}
+
+HostMemory::Places &HostMemory::placesOf(Held &held) {
+  if (held.places.empty()) {
+    if (!placeSpares_.empty()) {
+      held.places = std::move(placeSpares_.back());
+      placeSpares_.pop_back();
+    }
+    held.places.assign(wordCount(held.base, held.bytes.size()), std::nullopt);
+  }
+  return held.places;
 }
 
 std::byte *HostMemory::place(std::uint32_t base, std::uint32_t size) {
@@ -141,23 +170,40 @@ std::byte *HostMemory::place(std::uint32_t base, std::uint32_t size) {
   }
   if (first == last || first->base != mergedBase || std::next(first) != last ||
       first->bytes.size() != mergedEnd - mergedBase) {
-    Range merged = takeBuffer(mergedEnd - mergedBase);
+    Held merged{mergedBase, takeBuffer(mergedEnd - mergedBase), {}};
     for (auto held = first; held != last; ++held) {
-      std::copy(held->bytes.begin(), held->bytes.end(), merged.begin() + (held->base - mergedBase));
+      std::copy(held->bytes.begin(), held->bytes.end(), merged.bytes.begin() + (held->base - mergedBase));
+      if (!held->places.empty()) {
+        Places &places = placesOf(merged);
+        std::copy(held->places.begin(), held->places.end(), places.begin() + wordIndex(mergedBase, held->base));
+        placeSpares_.push_back(std::move(held->places));
+      }
       spares_.push_back(std::move(held->bytes));
     }
     first = ranges_.erase(first, last);
-    first = ranges_.insert(first, Held{mergedBase, std::move(merged)});
+    first = ranges_.insert(first, std::move(merged));
   }
   return first->bytes.data() + (base - mergedBase);
 }
 
+void HostMemory::forgetPlaces(Held &held, std::uint32_t kseg0, std::uint32_t size) {
+  if (held.places.empty() || size == 0) {
+    return;
+  }
+  const auto from = held.places.begin() + static_cast<std::ptrdiff_t>(wordIndex(held.base, kseg0));
+  const auto to = held.places.begin() + static_cast<std::ptrdiff_t>(wordIndex(held.base, kseg0 + size + 3u));
+  std::fill(from, to, std::nullopt);
+}
+
 void HostMemory::provide(std::uint32_t address, std::span<const std::byte> bytes) {
-  std::memcpy(place(kseg0Address(address), static_cast<std::uint32_t>(bytes.size())), bytes.data(), bytes.size());
+  const auto size = static_cast<std::uint32_t>(bytes.size());
+  std::memcpy(place(kseg0Address(address), size), bytes.data(), bytes.size());
+  forgetPlaces(*find(address), kseg0Address(address), size);
 }
 
 void HostMemory::zero(std::uint32_t address, std::uint32_t size) {
   std::memset(place(kseg0Address(address), size), 0, size);
+  forgetPlaces(*find(address), kseg0Address(address), size);
 }
 
 void HostMemory::mapGuest(Core &guest, std::uint32_t address, std::uint32_t size) {
@@ -236,18 +282,29 @@ const std::uint32_t *HostMemory::overlaid(std::uint32_t wordAddress) const {
 }
 
 bool HostMemory::read(std::uint32_t address, void *out, std::uint32_t size) const {
-  std::uint32_t base = 0;
-  const Range *range = find(address, base);
-  if (range == nullptr) {
+  const Held *held = find(address);
+  if (held == nullptr) {
     return false;
   }
-  const std::uint32_t offset = kseg0Address(address) - base;
-  if (offset + size > range->size()) {
+  const std::uint32_t offset = kseg0Address(address) - held->base;
+  if (offset + size > held->bytes.size()) {
     lucent::error("emit-memory", "a {}-byte read at 0x{:08X} runs past its host range", size, address);
     std::abort();
   }
-  std::memcpy(out, range->data() + offset, size);
+  std::memcpy(out, held->bytes.data() + offset, size);
   return true;
+}
+
+void HostMemory::readPlaces(std::uint32_t address, std::span<gte::WordPlace> out) const {
+  const Held *held = find(address);
+  if (held == nullptr || held->places.empty()) {
+    std::fill(out.begin(), out.end(), std::nullopt);
+    return;
+  }
+  const std::size_t first = wordIndex(held->base, kseg0Address(address));
+  for (std::size_t i = 0; i < out.size(); ++i) {
+    out[i] = first + i < held->places.size() ? held->places[first + i] : std::nullopt;
+  }
 }
 
 void HostMemory::fallThrough(Core &guest, std::uint32_t address, void *out, std::uint32_t size) const {
@@ -270,30 +327,42 @@ void HostMemory::fallThrough(Core &guest, std::uint32_t address, void *out, std:
   }
 }
 
-void HostMemory::write(std::uint32_t address, const void *in, std::uint32_t size) {
-  std::uint32_t base = 0;
-  Range *range = find(address, base);
-  if (range == nullptr) {
+HostMemory::Held &HostMemory::writableRange(std::uint32_t address, std::uint32_t size) {
+  Held *held = find(address);
+  if (held == nullptr) {
     lucent::error("emit-memory", "a render wrote {} bytes to 0x{:08X}, outside its host ranges", size, address);
     std::abort();
   }
-  const std::uint32_t offset = kseg0Address(address) - base;
-  if (offset + size > range->size()) {
+  if (kseg0Address(address) - held->base + size > held->bytes.size()) {
     lucent::error("emit-memory", "a {}-byte write at 0x{:08X} runs past its host range", size, address);
     std::abort();
   }
-  std::memcpy(range->data() + offset, in, size);
+  return *held;
+}
+
+void HostMemory::write(std::uint32_t address, const void *in, std::uint32_t size) {
+  Held &range = writableRange(address, size);
+  const std::uint32_t at = kseg0Address(address);
+  std::memcpy(range.bytes.data() + (at - range.base), in, size);
+  forgetPlaces(range, at, size);
+}
+
+void HostMemory::writeVertex(std::uint32_t address, const gte::ProjectedVertex &vertex) {
+  const std::uint32_t word = vertex.word();
+  Held &range = writableRange(address, sizeof(word));
+  const std::uint32_t at = kseg0Address(address);
+  std::memcpy(range.bytes.data() + (at - range.base), &word, sizeof(word));
+  placesOf(range)[wordIndex(range.base, at)] = vertex.place();
 }
 
 std::span<const std::byte> HostMemory::view(std::uint32_t address, std::uint32_t size) const {
-  std::uint32_t base = 0;
-  const Range *range = find(address, base);
-  const std::uint32_t offset = range != nullptr ? kseg0Address(address) - base : 0u;
-  if (range == nullptr || offset + size > range->size()) {
+  const Held *held = find(address);
+  const std::uint32_t offset = held != nullptr ? kseg0Address(address) - held->base : 0u;
+  if (held == nullptr || offset + size > held->bytes.size()) {
     lucent::error("emit-memory", "no host range holds {} bytes at 0x{:08X}", size, address);
     std::abort();
   }
-  return std::span<const std::byte>(*range).subspan(offset, size);
+  return std::span<const std::byte>(held->bytes).subspan(offset, size);
 }
 
 void EmitMemory::readWords(std::uint32_t address, std::span<std::uint32_t> out) const {
@@ -302,6 +371,14 @@ void EmitMemory::readWords(std::uint32_t address, std::span<std::uint32_t> out) 
   }
   for (std::size_t i = 0; i < out.size(); ++i) {
     out[i] = mem_r32(address + 4u * static_cast<std::uint32_t>(i));
+  }
+}
+
+void EmitMemory::readPlaces(std::uint32_t address, std::span<gte::WordPlace> out) const {
+  if (host_ != nullptr) {
+    host_->readPlaces(address, out);
+  } else {
+    std::fill(out.begin(), out.end(), std::nullopt);
   }
 }
 

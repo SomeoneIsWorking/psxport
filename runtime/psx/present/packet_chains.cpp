@@ -5,21 +5,13 @@
 
 #include <lucent/log.h>
 
-#include <array>
 #include <cstdlib>
 #include <span>
 
 namespace psx::present {
-namespace {
-
-// A tag's 8-bit count bounds a packet.
-constexpr std::size_t kMaxPacketWords = 255;
-
-} // namespace
 
 std::optional<std::uint32_t>
 PacketChainWalker::walk(std::uint32_t link, OtSlot slot, DrawModeTracker &drawMode, PrimitiveSink &sink) {
-  std::array<std::uint32_t, kMaxPacketWords> words;
   for (gpu::OtNode tag(0, gpu::OtHeaderWord{link}); !tag.endsChain();) {
     const std::uint32_t packet = gpu::guestAddressOf(tag.nextRamOffset());
     tag = gpu::OtNode(gpu::mainRamOffsetOf(packet), gpu::OtHeaderWord{memory_.mem_r32(packet)});
@@ -40,13 +32,15 @@ PacketChainWalker::walk(std::uint32_t link, OtSlot slot, DrawModeTracker &drawMo
     if (!tag.carriesPrimitive()) {
       continue;
     }
-    const std::span<std::uint32_t> command(words.data(), count);
+    const std::span<std::uint32_t> command(words_.data(), count);
+    const std::span<gte::WordPlace> commandPlaces(places_.data(), count);
     memory_.readWords(packet + 4u, command);
-    const gpu::Gp0Command head(words[0]);
+    memory_.readPlaces(packet + 4u, commandPlaces);
+    const gpu::Gp0Command head(words_[0]);
     if (drawMode.take(command) || head.isDrawEnvironmentCommand() || head.isDiscardedNoOp()) {
       continue;
     }
-    std::optional<DrawPrimitive> primitive = gpu::decodePacketPrimitive(command);
+    std::optional<DrawPrimitive> primitive = gpu::decodePacketPrimitive({command, commandPlaces});
     if (!primitive) {
       return packet;
     }

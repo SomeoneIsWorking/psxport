@@ -4,6 +4,9 @@
 #include "gte.h"
 #include "render_substrate.h"
 
+#include <lucent/log.h>
+
+#include <cstdlib>
 #include <cstring>
 
 // Knobs the vendored gte.c reads by extern; all off for faithful math.
@@ -19,6 +22,9 @@ namespace {
 inline constexpr std::uint32_t kOpMask = 0x3F;
 inline constexpr std::uint32_t kOpRtps = 0x01;
 inline constexpr std::uint32_t kOpRtpt = 0x30;
+bool isScreenFifo(std::uint32_t reg) {
+  return reg >= gte::kSxy0 && reg <= gte::kSxyP;
+}
 
 } // namespace
 
@@ -37,6 +43,10 @@ void Gte::release() {
 }
 
 std::uint32_t Gte::readData(std::uint32_t reg) {
+  if (isScreenFifo(reg)) {
+    lucent::error("gte", "data register {} read as a word; a projected vertex is read through Gte::projected", reg);
+    std::abort();
+  }
   bind();
   return GTE_ReadDR(reg);
 }
@@ -44,6 +54,22 @@ std::uint32_t Gte::readData(std::uint32_t reg) {
 void Gte::writeData(std::uint32_t reg, std::uint32_t value) {
   bind();
   GTE_WriteDR(reg, value);
+  if (!isScreenFifo(reg)) {
+    return;
+  }
+  const GtePlace place = gte::ProjectedVertex::whole(value).place();
+  if (reg == gte::kSxyP) {
+    regs_.places[0] = regs_.places[1];
+    regs_.places[1] = regs_.places[2];
+    regs_.places[2] = place;
+  } else {
+    regs_.places[reg - gte::kSxy0] = place;
+  }
+}
+
+gte::ProjectedVertex Gte::projected(std::uint32_t entry) {
+  bind();
+  return {GTE_ReadDR(gte::kSxy0 + entry), regs_.places[entry]};
 }
 
 std::uint32_t Gte::readControl(std::uint32_t reg) {
