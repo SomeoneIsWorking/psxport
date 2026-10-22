@@ -21,7 +21,9 @@ vertex met.
 `docs/presentation.md` (Sub-pixel place). The GTE hands SXY entries out only as `gte::ProjectedVertex` (word plus
 place); a body stores one with `EmitMemory::storeVertex` and reads it back with `loadVertex`. Over a render's
 `HostMemory` the word keeps its place until another write covers it, so scratch slots, queued pieces and packets
-carry places with no step a producer can forget; over guest memory only the word is stored. A producer computes a
+carry places as long as each copy goes through `loadVertex`/`storeVertex`; a plain word copy drops the place
+silently (the vertex draws on its word's pixel), and nothing enforces the path. Over guest memory only the word is
+stored. A producer computes a
 place only for a vertex it makes itself (clip crossings, split midpoints, pulls, scaled corners, `steppedTo`,
 `nearest`) and stores it the same way. `PacketChainWalker` reads places with the words and
 `decodePacketPrimitive(PacketView)` applies them to polygons, lines and sprites within two pixels of the whole
@@ -45,3 +47,27 @@ members of the walker.
   Gameplay in-betweens are not composed yet (psx-tomba issue 0039), so gameplay still steps at 30 Hz.
 - Real-speed intro, load 1.6: in-between lateness p50 0.18 ms, p90 0.20 ms (7.6 ms before the walker fix), 1
   simulated-display repeat in 1087 presents.
+
+## Review fixes (2026-10-22)
+- The doc claimed no step a producer can forget. A plain word copy still drops a place: psx-toy-story-2
+  `hierarchy_drawer.cpp:link` copied the four `rotAverage4` vertices from the scratchpad into the packet with
+  `mem_r32`/`mem_w32`, so its new `storeVertex` calls reached nothing. It copies them with `loadVertex`/`storeVertex`
+  now. Toy Story 2's mesh drawers still carry bare words (psx-toy-story-2 issue 0056). `presentation.md` states the
+  real contract.
+- `GteRawState` (`Gte::saveRaw`/`restoreRaw`, so `GteGuard` and `MachineSnapshot`) copied the SXY words without
+  their places, and Lightrec's `importGteRegisters` and the save-state GTE section replaced words under old places,
+  so `Gte::projected` could pair a guest-written word with a stale place inside the two-pixel window. The raw state
+  carries the places, and `placeReplacedScreenEntries` puts every entry whose word an import or a load replaces on
+  that word's pixel.
+- A render that built its `HostMemory` per call allocated the places vector on every present once vertices were
+  stored with places: psx-crash-bash `host_leaf.cpp:emitLeaf`, psx-tomba `list_state_producer.cpp` and psx-toy-story-2
+  `hierarchy_draw_state.cpp`. Each now takes a session-kept `Kept<HostMemory>`, which keeps ranges and places across
+  presents.
+- Tomba's guest-only writers (`perobj_billboard.cpp`, `quad_rtpt_submit.cpp`, `widescreen_margin_quad.cpp`,
+  `rain_streaks.cpp:draw`) wrapped guest memory in `EmitMemory` only to call `storeVertex`, which over the guest stores
+  the word alone; they store `projected(i).word()` directly.
+- Proof: all 11 products build with Clang and run 40 s at real speed, hidden and unpaced, exit 0 (psx-tomba
+  `scratch/judder-check/titles/fix`). Tomba 2 boot walk `fx-p3` (load 1.2 to 1.3) with the session-kept memory and
+  the (site, list, n-th) key: the new-game intro composes 490 in-betweens with 48 shown whole, as before, and 1
+  simulated-display repeat in 1087 presents. The Toy Story 2 hierarchy copy is not shown on screen: no capture tool
+  reaches a hierarchy-drawn model's in-between.

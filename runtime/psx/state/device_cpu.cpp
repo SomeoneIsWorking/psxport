@@ -3,10 +3,12 @@
 
 #include "core.h"
 #include "game.h"
+#include "gte_register_transfer.h"
 #include "gte_state.h"
 
 #include <algorithm>
 #include <array>
+#include <span>
 
 namespace psx::state {
 namespace {
@@ -93,6 +95,7 @@ bool readGteSection(Game &game, psx::platform::BlobReader &in, std::string &erro
     return false;
   }
   GteRegs &gte = game.core.gte().registers();
+  psx::cpu::placeReplacedScreenEntries(gte, std::span<const std::uint32_t, 32>(regs.data(), 32));
   std::copy(regs.begin(), regs.end(), gte.REG);
   gte.FLAGS = flags;
   // DR and CR alias REG and REG+32.

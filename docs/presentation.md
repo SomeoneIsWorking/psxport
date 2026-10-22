@@ -231,9 +231,13 @@ The composer builds the frame at `t` from S's record:
 - **Sub-pixel place.** A screen vertex is a `gte::ProjectedVertex`: the SXY word the GPU reads and its place,
   where it lay before the word rounded it. The GTE hands SXY FIFO entries out only as that type
   (`Gte::projected`, the place from Beetle's projection push); `readData` of SXY0..SXYP aborts, and `writeData` to
-  the FIFO places the entry on its word's pixel. A body stores a vertex with `EmitMemory::storeVertex` and reads
+  the FIFO places the entry on its word's pixel. `saveRaw`/`restoreRaw` (`GteGuard`, `MachineSnapshot`) carry the
+  places; a Lightrec register import or a save-state load puts each entry whose word it replaces on that word's
+  pixel (`placeReplacedScreenEntries`), so a direct guest write never pairs with an old place. A body stores a vertex with `EmitMemory::storeVertex` and reads
   one back with `loadVertex`; over a render's `HostMemory` the destination word keeps the place until another
-  write covers it, so scratch slots, queued pieces and packets carry it as they carry the word. `loadVertex(address,
+  write covers it, so scratch slots, queued pieces and packets carry it as long as each copy goes through
+  `loadVertex`/`storeVertex`. A plain `mem_r32`/`mem_w32` copy, or a word carried through a local, drops the place
+  without a report and the vertex draws on its word's pixel; nothing enforces the path. `loadVertex(address,
   word)` reads a vertex whose word the guest re-encoded (an outcode `SXY << 5 | bits`) at the place kept with it.
   Over guest memory only the word is stored: the guest's own arithmetic on SXY words cannot carry places, and the
   GP0 record draws the guest's words. A producer computes a place only for a vertex it makes itself (a clip
