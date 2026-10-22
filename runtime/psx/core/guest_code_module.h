@@ -23,7 +23,8 @@
 // PER-READ PUBLICATION. A loader that goes through the stock `CdRead` (Spyro 2/3, Spider-Man 1) calls
 // `publishStockReadLanding` from `GameRuntime::stockCdReadLanded`: each whole read becomes an image
 // named by the SHA-256 of its bytes, with a new generation per read, so a replaced overlay stops
-// resolving. A title may restrict it to the arena its loader allocates from.
+// resolving. A title may restrict it to the arena its loader allocates from; the digest comes back,
+// so a title keys its overrides on the read without hashing it again.
 #pragma once
 
 #include "cd_stock_read_completion.h"
@@ -31,6 +32,7 @@
 #include "image_identity.h"
 
 #include <cstdint>
+#include <optional>
 #include <span>
 #include <string>
 #include <string_view>
@@ -57,11 +59,13 @@ struct Digest {
 // for identical bytes, so a reload at the same address is a replacement.
 psx::cpu::ImageIdentity activate(Core &core, std::string_view kind, GuestAddressRange physical, const Digest &content);
 
-// Publish one finished stock `CdRead` as an image, after its bytes are written. A landing that is
-// not wholly inside a valid `arena` is not code the title's loader placed and publishes nothing; an
-// empty `arena` admits all of main RAM. A landing that cannot be published (empty or outside RAM) requests a runtime
-// fault rather than leaving guest code to run under no identity.
-void publishStockReadLanding(Core &core, const psx::cd::StockReadLanding &landing, GuestAddressRange arena = {});
+// Publish one finished stock `CdRead` as an image, after its bytes are written, and return the
+// content that names it. A landing that is not wholly inside a valid `arena` is not code the title's
+// loader placed and publishes nothing; an empty `arena` admits all of main RAM. A landing that cannot
+// be published (empty or outside RAM) requests a runtime fault rather than leaving guest code to run
+// under no identity.
+std::optional<Digest>
+publishStockReadLanding(Core &core, const psx::cd::StockReadLanding &landing, GuestAddressRange arena = {});
 
 // A CD sector transfer landed `landed` bytes of guest RAM. If that range is inside the runtime's declared module
 // window and the window has no active residency, the window becomes one, so the title's own module entry is

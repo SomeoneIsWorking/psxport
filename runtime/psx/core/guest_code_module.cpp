@@ -46,14 +46,15 @@ void refuse(Core &core, const psx::cd::StockReadLanding &landing, const char *de
 
 } // namespace
 
-void publishStockReadLanding(Core &core, const psx::cd::StockReadLanding &landing, GuestAddressRange arena) {
+std::optional<Digest>
+publishStockReadLanding(Core &core, const psx::cd::StockReadLanding &landing, GuestAddressRange arena) {
   const std::uint32_t begin = landing.destination & 0x1fffffffu;
   if (landing.bytes == 0u || begin >= sizeof core.ram || landing.bytes > sizeof core.ram - begin) {
     refuse(core, landing, "the landed range is empty or does not fit guest main RAM");
-    return;
+    return std::nullopt;
   }
   if (arena.valid() && (begin < arena.begin || begin + landing.bytes > arena.end)) {
-    return;
+    return std::nullopt;
   }
   const Digest content = digest(std::span<const std::uint8_t>(core.ram + begin, landing.bytes));
   const auto identity = activate(core, "CD read", {begin, begin + landing.bytes}, content);
@@ -67,6 +68,7 @@ void publishStockReadLanding(Core &core, const psx::cd::StockReadLanding &landin
                 landing.destination,
                 landing.destination + landing.bytes,
                 content.hex);
+  return content;
 }
 
 void publishLanding(Core &core, GuestAddressRange landed) {
