@@ -21,17 +21,15 @@ int MdecDevice::dmaIn(const uint32_t *words, int count) {
   return i;
 }
 
-// Word i lands at buf[i + offs]; the lower half of each block row has a negative offs (MDEC_DMARead).
+// Word i lands at buf[i + offs]; the lower half of each block row has a negative offs (MDEC_DMARead). A decoder
+// parked with less than a burst out is waiting for input, so the drain stops there.
 int MdecDevice::dmaOut(uint32_t *buf, int count) {
-  constexpr int kStepClocks = 256;
-  constexpr int kMaxSteps = 4096;
   for (int i = 0; i < count; i++) {
-    int steps = 0;
-    while (!canRead()) {
-      if (++steps > kMaxSteps) {
+    if (!canRead()) {
+      step();
+      if (!canRead()) {
         return i;
       }
-      MDEC_Run(kStepClocks);
     }
     uint32_t offs = 0;
     const uint32_t v = MDEC_DMARead(&offs);

@@ -45,7 +45,8 @@ public:
   }
   // DMA0: feed up to `count` words; returns the words fed, short when the decoder cannot take more.
   int dmaIn(const uint32_t *words, int count);
-  // DMA1: drain up to `count` words, each placed at its macroblock-interleave position in `buf` (dma.c CH_MDEC_OUT).
+  // DMA1: drain up to `count` words, each placed at its macroblock-interleave position in `buf` (dma.c CH_MDEC_OUT);
+  // short when the decoder parks waiting for input.
   int dmaOut(uint32_t *buf, int count);
   // The sub-burst tail DMA1 will not release, drained with the same placement; `buf` already advanced.
   int dmaOutRest(uint32_t *buf, int count);
