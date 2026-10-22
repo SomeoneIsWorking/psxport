@@ -42,9 +42,11 @@ void Fmv::buildFrame(psx::present::PixelSize size) {
   psx::platform::Watchdog::progress();
 }
 
-void Fmv::showFrame(int heldFields) {
+void Fmv::showFrame(double dueMs, int heldFields) {
   game->perf.heldFor(heldFields);
-  game->display.show();
+  // The movie clock runs from origin_; the presenter schedules on the host clock.
+  const double hostDueMs = psx::platform::hostNowMs() - elapsedMs() + dueMs;
+  game->display.showAt(hostDueMs, {.fence = game->presentation.fence(), .fields = heldFields});
 }
 
 void Fmv::AudioLag::add(double lagMs) {
@@ -259,7 +261,7 @@ void Fmv::step() {
         endWithSkip();
         return;
       }
-      showFrame(show.heldFields);
+      showFrame(show.atMs, show.heldFields);
       frames_++;
       const std::optional<double> lag = audioLagMs();
       if (lag) {
