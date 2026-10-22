@@ -30,6 +30,10 @@ from them; Spyro 3 `fix-s3` (load 0.50-0.82) 2543 16.76 ms late with one repeat,
 prefix's return into the main loop (cold main-loop code, the same compile). Every one lands on a load or on the
 first fields of newly loaded code.
 
+Spyro 2 new game, state 5 to 3 (psx-spyro 0196 pass 11, `r11-s2perf`, load 1.98-3.70): fences 9078 and
+9081 41 and 33 ms late, 161 of 229 guest-thread samples in Lightrec compile; the held pictures
+(`r11-s2seam`, fences 9061-9081) are all black.
+
 ## Cause
 `lightrec_execute`, called from `executeWithBoundary`, compiles each cold block synchronously on the guest thread.
 The WAD load invalidates the level image, so the load field runs the level's code cold and compiles it. Perf
