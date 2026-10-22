@@ -31,4 +31,7 @@ Tomba! 2 from boot at real speed, 8x on a 3840x2160 sink, fps60, hidden window, 
 - Movies were invisible to `presentseq`: `Fmv::showFrame` showed through `DisplayPresenter::show`, which logs
   nothing. It schedules through `showAt` on the host clock. `OP.STR`: 2027 presents held 2 fields each, 8 repeats
   and 5 drops in 67 s (the 59.94 Hz media clock slipping against a 60.00 Hz display). `LOGO.STR` lost 14 vblanks to
-  one 223 ms disc hunk fill (`[disc] worst fill 222.9 ms`); a run with the hunks cached shows none.
+  one 223 ms disc hunk fill (`[disc] worst fill 222.9 ms`). Later runs froze movies with no slow fill: the MDEC
+  drain spent two thirds of each frame spinning, so a busy host put frames behind (issue 0176, fixed). A single slow
+  host read on the movie's thread still delays the frames it feeds; with decode at 2.5 ms they catch up within a
+  few frames.
