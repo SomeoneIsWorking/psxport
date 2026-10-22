@@ -322,7 +322,7 @@ with black margins and reseeded after a resync. Each record entry is planned onc
 
 - A primitive whose draw area spans the buffer's columns (x range equal, rows inside the buffer; a title may inset its rows) draws into the
   canvas with its x clip widened by M. Any other primitive lands in the canvas only inside the buffer.
-- A fill spanning the buffer's columns also fills the margins on its rows. So does a flat untextured rectangle (a sprite, or an axis-aligned quad) whose columns are exactly the buffer's, such as a screen fade (`addCanvasMargins`, psx-spyro issue 0199).
+- A fill spanning the buffer's columns also fills the margins on its rows. So does a flat untextured rectangle (a sprite, or an axis-aligned quad) whose columns are exactly the buffer's, such as a screen fade (`addCanvasMargins`, psx-spyro issue 0199). A producer quad placed between rows (an in-between letterbox edge) keeps its rows' fraction, so the margins end on the same scaled row as the centre.
 - Copies and uploads land in the buffer region 1:1.
 - **Render-to-texture.** Textures, CLUTs and copy sources always read the VRAM image, which stays
   exactly the device's. A draw into the display buffer that the guest later samples is read at its

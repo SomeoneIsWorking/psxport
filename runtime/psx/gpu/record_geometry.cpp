@@ -44,37 +44,50 @@ RecordRect drawBounds(const present::DrawPrimitive &primitive) {
   return rect;
 }
 
-std::optional<RecordRect> flatRectangle(const present::DrawPrimitive &primitive) {
+std::optional<FlatRectangle> flatRectangle(const present::DrawPrimitive &primitive) {
   const present::RecordVertex &origin = primitive.vertices[0];
   if (primitive.textured || primitive.gouraud) {
     return std::nullopt;
   }
   if (primitive.kind == present::PrimitiveKind::Sprite) {
-    return RecordRect{origin.x, origin.y, origin.x + primitive.width, origin.y + primitive.height};
+    return FlatRectangle{.rect = {origin.x, origin.y, origin.x + primitive.width, origin.y + primitive.height}};
   }
   if (primitive.kind != present::PrimitiveKind::Polygon || primitive.vertexCount != 4) {
     return std::nullopt;
   }
-  RecordRect rect{origin.x, origin.y, origin.x, origin.y};
+  const auto atX = [](const present::RecordVertex &vertex) {
+    return static_cast<float>(vertex.x) + vertex.subX;
+  };
+  const auto atY = [](const present::RecordVertex &vertex) {
+    return static_cast<float>(vertex.y) + vertex.subY;
+  };
+  const present::RecordVertex *left = &origin;
+  const present::RecordVertex *top = &origin;
+  const present::RecordVertex *right = &origin;
+  const present::RecordVertex *bottom = &origin;
   for (const present::RecordVertex &vertex : primitive.vertices) {
-    rect.x0 = std::min(rect.x0, vertex.x);
-    rect.y0 = std::min(rect.y0, vertex.y);
-    rect.x1 = std::max(rect.x1, vertex.x);
-    rect.y1 = std::max(rect.y1, vertex.y);
+    left = atX(vertex) < atX(*left) ? &vertex : left;
+    right = atX(vertex) > atX(*right) ? &vertex : right;
+    top = atY(vertex) < atY(*top) ? &vertex : top;
+    bottom = atY(vertex) > atY(*bottom) ? &vertex : bottom;
   }
   unsigned corners = 0;
   for (const present::RecordVertex &vertex : primitive.vertices) {
-    const bool atX = vertex.x == rect.x0 || vertex.x == rect.x1;
-    const bool atY = vertex.y == rect.y0 || vertex.y == rect.y1;
-    if (!atX || !atY || vertex.subX != 0.0f || vertex.subY != 0.0f) {
+    const bool onRight = atX(vertex) == atX(*right);
+    const bool onBottom = atY(vertex) == atY(*bottom);
+    if ((!onRight && atX(vertex) != atX(*left)) || (!onBottom && atY(vertex) != atY(*top))) {
       return std::nullopt;
     }
-    corners |= 1u << ((vertex.x == rect.x1 ? 1 : 0) + (vertex.y == rect.y1 ? 2 : 0));
+    corners |= 1u << ((onRight ? 1 : 0) + (onBottom ? 2 : 0));
   }
   if (corners != 0xFu) {
     return std::nullopt;
   }
-  return rect;
+  return FlatRectangle{.rect = {left->x, top->y, right->x, bottom->y},
+                       .subX0 = left->subX,
+                       .subY0 = top->subY,
+                       .subX1 = right->subX,
+                       .subY1 = bottom->subY};
 }
 
 std::optional<RecordRect> entryWrittenRect(const present::RecordEntry &entry) {
