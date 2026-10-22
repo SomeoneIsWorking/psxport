@@ -30,7 +30,8 @@ callbacks and resource transitions.
 
 `ExecutionBudget::currentTurn` is one display field — `33'868'800/60 = 564,480` cycles — by
 construction, so exceeding it is routine rather than exceptional. While an
-`ExecutionControl::Unsuspendable` lives (a `GuestRedraw`), every call gets its budget in place of a turn. The two entry points for continuing
+`ExecutionControl::Unsuspendable` lives (a `GuestRedraw`), every call gets the whole budget in place of a turn —
+per call, not what its caller has left, so a runaway nested N calls deep runs up to N budgets. The two entry points for continuing
 are `psx::cpu::resumeOriginal` and `psx::cpu::resumeGuestToReturn`
 (`runtime/cpu/native_dispatch.h`): pass the `ExecutionResult::guestPc` a bounded turn reported, the
 return address the call must stop at, and a fresh budget. On `GuestReturn` the call has completed; on
