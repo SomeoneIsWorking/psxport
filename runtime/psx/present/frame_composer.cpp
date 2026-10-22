@@ -365,7 +365,9 @@ const FrameRecord *FrameComposer::compose(const FrameRecord &shown,
   bool replaced = false;
   for (const Covered &object : covered_) {
     std::optional<std::span<const std::byte>> earlier = from ? from->find(object.id) : std::nullopt;
-    if (!earlier && inBetween && object.render->rests(object.to, resting(object.to.size()))) {
+    // Only an object the previous frame skipped appears from rest; one it drew ambiguously has no state.
+    if (!earlier && inBetween && !from->holds(object.id) &&
+        object.render->rests(object.to, resting(object.to.size()))) {
       earlier = std::span<const std::byte>(resting_);
     }
     const StateInterval states{.from = earlier.value_or(object.to), .to = object.to, .t = earlier ? t : 1.0f};
