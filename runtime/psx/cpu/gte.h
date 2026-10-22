@@ -54,10 +54,10 @@ public:
     loadControl(gte::kTranslationX, words);
   }
 
-  // SXY entry 0..2 with the place the projection that pushed it gave it.
+  // SXY entry 0..2 with its place: from the projection that pushed it, or its word's pixel once a write replaced it.
   gte::ProjectedVertex projected(std::uint32_t entry);
 
-  // The whole register file and flags, copied without running a read port.
+  // The whole register file, flags and SXY places, copied without running a read port.
   GteRawState saveRaw() const;
   void restoreRaw(const GteRawState &state);
 

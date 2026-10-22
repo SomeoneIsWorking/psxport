@@ -98,12 +98,14 @@ GteRawState Gte::saveRaw() const {
   GteRawState state{};
   std::memcpy(state.reg, regs_.REG, sizeof state.reg);
   state.flags = regs_.FLAGS;
+  std::memcpy(state.places, regs_.places, sizeof state.places);
   return state;
 }
 
 void Gte::restoreRaw(const GteRawState &state) {
   std::memcpy(regs_.REG, state.reg, sizeof state.reg);
   regs_.FLAGS = state.flags;
+  std::memcpy(regs_.places, state.places, sizeof regs_.places);
 }
 
 } // namespace psx::cpu

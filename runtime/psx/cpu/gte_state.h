@@ -22,4 +22,5 @@ typedef struct GteRegs {
 typedef struct GteRawState {
   uint32_t reg[64]; // DR = reg[0..31], CR = reg[32..63]
   uint32_t flags;   // the accumulated overflow flags
+  GtePlace places[3];
 } GteRawState;
