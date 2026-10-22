@@ -16,7 +16,8 @@ public:
   std::optional<ExecutionResult> consume(std::uint32_t unstatedPc, std::uint64_t cycles);
   const std::optional<ExecutionResult> &pending() const;
 
-  // While one lives, a call cannot suspend at a turn's end, so each call gets `budget` in place of a turn.
+  // While one lives, a call cannot suspend at a turn's end, so each call gets `budget` in place of a turn:
+  // the whole budget per call, not what its caller left, so nested runaways bound at depth times `budget`.
   class Unsuspendable {
   public:
     Unsuspendable(ExecutionControl &control, ExecutionBudget budget);
