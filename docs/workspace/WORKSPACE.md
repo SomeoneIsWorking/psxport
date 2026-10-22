@@ -86,6 +86,10 @@ Products: `spyro_port`, `toystory2_port`, `crashbash_port`, `crash_port`, `ctr_p
   repeated present (the 59.94 Hz pacing on a 60.00 Hz display, a load hold) is not judder. The unmapped window
   never scans out, so simulate the player's 60.00 Hz display from the `presentseq` times (each vblank shows the
   newest present before it) and judge the motion across the shown sequence.
+- Only pacing needs real time on a quiet host. Composition, identity and halfway motion are judged unpaced
+  (`PSXPORT_NOPACE=1`, same ires and sink) at any load. Walk from boot once to find the earliest defect, then
+  iterate on that screen through its warp; one real-time walk from boot closes the pass. A reviewer reads the
+  diff and runs only what a claim needs. A psxport change gets the all-title real-time run once, at pass end.
 - Run captures stay small: dump only the presents a judgement needs, crop or downscale them for comparison,
   and before a pass ends delete its full-size dumps with `scratch_gc.py`, keeping logs, scripts and the reduced
   evidence the issue cites.
