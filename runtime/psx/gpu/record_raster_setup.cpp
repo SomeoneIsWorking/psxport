@@ -441,6 +441,8 @@ private:
   void markWritten(const RecordRect &rect);
   // A VRAM-space native rect drawn and written on the current target plane.
   void emit(const RecordRect &rect, std::uint32_t param = 0);
+  // A VRAM-space scaled quad drawn on the current target plane, `written` its native footprint.
+  void emit(const RecordRect &written, const RecordQuad &quad);
   // VRAM rects written by a transfer, into VRAM and where they land in each canvas buffer.
   void emitTransferRects(const WrappedRects &rects);
   // Keeps the op when its native footprint reached a plane, whatever its quads at this scale.
@@ -560,8 +562,12 @@ void RecordPlanner::Builder::markWritten(const RecordRect &rect) {
 
 void RecordPlanner::Builder::emit(const RecordRect &rect, std::uint32_t param) {
   const int s = plan_.scale;
-  place({.x0 = rect.x0 * s, .y0 = rect.y0 * s, .x1 = rect.x1 * s, .y1 = rect.y1 * s, .param = param});
-  markWritten(rect);
+  emit(rect, {.x0 = rect.x0 * s, .y0 = rect.y0 * s, .x1 = rect.x1 * s, .y1 = rect.y1 * s, .param = param});
+}
+
+void RecordPlanner::Builder::emit(const RecordRect &written, const RecordQuad &quad) {
+  place(quad);
+  markWritten(written);
   reaches_ = true;
 }
 
@@ -952,29 +958,34 @@ void RecordPlanner::Builder::addLine(const DrawPrimitive &primitive) {
 }
 
 void RecordPlanner::Builder::addCanvasMargins(const DrawPrimitive &primitive) {
-  const std::optional<RecordRect> rect = flatRectangle(primitive);
-  if (!rect) {
+  const std::optional<FlatRectangle> flat = flatRectangle(primitive);
+  if (!flat || flat->subX0 != 0.0f || flat->subX1 != 0.0f) {
     return;
   }
+  const RecordRect &rect = flat->rect;
+  const int s = plan_.scale;
   for (const PlaneClip &planeClip : planeClips(primitive.state)) {
     if (planeClip.plane == 0) {
       continue;
     }
     const RecordCanvas &canvas = canvases_[static_cast<std::size_t>(planeClip.plane - 1)];
     const Clip &clip = planeClip.clip;
-    const int y0 = std::max(rect->y0, clip.y0);
-    const int y1 = std::min(rect->y1, clip.y1 + 1);
-    if (rect->x0 != canvas.buffer.x0 || rect->x1 != canvas.buffer.x1 || y0 >= y1) {
+    // The margins share the rectangle's rows at this scale, a placed edge's fraction included.
+    const int y0 = std::max(scaledCoordinate(rect.y0, flat->subY0, s), clip.y0 * s);
+    const int y1 = std::min(scaledCoordinate(rect.y1, flat->subY1, s), (clip.y1 + 1) * s);
+    if (rect.x0 != canvas.buffer.x0 || rect.x1 != canvas.buffer.x1 || y0 >= y1) {
       continue;
     }
+    const int rowFirst = y0 / s;
+    const int rowEnd = (y1 + s - 1) / s;
     target(planeClip.plane);
     const int left = std::max(canvas.originX(), clip.x0);
     const int right = std::min(canvas.buffer.x1 + canvas.margin, clip.x1 + 1);
     if (left < canvas.buffer.x0) {
-      emit({left, y0, canvas.buffer.x0, y1});
+      emit({left, rowFirst, canvas.buffer.x0, rowEnd}, {left * s, y0, canvas.buffer.x0 * s, y1});
     }
     if (right > canvas.buffer.x1) {
-      emit({canvas.buffer.x1, y0, right, y1});
+      emit({canvas.buffer.x1, rowFirst, right, rowEnd}, {canvas.buffer.x1 * s, y0, right * s, y1});
     }
   }
   target(0);
