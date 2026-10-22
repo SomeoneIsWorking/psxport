@@ -200,7 +200,9 @@ The composer builds the frame at `t` from S's record:
   the last bucket head the walk passed. A title names its tables (address and length from the guest's
   own OT variables, `core.otTables.name`, with its bucket stride and walk order); a table per display
   buffer shares one id. A title that flattens its buckets into one chain before the walk (Spyro) assigns
-  each packet its bucket instead (`OtTables::assign`), good for one walk. `render` emits each
+  each packet its bucket instead (`OtTables::assign`), good for one walk; a bucket it flattened empty
+  is placed after the packet linked before it (`OtTables::placeEmpty`), so the walk still passes its
+  head. `render` emits each
   primitive with the slot the guest function would have inserted it into at that state, from the same
   depth-to-bucket rule the original uses. The record keeps where the walk passed each bucket head.
   A producer's primitives go where its entries were in that slot in S (the n-th at the object's n-th

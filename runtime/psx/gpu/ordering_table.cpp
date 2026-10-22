@@ -53,9 +53,22 @@ void OtTables::assign(std::uint32_t packetGuestAddress, present::OtSlot slot) {
   sorted_ = false;
 }
 
+void OtTables::placeEmpty(present::OtSlot slot, std::uint32_t packetGuestAddress) {
+  empties_.push_back({.offset = mainRamOffsetOf(packetGuestAddress), .slot = slot});
+}
+
+std::optional<present::OtSlot> OtTables::emptyAfter(std::uint32_t packetGuestAddress) const {
+  const std::uint32_t offset = mainRamOffsetOf(packetGuestAddress);
+  const auto empty = std::find_if(empties_.begin(), empties_.end(), [offset](const Assigned &entry) {
+    return entry.offset == offset;
+  });
+  return empty != empties_.end() ? std::optional(empty->slot) : std::nullopt;
+}
+
 void OtTables::clear() {
   areas_.clear();
   assigned_.clear();
+  empties_.clear();
   sorted_ = true;
 }
 
@@ -105,6 +118,7 @@ bool OtTables::descending(std::uint16_t table) const {
 
 void OtTables::endWalk() {
   assigned_.clear();
+  empties_.clear();
   sorted_ = true;
 }
 
@@ -124,14 +138,16 @@ void submitOrderingTable(Core &core, GpuDevice &device, std::uint32_t rootGuestA
     if (slot) {
       device.enterSlot(slot, tables.descending(slot->table));
     }
-    if (!node.carriesPrimitive()) {
-      continue;
+    if (node.carriesPrimitive()) {
+      const std::optional<present::RecordKey> key = core.emission.keyFor(node.guestAddress());
+      device.beginPacket();
+      for (unsigned i = 0; i < node.gp0WordCount(); i++) {
+        const std::uint32_t offset = node.gp0WordRamOffset(i);
+        device.gp0(core.mem_r32(offset), {.sourceAddress = guestAddressOf(offset), .packetKey = key});
+      }
     }
-    const std::optional<present::RecordKey> key = core.emission.keyFor(node.guestAddress());
-    device.beginPacket();
-    for (unsigned i = 0; i < node.gp0WordCount(); i++) {
-      const std::uint32_t offset = node.gp0WordRamOffset(i);
-      device.gp0(core.mem_r32(offset), {.sourceAddress = guestAddressOf(offset), .packetKey = key});
+    if (const std::optional<present::OtSlot> empty = tables.emptyAfter(node.guestAddress())) {
+      device.enterSlot(empty, tables.descending(empty->table));
     }
   } while (walk.advance());
   device.enterSlot(std::nullopt, true);

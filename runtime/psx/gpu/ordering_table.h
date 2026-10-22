@@ -119,6 +119,10 @@ public:
   void beginWalk();
   // The bucket the title last assigned the packet at `packetGuestAddress`.
   std::optional<present::OtSlot> assigned(std::uint32_t packetGuestAddress) const;
+  // `slot` holds no packet this walk and is drawn right after the packet at `packetGuestAddress`.
+  void placeEmpty(present::OtSlot slot, std::uint32_t packetGuestAddress);
+  // The empty bucket drawn right after the packet at `packetGuestAddress`.
+  std::optional<present::OtSlot> emptyAfter(std::uint32_t packetGuestAddress) const;
   // Whether `table` is walked from its high buckets down; true for a table never named.
   bool descending(std::uint16_t table) const;
   // A walk ended: assignments are spent.
@@ -139,6 +143,7 @@ private:
     present::OtSlot slot;
   };
   std::vector<Assigned> assigned_; // by offset, then order, from beginWalk
+  std::vector<Assigned> empties_;
   bool sorted_ = true;
 };
 
