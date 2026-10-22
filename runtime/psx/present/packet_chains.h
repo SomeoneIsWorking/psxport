@@ -6,6 +6,7 @@
 #include "gp0_primitive_decode.h"
 #include "state_producer.h"
 
+#include <array>
 #include <cstdint>
 #include <optional>
 
@@ -55,9 +56,15 @@ private:
   // The address of the first packet that is not a polygon, line or sprite, or nullopt when the chain ends.
   std::optional<std::uint32_t> walk(std::uint32_t link, OtSlot slot, DrawModeTracker &drawMode, PrimitiveSink &sink);
 
+  // A tag's 8-bit count bounds a packet.
+  static constexpr std::size_t kMaxPacketWords = 255;
+
   EmitMemory memory_;
   PacketBound bound_;
   std::uint32_t walked_ = 0;
+  // One packet's words and their places, held across chains so a walk does not construct them per bucket.
+  std::array<std::uint32_t, kMaxPacketWords> words_{};
+  std::array<gte::WordPlace, kMaxPacketWords> places_{};
 };
 
 } // namespace psx::present

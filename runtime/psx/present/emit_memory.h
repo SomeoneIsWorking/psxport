@@ -3,6 +3,7 @@
 #pragma once
 
 #include "core.h"
+#include "projected_vertex.h"
 
 #include <cstddef>
 #include <cstdint>
@@ -85,7 +86,8 @@ private:
 
 // Host bytes standing in for ranges of guest memory, one store under every name of an address. Ranges that
 // overlap or touch merge. A read outside every range falls through to the guest (level data the guest does
-// not change while an object lives), or to an overlaid word; a write outside them aborts.
+// not change while an object lives), or to an overlaid word; a write outside them aborts. A word a vertex was
+// stored into keeps the vertex's place until another write covers it.
 class HostMemory {
 public:
   HostMemory() = default;
@@ -120,14 +122,21 @@ public:
   // A read in no range, from the overlay or the guest.
   void fallThrough(Core &guest, std::uint32_t address, void *out, std::uint32_t size) const;
   void write(std::uint32_t address, const void *in, std::uint32_t size);
+  // The vertex's word at `address`, which keeps the vertex's place; aborts outside every range.
+  void writeVertex(std::uint32_t address, const gte::ProjectedVertex &vertex);
+  // The place of each word from `address`, none where no vertex was stored or no range holds the word.
+  void readPlaces(std::uint32_t address, std::span<gte::WordPlace> out) const;
   // The bytes of the range holding [address, address + size); aborts when none does.
   std::span<const std::byte> view(std::uint32_t address, std::uint32_t size) const;
 
 private:
   using Range = std::vector<std::byte>;
+  // One entry per word of a range from its base's word, or empty while the range holds no vertex.
+  using Places = std::vector<gte::WordPlace>;
   struct Held {
     std::uint32_t base = 0; // kseg0
     Range bytes;
+    Places places;
   };
   struct OverlayNote {
     std::uint32_t address = 0;
@@ -138,17 +147,23 @@ private:
   // bytes; returns the merged range's bytes from `base` on.
   std::byte *place(std::uint32_t base, std::uint32_t size);
   // The range holding `address` and its base, or null.
-  const Range *find(std::uint32_t address, std::uint32_t &base) const;
-  Range *find(std::uint32_t address, std::uint32_t &base);
+  const Held *find(std::uint32_t address) const;
+  Held *find(std::uint32_t address);
   const std::uint32_t *overlaid(std::uint32_t wordAddress) const;
   // A buffer of `size` bytes from the spares.
   Range takeBuffer(std::size_t size);
+  // `held`'s places, one per word, taken from the spares the first time a vertex is stored there.
+  Places &placesOf(Held &held);
+  // Drops the places of the words [kseg0, kseg0 + size) touches.
+  static void forgetPlaces(Held &held, std::uint32_t kseg0, std::uint32_t size);
+  // The range a write of `size` bytes at `address` lands in; aborts outside every range or past its end.
+  Held &writableRange(std::uint32_t address, std::uint32_t size);
 
   std::vector<Held> ranges_; // by base
   std::vector<Range> spares_;
+  std::vector<Places> placeSpares_;
   // The range the last lookup found; a body reads one range for long runs. Cleared when ranges change.
-  mutable const Range *lastRange_ = nullptr;
-  mutable std::uint32_t lastBase_ = 0;
+  mutable const Held *lastRange_ = nullptr;
   std::vector<LevelWord> overlay_; // by kseg0 word address, one entry per word
   std::vector<OverlayNote> overlayNotes_;
   std::vector<GuestSpan> gaps_;
@@ -189,6 +204,8 @@ public:
   }
   // Consecutive words from `address`; one copy when a host range holds the first, which must then hold all.
   void readWords(std::uint32_t address, std::span<std::uint32_t> out) const;
+  // The places of the words from `address` (none over the guest, which keeps no place).
+  void readPlaces(std::uint32_t address, std::span<gte::WordPlace> out) const;
   void mem_w8(std::uint32_t address, std::uint8_t value) const {
     write(address, value);
   }
@@ -199,9 +216,24 @@ public:
     write(address, value);
   }
 
-  // The GTE screen point `reg` into the packet word at `address`.
-  void storeGteXy(std::uint32_t address, int reg) const {
-    mem_w32(address, core_->gte().readData(static_cast<std::uint32_t>(reg)));
+  // A vertex into the word at `address`; host memory keeps its place, the guest only its word.
+  void storeVertex(std::uint32_t address, const gte::ProjectedVertex &vertex) const {
+    if (host_ != nullptr) {
+      host_->writeVertex(address, vertex);
+    } else {
+      mem_w32(address, vertex.word());
+    }
+  }
+  // The vertex a body stored at `address`, on its word's pixel where no place was kept.
+  [[nodiscard]] gte::ProjectedVertex loadVertex(std::uint32_t address) const {
+    return loadVertex(address, mem_r32(address));
+  }
+  // The vertex `word` names at the place kept at `address`, whose word may be another encoding of it (an
+  // outcode); on its own pixel where no place was kept.
+  [[nodiscard]] gte::ProjectedVertex loadVertex(std::uint32_t address, std::uint32_t word) const {
+    gte::WordPlace place;
+    readPlaces(address, std::span(&place, 1));
+    return place ? gte::ProjectedVertex(word, *place) : gte::ProjectedVertex::whole(word);
   }
 
 private:

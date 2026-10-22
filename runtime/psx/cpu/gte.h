@@ -4,6 +4,7 @@
 #include "gte_preop_observer.h"
 #include "gte_registers.h"
 #include "gte_state.h"
+#include "projected_vertex.h"
 
 #include <array>
 #include <cstddef>
@@ -25,7 +26,9 @@ public:
   Gte &operator=(Gte &&) = delete;
   ~Gte() = default;
 
+  // Aborts on SXY0..SXYP: a projected vertex is read whole, place and all, through `projected`.
   std::uint32_t readData(std::uint32_t reg);
+  // A write to the SXY FIFO puts that entry on the pixel its word names.
   void writeData(std::uint32_t reg, std::uint32_t value);
   std::uint32_t readControl(std::uint32_t reg);
   void writeControl(std::uint32_t reg, std::uint32_t value);
@@ -51,10 +54,8 @@ public:
     loadControl(gte::kTranslationX, words);
   }
 
-  // The unrounded place of SXY0..2 as the projections pushed them; a direct write to the FIFO is not followed.
-  GtePlace projectedPlace(std::uint32_t entry) const {
-    return regs_.places[entry];
-  }
+  // SXY entry 0..2 with the place the projection that pushed it gave it.
+  gte::ProjectedVertex projected(std::uint32_t entry);
 
   // The whole register file and flags, copied without running a read port.
   GteRawState saveRaw() const;

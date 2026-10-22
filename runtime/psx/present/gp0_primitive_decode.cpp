@@ -3,7 +3,30 @@
 
 #include "vram_pixel.h"
 
+#include <cmath>
+
 namespace psx::gpu {
+namespace {
+
+// A place lies within one rounding of its whole pixel each way; farther, the GPU wrapped the 11-bit word.
+bool placesWhole(int whole, float place) {
+  return std::abs(place - static_cast<float>(whole)) < 2.0f;
+}
+
+// The vertex decoded from the word at `word` takes the place stored there.
+void place(present::RecordVertex &vertex, const PacketView &packet, std::size_t word) {
+  if (word >= packet.places.size() || !packet.places[word]) {
+    return;
+  }
+  const GtePlace &at = *packet.places[word];
+  if (!placesWhole(vertex.x, at.x) || !placesWhole(vertex.y, at.y)) {
+    return;
+  }
+  vertex.subX = at.x - static_cast<float>(vertex.x);
+  vertex.subY = at.y - static_cast<float>(vertex.y);
+}
+
+} // namespace
 
 present::RecordVertex colourVertex(std::uint32_t colourWord) {
   const Gp0Colour colour = Gp0Command(colourWord).colour();
@@ -23,6 +46,9 @@ present::RecordVertex polygonVertex(std::span<const std::uint32_t> words,
   const Gp0VertexPos position = Gp0Command(words[index++]).vertexPos();
   vertex.x = position.x;
   vertex.y = position.y;
+  // A flat polygon's later vertex takes the first one's colour, not its place.
+  vertex.subX = 0.0f;
+  vertex.subY = 0.0f;
   if (flags.textured) {
     const Gp0TextureCoord coord = Gp0Command(words[index++]).textureCoord();
     vertex.u = static_cast<std::uint8_t>(coord.u);
@@ -51,7 +77,8 @@ void applyTexPageAttribute(present::RecordDrawState &state, std::uint16_t attrib
   state.texMode = static_cast<int>(page.depth);
 }
 
-std::optional<present::DrawPrimitive> decodePacketPrimitive(std::span<const std::uint32_t> words) {
+std::optional<present::DrawPrimitive> decodePacketPrimitive(PacketView packet) {
+  const std::span<const std::uint32_t> words = packet.words;
   if (words.empty() || words.size() < Gp0Command::packetWordCount(words[0])) {
     return std::nullopt;
   }
@@ -67,8 +94,10 @@ std::optional<present::DrawPrimitive> decodePacketPrimitive(std::span<const std:
     primitive.vertexCount = command.polygonVertexCount();
     std::size_t index = 0;
     for (int v = 0; v < primitive.vertexCount; v++) {
-      primitive.vertices[static_cast<std::size_t>(v)] =
-          polygonVertex(words, index, flags, primitive.vertices[0], v == 0);
+      const std::size_t position = index + ((v == 0 || flags.gouraud) ? 1u : 0u);
+      present::RecordVertex &vertex = primitive.vertices[static_cast<std::size_t>(v)];
+      vertex = polygonVertex(words, index, flags, primitive.vertices[0], v == 0);
+      place(vertex, packet, position);
     }
     if (flags.textured) {
       // Words: command, xy0, uv0 + CLUT, [colour1], xy1, uv1 + texpage.
@@ -88,6 +117,8 @@ std::optional<present::DrawPrimitive> decodePacketPrimitive(std::span<const std:
     primitive.textured = false;
     primitive.modulate = false;
     decodeLineEnds(words, primitive.vertices[0], primitive.vertices[1]);
+    place(primitive.vertices[0], packet, 1);
+    place(primitive.vertices[1], packet, primitive.gouraud ? 3 : 2);
     return primitive;
   }
   if (command.isRectangleOrSprite()) {
@@ -109,6 +140,7 @@ std::optional<present::DrawPrimitive> decodePacketPrimitive(std::span<const std:
     primitive.width = region.width;
     primitive.height = region.height;
     primitive.vertices[0] = vertex;
+    place(primitive.vertices[0], packet, 1);
     return primitive;
   }
   return std::nullopt;

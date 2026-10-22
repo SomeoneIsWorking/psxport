@@ -405,7 +405,7 @@ void Gp0RecordTap::consumePolyLineWord(std::uint32_t word, const DeviceProbe &pr
 }
 
 void Gp0RecordTap::recordSprite(const DeviceProbe &probe) {
-  std::optional<present::DrawPrimitive> decoded = decodePacketPrimitive(words_);
+  std::optional<present::DrawPrimitive> decoded = decodePacketPrimitive({.words = words_, .places = {}});
   if (!decoded) {
     desync();
     return;

@@ -2,34 +2,15 @@
 #pragma once
 
 #include "frame_record.h"
-#include "gp0_command.h"
-#include "gte_state.h"
-#include "guest_memory_map.h"
 
-#include <cstddef>
 #include <cstdint>
 #include <memory>
-#include <optional>
 #include <span>
 #include <unordered_map>
 #include <utility>
 #include <vector>
 
 namespace psx::present {
-
-// The place a packet vertex word names exactly, as the GPU reads it: a corner no projection made.
-[[nodiscard]] inline GtePlace wholePlace(std::uint32_t word) {
-  const gpu::Gp0VertexPos position = gpu::Gp0Command(word).vertexPos();
-  return {static_cast<float>(position.x), static_cast<float>(position.y)};
-}
-
-// `place` carried by the whole-pixel step from SXY word `from` to `to`: a corner the guest offset from a
-// projected point.
-[[nodiscard]] inline GtePlace placeOffset(GtePlace place, std::uint32_t from, std::uint32_t to) {
-  const GtePlace start = wholePlace(from);
-  const GtePlace end = wholePlace(to);
-  return {place.x + end.x - start.x, place.y + end.y - start.y};
-}
 
 // Where a render puts its primitives. Positions are draw-offset relative, as the guest packet holds
 // them. The render sets the texture page, texture mode and blend mode; draw area, offset, mask,
@@ -38,38 +19,14 @@ class PrimitiveSink {
 public:
   virtual ~PrimitiveSink() = default;
   virtual void emit(OtSlot slot, const DrawPrimitive &primitive) = 0;
-  // The producer's unrounded screen place of polygon or line vertex `vertex` in the packet it wrote at `packet`,
-  // declared before the packet is emitted.
-  virtual void place(std::uint32_t /*packet*/, int /*vertex*/, const GtePlace & /*place*/) {}
-  // The places of every vertex of the packet at `packet` (any segment), in packet order.
-  void placeCorners(std::uint32_t packet, std::span<const GtePlace> corners) {
-    for (std::size_t vertex = 0; vertex < corners.size(); ++vertex) {
-      place(psx::kseg0Address(packet), static_cast<int>(vertex), corners[vertex]);
-    }
-  }
-  // The place declared for that vertex, for a producer that cuts a packet it already wrote.
-  [[nodiscard]] virtual std::optional<GtePlace> placed(std::uint32_t /*packet*/, int /*vertex*/) {
-    return std::nullopt;
-  }
 };
 
-// A sink that keeps what it is handed, in order; a polygon or line from a packet with declared places takes
-// their offsets from its whole pixels. `clear` keeps the storage for the next render.
+// A sink that keeps what it is handed, in order. `clear` keeps the storage for the next render.
 class PrimitiveList final : public PrimitiveSink {
 public:
   void emit(OtSlot slot, const DrawPrimitive &primitive) override;
-  void place(std::uint32_t packet, int vertex, const GtePlace &place) override;
-  [[nodiscard]] std::optional<GtePlace> placed(std::uint32_t packet, int vertex) override;
   void clear();
   std::vector<std::pair<OtSlot, DrawPrimitive>> primitives;
-
-private:
-  struct VertexPlace {
-    std::uint64_t key = 0; // packet << 2 | vertex
-    GtePlace place{};
-  };
-  std::vector<VertexPlace> places_;
-  bool placesSorted_ = true;
 };
 
 // The `t` of present `field` (1..fields) of a logic frame of `fields` fields: one present a field (FramePresenter).

@@ -44,7 +44,7 @@ present plan / sink                           viewport, letterbox, window
 | `present/emission_scope.*` | the `(P, obj, k)` scope stack and packet-address to key map |
 | `runtime/cpu/native_dispatch.*` | `Producer{Arg}` registration; opens the emission scope around the call |
 | `present/frame_state.*` | producer states by the scope serial that saved them; per record, the states its packets came from |
-| `present/state_producer.*` | `StateProducer` (render at `t`, and its `Composition` there), `PrimitiveSink` (primitives and declared vertex places), `PrimitiveList`, the `StateProducers` registry on `Core` |
+| `present/state_producer.*` | `StateProducer` (render at `t`, and its `Composition` there), `PrimitiveSink` (the primitives a render emits), `PrimitiveList`, the `StateProducers` registry on `Core` |
 | `present/guest_redraw.*`, `core/write_rollback.h` | `GuestRedraw`: a guest draw routine run again for an in-between, every store put back, registers and GTE restored, devices and guest time held (`SideEffectMode::Discard`) |
 | `present/frame_composer.*` | the frame at `t`: S's unproduced entries plus each producer's render, by OT slot |
 | `gpu/ordering_table.*` | OT node decode and the OT walk; `OtTables`, the title-named tables whose bucket heads tag each entry's slot |
@@ -93,7 +93,7 @@ name is refused with a warning and the Core stays on `record`.
   starts a new batch, so at 1x reads see VRAM as the device did. Which ops exist and where batches
   split come from the 1x walk at every S: the `record_plan` line's ops and batches for one frame are
   equal at every S, and only its quads (and the GPU's pixels) grow. The one exception is a triangle whose
-  declared places give it area where its words give none, such as a sliver a clip cut between two crossings
+  stored places give it area where its words give none, such as a sliver a clip cut between two crossings
   that round to one word: above 1x it draws and writes the native pixels its quads reach (`addTriangle`); without
   it the pieces either side of the sliver leave a seam. A batch's snapshot refresh
   covers every scaled pixel its quads can reach.
@@ -228,24 +228,26 @@ The composer builds the frame at `t` from S's record:
   mask, texture window and interlace are those in effect where the primitive lands in S (the
   first recorded primitive at or after its position), and the CLUT from S's sample of the same CLUT
   attribute (`clutWord`), or from the device VRAM when S never sampled it.
-- **Sub-pixel place.** The GTE keeps the unrounded place of each SXY FIFO entry as RTPS and RTPT push
-  it (`Gte::projectedPlace`, from Beetle's projection push). A producer that copies a projected word
-  into a packet declares that vertex's place to the sink by packet address and vertex index
-  (`PrimitiveSink::place`, or `placeCorners` for every vertex of a polygon or line; `placeOffset` for a corner the
-  guest sets a genuine whole-pixel step from a projected point, `wholePlace` for a corner no projection made, read as
-  the GPU reads the word), carrying it through its own arithmetic (scratch slots, midpoints, pulls) as it carries the
-  word. A corner the guest offsets by a scaled size (a glow rim, a scaled quad's sides) takes the offset before the
-  guest truncates it, so its size changes smoothly too. `PrimitiveList` gives each polygon or line walked from a
-  packet with declared places the place's offset from its whole pixel in `subX`/`subY`; that offset lies within two
-  pixels either way, and a place farther off is a word the GPU wrapped, so that vertex keeps its whole pixel. No
-  place is matched by value. A producer that cuts a packet it already wrote reads the declared places back
-  (`placed`). Every render declares places, so a real (`t = 1`) compose and its in-betweens agree and a still
-  object does not shift. A vertex shared by two primitives is one place, so no seam opens; a producer that declares
-  places must declare them for every primitive it projects. Above native scale the rasterizer draws a vertex at
-  `whole * scale + floor(offset * scale)`; a line's pixels take the offset interpolated along it. At native scale
-  every vertex keeps the guest's pixel. A sprite (GP0 0x60-0x7F) takes its origin's place the same way: above
-  native scale its quad and the texel lookup move by `floor(offset * scale)` together, so the image slides without
-  resampling (`addSprite`, `record.frag`).
+- **Sub-pixel place.** A screen vertex is a `gte::ProjectedVertex`: the SXY word the GPU reads and its place,
+  where it lay before the word rounded it. The GTE hands SXY FIFO entries out only as that type
+  (`Gte::projected`, the place from Beetle's projection push); `readData` of SXY0..SXYP aborts, and `writeData` to
+  the FIFO places the entry on its word's pixel. A body stores a vertex with `EmitMemory::storeVertex` and reads
+  one back with `loadVertex`; over a render's `HostMemory` the destination word keeps the place until another
+  write covers it, so scratch slots, queued pieces and packets carry it as they carry the word. `loadVertex(address,
+  word)` reads a vertex whose word the guest re-encoded (an outcode `SXY << 5 | bits`) at the place kept with it.
+  Over guest memory only the word is stored: the guest's own arithmetic on SXY words cannot carry places, and the
+  GP0 record draws the guest's words. A producer computes a place only for a vertex it makes itself (a clip
+  crossing, a split midpoint, a pull, a corner offset by a scaled size, a whole-pixel step with `steppedTo`, a
+  lerped 2D point with `nearest`) and stores it through the same path; a local packet is a `gpu::PacketBuffer`.
+  `PacketChainWalker` reads each packet's places with its words and `decodePacketPrimitive(PacketView)` gives a
+  placed polygon, line or sprite vertex its offset from its whole pixel in `subX`/`subY`; that offset lies within
+  two pixels either way, and a place farther off is a word the GPU wrapped, so that vertex keeps its whole pixel.
+  No place is matched by value. Every render stores places the same way, so a real (`t = 1`) compose and its
+  in-betweens agree and a still object does not shift; a vertex shared by two primitives is one stored word, so
+  no seam opens. Above native scale the rasterizer draws a vertex at `whole * scale + floor(offset * scale)`; a
+  line's pixels take the offset interpolated along it. At native scale every vertex keeps the guest's pixel. A
+  sprite (GP0 0x60-0x7F) takes its origin's place the same way: above native scale its quad and the texel lookup
+  move by `floor(offset * scale)` together, so the image slides without resampling (`addSprite`, `record.frag`).
 - **Exactness.** At `t = 1`, 4:3, depth testing off, a render must reproduce the entries it replaces;
   the title's oracle compare covers the frame (at 1x; above it, placed vertices keep their offset).
 

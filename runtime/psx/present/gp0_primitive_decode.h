@@ -4,7 +4,10 @@
 
 #include "frame_record.h"
 #include "gp0_command.h"
+#include "projected_vertex.h"
 
+#include <algorithm>
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <optional>
@@ -26,11 +29,46 @@ void decodeLineEnds(std::span<const std::uint32_t> words, present::RecordVertex 
 // A texpage attribute into texture page, texture mode and blend mode.
 void applyTexPageAttribute(present::RecordDrawState &state, std::uint16_t attribute);
 
+// A packet's words, and the place of the vertex stored into each: one per word, or none at all for words that
+// carry no place (the guest's GP0 stream).
+struct PacketView {
+  std::span<const std::uint32_t> words;
+  std::span<const gte::WordPlace> places;
+};
+
+// A packet a producer builds in its own storage, keeping the place of each vertex stored into it.
+template <std::size_t Count> class PacketBuffer {
+public:
+  PacketBuffer() = default;
+  // `words` copied in, none of them a placed vertex.
+  explicit PacketBuffer(std::span<const std::uint32_t, Count> words) {
+    std::ranges::copy(words, words_.begin());
+  }
+  void store(std::size_t index, std::uint32_t word) {
+    words_[index] = word;
+    places_[index].reset();
+  }
+  void storeVertex(std::size_t index, const gte::ProjectedVertex &vertex) {
+    words_[index] = vertex.word();
+    places_[index] = vertex.place();
+  }
+  [[nodiscard]] std::uint32_t word(std::size_t index) const {
+    return words_[index];
+  }
+  [[nodiscard]] PacketView view() const {
+    return {words_, places_};
+  }
+
+private:
+  std::array<std::uint32_t, Count> words_{};
+  std::array<gte::WordPlace, Count> places_{};
+};
+
 // One polygon or sprite packet as written, before the draw offset: positions, colours, UVs, and for a
 // textured polygon its texpage and CLUT attributes. A sprite's or line's texture page and blend mode are the
-// draw environment's.
+// draw environment's. A vertex stored with a place lies that far past its whole pixel (subX/subY).
 // Nullopt for any other command, and for a poly-line.
-std::optional<present::DrawPrimitive> decodePacketPrimitive(std::span<const std::uint32_t> words);
+std::optional<present::DrawPrimitive> decodePacketPrimitive(PacketView packet);
 
 } // namespace psx::gpu
 

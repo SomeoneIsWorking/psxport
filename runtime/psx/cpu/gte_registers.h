@@ -22,6 +22,7 @@ inline constexpr std::uint32_t kIr3 = 11;
 inline constexpr std::uint32_t kSxy0 = 12;
 inline constexpr std::uint32_t kSxy1 = 13;
 inline constexpr std::uint32_t kSxy2 = 14;
+inline constexpr std::uint32_t kSxyP = 15; // a write pushes the FIFO
 inline constexpr std::uint32_t kSz0 = 16;
 inline constexpr std::uint32_t kSz1 = 17;
 inline constexpr std::uint32_t kSz2 = 18;

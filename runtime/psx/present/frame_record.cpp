@@ -1,19 +1,9 @@
 // frame_record.cpp — FrameRecord storage.
 #include "frame_record.h"
 
-#include <cmath>
 #include <utility>
 
 namespace psx::present {
-
-void placeVertex(RecordVertex &vertex, float x, float y) {
-  const float column = std::floor(x);
-  const float row = std::floor(y);
-  vertex.x = static_cast<int>(column);
-  vertex.subX = x - column;
-  vertex.y = static_cast<int>(row);
-  vertex.subY = y - row;
-}
 
 std::span<const std::uint16_t> FrameRecord::clut(const DrawPrimitive &primitive) const {
   if (primitive.clutOffset == kNoClut) {
