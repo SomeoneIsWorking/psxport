@@ -44,9 +44,8 @@ void Fmv::buildFrame(psx::present::PixelSize size) {
 
 void Fmv::showFrame(double dueMs, int heldFields) {
   game->perf.heldFor(heldFields);
-  // The movie clock runs from origin_; the presenter schedules on the host clock.
-  const double hostDueMs = psx::platform::hostNowMs() - elapsedMs() + dueMs;
-  game->display.showAt(hostDueMs, {.fence = game->presentation.fence(), .fields = heldFields});
+  game->display.showAt(psx::platform::hostMs(origin_) + dueMs,
+                       {.fence = game->presentation.fence(), .fields = heldFields});
 }
 
 void Fmv::AudioLag::add(double lagMs) {

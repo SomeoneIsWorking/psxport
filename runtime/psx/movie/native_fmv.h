@@ -76,7 +76,7 @@ private:
   // How far the audio device's position trails the movie clock, in ms; nullopt without audio.
   std::optional<double> audioLagMs() const;
   void buildFrame(psx::present::PixelSize size);
-  // Show the built frame due at `dueMs`, the previous one having been held for `heldFields`.
+  // Show the built frame due `dueMs` after the movie began, the previous one having been held for `heldFields`.
   void showFrame(double dueMs, int heldFields);
   void ensureScratch();
   // The ordinary end (stream exhausted, or the dev cap) and the Start skip; both idempotent.
