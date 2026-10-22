@@ -14,8 +14,13 @@ inline std::uint64_t hostNowNs() {
       std::chrono::duration_cast<std::chrono::nanoseconds>(HostClock::now().time_since_epoch()).count());
 }
 
+// `at` in the ms hostNowMs counts.
+inline double hostMs(HostClock::time_point at) {
+  return std::chrono::duration<double, std::milli>(at.time_since_epoch()).count();
+}
+
 inline double hostNowMs() {
-  return std::chrono::duration<double, std::milli>(HostClock::now().time_since_epoch()).count();
+  return hostMs(HostClock::now());
 }
 
 // Sleeps until the host clock reaches `dueMs`; a deadline already passed returns at once.
