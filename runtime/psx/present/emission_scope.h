@@ -49,6 +49,8 @@ public:
   [[nodiscard]] Guard instance(std::uint32_t object);
   // One element of the innermost open object (a primitive index, a sub-part).
   [[nodiscard]] Guard element(std::uint32_t index);
+  // A bound packet's own key (`keyFor`) reopened, for a pass that rewrites the packet in place.
+  [[nodiscard]] Guard amend(const RecordKey &key);
 
   bool isOpen() const {
     return !stack_.empty();

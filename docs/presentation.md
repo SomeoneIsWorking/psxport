@@ -228,6 +228,14 @@ The composer builds the frame at `t` from S's record:
   mask, texture window and interlace are those in effect where the primitive lands in S (the
   first recorded primitive at or after its position), and the CLUT from S's sample of the same CLUT
   attribute (`clutWord`), or from the device VRAM when S never sampled it.
+- **In-place rewrite.** A title whose producer rewrites an already-written packet (a tint, a palette
+  swap, a blend bit) must do it under the packet's own key: `EmissionScope::amend(keyFor(packet))` opens
+  the binding the packet already carries, so the rewritten colour word re-binds the command word it
+  shares with (`PacketAmendScope`) instead of unbinding it. An out-of-scope rewrite leaves the packet
+  unkeyed and its record is shown whole.
+- **Line and poly-line packets.** A GP0 line packet decodes to one primitive per segment
+  (`decodePolyLine`, first point to last through the terminator), each carrying its place, so a producer
+  that keys a node's strip interpolates every line of it.
 - **Sub-pixel place.** A screen vertex is a `gte::ProjectedVertex`: the SXY word the GPU reads and its place,
   where it lay before the word rounded it. The GTE hands SXY FIFO entries out only as that type
   (`Gte::projected`, the place from Beetle's projection push); `readData` of SXY0..SXYP aborts, and `writeData` to

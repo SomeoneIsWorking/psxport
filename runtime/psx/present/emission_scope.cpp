@@ -52,6 +52,10 @@ EmissionScope::Guard EmissionScope::element(std::uint32_t index) {
   return Guard(*this, RecordKey{stack_.back().producer, stack_.back().object, index, 0, stack_.back().serial});
 }
 
+EmissionScope::Guard EmissionScope::amend(const RecordKey &key) {
+  return Guard(*this, key);
+}
+
 EmissionScope::EmissionScope() : words_(kMainRamWords) {}
 
 void EmissionScope::push(const RecordKey &key) {

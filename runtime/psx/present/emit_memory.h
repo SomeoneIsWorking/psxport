@@ -8,6 +8,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <new>
+#include <optional>
 #include <span>
 #include <vector>
 
@@ -293,6 +294,34 @@ public:
   ElementScope &operator=(const ElementScope &) = delete;
   ElementScope(ElementScope &&) = delete;
   ElementScope &operator=(ElementScope &&) = delete;
+
+private:
+  alignas(EmissionScope::Guard) std::byte storage_[sizeof(EmissionScope::Guard)];
+  EmissionScope::Guard *guard_ = nullptr;
+};
+
+// A pass rewriting the packet at `packetAddress` in place over the guest (a tint, a palette swap) keeps the
+// packet's own key; nothing in a render, and nothing for an unbound packet.
+class PacketAmendScope {
+public:
+  PacketAmendScope(const EmitMemory &memory, std::uint32_t packetAddress) {
+    if (memory.hosted()) {
+      return;
+    }
+    EmissionScope &emission = memory.core().emission;
+    if (const std::optional<RecordKey> key = emission.keyFor(packetAddress)) {
+      guard_ = new (storage_) EmissionScope::Guard(emission.amend(*key));
+    }
+  }
+  ~PacketAmendScope() {
+    if (guard_ != nullptr) {
+      guard_->~Guard();
+    }
+  }
+  PacketAmendScope(const PacketAmendScope &) = delete;
+  PacketAmendScope &operator=(const PacketAmendScope &) = delete;
+  PacketAmendScope(PacketAmendScope &&) = delete;
+  PacketAmendScope &operator=(PacketAmendScope &&) = delete;
 
 private:
   alignas(EmissionScope::Guard) std::byte storage_[sizeof(EmissionScope::Guard)];
