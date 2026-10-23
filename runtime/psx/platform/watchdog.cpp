@@ -23,6 +23,7 @@ struct {
   int boot_secs; // generous grace until the main presenter completes cold initialization
   volatile sig_atomic_t armed;
   volatile sig_atomic_t main_present_ready; // 0 until the first main VRAM presentation completes
+  volatile sig_atomic_t suspended;          // an intentional idle: presents during it must not re-arm
   volatile sig_atomic_t int_seen;           // SIGINT/SIGTERM re-entry latch
 } s_wd;
 
@@ -170,7 +171,7 @@ Watchdog::Watchdog() {
 // that presenter is ready, the same call naturally uses the steady timeout, so later movies do not
 // regain boot grace.
 void Watchdog::progress() {
-  if (s_wd.armed) {
+  if (s_wd.armed && !s_wd.suspended) {
     alarm((unsigned)(s_wd.main_present_ready ? s_wd.secs : s_wd.boot_secs));
   }
 }
@@ -180,7 +181,7 @@ void Watchdog::progress() {
 // first full target allocation are part of this present and own boot_secs. Calling it for a simpler
 // bootstrap image is equally wrong because that path does not materialise those targets.
 void Watchdog::mainPresentComplete() {
-  if (!s_wd.armed) {
+  if (!s_wd.armed || s_wd.suspended) {
     return;
   }
   s_wd.main_present_ready = 1;
@@ -191,16 +192,18 @@ void Watchdog::mainPresentComplete() {
 // present this retains boot_secs; afterwards it re-arms the steady-state budget. The native frame loop
 // calls this before work so a resumed step can still be diagnosed if it hangs.
 void Watchdog::resume() {
+  s_wd.suspended = 0;
   if (s_wd.armed) {
     alarm((unsigned)(s_wd.main_present_ready ? s_wd.secs : s_wd.boot_secs));
   }
 }
 
 // Suspend the frame-progress timeout during an INTENTIONAL idle where no frame is presented and that
-// is NOT a hang: a debug-server PAUSE/step-wait, or blocking on REPL stdin for the next command. The
-// resume re-arms it before work resumes, and the next completed present resets it. Without
-// this the 3s timeout fires on a deliberately paused/idle process. Keep s_armed so resume can re-arm.
+// is NOT a hang: a debug-server PAUSE/step-wait, blocking on REPL stdin for the next command, or a
+// bug-report form held open for the player. While suspended no present may re-arm it (a form still
+// presents), and resume() re-arms it before work resumes. Keep s_armed so resume can re-arm.
 void Watchdog::suspend() {
+  s_wd.suspended = 1;
   if (s_wd.armed) {
     alarm(0);
   }

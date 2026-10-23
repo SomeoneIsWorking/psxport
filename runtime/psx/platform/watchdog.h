@@ -19,7 +19,8 @@ public:
   static void mainPresentComplete();
   // Resume after an intentional idle without claiming frame progress.
   static void resume();
-  // Cancel the timeout during an intentional idle (pause, REPL input wait).
+  // Cancel the timeout during an intentional idle; no present re-arms it until resume() (pause, REPL
+  // input wait, a bug-report form held open).
   static void suspend();
   // Permanently disarm (the divergence debugger pauses indefinitely).
   static void disable();
