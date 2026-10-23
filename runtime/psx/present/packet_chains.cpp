@@ -40,6 +40,17 @@ PacketChainWalker::walk(std::uint32_t link, OtSlot slot, DrawModeTracker &drawMo
     if (drawMode.take(command) || head.isDrawEnvironmentCommand() || head.isDiscardedNoOp()) {
       continue;
     }
+    if (head.isPolyLine()) {
+      const bool terminated = gpu::decodePolyLine({command, commandPlaces}, [&](DrawPrimitive segment) {
+        drawMode.apply(segment);
+        segment.sourceAddress = packet;
+        sink.emit(slot, segment);
+      });
+      if (!terminated) {
+        return packet;
+      }
+      continue;
+    }
     std::optional<DrawPrimitive> primitive = gpu::decodePacketPrimitive({command, commandPlaces});
     if (!primitive) {
       return packet;

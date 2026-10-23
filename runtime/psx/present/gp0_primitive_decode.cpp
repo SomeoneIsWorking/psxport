@@ -69,6 +69,38 @@ void decodeLineEnds(std::span<const std::uint32_t> words, present::RecordVertex 
   to.y = p1.y;
 }
 
+void decodePlacedLineEnds(PacketView packet, present::RecordVertex &from, present::RecordVertex &to) {
+  decodeLineEnds(packet.words, from, to);
+  place(from, packet, 1);
+  place(to, packet, Gp0Command(packet.words[0]).flags().gouraud ? 3 : 2);
+}
+
+present::RecordVertex polyLinePoint(PacketView packet,
+                                    std::size_t colourWord,
+                                    std::size_t positionWord,
+                                    const present::RecordVertex &previous) {
+  present::RecordVertex vertex = colourWord != positionWord ? colourVertex(packet.words[colourWord]) : previous;
+  const Gp0VertexPos position = Gp0Command(packet.words[positionWord]).vertexPos();
+  vertex.x = position.x;
+  vertex.y = position.y;
+  vertex.subX = 0.0f;
+  vertex.subY = 0.0f;
+  place(vertex, packet, positionWord);
+  return vertex;
+}
+
+present::DrawPrimitive
+lineSegment(const Gp0Command &command, const present::RecordVertex &from, const present::RecordVertex &to) {
+  present::DrawPrimitive primitive;
+  primitive.kind = present::PrimitiveKind::Line;
+  primitive.vertexCount = 2;
+  primitive.gouraud = command.flags().gouraud;
+  primitive.semiTransparent = command.flags().semiTransparent;
+  primitive.vertices[0] = from;
+  primitive.vertices[1] = to;
+  return primitive;
+}
+
 void applyTexPageAttribute(present::RecordDrawState &state, std::uint16_t attribute) {
   const TexPage page = decodeTexPage(attribute);
   state.texPageX = page.x;
@@ -112,14 +144,10 @@ std::optional<present::DrawPrimitive> decodePacketPrimitive(PacketView packet) {
     if (command.isPolyLine()) {
       return std::nullopt;
     }
-    primitive.kind = present::PrimitiveKind::Line;
-    primitive.vertexCount = 2;
-    primitive.textured = false;
-    primitive.modulate = false;
-    decodeLineEnds(words, primitive.vertices[0], primitive.vertices[1]);
-    place(primitive.vertices[0], packet, 1);
-    place(primitive.vertices[1], packet, primitive.gouraud ? 3 : 2);
-    return primitive;
+    present::RecordVertex from;
+    present::RecordVertex to;
+    decodePlacedLineEnds(packet, from, to);
+    return lineSegment(command, from, to);
   }
   if (command.isRectangleOrSprite()) {
     primitive.kind = present::PrimitiveKind::Sprite;

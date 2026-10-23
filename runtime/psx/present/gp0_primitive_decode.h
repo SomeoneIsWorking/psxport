@@ -64,6 +64,48 @@ private:
   std::array<gte::WordPlace, Count> places_{};
 };
 
+// The vertex of a poly-line point after `previous`: its colour from the word at `colourWord` (a gouraud line's),
+// or `previous`'s, and its position and place from the word at `positionWord`.
+present::RecordVertex polyLinePoint(PacketView packet,
+                                    std::size_t colourWord,
+                                    std::size_t positionWord,
+                                    const present::RecordVertex &previous);
+// The first two points of a line packet with their places.
+void decodePlacedLineEnds(PacketView packet, present::RecordVertex &from, present::RecordVertex &to);
+// A line primitive of `command` from `from` to `to`, as the record tap records each segment.
+present::DrawPrimitive
+lineSegment(const Gp0Command &command, const present::RecordVertex &from, const present::RecordVertex &to);
+
+// Each segment of a poly-line packet as written, before the draw offset, first to last, through
+// `segment(DrawPrimitive)`; false, having emitted the segments before it, when the packet ends before its
+// terminator.
+template <class Segment> bool decodePolyLine(PacketView packet, Segment &&segment) {
+  const std::span<const std::uint32_t> words = packet.words;
+  const Gp0Command command(words[0]);
+  const bool gouraud = command.flags().gouraud;
+  const std::size_t stride = gouraud ? 2u : 1u;
+  const std::size_t third = gouraud ? 4u : 3u; // the word after the first two points
+  if (words.size() < third) {
+    return false;
+  }
+  present::RecordVertex from;
+  present::RecordVertex to;
+  decodePlacedLineEnds(packet, from, to);
+  segment(lineSegment(command, from, to));
+  for (std::size_t index = third; index < words.size(); index += stride) {
+    if (Gp0Command::isPolyLineTerminator(words[index])) {
+      return true;
+    }
+    if (index + stride > words.size()) {
+      return false;
+    }
+    const present::RecordVertex next = polyLinePoint(packet, index, index + stride - 1u, to);
+    segment(lineSegment(command, to, next));
+    to = next;
+  }
+  return false;
+}
+
 // One polygon or sprite packet as written, before the draw offset: positions, colours, UVs, and for a
 // textured polygon its texpage and CLUT attributes. A sprite's or line's texture page and blend mode are the
 // draw environment's. A vertex stored with a place lies that far past its whole pixel (subX/subY).
