@@ -21,3 +21,8 @@ first: `bookStore` (write rollback, packet tracking, `emission.noteStore`), `dis
 `storeWatch`. Each needs a seam that does not depend on seeing every store, such as Lightrec's own invalidation hook
 for code pages, or page protection for the few watched ranges. This is a framework restructure that changes every
 title's store path, so it needs its own pass and an all-title real-time check.
+
+## C-12 no longer pays it at boot (2026-10-28)
+C-12 now binds its libcd CdRead and CdReadSync as stock, so its loads land at once and its boot no longer spins in
+CdReady (psx-c12 0006: 0 of 2361 presents missed). The callback cost itself is unchanged and still applies to any
+title that spins or stores heavily; this issue stays open for the direct RAM map.

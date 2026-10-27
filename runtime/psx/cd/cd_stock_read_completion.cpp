@@ -4,6 +4,8 @@
 #include "core.h"
 #include "game.h"
 #include "game_runtime.h"
+#include "guest_code_module.h"
+#include "guest_memory_map.h"
 #include "hle.h"
 #include "irq_edge.h"
 
@@ -16,6 +18,9 @@ void announceStockReadLanding(Core &core, const StockReadLanding &landing) {
     return;
   }
   core.runtime.stockCdReadLanded(core, landing);
+  // A stock read is a CD transfer like DMA3, so it lands in the declared module window the same way.
+  const std::uint32_t begin = landing.destination & kPhysicalMask;
+  psx::code_module::publishLanding(core, {begin, begin + landing.bytes});
 }
 
 bool raiseStockReadCompletion(Core &core, std::uint32_t firstLba, std::uint32_t sectors, std::uint8_t mode) {
