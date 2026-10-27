@@ -80,6 +80,9 @@ void Gp0RecordTap::onGp0(std::uint32_t word, const Gp0Origin &origin, const Devi
     if (words_.empty()) {
       packetSource_ = origin.sourceAddress;
       packetKey_ = origin.packetKey;
+      packetOwner_ = origin.owner;
+      packetMixed_ = origin.mixedOwner;
+      packetCommand_ = static_cast<std::uint8_t>(word >> 24);
       need_ = firstDispatchWords(word);
     }
     words_.push_back(word);
@@ -173,6 +176,14 @@ std::optional<present::RecordKey> Gp0RecordTap::nextPrimitiveKey() {
   return key;
 }
 
+void Gp0RecordTap::stampPacket(present::DrawPrimitive &primitive) {
+  primitive.key = nextPrimitiveKey();
+  primitive.slot = slot_;
+  primitive.owner = packetOwner_;
+  primitive.mixedOwner = packetMixed_;
+  primitive.command = packetCommand_;
+}
+
 void Gp0RecordTap::verify(const DeviceProbe &probe) {
   bool agrees = !probe.wordDropped && probe.dispatched == expectedDispatches_;
   const auto queued = static_cast<unsigned>(words_.size());
@@ -242,6 +253,8 @@ void Gp0RecordTap::executeCommand(const DeviceProbe &probe) {
       polyLineOpcode_ = words_[0];
       polyLineSource_ = packetSource_;
       polyLineKey_ = packetKey_;
+      polyLineOwner_ = packetOwner_;
+      polyLineMixed_ = packetMixed_;
       need_ = gouraud ? 2u : 1u;
     }
     words_.clear();
@@ -294,6 +307,7 @@ void Gp0RecordTap::executeCommand(const DeviceProbe &probe) {
     upload_.maskSet = probe.state.maskSet;
     upload_.maskCheck = probe.state.maskCheck;
     upload_.sourceAddress = packetSource_;
+    upload_.owner = packetOwner_;
     uploadRemaining_ = static_cast<std::uint32_t>(target.width) * static_cast<std::uint32_t>(target.height);
     uploadPixels_.clear();
     feedback_.invalidate();
@@ -337,8 +351,7 @@ void Gp0RecordTap::recordPolygon(const DeviceProbe &probe) {
     primitive.clutOffset = captureClut(probe);
     primitive.clutWord = static_cast<std::uint16_t>(probe.clutTag & 0x7FFFu);
   }
-  primitive.key = nextPrimitiveKey();
-  primitive.slot = slot_;
+  stampPacket(primitive);
   record_.append(primitive);
 }
 
@@ -375,8 +388,7 @@ void Gp0RecordTap::recordLineSegment(const present::RecordVertex &from,
   primitive.vertices[1] = to;
   primitive.state = probe.state;
   primitive.sourceAddress = packetSource_;
-  primitive.key = nextPrimitiveKey();
-  primitive.slot = slot_;
+  stampPacket(primitive);
   record_.append(primitive);
   settleLast(probe);
 }
@@ -399,6 +411,9 @@ void Gp0RecordTap::consumePolyLineWord(std::uint32_t word, const DeviceProbe &pr
   expectedDispatches_ = 1;
   packetSource_ = polyLineSource_;
   packetKey_ = polyLineKey_;
+  packetOwner_ = polyLineOwner_;
+  packetMixed_ = polyLineMixed_;
+  packetCommand_ = static_cast<std::uint8_t>(polyLineOpcode_ >> 24);
   recordLineSegment(polyLinePoint_, to, gouraud, command.flags().semiTransparent, probe);
   polyLinePoint_ = to;
   words_.clear();
@@ -422,8 +437,7 @@ void Gp0RecordTap::recordSprite(const DeviceProbe &probe) {
     primitive.clutOffset = captureClut(probe);
     primitive.clutWord = static_cast<std::uint16_t>(probe.clutTag & 0x7FFFu);
   }
-  primitive.key = nextPrimitiveKey();
-  primitive.slot = slot_;
+  stampPacket(primitive);
   record_.append(primitive);
   settleLast(probe);
 }

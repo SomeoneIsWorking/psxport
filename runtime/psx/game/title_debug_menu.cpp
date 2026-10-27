@@ -243,6 +243,12 @@ void TitleDebugMenu::soundTest() {
   });
 }
 
+void TitleDebugMenu::screen(std::function<std::uint64_t(Core &)> key,
+                            std::function<std::string(Core &, std::uint64_t)> route) {
+  screenKey_ = std::move(key);
+  screenRoute_ = std::move(route);
+}
+
 void TitleDebugMenu::aboutLine(std::string_view line) {
   about_.push_back(line);
 }

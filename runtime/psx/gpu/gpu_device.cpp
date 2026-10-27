@@ -265,6 +265,10 @@ void GpuDevice::beginPacket() {
   mTap.beginPacket();
 }
 
+void GpuDevice::noteDrawEntry(std::uint32_t field) {
+  mTap.noteDrawEntry(field);
+}
+
 void GpuDevice::enterSlot(const std::optional<present::OtSlot> &slot, bool descending) {
   mTap.enterSlot(slot, descending);
 }
@@ -318,7 +322,7 @@ bool GpuDevice::hasUnsealedWork() const {
   return mTap.hasPendingWork();
 }
 
-void GpuDevice::loadImage(VramRect rect, std::span<const uint16_t> pixels) {
+void GpuDevice::loadImage(VramRect rect, std::span<const uint16_t> pixels, std::uint32_t owner) {
   const int x = rect.x;
   const int y = rect.y;
   const int width = rect.width;
@@ -331,13 +335,14 @@ void GpuDevice::loadImage(VramRect rect, std::span<const uint16_t> pixels) {
     lucent::error("gpu-device", "loadImage {}x{} given {} pixels", width, height, pixels.size());
     std::abort();
   }
-  gp0(0xA0000000u);
-  gp0((static_cast<uint32_t>(y & 0x1FF) << 16) | static_cast<uint32_t>(x & 0x3FF));
-  gp0((static_cast<uint32_t>(height) << 16) | static_cast<uint32_t>(width));
+  const Gp0Origin origin{.owner = owner};
+  gp0(0xA0000000u, origin);
+  gp0((static_cast<uint32_t>(y & 0x1FF) << 16) | static_cast<uint32_t>(x & 0x3FF), origin);
+  gp0((static_cast<uint32_t>(height) << 16) | static_cast<uint32_t>(width), origin);
   for (size_t i = 0; i < count; i += 2) {
     const uint32_t low = pixels[i];
     const uint32_t high = i + 1 < count ? pixels[i + 1] : 0u; // an odd count pads the last word
-    gp0(low | (high << 16));
+    gp0(low | (high << 16), origin);
   }
 }
 

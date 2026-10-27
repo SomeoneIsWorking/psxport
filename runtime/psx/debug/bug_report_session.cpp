@@ -29,6 +29,7 @@ namespace {
 constexpr const char *kScreenshotFile = "screen.png";
 constexpr const char *kReferenceFile = "psx.png";
 constexpr const char *kClipFile = "motion.png";
+constexpr const char *kOwnersFile = "owners.jsonl";
 constexpr const char *kRecordingFile = "repro.pad";
 constexpr const char *kCardFile = "memcard.mcr";
 
@@ -173,6 +174,11 @@ void BugReportSession::attachCaptures(Core &core, bug_report::Draft &draft) {
 
   if (const auto path = draft.pathFor(kClipFile, error); path && game.render().writeClip(path->string().c_str())) {
     attachOrWarn(draft, kClipFile, AttachmentRole::Screenshot, "The last second of presents before the report");
+  }
+
+  if (const auto path = draft.pathFor(kOwnersFile, error);
+      path && !game.ownerJournal.rows().empty() && game.ownerJournal.writeJsonl(core, path->string())) {
+    attachOrWarn(draft, kOwnersFile, AttachmentRole::Context, "Owner journal: draws with no owner, held intervals");
   }
 
   const std::size_t padFrames = game.pad.recordedFrames();

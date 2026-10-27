@@ -52,7 +52,8 @@ counts `Config::environmentNames()` as declared.
 
 The resolved value, source layer, and complete `PSXPORT_*` environment denominator are available
 through `psx::config::report()` and the `cvars` runtime command. `PSXPORT_LOG_FILE` selects the log
-sink. `PSXPORT_DEBUG` is the comma-separated diagnostic-channel set.
+sink. `PSXPORT_DEBUG` is the comma-separated diagnostic-channel set. `PSXPORT_OWNERS_DIR` (default `scratch/owners`,
+empty disarms) is where the owner journal writes its JSONL at each screen change and at run end.
 
 ## The live debug endpoint
 

@@ -2,6 +2,7 @@
 #pragma once
 
 #include "frame_record.h"
+#include "owner_ledger.h"
 #include "texture_feedback.h"
 
 #include <cstdint>
@@ -34,6 +35,8 @@ struct DeviceProbe {
 struct Gp0Origin {
   std::uint32_t sourceAddress = 0;
   std::optional<present::RecordKey> packetKey;
+  present::OwnerHandle owner = present::kNoOwner;
+  present::OwnerHandle mixedOwner = present::kNoOwner;
 };
 
 // Frames the GP0 word stream exactly as gpu.c's ProcessFIFO does, decodes each command with
@@ -46,6 +49,9 @@ public:
   void onGp0(std::uint32_t word, const Gp0Origin &origin, const DeviceProbe &probe);
   // The next words belong to a new OT node; `part` numbering restarts.
   void beginPacket();
+  void noteDrawEntry(std::uint32_t field) {
+    record_.markDrawEntry(field);
+  }
   // The walk reached `slot` of a table walked high to low when `descending`, or left every named
   // table (nullopt).
   void enterSlot(const std::optional<present::OtSlot> &slot, bool descending);
@@ -87,6 +93,8 @@ private:
   void resetFraming();
   // The key for the next primitive of the current packet: its packet key with the next part.
   std::optional<present::RecordKey> nextPrimitiveKey();
+  // The packet's key, owners and command onto `primitive`, with its slot.
+  void stampPacket(present::DrawPrimitive &primitive);
 
   std::uint64_t nextSequence_ = 1; // 0 is the presenter's empty record
   present::FrameRecord record_;
@@ -97,6 +105,9 @@ private:
   unsigned need_ = 0;
   std::uint32_t packetSource_ = 0;
   std::optional<present::RecordKey> packetKey_;
+  present::OwnerHandle packetOwner_ = present::kNoOwner;
+  present::OwnerHandle packetMixed_ = present::kNoOwner;
+  std::uint8_t packetCommand_ = 0;
   std::optional<present::RecordKey> lastKey_; // the last primitive key stamped in this packet
   std::optional<present::OtSlot> slot_;
   unsigned expectedDispatches_ = 0; // by the word being processed
@@ -108,6 +119,8 @@ private:
   std::uint32_t polyLineOpcode_ = 0;
   std::uint32_t polyLineSource_ = 0;
   std::optional<present::RecordKey> polyLineKey_;
+  present::OwnerHandle polyLineOwner_ = present::kNoOwner;
+  present::OwnerHandle polyLineMixed_ = present::kNoOwner;
 
   present::VramUpload upload_{};
   std::uint32_t uploadRemaining_ = 0;

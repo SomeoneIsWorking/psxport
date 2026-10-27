@@ -23,6 +23,10 @@ void dma2LinkedList(Core &core, std::uint32_t madr) {
 
 void dma2Block(Core &core, GuestSpan block, std::uint32_t blockWords, bool toGpu) {
   const std::uint32_t base = mainRamOffsetOf(block.address);
+  const present::OwnerHandle owner = toGpu ? core.owners.port(present::WriterKind::BlockDma) : present::kNoOwner;
+  if (toGpu) {
+    core.gpuDevice().noteDrawEntry(static_cast<std::uint32_t>(core.game->timing.displayField()));
+  }
   for (std::uint32_t i = 0; i < block.bytes / 4u; i++) {
     // A long upload is milliseconds of host work inside one executor segment; a present due meanwhile lands
     // between DMA blocks.
@@ -31,7 +35,7 @@ void dma2Block(Core &core, GuestSpan block, std::uint32_t blockWords, bool toGpu
     }
     const std::uint32_t address = base + i * 4u;
     if (toGpu) {
-      core.gpuDevice().gp0(core.mem_r32(address), {.sourceAddress = guestAddressOf(address)});
+      core.gpuDevice().gp0(core.mem_r32(address), {.sourceAddress = guestAddressOf(address), .owner = owner});
     } else {
       core.mem_w32(address, core.gpuDevice().read());
     }

@@ -23,6 +23,7 @@
 #include "memcard.h"
 #include "mods.h"
 #include "native_fmv.h"
+#include "owner_journal.h"
 #include "pad_frame_probes.h"
 #include "pad_input.h"
 #include "platform_hle.h"
@@ -81,6 +82,7 @@ public:
   }
 
   psx::frame::FramePresenter presentation;           // non-temporal current-frame fence, present and pacing owner
+  psx::present::OwnerJournal ownerJournal;           // draws with no owner and held intervals, per screen
   psx::present::GuestPresentationState guestDisplay; // latched only when the title publishes matching guest projection
   // A resume replay or a host pre-roll: the pacer does not sleep, movies run uncapped, audio is dropped.
   bool fastForwarding() const {
@@ -106,6 +108,8 @@ public:
   // The product this Game runs in and the catalog title it runs; null for the selector.
   std::string_view productName;
   const psx::host::TitleIdentity *title = nullptr;
+  // The authenticated executable the title booted from; empty for the selector.
+  std::filesystem::path executable;
 
   // The title's card and user-data names; fields are null when the title declares none.
   psx::game::HostIdentity hostIdentity() const;

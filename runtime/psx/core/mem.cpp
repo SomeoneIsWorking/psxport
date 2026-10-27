@@ -480,7 +480,8 @@ void Core::io_write(uint32_t a, uint32_t v, uint32_t bytes) {
     return;
   }
   if (p == 0x1F801810) {
-    gpuDevice().gp0(v);
+    gpuDevice().noteDrawEntry(static_cast<std::uint32_t>(game->timing.displayField()));
+    gpuDevice().gp0(v, {.owner = owners.port(psx::present::WriterKind::MmioGp0)});
     return;
   } // GP0 (direct)
   if (p == 0x1F801814) {

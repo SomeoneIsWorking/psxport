@@ -108,14 +108,6 @@ bool FrameComposer::index(const FrameRecord &shown,
       clutOffsets_.emplace_back(clutKey(*primitive), primitive->clutOffset);
     }
     if (!primitive->key) {
-      if (inBetween) {
-        lucent::debug(composeChannel,
-                      "record={} in-between shown whole: entry {} unkeyed, packet {:#010x}",
-                      shown.sequence(),
-                      i,
-                      primitive->sourceAddress);
-        return false;
-      }
       continue;
     }
     const std::uint64_t object = objectKey({primitive->key->producer, primitive->key->object});
@@ -126,6 +118,7 @@ bool FrameComposer::index(const FrameRecord &shown,
                       shown.sequence(),
                       primitive->key->producer,
                       primitive->key->object);
+        refusal_ = {HeldCause::None, primitive->key->producer, true};
         return false;
       }
       continue;
@@ -164,6 +157,7 @@ bool FrameComposer::index(const FrameRecord &shown,
                     shown.sequence(),
                     id.producer,
                     id.object);
+      refusal_ = {HeldCause::NoState, id.producer};
       return false;
     }
     begin = end;
@@ -246,6 +240,7 @@ FrameComposer::Placement FrameComposer::place(const FrameRecord &shown,
                     id.producer,
                     id.object,
                     states.t);
+      refusal_ = {HeldCause::ProducerRefused, id.producer};
       return Placement::Refused;
     }
     return Placement::Kept;
@@ -302,6 +297,7 @@ FrameComposer::Placement FrameComposer::place(const FrameRecord &shown,
                       shown.sequence(),
                       id.producer,
                       id.object);
+        refusal_ = {HeldCause::Unplaceable, id.producer};
         return Placement::Refused;
       }
       return Placement::Kept;
@@ -320,11 +316,12 @@ const FrameRecord *FrameComposer::compose(const FrameRecord &shown,
                                           float t,
                                           const StateProducers &producers,
                                           std::span<const std::uint16_t> vram) {
+  refusal_ = {};
   if (to.empty()) {
     lucent::debug(composeChannel, "record={} shown whole: no state saved", shown.sequence());
     return nullptr;
   }
-  // An in-between keeping any primitive as S drew it would mix two moments: S is shown whole instead.
+  // An in-between keeping an owned object as S drew it would mix two moments: it refuses instead.
   const bool inBetween = from != nullptr && t < 1.0f;
   if (!index(shown, to, producers, inBetween)) {
     return nullptr;
@@ -370,7 +367,17 @@ const FrameRecord *FrameComposer::compose(const FrameRecord &shown,
         object.render->rests(object.to, resting(object.to.size()))) {
       earlier = std::span<const std::byte>(resting_);
     }
-    const StateInterval states{.from = earlier.value_or(object.to), .to = object.to, .t = earlier ? t : 1.0f};
+    // An object with no state in S' would draw S's moment inside an in-between: the interval is held.
+    if (!earlier && inBetween) {
+      lucent::debug(composeChannel,
+                    "record={} in-between held: object {:#010x}/{:#010x} has no state in S'",
+                    shown.sequence(),
+                    object.id.producer,
+                    object.id.object);
+      refusal_ = {HeldCause::Unpaired, object.id.producer};
+      return nullptr;
+    }
+    const StateInterval states{.from = earlier.value_or(object.to), .to = object.to, .t = t};
     const auto run = std::span<const Keyed>(keyed_).subspan(object.begin, object.end - object.begin);
     const Placement placement = place(shown, object.id, *object.render, states, run, vram, inBetween);
     if (placement == Placement::Refused) {

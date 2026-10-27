@@ -56,6 +56,8 @@ public:
 
   // Advance the host field count once at the title's native frame boundary.
   void frameTick();
+  // Display fields the emulated clock has crossed: the field a draw entry or a present lands in.
+  [[nodiscard]] uint64_t displayField() const;
 
   // The emulated clock and the display-pacing phase, for a save state.
   struct ClockSnapshot {

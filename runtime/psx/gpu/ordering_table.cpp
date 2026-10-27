@@ -124,6 +124,7 @@ void OtTables::endWalk() {
 
 void submitOrderingTable(Core &core, GpuDevice &device, std::uint32_t rootGuestAddress) {
   OrderingTableCursor walk(core, rootGuestAddress);
+  device.noteDrawEntry(static_cast<std::uint32_t>(core.game->timing.displayField()));
   core.otTables.beginWalk();
   const OtTables &tables = core.otTables;
   device.enterSlot(std::nullopt, true);
@@ -140,10 +141,23 @@ void submitOrderingTable(Core &core, GpuDevice &device, std::uint32_t rootGuestA
     }
     if (node.carriesPrimitive()) {
       const std::optional<present::RecordKey> key = core.emission.keyFor(node.guestAddress());
+      // The command word's owner, and the other side of an overwrite pair in the packet: the writer that stored
+      // over an owned packet's word, or the scope an unowned packet's writer stored over.
+      const present::OwnerHandle owner = core.owners.ownerOf(node.guestAddress() + 4u);
+      const bool owned = present::OwnerLedger::isScope(owner);
+      present::OwnerHandle mixed = present::kNoOwner;
+      for (unsigned i = 0; i < node.gp0WordCount() && mixed == present::kNoOwner; i++) {
+        const std::uint32_t address = guestAddressOf(node.gp0WordRamOffset(i));
+        const present::OwnerHandle replaced = core.owners.overwrote(address);
+        if (replaced != present::kNoOwner) {
+          mixed = owned ? core.owners.ownerOf(address) : replaced;
+        }
+      }
       device.beginPacket();
       for (unsigned i = 0; i < node.gp0WordCount(); i++) {
         const std::uint32_t offset = node.gp0WordRamOffset(i);
-        device.gp0(core.mem_r32(offset), {.sourceAddress = guestAddressOf(offset), .packetKey = key});
+        device.gp0(core.mem_r32(offset),
+                   {.sourceAddress = guestAddressOf(offset), .packetKey = key, .owner = owner, .mixedOwner = mixed});
       }
     }
     if (const std::optional<present::OtSlot> empty = tables.emptyAfter(node.guestAddress())) {
@@ -152,6 +166,7 @@ void submitOrderingTable(Core &core, GpuDevice &device, std::uint32_t rootGuestA
   } while (walk.advance());
   device.enterSlot(std::nullopt, true);
   core.otTables.endWalk();
+  core.owners.drawListSubmitted();
 }
 
 } // namespace psx::gpu

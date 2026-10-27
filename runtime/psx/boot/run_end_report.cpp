@@ -24,6 +24,7 @@ void RunEndReport::emit(std::uint64_t productSteps) const {
   core.guestCallCensus().log("product loop ended");
   game_.perf.reportPresents();
   game_.presentation.reportStability();
+  game_.ownerJournal.flush(core);
   game_.spu_audio.reportQueue();
   if (const std::string &path = psx::config::ramdump_path(); !path.empty()) {
     psx::debug::Snapshotter::writeRam(core, path);

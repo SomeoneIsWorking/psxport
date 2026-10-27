@@ -3,6 +3,7 @@
 #include "emulated_time.h"
 #include "execution_control.h"
 #include "execution_exit.h"
+#include "game.h"
 #include "native_dispatch.h"
 
 #include <lucent/log.h>
@@ -43,6 +44,8 @@ bool GuestRedraw::run(std::uint32_t entry, std::span<const std::uint32_t> argume
                  entry,
                  cpu::executionExitName(result.reason),
                  result.guestPc);
+    core_.game->ownerJournal.record(
+        core_, {.reason = OwnerReason::ReplayRefused, .producer = entry, .sampleAddress = result.guestPc}, false);
     return false;
   }
   const auto touched = std::ranges::find_if(journal_.effects(), [](const cpu::SideEffect &effect) {
@@ -51,6 +54,8 @@ bool GuestRedraw::run(std::uint32_t entry, std::span<const std::uint32_t> argume
   });
   if (touched != journal_.effects().end()) {
     lucent::warn("redraw", "the redraw of 0x{:08X} reached {}", entry, cpu::describeSideEffect(*touched));
+    core_.game->ownerJournal.record(
+        core_, {.reason = OwnerReason::ReplayRefused, .producer = entry, .sampleAddress = touched->address}, false);
     return false;
   }
   return true;

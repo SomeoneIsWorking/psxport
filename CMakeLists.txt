@@ -18,3 +18,7 @@ add_subdirectory(tools)
 
 # The framework static library `psxport`.
 include(cmake/psxport.cmake)
+
+if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
+  include(cmake/testprog.cmake)
+endif()

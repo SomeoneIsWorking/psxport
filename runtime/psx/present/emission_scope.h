@@ -3,6 +3,7 @@
 
 #include "frame_record.h"
 #include "guest_address_range.h"
+#include "owner_ledger.h"
 
 #include <cstdint>
 #include <optional>
@@ -19,8 +20,9 @@ struct Producer {
 };
 
 // One per Core. While a scope (P, obj, element) is open, a store to a main-RAM word binds the word to
-// that key; a store outside every scope unbinds it. Native and guest stores both count: Lightrec routes
-// every RAM store through Core::mem_w*. A packet's key is the binding of its first command word, so links
+// that key in the OwnerLedger; a store outside every scope binds it to its writer. Native and guest stores both
+// count: Lightrec routes every RAM store through Core::mem_w*. A packet's key is the binding of its first command
+// word, so links
 // written into its header later, by anyone, leave it alone, and a binding outlives the record seal until
 // the word is rewritten. Keys are identity only: a producer that writes several packets for one object names
 // each with element(); packets left sharing a key are ambiguous and never interpolated. Every object scope
@@ -28,7 +30,7 @@ struct Producer {
 // that scope is the state those packets were drawn from.
 class EmissionScope {
 public:
-  EmissionScope();
+  explicit EmissionScope(OwnerLedger &ledger);
 
   class Guard {
   public:
@@ -60,22 +62,24 @@ public:
   }
   // The innermost open scope's key; aborts with none open.
   const RecordKey &current() const;
-  // Binds every main-RAM word `store` touches to the innermost open scope, or unbinds them with none open.
+  // Binds every main-RAM word `store` touches to the innermost open scope, or to its writer with none open.
   void noteStore(GuestSpan store);
   // Names the packet at `packetAddress` by the innermost open scope, for a producer that keys packets its
   // guest body already wrote.
   void bindPacket(std::uint32_t packetAddress);
   // The key of the packet whose header word is at `packetAddress`, with part 0.
   std::optional<RecordKey> keyFor(std::uint32_t packetAddress) const;
-  // Main RAM was replaced wholesale (a savestate load): nothing is bound.
-  void clear();
 
 private:
+  struct Open {
+    RecordKey key;
+    OwnerHandle handle = kNoOwner;
+  };
   void push(const RecordKey &key);
   void pop();
-  std::vector<RecordKey> stack_;
+  OwnerLedger &ledger_;
+  std::vector<Open> stack_;
   std::uint32_t nextSerial_ = 1;
-  std::vector<RecordKey> words_; // per main-RAM word; producer 0 is unbound
 };
 
 } // namespace psx::present

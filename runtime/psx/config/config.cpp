@@ -63,6 +63,7 @@ Var<std::string> cv_override_diff_report("PSXPORT_OVERRIDE_DIFF_REPORT",
                                          std::string(psx::cpu::kDefaultDifferentialReportPath),
                                          kRunOnly);
 Var<std::string> cv_reach_report("PSXPORT_REACH_REPORT", "", kRunOnly);
+Var<std::string> cv_owners_dir("PSXPORT_OWNERS_DIR", "scratch/owners", kRunOnly);
 Var<bool> cv_fullscreen("PSXPORT_FULLSCREEN", false, kRunOnly);
 Var<bool> cv_windowed("PSXPORT_WINDOWED", true, kRunOnly);
 Var<std::string> cv_picker_titles("PSXPORT_PICKER_TITLES", "", kRunOnly);
@@ -99,6 +100,7 @@ const Registration kRegistration{
     cv_override_diff_dead_stack,
     cv_override_diff_report,
     cv_reach_report,
+    cv_owners_dir,
     cv_fullscreen,
     cv_windowed,
     cv_picker_titles,
@@ -200,6 +202,10 @@ psx::cpu::OverrideDifferentialConfig override_differential_config() {
 
 std::string function_reach_report_path() {
   return cv_reach_report.get();
+}
+
+std::string owners_dir() {
+  return cv_owners_dir.get();
 }
 
 bool no_audio() {
