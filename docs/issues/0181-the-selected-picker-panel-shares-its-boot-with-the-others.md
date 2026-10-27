@@ -44,3 +44,13 @@ Spyro 2 after 5.9 s and Spyro 3 after 9.2 s; all three reach their demos.
 
 The Spyro 2/3 wait is accepted: it is their own boot prefixes, run unpaced inside each selector frame's pre-roll
 budget, after the selected panel. Round-robin bought them about 0.6 s and cost the panel in focus about 2 s.
+
+What a panel shows when it turns ready (psxport working tree after `2b3cb3bb`, Spyro selector, paced, hidden, sink
+960x540 so every present could be shot, `PSXPORT_PRESENT_SHOT_AT=1-900`; `psx-spyro/scratch/player-bugs-2/picker-shots`
+and `picker-shots2`, contact sheets `spyro1_ready.png` and `flips.png`):
+- Spyro 1 turns ready on present 438, the first frame of its title flyover fading in from black (mean luma 0-2 at
+  presents 436-439, 4 at 440, 7 at 441). It is the selected panel and keeps running, so the pane shows the live
+  fade-in; with the deleted hold it showed its cover until a lit frame passed the probe.
+- Spyro 2 and Spyro 3 turn ready on their "Developed by Insomniac" card (mean luma about 4), as in the original report.
+- Not shown: a panel deselected in the middle of a fade. That needs a selector input injected while a panel fades;
+  a deselected panel then holds whatever it last presented, black included.
