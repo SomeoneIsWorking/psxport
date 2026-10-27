@@ -126,7 +126,8 @@ press-start page or opening movie, whether or not it has drawn a picture by then
 selected panel runs and the others hold. A pre-roll is a fast-forward (`SessionControl::setPreRolling`,
 read through `Game::fastForwarding`): its steps do not sleep on the panel's pacer and its audio is
 dropped. Each picker frame pre-rolls one panel for as many steps as fit in one NTSC field
-(`PreRollBudget`), at least one. A settled panel steps once per picker frame on its own pacer, so the
+(`PreRollBudget`), at least one. The selected panel takes every pre-roll turn until it shows a picture; then the
+unsettled panels take turns. A settled panel steps once per picker frame on its own pacer, so the
 picker's loop runs at that title's step cadence, but the selector's frame follows the selected panel's
 presents: the picker is that panel's pane host (`TitleSession::setPaneHost`), building at each pane
 build and showing at each pane show, so an interpolated logic frame's in-between reaches the window.
