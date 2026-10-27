@@ -4,15 +4,20 @@
 //   * the SDL event queue drain — every pump site goes through the same function;
 //   * the delivered host key state, one bit per SDL scancode;
 //   * the SDL gamepads: open, hotswap, close, and their contribution to the button mask;
+//   * which overlay takes the events: the one of the Game holding the player's input;
 //   * whether the GAME or the overlay currently owns the keyboard;
-//   * the P / '.' / B debug-key edges, latched here and acted on by whoever owns the action.
+//   * the P / '.' / B debug-key edges, latched here and acted on by whoever owns the action;
+//   * the control channel's injected input, pushed into the same queue (InputInjection).
 //
 // It knows nothing about the PSX guest, the pad packet, the frame clock, a recording or a replay:
-// those belong to psx::input::Pad, which consumes the mask this owner produces. One host-input
-// owner means one place where "is the player holding a key" can be answered, and one place where a
-// host event can be dropped by accident.
+// those belong to psx::input::Pad, which consumes the mask this owner produces. One per process, like
+// the window whose queue it drains: every Game of the process (the picker and its panels, a title)
+// reads this one, so a key's press and release always land in the same state.
 #pragma once
+#include "input_injection.h"
+
 #include <cstdint>
+#include <vector>
 
 class RmlOverlay;
 struct SDL_Gamepad; // opaque; only held as pointers (SDL build only)
@@ -47,12 +52,12 @@ public:
   HostInput(const HostInput &) = delete;
   HostInput &operator=(const HostInput &) = delete;
 
-  // The overlay consumes the same events this owner drains, so it is an explicit dependency rather
-  // than a per-event lookup through the Game. Optional: with no overlay attached, events are still
-  // drained and recorded.
-  void attachOverlay(RmlOverlay *overlay) {
-    mOverlay = overlay;
-  }
+  // Each Game's overlay, from its construction to its destruction. Events go to the live one, the
+  // overlay of the Game holding the player's input; with none live, events are still drained and recorded.
+  void attachOverlay(RmlOverlay *overlay);
+  void detachOverlay(const RmlOverlay *overlay);
+  // Pad::setPlayerInputSuppressed: whether this overlay's Game holds the player's input.
+  void setOverlayLive(const RmlOverlay *overlay, bool live);
 
   // Drain the host event queue: record every delivered key into the state below, hand every event to
   // the overlay, and hand a window close to the attached QuitScope.
@@ -66,8 +71,7 @@ public:
   // With no QuitScope attached a window close ends the process.
   void drainEvents();
 
-  // The run that owns its end. The SDL queue is the process's, so every Game whose drain can see the
-  // close attaches the same scope; null detaches.
+  // The run that owns its end; null detaches.
   void attachQuitScope(QuitScope *scope) {
     mQuitScope = scope;
   }
@@ -75,14 +79,19 @@ public:
   // The active-low PSX button mask for this frame, from the host keyboard and every connected
   // controller, additive so both work at once. Drains first, so a caller only ever has to pump here.
   //
-  // `shown` says the window is mapped for a player. An unmapped tool window takes no host input, so it
-  // answers kNoButtons and drops any pending debug-key edge; a connected controller never steers a tool run.
+  // `shown` says the window is mapped for a player. An unmapped tool window reads the same queue, which only
+  // injected events reach, and opens only virtual gamepads, so a connected controller never steers a tool run.
   std::uint16_t poll(bool shown);
 
-  // Take the P (pause / resume) edge the last poll detected, and the '.' (freeze, advance one frame)
-  // edge. Edge-detected once per poll and latched until taken, so one press is one action no matter
-  // which turn consumes it. Taking is separate from asking because the ACTION is not this owner's:
-  // the debug channel owns pause and step state (DbgServer::togglePause / addStep).
+  // The control channel's keys, mouse, touch and virtual gamepad, delivered through drainEvents and poll.
+  InputInjection &injection() {
+    return mInjection;
+  }
+
+  // Take the P (pause / resume) edge a poll detected, and the '.' (freeze, advance one frame) edge.
+  // Latched until taken, so one press is one action whichever Game's poll saw it. Taking is separate from asking
+  // because the ACTION is not this owner's: the debug channel owns pause and step state (DbgServer::togglePause /
+  // addStep).
   bool takePauseRequest() {
     const bool requested = mPauseRequested;
     mPauseRequested = false;
@@ -105,13 +114,21 @@ private:
   bool keyDown(int scancode) const;
   void noteHostKey(int scancode, bool down);
   void ensureGamepadSubsystem();
-  void rescanControllers();
+  void rescanControllers(bool shown);
   // PSXPORT_PAD_NOPAD: ignore every controller and use the keyboard only. For a machine where a
   // connected or phantom pad reports a drifting analog stick and cannot be unplugged.
   bool noPadRequested();
 #endif
 
-  RmlOverlay *mOverlay = nullptr;
+  struct AttachedOverlay {
+    RmlOverlay *overlay;
+    bool live;
+  };
+  // The overlay of the Game holding the player's input, or null.
+  RmlOverlay *liveOverlay() const;
+
+  std::vector<AttachedOverlay> mOverlays;
+  InputInjection mInjection;
 
 #ifdef PSXPORT_SDL
   // The delivered host key state, fed from the events themselves rather than from SDL's keyboard array

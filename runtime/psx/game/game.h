@@ -52,6 +52,8 @@ public:
   // Game made without one owns it. Declared before every user so it is destroyed after them.
   std::unique_ptr<psx::render::RenderDevice> ownedRenderDevice;
   psx::render::RenderDevice &renderDevice;
+  // The window's host input, shared the same way and declared before the pad that reads it.
+  std::unique_ptr<psx::input::HostInput> ownedHostInput;
   Core core; // CPU registers + 2 MB main RAM + 1 KB scratchpad (was the sole instance object)
 
   // ---- migrated subsystem state (one member per migrated subsystem) ----
@@ -67,11 +69,10 @@ public:
   Hle hle;
   Sio0 sio; // controller port (SIO0) hardware: the pad protocol and its transfer/ack deadlines
   DmaCallbackRegistry dmaCallbacks;
-  // The host input owner, constructed before the pad it feeds: the SDL event drain, the delivered
-  // key state, the gamepads and the active-low mask they add up to. Every pump site — the pad frame
-  // service, the SCEA splash, a blocking movie, the debug-server pause wait, and the present path's
-  // own window drain — reaches the host through this one object.
-  psx::input::HostInput hostInput;
+  // The process's host input: the SDL event drain, the delivered key state, the gamepads and the
+  // active-low mask they add up to. Every pump site — the pad frame service, a blocking movie, the
+  // debug-server pause wait, and the present path's own window drain — reaches the host through it.
+  psx::input::HostInput &hostInput;
   Pad pad{hostInput};
   Repl repl;                                         // interactive REPL driver + title-consumed requests (repl.cpp)
   Fmv fmv;                                           // native .STR movie player (native_fmv.cpp)
@@ -135,8 +136,11 @@ public:
 
   // core.game is a back-pointer so a subsystem holding one can reach the rest of the machine.
   Game(psx::game::GameRuntime &runtime, const psx::config::Config &config);
-  // Present through a device the caller owns and keeps alive past this Game.
-  Game(psx::game::GameRuntime &runtime, psx::render::RenderDevice &presentation, const psx::config::Config &config);
+  // Present through a device and read a host input the caller owns and keeps alive past this Game.
+  Game(psx::game::GameRuntime &runtime,
+       psx::render::RenderDevice &presentation,
+       psx::input::HostInput &input,
+       const psx::config::Config &config);
   ~Game();
   // Present nothing: no window or GPU device is brought up.
   void disablePresentation();

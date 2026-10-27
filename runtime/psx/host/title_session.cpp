@@ -75,10 +75,9 @@ bool TitleSession::boot() {
     lucent::error("boot", "{} has no authenticated executable", title_.identity->displayName);
     return false;
   }
-  parts_->game = std::make_unique<Game>(runtime, services_.presentation, services_.config);
+  parts_->game = std::make_unique<Game>(runtime, services_.presentation, services_.input, services_.config);
   Game &game = *parts_->game;
   Core &core = game.core;
-  game.hostInput.attachQuitScope(&services_.quit);
   game.session.setReturnAvailable(selectorAvailable_);
   game.productName = catalog_.productName();
   game.title = title_.identity;

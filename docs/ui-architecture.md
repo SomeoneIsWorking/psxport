@@ -72,7 +72,7 @@ when both halves had been false for some time. Both are now gone, so there is no
 
 **psxport already has the developer stack, and it is better suited than ImGui here.**
 `runtime/psx/debug/debug_commands.cpp` holds the developer verbs; `repl.cpp` (stdin) and `dbg_server.cpp`
-(TCP + `tools/dbgclient.py`) carry them and work with no window at all.
+(HTTP + `tools/dbgclient.py`) carry them and work with no window at all.
 
 **And that is the deciding constraint.** `docs/workspace/PROTOCOL.md`: *agents never run windowed*. An ImGui
 developer stack draws into the swapchain, so the primary consumer of developer tooling in this
@@ -91,15 +91,13 @@ implying a stack that grep says does not exist (re-vendoring later is one `git c
 
 ## Driving the menu without a window
 
-The menu is driven by SDL keyboard events, which do not exist headless. The REPL therefore carries
-a driving surface — host UI state only, no guest state, like `press`/`tap`:
+A hidden window drives the menu through the player's own path: the control channel's `key`, `text`,
+`mouse`, `touch` and `gamepad` verbs push SDL events into the window's queue on the main thread
+(`input/input_injection.h`), and `HostInput` hands them to RmlUi exactly as a real device would. ESC opens
+the menu, a click at a tab's window coordinates selects it, arrows and Return walk and run rows. `pshot`
+shows the result. `menu` alone dumps every tab, pane and row with its LIVE value to the log.
 
-    menu [on|off|toggle]              show / hide
-    menu tab <index>                  select a tab
-    menu nav <up|down|left|right|enter>   navigate / activate the focused row
-    menu dump                         enumerate every tab, pane and row with its LIVE value
-
-`menu dump` is the instrument that answers "did a change lose a row?" by measuring instead of by
+The dump is the instrument that answers "did a change lose a row?" by measuring instead of by
 counting two files by hand. It prints its counts first, so the enumeration always arrives with its
 denominator.
 

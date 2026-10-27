@@ -67,10 +67,8 @@ public:
   bug_report::Form *showBugReport(const bug_report::Draft &draft);
   void closeBugReport();
 
-  // Headless driving (REPL `menu ...`): the menu without SDL keyboard events.
-  void selectTab(int index);
-  bool sendKey(SDL_Keycode key); // false = the menu did not claim that key
-  void dumpMenu() const;         // enumerate every tab/pane/row + its live value
+  // Every tab, pane and row with its live value, to the log (control channel `menu`).
+  void dumpMenu() const;
 
 private:
   bool mInited = false;

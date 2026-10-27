@@ -10,11 +10,13 @@
 #include "gpu_debug.h"
 #include "gpu_device.h"
 #include "guest_call.h"
+#include "input_injection.h"
 #include "lightrec_executor.h"
 #include "machine_state.h"
 #include "ordering_table.h"
 #include "ot_attr.h"
 #include "render.h"
+#include "render_device.h"
 #include "render_mode.h"
 #include "render_state.h"
 #include "snapshot.h"
@@ -570,47 +572,117 @@ void bugReport(const Call &call) {
   call.reply("bugreport: armed; it is taken over the next two frames");
 }
 
-// Host UI state only, so the overlay can be shown, read and navigated headless.
+// Every row of the overlay with its live value; the menu itself is driven by injected keys and mouse.
 void menu(const Call &call) {
-  const std::string_view which = call.args.word(1);
-  RmlOverlay &overlay = call.core.game->rml_overlay;
+  const RmlOverlay &overlay = call.core.game->rml_overlay;
   if (!overlay.inited()) {
     call.reply("menu: overlay NOT initialised");
-    return;
-  }
-  if (!overlay.hasMenu()) {
+  } else if (!overlay.hasMenu()) {
     call.reply("menu: overlay is up but has NO DOCUMENT (check PSXPORT_ASSET_DIR)");
+  } else {
+    overlay.dumpMenu();
+    call.reply(lucent::format("menu dumped to the log ({})", overlay.visible() ? "shown" : "hidden"));
+  }
+}
+
+// Injected input enters the window's own event queue, so every reader sees it as the player's.
+input::WindowId windowId(const Call &call) {
+  return input::WindowId{SDL_GetWindowID(call.core.game->renderDevice.window().window())};
+}
+
+input::InputInjection &injection(const Call &call) {
+  return call.core.game->hostInput.injection();
+}
+
+// About a human tap: a tenth of a second of pad frames.
+inline constexpr int kDefaultHoldFrames = 6;
+
+// `down`, `up` or `tap` at word `index` (tap when absent) and the tap's hold in pad frames after it.
+struct PressWords {
+  std::optional<input::InjectedPress> press;
+  int holdFrames = kDefaultHoldFrames;
+};
+
+PressWords pressWords(const Call &call, std::size_t index) {
+  const std::string_view word = call.args.word(index);
+  PressWords words;
+  words.press = word.empty() || word == "tap" ? std::optional(input::InjectedPress::Tap)
+                : word == "down"              ? std::optional(input::InjectedPress::Down)
+                : word == "up"                ? std::optional(input::InjectedPress::Up)
+                                              : std::nullopt;
+  words.holdFrames = call.args.integer(index + 1).value_or(kDefaultHoldFrames);
+  return words;
+}
+
+void key(const Call &call) {
+  const PressWords words = pressWords(call, 2);
+  if (call.args.word(1).empty() || !words.press) {
+    call.reply("usage: key <name|scancode> [down|up|tap] [frames]");
     return;
   }
-  if (which == "dump") {
-    overlay.dumpMenu();
-    call.reply("menu dumped to the log");
-  } else if (which == "tab") {
-    const std::optional<int> index = call.args.integer(2);
-    if (index) {
-      overlay.selectTab(*index);
-    }
-    call.reply(index ? lucent::format("menu: tab {}", *index) : std::string("menu tab <index>"));
-  } else if (which == "nav") {
-    const std::string_view key = call.args.word(2);
-    const SDL_Keycode code = key == "up"      ? SDLK_UP
-                             : key == "down"  ? SDLK_DOWN
-                             : key == "left"  ? SDLK_LEFT
-                             : key == "right" ? SDLK_RIGHT
-                             : key == "enter" ? SDLK_RETURN
-                                              : SDLK_UNKNOWN;
-    if (code == SDLK_UNKNOWN) {
-      call.reply(lucent::format("menu nav <up|down|left|right|enter>; \"{}\" is not one of them", key));
-    } else if (!overlay.visible()) {
-      call.reply(lucent::format("menu nav {}: IGNORED, the menu is hidden", key));
-    } else {
-      call.reply(lucent::format("menu nav {}: {}", key, overlay.sendKey(code) ? "handled" : "NOT handled"));
-    }
-  } else {
-    const bool on = which == "off" ? false : which == "on" ? true : !overlay.visible();
-    overlay.setVisible(on);
-    call.reply(lucent::format("menu: {}", on ? "shown" : "hidden"));
+  call.reply(injection(call).key(windowId(call), call.args.word(1), *words.press, words.holdFrames));
+}
+
+void text(const Call &call) {
+  call.reply(injection(call).text(windowId(call), call.args.rest(1)));
+}
+
+void mouse(const Call &call) {
+  const std::string_view what = call.args.word(1);
+  if (what == "move") {
+    const std::optional<float> x = call.args.decimal(2);
+    const std::optional<float> y = call.args.decimal(3);
+    call.reply(x && y ? injection(call).mouseMove(windowId(call), {.x = *x, .y = *y})
+                      : std::string("usage: mouse move <x> <y>"));
+    return;
   }
+  if (what == "wheel") {
+    const std::optional<float> dy = call.args.decimal(2);
+    const float dx = call.args.decimal(3).value_or(0.0f);
+    call.reply(dy ? injection(call).mouseWheel(windowId(call), {.x = dx, .y = *dy})
+                  : std::string("usage: mouse wheel <dy> [dx]"));
+    return;
+  }
+  const PressWords words = pressWords(call, 2);
+  if (what.empty() || !words.press) {
+    call.reply(
+        "usage: mouse move <x> <y> | mouse <left|middle|right|x1|x2> [down|up|tap] [frames] | mouse wheel <dy> [dx]");
+    return;
+  }
+  call.reply(injection(call).mouseButton(windowId(call), what, *words.press, words.holdFrames));
+}
+
+void gamepad(const Call &call) {
+  if (call.args.word(1) == "axis") {
+    const std::optional<int> value = call.args.integer(3);
+    call.reply(value ? injection(call).gamepadAxis(call.args.word(2), *value)
+                     : std::string("usage: gamepad axis <name> <value>"));
+    return;
+  }
+  const PressWords words = pressWords(call, 2);
+  if (call.args.word(1).empty() || !words.press) {
+    call.reply("usage: gamepad <button> [down|up|tap] [frames] | gamepad axis <name> <value>");
+    return;
+  }
+  call.reply(injection(call).gamepadButton(call.args.word(1), *words.press, words.holdFrames));
+}
+
+void touch(const Call &call) {
+  const std::optional<int> finger = call.args.integer(1);
+  const std::string_view what = call.args.word(2);
+  const std::optional<input::InjectedPress> press = what == "down" || what == "move"
+                                                        ? std::optional(input::InjectedPress::Down)
+                                                    : what == "up"  ? std::optional(input::InjectedPress::Up)
+                                                    : what == "tap" ? std::optional(input::InjectedPress::Tap)
+                                                                    : std::nullopt;
+  const std::optional<float> x = call.args.decimal(3);
+  const std::optional<float> y = call.args.decimal(4);
+  if (!finger || !press || !x || !y) {
+    call.reply("usage: touch <finger> <down|move|up|tap> <x> <y> [frames]");
+    return;
+  }
+  call.reply(injection(call).touch(
+      windowId(call), *finger, *press, {.x = *x, .y = *y}, call.args.integer(5).value_or(kDefaultHoldFrames)));
 }
 
 inline constexpr std::array kVerbs{
@@ -664,7 +736,24 @@ inline constexpr std::array kVerbs{
     Verb{"state", "state save|load <path>", "the whole machine, refused on any mismatch", &state},
     Verb{"session", "session return", "end this session and show the title selector", &session},
     Verb{"bugreport", "bugreport <summary>", "take a bug report over the next two frames", &bugReport},
-    Verb{"menu", "menu [on|off|dump|tab N|nav K]", "drive the overlay menu", &menu},
+    Verb{"menu", "menu", "every overlay row with its live value, to the log", &menu},
+    Verb{"key",
+         "key <name|scancode> [down|up|tap] [frames]",
+         "a keyboard key as SDL events (tap holds 6 pad frames)",
+         &key},
+    Verb{"text", "text <utf8>", "typed text as an SDL text-input event", &text},
+    Verb{"mouse",
+         "mouse move <x> <y> | <button> [down|up|tap] [frames] | wheel <dy> [dx]",
+         "the mouse as SDL events, in window coordinates",
+         &mouse},
+    Verb{"gamepad",
+         "gamepad <button> [down|up|tap] [frames] | axis <name> <value>",
+         "an SDL virtual gamepad, attached on first use",
+         &gamepad},
+    Verb{"touch",
+         "touch <finger> <down|move|up|tap> <x> <y> [frames]",
+         "a finger as SDL touch events, in window coordinates",
+         &touch},
 };
 
 } // namespace

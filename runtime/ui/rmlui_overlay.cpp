@@ -160,14 +160,6 @@ void RmlOverlay::setVisible(bool v) {
   }
 }
 
-void RmlOverlay::selectTab(int index) {
-  if (mMenu) {
-    mMenu->select_tab(index);
-  }
-}
-bool RmlOverlay::sendKey(SDL_Keycode key) {
-  return mMenu && mMenu->handle_key(key);
-}
 void RmlOverlay::dumpMenu() const {
   if (mMenu) {
     mMenu->dump();

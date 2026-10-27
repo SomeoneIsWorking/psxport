@@ -19,26 +19,16 @@ struct PadButtonName {
 };
 
 inline constexpr std::array<PadButtonName, 20> kPadButtonNames{{
-    {"select", input::kButtonSelect},
-    {"l3", input::kButtonL3},
-    {"r3", input::kButtonR3},
-    {"start", input::kButtonStart},
-    {"up", input::kButtonUp},
-    {"right", input::kButtonRight},
-    {"down", input::kButtonDown},
-    {"left", input::kButtonLeft},
-    {"l2", input::kButtonL2},
-    {"r2", input::kButtonR2},
-    {"l1", input::kButtonL1},
-    {"r1", input::kButtonR1},
-    {"t", input::kButtonTriangle},
-    {"triangle", input::kButtonTriangle},
-    {"o", input::kButtonCircle},
-    {"circle", input::kButtonCircle},
-    {"x", input::kButtonCross},
-    {"cross", input::kButtonCross},
-    {"sq", input::kButtonSquare},
-    {"square", input::kButtonSquare},
+    {"select", input::kButtonSelect}, {"l3", input::kButtonL3},
+    {"r3", input::kButtonR3},         {"start", input::kButtonStart},
+    {"up", input::kButtonUp},         {"right", input::kButtonRight},
+    {"down", input::kButtonDown},     {"left", input::kButtonLeft},
+    {"l2", input::kButtonL2},         {"r2", input::kButtonR2},
+    {"l1", input::kButtonL1},         {"r1", input::kButtonR1},
+    {"t", input::kButtonTriangle},    {"triangle", input::kButtonTriangle},
+    {"o", input::kButtonCircle},      {"circle", input::kButtonCircle},
+    {"x", input::kButtonCross},       {"cross", input::kButtonCross},
+    {"sq", input::kButtonSquare},     {"square", input::kButtonSquare},
 }};
 
 } // namespace
@@ -93,6 +83,10 @@ std::optional<std::uint32_t> CommandArgs::number(std::size_t index) const {
 
 std::optional<int> CommandArgs::integer(std::size_t index) const {
   return config::parseInt(word(index));
+}
+
+std::optional<float> CommandArgs::decimal(std::size_t index) const {
+  return config::parseFloat(word(index));
 }
 
 } // namespace psx::debug

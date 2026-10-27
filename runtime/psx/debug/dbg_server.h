@@ -1,4 +1,5 @@
-// The live loopback debug endpoint: a listener thread queues one command, service() runs it on the main thread.
+// The live loopback control channel (lucent::http::Server): a request thread queues one command, service() runs it
+// on the main thread.
 #pragma once
 #include "config_vars.h"
 #include <atomic>

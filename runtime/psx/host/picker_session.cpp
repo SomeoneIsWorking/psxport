@@ -117,7 +117,7 @@ int PickerSession::serviceInput() {
 }
 
 PickerSession::Result PickerSession::run() {
-  host_ = std::make_unique<Game>(runtime_, services_.presentation, services_.config);
+  host_ = std::make_unique<Game>(runtime_, services_.presentation, services_.input, services_.config);
   host_->productName = catalog_.productName();
   Core &core = host_->core;
   layout_.emplace(content_.panelCount(),
@@ -125,7 +125,6 @@ PickerSession::Result PickerSession::run() {
                                        .slantPerWidth = host_->mods.pickerSlantPerWidth,
                                        .responsePerFrame = host_->mods.pickerWidthResponse});
   host_->pad.useLiveInputOnly(); // a selector must not open or rotate the player's pad recording
-  host_->hostInput.attachQuitScope(&services_.quit);
   // No guest runs here, so the channel needs no store observer.
   host_->dbg_server.start();
   // The overlay exists before the first build.

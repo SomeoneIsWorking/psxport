@@ -36,6 +36,7 @@ public:
   // The whole word in base 10.
   std::optional<std::uint32_t> number(std::size_t index) const;
   std::optional<int> integer(std::size_t index) const;
+  std::optional<float> decimal(std::size_t index) const;
 
 private:
   std::string_view line_;

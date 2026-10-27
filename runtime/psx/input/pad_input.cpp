@@ -11,15 +11,9 @@ void Pad::init() {
   buttons = psx::input::kNoButtons;
 }
 
-// An unmapped tool window keeps whatever forced or replayed mask it resolves; the drain still runs so a close ends
-// the run.
+// A shown or unmapped window reads the same queue; forced and replayed masks are applied after this.
 void Pad::pollHostInput() {
-  const bool shown = game->renderDevice.shown();
-  const uint16_t hostMask = mHost.poll(shown);
-  if (!shown) {
-    return;
-  }
-  buttons = hostMask;
+  buttons = mHost.poll(game->renderDevice.shown());
   // The debug keys act on the one Game the host gave the player's input.
   if (mPlayerInputSuppressed) {
     return;
@@ -33,6 +27,11 @@ void Pad::pollHostInput() {
   if (mHost.takeBugReportRequest()) {
     game->bugReport.request();
   }
+}
+
+void Pad::setPlayerInputSuppressed(bool suppressed) {
+  mPlayerInputSuppressed = suppressed;
+  mHost.setOverlayLive(&game->rml_overlay, !suppressed);
 }
 
 void Pad::driveHold(uint16_t activeLowMask) {
@@ -58,6 +57,10 @@ void Pad::serviceFrame() {
   Core *c = &game->core;
   const bool shown = game->renderDevice.shown();
   pollHostInput();
+  // Injected taps last the player's pad frames, not every Game's.
+  if (!mPlayerInputSuppressed) {
+    mHost.injection().afterPadFrame();
+  }
 
   if (!mForcedRead) {
     mForcedRead = true;

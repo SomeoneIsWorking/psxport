@@ -42,6 +42,8 @@ private:
     // The presentation keeps the title pointer, so the text lives as long as the process state.
     std::string windowTitle;
     psx::input::QuitScope quit;
+    // The window's event queue has one reader for every session; destroyed before the window.
+    psx::input::HostInput input;
     RunBudget budget;
     SessionServices services;
     psx::platform::Watchdog watchdog;

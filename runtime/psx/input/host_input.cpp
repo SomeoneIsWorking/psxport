@@ -10,6 +10,33 @@
 #include <stdlib.h> // atoi (PSXPORT_PAD_NOPAD parse)
 #endif
 
+void psx::input::HostInput::attachOverlay(RmlOverlay *overlay) {
+  mOverlays.push_back({.overlay = overlay, .live = true});
+}
+
+void psx::input::HostInput::detachOverlay(const RmlOverlay *overlay) {
+  std::erase_if(mOverlays, [overlay](const AttachedOverlay &attached) {
+    return attached.overlay == overlay;
+  });
+}
+
+void psx::input::HostInput::setOverlayLive(const RmlOverlay *overlay, bool live) {
+  for (AttachedOverlay &attached : mOverlays) {
+    if (attached.overlay == overlay) {
+      attached.live = live;
+    }
+  }
+}
+
+RmlOverlay *psx::input::HostInput::liveOverlay() const {
+  for (const AttachedOverlay &attached : mOverlays) {
+    if (attached.live) {
+      return attached.overlay;
+    }
+  }
+  return nullptr;
+}
+
 void psx::input::HostInput::drainEvents() {
 #ifdef PSXPORT_SDL
   SDL_PumpEvents();
@@ -18,11 +45,8 @@ void psx::input::HostInput::drainEvents() {
     if (event.type == SDL_EVENT_KEY_DOWN || event.type == SDL_EVENT_KEY_UP) {
       noteHostKey(static_cast<int>(event.key.scancode), event.type == SDL_EVENT_KEY_DOWN);
     }
-    // Every event reaches the overlay, so it keeps exactly the input it had when the present-path
-    // drain was its only source: two drains of one queue are safe for the same reason the drain is
-    // one function — whichever gets an event passes it on here.
-    if (mOverlay) {
-      mOverlay->event(&event);
+    if (RmlOverlay *overlay = liveOverlay()) {
+      overlay->event(&event);
     }
     if (event.type == SDL_EVENT_QUIT) {
       if (mQuitScope != nullptr) {
@@ -32,6 +56,7 @@ void psx::input::HostInput::drainEvents() {
       }
     }
   }
+  mInjection.afterDrain();
 #endif
 }
 
@@ -132,7 +157,7 @@ bool psx::input::HostInput::noPadRequested() {
 // rescan rather than a device-added/removed handler, because the controller events are delivered to
 // whoever drains the queue and this owner cannot depend on being that site. SDL_NumJoysticks is a
 // count, and only indices not already held are opened.
-void psx::input::HostInput::rescanControllers() {
+void psx::input::HostInput::rescanControllers(bool shown) {
   if (noPadRequested()) {
     for (int slot = 0; slot < kMaxGamepads; slot++) {
       if (mGamepads[slot]) {
@@ -159,7 +184,7 @@ void psx::input::HostInput::rescanControllers() {
     for (int slot = 0; slot < kMaxGamepads; slot++) {
       held = held || mGamepadInstance[slot] == static_cast<int>(instance);
     }
-    if (held) {
+    if (held || (!shown && !SDL_IsJoystickVirtual(instance))) {
       continue;
     }
     for (int slot = 0; slot < kMaxGamepads; slot++) {
@@ -167,6 +192,7 @@ void psx::input::HostInput::rescanControllers() {
         if (SDL_Gamepad *opened = SDL_OpenGamepad(instance)) {
           mGamepads[slot] = opened;
           mGamepadInstance[slot] = static_cast<int>(SDL_GetGamepadID(opened));
+          lucent::info("pad", "controller {} opened in slot {}: {}", instance, slot, SDL_GetGamepadName(opened));
         }
         break;
       }
@@ -177,24 +203,19 @@ void psx::input::HostInput::rescanControllers() {
 
 std::uint16_t psx::input::HostInput::poll(bool shown) {
   drainEvents();
-  if (!shown) {
-    mPauseRequested = false;
-    mFrameStepRequested = false;
-    mBugReportRequested = false;
-    return kNoButtons;
-  }
 
   // Debug pause / frame-step / bug-report keys, edge-detected so one keypress is one action, and read
   // from the same host key state as gameplay — which means they keep working while the overlay owns
   // the gameplay keys, and on a window that does not hold focus. Not while the player is TYPING into
   // an overlay text field, though: there a "p" or a "b" is a letter, not a command.
-  const bool typing = mOverlay != nullptr && mOverlay->typingText();
+  const RmlOverlay *overlay = liveOverlay();
+  const bool typing = overlay != nullptr && overlay->typingText();
   const bool pauseKey = keyDown(SDL_SCANCODE_P);
   const bool stepKey = keyDown(SDL_SCANCODE_PERIOD);
   const bool bugReportKey = keyDown(SDL_SCANCODE_B);
-  mPauseRequested = !typing && pauseKey && !mPrevPauseKey;
-  mFrameStepRequested = !typing && stepKey && !mPrevStepKey;
-  mBugReportRequested = !typing && bugReportKey && !mPrevBugReportKey;
+  mPauseRequested = mPauseRequested || (!typing && pauseKey && !mPrevPauseKey);
+  mFrameStepRequested = mFrameStepRequested || (!typing && stepKey && !mPrevStepKey);
+  mBugReportRequested = mBugReportRequested || (!typing && bugReportKey && !mPrevBugReportKey);
   mPrevPauseKey = pauseKey;
   mPrevStepKey = stepKey;
   mPrevBugReportKey = bugReportKey;
@@ -204,7 +225,7 @@ std::uint16_t psx::input::HostInput::poll(bool shown) {
   // While the overlay is actively TYPING into a text widget it owns the keyboard, so a character the
   // player typed into a text field does not also move the guest. The overlay reports that itself; this
   // is where the answer gates the gamepad-like keyboard read below.
-  const bool gameOwnsKeyboard = mOverlay == nullptr || !mOverlay->wantsKeyboard();
+  const bool gameOwnsKeyboard = overlay == nullptr || !overlay->wantsKeyboard();
   if (gameOwnsKeyboard) {
     if (keyDown(SDL_SCANCODE_UP) || keyDown(SDL_SCANCODE_W)) {
       mask &= static_cast<std::uint16_t>(~psx::input::kButtonUp);
@@ -254,7 +275,7 @@ std::uint16_t psx::input::HostInput::poll(bool shown) {
   // subsystem happened to be up when it ran, and this owner initialises it lazily — so on the frames
   // right after a controller is opened the reads below could be stale, and a stale axis reads as a
   // held direction.
-  rescanControllers();
+  rescanControllers(shown);
   SDL_UpdateGamepads();
   const std::uint16_t keyboardMask = mask;
   for (int slot = 0; slot < kMaxGamepads; slot++) {
@@ -277,6 +298,7 @@ std::uint16_t psx::input::HostInput::poll(bool shown) {
       mPadDirsWarned = true;
     }
   }
+  lucent::debug("hostinput", "poll: mask=0x{:04x} keyboard={} shown={}", (unsigned)mask, gameOwnsKeyboard, shown);
   return mask;
 }
 
