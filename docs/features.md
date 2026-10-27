@@ -104,7 +104,7 @@ title answers there. A hop with no title entry runs on the framework alone.
 
 | hop | owner | title |
 |---|---|---|
-| 1 | `psx/game/game.cpp:Game::hostIdentity` → `GameRuntime::hostIdentity`; `psx/platform/memcard.h:Memcard` | `hostIdentity` |
+| 1 | `psx/game/game.cpp:Game::hostIdentity` → `GameRuntime::hostIdentity`; `psx/platform/memcard.h:Memcard` — card path from `PSXPORT_CARD` for every title, else the title's default | `hostIdentity` |
 | 2 | `psx/state/machine_state.cpp:MachineState::titlePort` → `GameRuntime::nativeState` | `nativeState` |
 | 3 | `psx/state/state_file.h:StateFile` — the state file and its required sections | |
 
@@ -112,8 +112,8 @@ title answers there. A hop with no title entry runs on the framework alone.
 
 | hop | owner | title |
 |---|---|---|
-| 1 | `psx/debug/debug_commands.cpp:DebugCommands::run` → `psx/game/title_command.cpp:runTitleCommand` → `GameRuntime::titleCommand` | `titleCommand` |
-| 2 | `ui/warp_control.cpp:WarpControl::titleWarp` → `GameRuntime::devWarp` | `devWarp` |
-| 3 | `ui/menu_readouts.cpp:MenuReadouts::update` → `GameRuntime::worldReadout` | `worldReadout` |
+| 1 | `psx/debug/debug_commands.cpp:DebugCommands::run` → `psx/game/title_debug_menu.cpp:TitleDebugMenu::run` over `GameRuntime::debugMenu` — the title's verbs, typed parameters and refusals; `help` lists them | `debugMenu` |
+| 2 | `ui/title_debug_rows.cpp:TitleDebugRows` — the Debug tab's sections, readouts, parameter and run rows and the About lines, generated from the same `TitleDebugMenu`; a run row sends the line its selections spell through hop 1 | |
+| 3 | `psx/game/title_debug_menu.cpp:TitleDebugMenu::soundTest` — `music <track>`, `music-stop` and the now-playing readout over `TitleAudio` track names | `TitleAudio::trackName` |
 | 4 | `psx/debug/producer_census.h:ProducerCensus` — primitives per producer, keyed and rendered | |
-| 5 | `psx/debug/bug_report_session.h:BugReportSession` — the in-app bug report | |
+| 5 | `psx/debug/bug_report_session.h:BugReportSession` — the in-app bug report: the reference frame sealed at `FramePresenter::commit`, the last second of presents from `render/present_clip.h:PresentClip`; only the Game holding player input takes P / '.' / B (`input/pad_input.cpp:Pad::pollHostInput`) | |

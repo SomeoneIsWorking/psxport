@@ -5,25 +5,17 @@
 // show/hide/update/focus/nav — so the code that manages RmlUi's LIFETIME (contexts, interfaces,
 // fonts) never touches elements, and the code that manages ELEMENTS never touches RmlUi's lifetime.
 //
-// That separation is the point of the split. `rmlui_overlay.cpp` was 592 lines in which the render
-// interface, the SDL system interface, font loading, `LoadDocument`, tab selection, row value
-// formatting, the `Mods` toggle/adjust ladders, the dev warp, the four readouts, focus navigation
-// and the SDL key switch were all file-scope statics and member functions of one class. Nothing in
-// it could be constructed, exercised or reasoned about without an SDL_GPU device.
-//
-// This class does not build its own DOM. It adopts what `assets/rml/menu.rml` authored, because the menu's
-// structure is CONTENT — a game ships its own `menu.rml`, and the framework hard-coding Tomba!2's
-// six tabs in C++ would be the framework knowing a game. See ui_component.h.
+// It adopts the shell `assets/rml/menu.rml` authors (Display, Debug, Game, About) and fills the Debug and About
+// tabs from the title's debug menu (TitleDebugRows), so nothing here names a title's rows.
 #ifndef PSXPORT_UI_MENU_DOCUMENT_H
 #define PSXPORT_UI_MENU_DOCUMENT_H
 
-#include "dev_command_control.h"
 #include "menu_pane.h"
 #include "menu_readouts.h"
 #include "menu_row.h"
 #include "menu_tab_bar.h"
+#include "title_debug_rows.h"
 #include "ui_component.h"
-#include "warp_control.h"
 
 #include <SDL3/SDL_keycode.h>
 
@@ -112,8 +104,7 @@ private:
   Rml::ElementDocument *mDoc = nullptr;
   Game *mGame = nullptr;
 
-  DevCommandControl mDevCommands;
-  WarpControl mWarp;
+  TitleDebugRows mDebugRows;
   MenuTabBar *mTabBar = nullptr;     // owned by Component::mChildren
   MenuReadouts *mReadouts = nullptr; // owned by Component::mChildren
   std::vector<MenuPane *> mPanes;    // owned by Component::mChildren

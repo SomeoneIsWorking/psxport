@@ -80,6 +80,7 @@ void FramePresenter::commit(Core *core, int guestFields) {
   core->game->display.finishShow();
   RecordSlot &slot = freeSlot();
   core->gpuDevice().sealRecord(slot.record);
+  core->game->bugReport.frameSealed(*core);
   core->frameStates.collect(slot.record, slot.state);
   psx::debug::censusRecord(*core, slot.record, slot.state);
   core->frameStates.endFrame();

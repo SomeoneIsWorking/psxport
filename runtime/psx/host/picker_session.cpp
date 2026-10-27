@@ -118,6 +118,7 @@ int PickerSession::serviceInput() {
 
 PickerSession::Result PickerSession::run() {
   host_ = std::make_unique<Game>(runtime_, services_.presentation, services_.config);
+  host_->productName = catalog_.productName();
   Core &core = host_->core;
   layout_.emplace(content_.panelCount(),
                   PickerLayout::Motion{.selectedShare = host_->mods.pickerSelectedShare,

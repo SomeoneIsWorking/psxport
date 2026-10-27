@@ -44,7 +44,8 @@ No repo has a `docs/features.md`. psxport and nine title repos use the narrowed 
 | `GameRuntime` | One per title, process lifetime, immutable. The only title interface. It has no legacy views, no `Core::cfg`/`hooks`/`gameCtx`, and no `if (core.cfg)` anywhere. |
 | `TitleSessionState` | Per-Core RAII base returned by `createSession(Game&)`. The title derives its own. It replaces `createContext`/`destroyContext`/`void *gameCtx` (91 references in psxport, 16 title overrides). |
 | `FrameDriver` | Required. `stepFrame` is one guest turn plus exactly one `presentation.commit`. |
-| `TitleAudio`, `TitleDevWarp` | Optional capabilities returned by `audio(Core&)` and `devWarp(Core&)`. The null check lives only in the consumer (`SpuAudio`, the menus, `warp_control`). |
+| `TitleAudio` | Optional capability returned by `audio(Core&)`, with track names for the sound test. The null check lives only in the consumer (`SpuAudio`, the sound test). |
+| `TitleDebugMenu` | Required, returned by `debugMenu()`: the title's debug verbs with typed parameters and refusals, readouts, sound test and About lines. One table drives the control channel, REPL, `help` and the Debug and About tabs. |
 | `HostIdentity`, `TitleIntSetting`; `psx::host::TitleIdentity` (`host/title_catalog.h`) | Plain data: disc serial, size, sha256, EXE header, disc env key and path; card and user-data names; menu rows. |
 
 `GameRuntime` virtuals, final list:
@@ -59,7 +60,7 @@ No repo has a `docs/features.md`. psxport and nine title repos use the narrowed 
   - `interpolates()`.
   - `stateProducer(Core&, uint32_t producer)`.
   - `sealedFrameIsCut`, `presentDeadline`, `displayHeight`, `guestWidescreenProjection`, `panelLogo`.
-- **Debug and run.** `titleCommand(Core&, cmd, line, FILE *reply)`, `inputPhase`, `nativeState`, `reportRun`.
+- **Debug and run.** `debugMenu()`, `inputPhase`, `nativeState`, `reportRun`.
 
 ### 3.2 What titles hand psxport today, and what each becomes
 
@@ -74,9 +75,9 @@ No repo has a `docs/features.md`. psxport and nine title repos use the narrowed 
 | `RenderCapabilities` {defaultPath, nativeRenderPath, temporalInterpolation, defaultFaceOrder} + `render_path_install` | game.cpp, render_path | `interpolates()` virtual. The path is always Record. Both the struct and the install are deleted. |
 | `guestVramIsPicture`, `guestPictureIsNativeWidth`, `createTemporalFramePresentation` | renderer | Deleted with Native. Keep `guestPictureIsNativeWidth` only if Spyro 1's boot logos on Record need it. |
 | `core.stateProducers.install(addr, …)` registry | frame_composer | `stateProducer(Core&, addr)` virtual, answered from the title's session state. |
-| `replCommand`, `controlCommand`, framework `tp` (`dbg_server.cpp:653`, `repl.cpp:311`) | repl, dbg_server | `titleCommand`. `tp` becomes a Tomba 2 command. |
+| `replCommand`, `controlCommand`, framework `tp` (`dbg_server.cpp:653`, `repl.cpp:311`) | repl, dbg_server | `TitleDebugMenu` verbs. `tp` is a Tomba 2 verb. |
 | hooks `audioMixFrame`, `audioNowPlayingName`, `audioSoundTestPlay` | spu_audio, menus | `TitleAudio`. |
-| hooks `devAreaCount`, `devAreaName`, `devWarpAllowed` | warp_control | `TitleDevWarp`. |
+| hooks `devAreaCount`, `devAreaName`, `devWarpAllowed` | warp_control | The title's `warp` verb in its `TitleDebugMenu`. |
 | hooks `sched*`, `hasNativeHandlerForEntry`, config `schedEntries`/`syncWait*`/task table; `frame/pc_scheduler.*` (554 lines), the Tomba stanzas of `platform/scheduler.cpp`, `platform/synchronous_task_wait*`, `task_slot_layout.h` | frame, platform, gpu_perf | Tomba 2's `TombaScheduler`, a `TombaSession` member. |
 | config `cdFileLoad`, `cdAsyncRead`, `cdInlineLoad`, `cdCmdStream`, `voicePlay`/`voiceStop`, `lastSectorTracker`, `cdCallbackTable`/`Fn`; hooks `cdDialogToneActive`, `cdMusicFadeIn` | cd_override (1,049 lines) | Tomba 2 overrides. `cd_override.cpp` keeps only stock libcd. |
 | config `paceQuota`, `guestDisplayHeight`, `preserveVramBackdrop`, `vsyncTrap`, `fadewatch*`, `codeScan*`, `decDct*`, `gpuTimeout*`; hooks `renderFadeState`, `renderBbFrameReset`, `frameUpdate`, `drawOTag`, `musicCoordTick`, `replCamTeleport*` | frame_pacer, gpu_native_scanout, gpu_vk_fadewatch, hle | `presentDeadline`/`displayHeight` virtuals, the stock HLE classes, or title code. Hooks with no live caller are deleted. |
@@ -131,7 +132,7 @@ No repo has a `docs/features.md`. psxport and nine title repos use the narrowed 
 ### 3.6 Docs and policy
 
 - **psxport `docs/features.md`.** Sections F-BOOT, F-TURN, F-INPUT, F-PICK, F-RENDER, F-WIDE, F-FPS60, F-FMV, F-CD, F-AUDIO, F-LOAD, F-SAVE and F-DEBUG, each at most 40 lines. Hop rows are written as `` `path:Symbol` ``. Done in (c) stage 4; F-RENDER.1 (the render path) has no title hop since `RenderCapabilities` went, so Tekken 3's GPU-timeout row joins F-BOOT.6.
-- **Every title's `docs/features.md`.** Title hops only, joined as `psxport F-X.n`. C-12 (the template) joins F-BOOT.1 (catalog and disc), F-BOOT.6 (`registerOverrides`, `createSession`), F-TURN.2 (`FrameDriver::stepFrame`), F-TURN.4 (run-end report), F-CD.1 (stock libcd binding), F-CD.3 (module landing), F-RENDER.1 (render path), F-RENDER.2 (`packetPool`), F-WIDE.1 (projection policy) and F-WIDE.2 (widened culls). Tomba adds F-BOOT.5 (`startProgram`), F-TURN.3 (the title's task scheduler, stepped by its frame driver), F-INPUT.1 (`deliverPad`), F-RENDER.3 (`displayHeight`), F-FPS60.1 (`stateProducer`), F-FPS60.2 (`sealedFrameIsCut`), F-FMV.1 (a title-started movie), F-AUDIO.1 (`TitleAudio`), F-SAVE.1 (`hostIdentity`), F-SAVE.2 (`nativeState`), F-DEBUG.1 (`titleCommand`), F-DEBUG.2 (`TitleDevWarp`) and F-DEBUG.3 (`worldReadout`). Spyro adds F-TURN.5 (`presentDeadline`), F-INPUT.2 (`inputPhase`), F-PICK.1 (`panelLogo`) and F-RENDER.4 (`guestPictureIsNativeWidth`). psxport's `features.md` keeps those hop numbers.
+- **Every title's `docs/features.md`.** Title hops only, joined as `psxport F-X.n`. C-12 (the template) joins F-BOOT.1 (catalog and disc), F-BOOT.6 (`registerOverrides`, `createSession`), F-TURN.2 (`FrameDriver::stepFrame`), F-TURN.4 (run-end report), F-CD.1 (stock libcd binding), F-CD.3 (module landing), F-RENDER.1 (render path), F-RENDER.2 (`packetPool`), F-WIDE.1 (projection policy) and F-WIDE.2 (widened culls). Tomba adds F-BOOT.5 (`startProgram`), F-TURN.3 (the title's task scheduler, stepped by its frame driver), F-INPUT.1 (`deliverPad`), F-RENDER.3 (`displayHeight`), F-FPS60.1 (`stateProducer`), F-FPS60.2 (`sealedFrameIsCut`), F-FMV.1 (a title-started movie), F-AUDIO.1 (`TitleAudio`), F-SAVE.1 (`hostIdentity`), F-SAVE.2 (`nativeState`), F-DEBUG.1 (`debugMenu`), F-DEBUG.2 (the generated Debug tab) and F-DEBUG.3 (the sound test). Spyro adds F-TURN.5 (`presentDeadline`), F-INPUT.2 (`inputPhase`), F-PICK.1 (`panelLogo`) and F-RENDER.4 (`guestPictureIsNativeWidth`). psxport's `features.md` keeps those hop numbers.
 - **Codemap.** At most 150 lines in Owners-table shape, with no source-tree dump and no "Who owns it" chains. psxport's is 120 lines (stage 4); its hop chains moved to `features.md`.
 - **Renderer doc.** `presentation.md` is the one renderer doc. Delete `one-renderer.md` and `presentation-contract.md` (done in (c) stage 2). Every other psxport doc and open issue that named deleted code is corrected or resolved (stage 4).
 - **clang-tidy.** Every repo's `.clang-tidy` is `clang-analyzer-*`, `bugprone-*` and `performance-*`, with warnings as errors. psxport's is aligned (done in (c) stage 3, vendor headers excluded); every finding is fixed except `bugprone-easily-swappable-parameters` (191 sites in 105 files, among them the title-facing `dispatchGuest*`, `GuestMemory`, GPU-port and GTE signatures), whose fix is strong argument types at each signature and every title caller.
@@ -196,7 +197,7 @@ Each pass converts the rows of section 3.2 that the repo uses, moves GTE calls t
 
 | | |
 |---|---|
-| owners | `TombaRuntime : GameRuntime` directly, no adapter; `TombaSession` from `game_ctx`; `TombaScheduler` held by `TombaSession`; `TombaAudio : TitleAudio` (per-Core NativeMusic); `TombaDevWarp : TitleDevWarp` (`dev_areas.cpp`); `Tomba1Runtime` |
+| owners | `TombaRuntime : GameRuntime` directly, no adapter; `TombaSession` from `game_ctx`; `TombaScheduler` held by `TombaSession`; `TombaAudio : TitleAudio` (per-Core NativeMusic); `tomba::DebugMenu : TitleDebugMenu` (`debug_menu.cpp`); `Tomba1Runtime` |
 | converts | every row of section 3.2 |
 | product: scheduler | Moves into `game/core/sched/`, and the code is cut from psxport in this brief. The 12 hook sites become direct `Engine` calls. `test_synchronous_task_wait` and `test_task_slot_layout` move here. Read Tomba 1's `GuestTaskBudget` first, so no second scheduler is made. |
 | product: CD | The chokepoints become Tomba overrides, cut from psxport in this brief. cdCommand/cdSync/cdReadPrim/cdInit use the stock classes only where Ghidra shows a stock body. |
@@ -263,7 +264,7 @@ Each pass converts the rows of section 3.2 that the repo uses, moves GTE calls t
 Continue from the uncommitted M8a tree; do not restart it.
 
 1. Finish M8a. `FrameLoopShell::bound_` becomes a member of the shell's owner, still rebinding only when the running Core changes. Delete the neutral-runtime branches in FramePresenter and the pacer.
-2. Add the section 3.1 interface in `psx::game`: `TitleSessionState`, `titleCommand`, `TitleAudio`, `TitleDevWarp`, `startProgram` + `Crt0Boot`, `deliverPad`, `packetPool`, `residentText`, `displayHeight`, `interpolates`, `stateProducer`. Each needs a unit test through the stub runtime.
+2. Add the section 3.1 interface in `psx::game`: `TitleSessionState`, `debugMenu`, `TitleAudio`, `startProgram` + `Crt0Boot`, `deliverPad`, `packetPool`, `residentText`, `displayHeight`, `interpolates`, `stateProducer`. Each needs a unit test through the stub runtime.
 3. Add the stock-library classes (`StockLibcd`, `StockLibgpu`, `StockLibgte`, `StockVSync`, `StockDmaCallbacks`, `StockPadBuffers`), built from the code that today reads `PlatformHlePlan` and the layouts.
 4. Typed config, done at the start of the c12 brief: one immutable `psx::config` object built by the config owner from the environment and reached through `Game`. A setting the player changes at runtime (`fps60` from the mods UI) is not config: it is a member of its owner, reached through `Game`. Titles read only these two.
 5. `psx::cpu::Gte` with `core.gte()` as the one bind rule; `GpuDevice&` reached through `Game`/`Core`; Lucent `info`/`warn`/`error`/`debug`.

@@ -518,6 +518,17 @@ A keyed primitive counts under its key's producer. An unkeyed one counts under t
 storing call chain that is a registered producer, else the span's emitter; with none it is counted as
 no-source, span-miss or span-no-fn.
 
+## Bug report capture
+
+A bug report takes three pictures. `screen.png` is the window's last present. `psx.png` is the guest draw
+area from the device VRAM, captured by `BugReportSession::frameSealed` right after `FramePresenter::commit`
+seals the next record, so every title produces it through the one commit path; the report says "not
+captured" only when no frame seals within 4 fields. `motion.png` is an APNG of the last second of window
+presents: `PresentClip` keeps 60 layers of a 960x540 RGBA8 GPU texture array (about 124 MB of VRAM,
+allocated on the first window present), letterboxes one GPU blit per swapchain present into the next
+layer and records its time, and downloads the ring only when a report is written. Nothing in it is
+CPU work per present, and its size does not depend on the internal resolution.
+
 ## Status
 
 The native and GTE draw paths, the render queue, painter, keyed blend and every title's

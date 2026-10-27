@@ -22,7 +22,7 @@
 
 namespace psx::ui {
 
-// Implemented by MenuDocument: it owns the models a row binds to (Mods, WarpControl, the actions),
+// Implemented by MenuDocument: it owns the models a row binds to (Mods, the title debug rows, the actions),
 // so the pane asks it to wire each authored row rather than reaching for those models itself.
 class RowBuilder {
 public:

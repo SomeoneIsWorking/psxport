@@ -1,11 +1,9 @@
 #include "menu_row.h"
 
-#include "dev_command_control.h"
 #include "mod_row_model.h"
 #include "mods.h"
 #include "rml_text.h"
 #include "title_settings.h"
-#include "warp_control.h"
 
 #include <RmlUi/Core/StringUtilities.h>
 
@@ -56,67 +54,6 @@ private:
   Mods *mMods;
 };
 
-class WarpAreaBinding final : public RowBinding {
-public:
-  explicit WarpAreaBinding(WarpControl *warp) : mWarp(warp) {}
-  bool text(std::string &out) const override {
-    if (!mWarp) {
-      return false;
-    }
-    out = mWarp->currentLabel();
-    return true;
-  }
-  void step(int dir) override {
-    if (mWarp) {
-      mWarp->adjust(dir);
-    }
-  }
-  bool steps_with_arrows() const override {
-    return true;
-  }
-
-private:
-  WarpControl *mWarp;
-};
-
-class DevCommandBinding final : public RowBinding {
-public:
-  DevCommandBinding(DevCommandControl *commands, std::string id) : mCommands(commands), mId(std::move(id)) {}
-  bool text(std::string &out) const override {
-    if (!mCommands) {
-      return false;
-    }
-    out = std::to_string(value());
-    return true;
-  }
-  void step(int dir) override {
-    if (!mCommands) {
-      return;
-    }
-    if (mId == "warp_entry") {
-      mCommands->adjustEntry(dir);
-    } else if (mId == "flag_index") {
-      mCommands->adjustFlagIndex(dir);
-    } else {
-      mCommands->adjustFlagValue(dir);
-    }
-  }
-  bool steps_with_arrows() const override {
-    return true;
-  }
-
-private:
-  int value() const {
-    if (mId == "warp_entry") {
-      return mCommands->entry();
-    }
-    return mId == "flag_index" ? mCommands->flagIndex() : mCommands->flagValue();
-  }
-
-  DevCommandControl *mCommands;
-  std::string mId;
-};
-
 class ActionBinding final : public RowBinding {
 public:
   ActionBinding(std::function<void()> action, std::function<bool()> available)
@@ -142,12 +79,6 @@ std::unique_ptr<RowBinding> make_mod_toggle_binding(Mods *mods, std::string id) 
 }
 std::unique_ptr<RowBinding> make_title_setting_binding(const psx::game::TitleIntSetting *setting, Mods *mods) {
   return std::make_unique<TitleSettingBinding>(setting, mods);
-}
-std::unique_ptr<RowBinding> make_warp_area_binding(WarpControl *warp) {
-  return std::make_unique<WarpAreaBinding>(warp);
-}
-std::unique_ptr<RowBinding> make_dev_command_binding(DevCommandControl *commands, std::string id) {
-  return std::make_unique<DevCommandBinding>(commands, std::move(id));
 }
 std::unique_ptr<RowBinding> make_action_binding(std::function<void()> action, std::function<bool()> available) {
   return std::make_unique<ActionBinding>(std::move(action), std::move(available));

@@ -20,6 +20,10 @@ void Pad::pollHostInput() {
     return;
   }
   buttons = hostMask;
+  // The debug keys act on the one Game the host gave the player's input.
+  if (mPlayerInputSuppressed) {
+    return;
+  }
   if (mHost.takePauseRequest()) {
     game->dbg_server.togglePause();
   }

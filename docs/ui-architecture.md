@@ -19,12 +19,11 @@ headless-operation, content-authoring, and testability requirements; the codemap
     runtime/ui/ui_component.{h,cpp}        Component base + set_text(), the ONE data->DOM boundary
     runtime/ui/ui_assets.{h,cpp}           asset resolution that refuses to report success
     runtime/ui/mod_row_model.{h,cpp}       what a row MEANS (the Mods toggle/adjust tables)
-    runtime/ui/warp_control.{h,cpp}        the Debug tab's dev area warp
-    runtime/ui/dev_command_control.{h,cpp} warp entry, grant-all-items and event-flag commands, sent over the control channel
+    runtime/ui/title_debug_rows.{h,cpp}    the Debug and About tabs generated from the title's TitleDebugMenu
     runtime/ui/menu_row.{h,cpp}            one <select-button> + its binding (incl. a title's stepped integer setting)
     runtime/ui/menu_pane.{h,cpp}           one tab's page of rows
     runtime/ui/menu_tab_bar.{h,cpp}        the <tab> row and which one is selected
-    runtime/ui/menu_readouts.{h,cpp}       the live video/world/music/warp status lines
+    runtime/ui/menu_readouts.{h,cpp}       the live video line, the debug status and the title's readouts
     runtime/ui/menu_document.{h,cpp}       the tree over assets/rml/menu.rml
 
     assets/rml/menu.rml                    the document — CONTENT, shipped, per-game
@@ -53,6 +52,11 @@ the DOM in C++. The method is therefore named `adopt<T>(element, args…)`.
 The reason is the framework/game seam: **the menu's structure is CONTENT.** A game ships its own
 `menu.rml`, and psxport hard-coding Tomba!2's six tabs in C++ would be the framework knowing a game
 — the framework/game coupling the link boundary exists to prevent.
+
+The two generated exceptions are the Debug tab's `#title_debug` and the About tab's `#about`:
+`TitleDebugRows` fills them from the running title's `TitleDebugMenu` before the panes adopt their
+rows, so every title gets its own warps, readouts, sound test and About lines with no title text in
+`menu.rml`. Row ids are `debug:<verb>:<param>` (a stepped parameter) and `debug:<verb>` (run).
 
 ## ONE stack, not two — the ImGui decision (2026-08-06)
 
@@ -122,7 +126,7 @@ RmlUi is the upstream 6.3 release as the `vendor/rmlui` submodule.
   site in the subsystem; keep it the only one in the subsystem.
 - **A new row kind is a new `RowBinding`**, not a branch in `MenuDocument`.
 - **A new Mods-backed `toggle=`/`adjust=` id is a row in `mod_row_model.cpp`'s table.** Feature-owned
-  state gets a cohesive control plus `RowBinding`, as `warp_control` does;
+  state gets a cohesive control plus `RowBinding`, as `title_debug_rows` does;
   `MenuDocument` only maps the authored id to that binding. An unresolved id is an ERROR at load.
 - **Non-ASCII glyphs in `.rml` are numeric character references** (`&#183;`), never HTML entity
   names: RML is XML-ish, and an unknown name renders literally. The test lints the shipped assets.

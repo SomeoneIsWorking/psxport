@@ -4,18 +4,15 @@
 // library's (shared/bug-report). This owner is the PSX half: WHEN a report is taken, WHAT it
 // carries, and holding the game still while the player writes it.
 //
-// One report is three frame boundaries, so the screenshot and the reference picture are the same
-// frame:
+// A report is taken across frame boundaries, so the screenshot and the reference picture are the same frame:
 //   1. `request()` — the B key (HostInput) or the REPL. Nothing happens mid-frame.
-//   2. The next field begins: the session arms `capturingFrame()`, the frame runs, and the title's
-//      ordering-table kick calls `captureReferenceFrame` once the device has drawn the table; that
-//      drawing is the reference picture.
-//   3. The field after that begins: that frame is on screen, so the session captures the presented
-//      picture, the pad recording up to it and the card it started from, opens the form and holds
-//      the field until the player saves or cancels.
+//   2. The next field begins and the session captures: the next logic frame the presenter seals
+//      (FramePresenter::commit) hands it the device's drawing of that frame, the reference picture.
+//   3. The field after the seal begins: that frame is on screen, so the session captures the presented
+//      picture, the last second of presents as a clip, the pad recording up to it and the card it
+//      started from, opens the form and holds the field until the player saves or cancels.
 //
-// A title that never calls `captureReferenceFrame` still gets a report; it just carries no reference
-// picture and says so in its facts.
+// A field run that seals no frame within a few fields still gets a report, without a reference picture.
 #pragma once
 
 #include "rgb24_picture.h"
@@ -42,20 +39,11 @@ public:
   // so a headless run exercises the whole path.
   void requestScripted(std::string summary);
 
-  // True for the one frame whose ordering table the reference picture must come from.
-  bool capturingFrame() const {
-    return mState == State::Capturing;
-  }
-  // Called by a title's ordering-table kick while capturingFrame(), after the device drew the table.
-  void captureReferenceFrame(Core &core);
+  // A logic frame was sealed: the device has drawn it into its draw area.
+  void frameSealed(Core &core);
 
   // The frame-boundary half, called at the start of every field (FieldTurn::beginField).
   void atFieldBoundary(Core &core);
-
-  // The application a report is filed under (TitleCatalog::productName); unset, the title's userDataName.
-  void setProductName(std::string_view name) {
-    mProductName = name;
-  }
 
 private:
   enum class State : std::uint8_t { Idle, Requested, Capturing };
@@ -66,8 +54,8 @@ private:
   bool holdForm(Core &core, bug_report::Draft &draft);
 
   State mState = State::Idle;
+  int mFieldsCapturing = 0;
   bool mPruned = false;
-  std::string mProductName;
   std::optional<std::string> mScriptedSummary;
   std::optional<psx::gpu::Rgb24Picture> mReference;
 };

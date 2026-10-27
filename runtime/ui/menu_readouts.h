@@ -1,19 +1,17 @@
-// psx::ui::MenuReadouts — the menu's live status lines (video / world / music / warp).
+// psx::ui::MenuReadouts — the menu's live status lines: the video line, the debug status line and the
+// readouts the title's debug menu declares.
 //
-// A readout is a `<div id="…_readout">` the document authored; this component finds the four it
-// knows, and refreshes the ones that exist. AN ABSENT READOUT IS NOT AN ERROR: a game ships its own
-// `menu.rml`, and one without an Area Warp section legitimately has no `#warp_readout`. What IS
-// reported, once at construction, is WHICH of them were found — so "the world line never updates"
-// can be told apart from "there is no world line in this document", which the old code could not
-// distinguish because every write went through a null-tolerant setter and said nothing either way.
-// Keeping readouts in their own component avoids repeating four `GetElementById` lookups inside the
-// overlay's per-frame function.
+// A readout is a `<div id="…">` the document holds; an absent one is skipped, and the construction report
+// says how many were found.
 #ifndef PSXPORT_UI_MENU_READOUTS_H
 #define PSXPORT_UI_MENU_READOUTS_H
 
 #include "ui_component.h"
 
+#include <cstddef>
 #include <string>
+#include <utility>
+#include <vector>
 
 class Game;
 
@@ -24,13 +22,12 @@ public:
   // `root` is the document body; `game` may be null (the readouts then show their static text).
   MenuReadouts(Rml::Element *root, Game *game);
 
-  // Refresh video / world / music from live state. Called by the base's per-frame walk.
+  // Refresh the video line and the title's readouts from live state. Called by the base's per-frame walk.
   void update() override;
 
-  // The Area Warp status line, written when a warp is armed (or refused).
-  void set_warp_status(const std::string &text);
+  // The Debug tab's status line: the last verb's reply.
+  void set_status(const std::string &text);
 
-  // Denominator for the construction report and for tests: how many of the four were present.
   int found() const {
     return mFound;
   }
@@ -38,10 +35,9 @@ public:
 private:
   Game *mGame = nullptr;
   Rml::Element *mVideo = nullptr;
-  Rml::Element *mWorld = nullptr;
-  Rml::Element *mMusic = nullptr;
-  Rml::Element *mWarp = nullptr;
-
+  Rml::Element *mStatus = nullptr;
+  // Each title readout's element and its index in the debug menu.
+  std::vector<std::pair<Rml::Element *, std::size_t>> mTitle;
   int mFound = 0;
 };
 

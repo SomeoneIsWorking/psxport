@@ -28,8 +28,12 @@ namespace {
 // The report folder's file names. The reproduction command below names them, so they are spelled once.
 constexpr const char *kScreenshotFile = "screen.png";
 constexpr const char *kReferenceFile = "psx.png";
+constexpr const char *kClipFile = "motion.png";
 constexpr const char *kRecordingFile = "repro.pad";
 constexpr const char *kCardFile = "memcard.mcr";
+
+// Fields a capture waits for a sealed frame before it reports without a reference picture.
+constexpr int kReferenceWaitFields = 4;
 
 // The directory name under the user-data root when a title declares none: the framework's own, so
 // every report still lands in one known place.
@@ -61,7 +65,10 @@ void BugReportSession::requestScripted(std::string summary) {
   request();
 }
 
-void BugReportSession::captureReferenceFrame(Core &core) {
+void BugReportSession::frameSealed(Core &core) {
+  if (mState != State::Capturing || mReference) {
+    return;
+  }
   psx::gpu::GpuDevice &device = core.gpuDevice();
   // The table draws into the draw area; the display still shows the previous frame.
   const psx::gpu::DisplayArea display = device.displayArea();
@@ -83,9 +90,13 @@ void BugReportSession::atFieldBoundary(Core &core) {
     return;
   case State::Requested:
     mReference.reset();
+    mFieldsCapturing = 0;
     mState = State::Capturing;
     return;
   case State::Capturing:
+    if (!mReference && ++mFieldsCapturing < kReferenceWaitFields) {
+      return;
+    }
     report(core);
     mState = State::Idle;
     mReference.reset();
@@ -116,9 +127,9 @@ void BugReportSession::report(Core &core) {
     return;
   }
   const psx::game::HostIdentity identity = game.hostIdentity();
-  const char *application = !mProductName.empty()              ? mProductName.c_str()
-                            : identity.userDataName != nullptr ? identity.userDataName
-                                                               : kFallbackUserDataName;
+  const std::string application(!game.productName.empty()          ? game.productName
+                                : identity.userDataName != nullptr ? std::string_view(identity.userDataName)
+                                                                   : std::string_view(kFallbackUserDataName));
   std::string error;
   std::optional<bug_report::Draft> draft =
       bug_report::Draft::open(*root, application, std::chrono::system_clock::now(), error);
@@ -156,7 +167,12 @@ void BugReportSession::attachCaptures(Core &core, bug_report::Draft &draft) {
       attachOrWarn(draft, kReferenceFile, AttachmentRole::Reference, "GPU device render of the same frame");
     }
   } else {
-    draft.addFact("Device render", "not captured (the title's draw kick does not take a reference frame)");
+    draft.addFact("Device render",
+                  lucent::format("not captured (no frame was sealed in {} fields)", kReferenceWaitFields));
+  }
+
+  if (const auto path = draft.pathFor(kClipFile, error); path && game.render().writeClip(path->string().c_str())) {
+    attachOrWarn(draft, kClipFile, AttachmentRole::Screenshot, "The last second of presents before the report");
   }
 
   const std::size_t padFrames = game.pad.recordedFrames();
@@ -178,8 +194,6 @@ void BugReportSession::attachCaptures(Core &core, bug_report::Draft &draft) {
   draft.addFact("build", PSXPORT_BUILD_ID_COMPOSITE);
 
   if (recorded) {
-    const psx::game::HostIdentity identity = game.hostIdentity();
-    const std::string cardVar = identity.cardEnvVar != nullptr ? identity.cardEnvVar : "PSXPORT_CARD";
     draft.setReproduction(bug_report::Reproduction{
         .summary = "Replay the pad recording from boot on the memory card it started from; pad frame " +
                    std::to_string(reportedFrame) + " is the reported frame.",
@@ -190,7 +204,7 @@ void BugReportSession::attachCaptures(Core &core, bug_report::Draft &draft) {
                 "reported frame to scratch/screenshots/padshot_" +
                     std::to_string(reportedFrame) + ".ppm.",
             },
-        .command = cardVar + "=<copy of memcard.mcr> PSXPORT_PAD_REPLAY=<report>/" + kRecordingFile +
+        .command = std::string("PSXPORT_CARD=<copy of memcard.mcr> PSXPORT_PAD_REPLAY=<report>/") + kRecordingFile +
                    " PSXPORT_PAD_SHOT_AT=" + std::to_string(reportedFrame),
     });
   }

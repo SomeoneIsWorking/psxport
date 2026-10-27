@@ -3,7 +3,7 @@
 // contracts while routing storage through that owner.
 
 #include "memcard.h"
-#include "config.h" // launch_setting — the title card key, then PSXPORT_CARD
+#include "config.h" // launch_setting — PSXPORT_CARD
 #include "core.h"
 #include "fs_util.h"
 #include "game.h" // c->game->hle.deliverEvent — Hle subsystem lives on Game
@@ -22,9 +22,9 @@
 
 // class Memcard is a Game member (see memcard.h). All BIOS handlers below reach it via `c->game->memcard`.
 
-// The game's card key then PSXPORT_CARD (launch_setting trims), then the game's default path.
+// PSXPORT_CARD (launch_setting trims), then the game's default path.
 std::string Memcard::resolvePath(const psx::game::HostIdentity &identity) {
-  const std::string configured = psx::config::launch_setting({identity.cardEnvVar, "PSXPORT_CARD"});
+  const std::string configured = psx::config::launch_setting({"PSXPORT_CARD"});
   if (!configured.empty()) {
     return configured;
   }

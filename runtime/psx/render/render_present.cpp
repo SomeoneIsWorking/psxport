@@ -210,6 +210,13 @@ void RenderState::buildPresentImage(SDL_GPUCommandBuffer *cmd, const present::Pr
                  plan.viewport,
                  presentImageSize_);
   SDL_EndGPURenderPass(pass);
+  clipPresent(cmd);
+}
+
+void RenderState::clipPresent(SDL_GPUCommandBuffer *cmd) {
+  if (target_ == PresentTarget::Swapchain) {
+    clip_.record(cmd, presentImage_, presentImageSize_);
+  }
 }
 
 // The sink: the finished picture into the window, letterboxed, with the overlay on top.
@@ -263,6 +270,7 @@ void RenderState::buildHostImage(SDL_GPUCommandBuffer *cmd, float fade) {
                  laidOut,
                  presentImageSize_);
   SDL_EndGPURenderPass(pass);
+  clipPresent(cmd);
   viewport_ = laidOut;
 }
 

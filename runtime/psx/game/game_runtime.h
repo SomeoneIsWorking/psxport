@@ -2,13 +2,12 @@
 #pragma once
 
 #include <cstdint>
-#include <cstdio>
 #include <memory>
 #include <optional>
 #include <span>
 #include <string>
+#include <string_view>
 
-#include "command_args.h"
 #include "execution_exit.h"
 #include "field_cadence.h"
 #include "guest_address_range.h"
@@ -34,18 +33,11 @@ class NativeStatePort;
 
 namespace psx::game {
 
-// One control-channel line: its first word, and every word for the title to parse.
-struct TitleCommandLine {
-  const char *command;
-  // Word 0 is the command.
-  const psx::debug::CommandArgs &args;
-};
+class TitleDebugMenu;
 
-// Where a title's memory card and user data live. The framework reads the card variable through its
-// configuration owner; the title only names the key.
+// Where a title's memory card and user data live; PSXPORT_CARD overrides the card for every title.
 struct HostIdentity {
-  const char *cardEnvVar = nullptr;      // checked before the generic PSXPORT_CARD
-  const char *cardDefaultPath = nullptr; // used when neither variable names a card
+  const char *cardDefaultPath = nullptr; // used when PSXPORT_CARD names no card
   const char *userDataName = nullptr;    // one path component under the OS user-data root (bug reports)
 };
 
@@ -84,29 +76,21 @@ public:
 
   // Adds the title's music to `frames` stereo frames the SPU already rendered into `pcm`.
   virtual void mixFrame(std::int16_t *pcm, int frames) = 0;
-  // The sound-test track playing now, or null.
-  virtual const char *nowPlayingName() const {
-    return nullptr;
+  // The sound-test track playing now; empty when stopped.
+  virtual std::string_view nowPlayingName() const {
+    return {};
+  }
+  // The sound test's tracks; an empty name shows as its number.
+  virtual int trackCount() const {
+    return 0;
+  }
+  virtual std::string_view trackName(int track) const {
+    (void)track;
+    return {};
   }
   // Plays sound-test track `track`, or stops on a negative value.
   virtual void soundTestPlay(int track) {
     (void)track;
-  }
-};
-
-// The areas the Debug tab's warp offers; the warp itself is the title's `warp` control command.
-class TitleDevWarp {
-public:
-  virtual ~TitleDevWarp() = default;
-
-  virtual int areaCount() const = 0;
-  // The area's sourced name, or null when the title has none.
-  virtual const char *areaName(int area) const {
-    (void)area;
-    return nullptr;
-  }
-  virtual bool warpAllowed() const {
-    return true;
   }
 };
 
@@ -198,23 +182,9 @@ public:
 
   // ---- Debug and run
 
-  // A control-channel or REPL command the framework did not recognise. Replies go to `reply`; true
-  // when the command was the title's.
-  virtual bool titleCommand(Core &core, const TitleCommandLine &input, std::FILE *reply) {
-    (void)core;
-    (void)input;
-    (void)reply;
-    return false;
-  }
-  // Usage lines for titleCommand's verbs, listed by `help`.
-  virtual std::span<const psx::debug::VerbUsage> commandUsage() const {
-    return {};
-  }
+  // The title's debug verbs, readouts, sound test and About lines; outlives every Game.
+  virtual const TitleDebugMenu &debugMenu() const = 0;
   virtual TitleAudio *audio(Core &core) const {
-    (void)core;
-    return nullptr;
-  }
-  virtual TitleDevWarp *devWarp(Core &core) const {
     (void)core;
     return nullptr;
   }
@@ -232,12 +202,6 @@ public:
   virtual void reportRun(Core &core) const {
     (void)core;
   }
-  // The Debug tab's world line (position, stage); empty when the title has none.
-  virtual std::string worldReadout(Core &core) const {
-    (void)core;
-    return {};
-  }
-
   // ---- Identity data
   virtual const HostIdentity *hostIdentity() const {
     return nullptr;

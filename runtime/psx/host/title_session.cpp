@@ -80,7 +80,8 @@ bool TitleSession::boot() {
   Core &core = game.core;
   game.hostInput.attachQuitScope(&services_.quit);
   game.session.setReturnAvailable(selectorAvailable_);
-  game.bugReport.setProductName(catalog_.productName());
+  game.productName = catalog_.productName();
+  game.title = title_.identity;
   // Panel defaults are applied only to a selector session. A product session must stay windowed
   // with the player's pad live and its audio on: a title whose boot waits on its own audio device
   // never gets there, and the run stalls in the first guest step with no frame ever presented.

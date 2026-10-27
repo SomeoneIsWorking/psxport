@@ -4,7 +4,7 @@
 namespace psx::ui {
 
 // `value` moved by `dir` within [0, span); span < 1 leaves it unchanged.
-constexpr int wrap(int value, int dir, int span) {
+template <typename T> constexpr T wrap(T value, T dir, T span) {
   if (span < 1) {
     return value;
   }

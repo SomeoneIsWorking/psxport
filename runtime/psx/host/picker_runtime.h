@@ -2,9 +2,11 @@
 
 #include "game_runtime.h"
 #include "picker_content.h"
+#include "title_debug_menu.h"
 
 #include <optional>
 #include <string>
+#include <string_view>
 
 namespace psx::host {
 
@@ -12,7 +14,7 @@ namespace psx::host {
 // every decision the pad makes in the window. Commands only record a request; the selector applies it.
 class PickerRuntime final : public psx::game::GameRuntime {
 public:
-  PickerRuntime() = default;
+  PickerRuntime();
 
   void bind(const PickerContent *content) {
     content_ = content;
@@ -40,9 +42,24 @@ public:
   }
 
   void registerOverrides(Game &) override {}
-  bool titleCommand(Core &core, const psx::game::TitleCommandLine &input, FILE *out) override;
+  const psx::game::TitleDebugMenu &debugMenu() const override {
+    return menu_;
+  }
 
 private:
+  // `picker`, `pick <title>` and `select <panel>`.
+  class Menu final : public psx::game::TitleDebugMenu {
+  public:
+    explicit Menu(PickerRuntime &picker);
+  };
+
+  std::string listing() const;
+  std::string pick(std::string_view slug);
+  std::string select(std::string_view panel);
+  int panelCount() const;
+  std::string panelSlug(int panel) const;
+
+  Menu menu_{*this};
   const PickerContent *content_ = nullptr;
   std::optional<std::string> pendingSlug_;
   std::optional<int> pendingPanel_;

@@ -2,6 +2,7 @@
 #pragma once
 #include "pane_host.h"
 #include "pixel_size.h"
+#include "present_clip.h"
 #include "present_sink.h"
 #include "record_rasterizer.h"
 #include "render_pane.h"
@@ -62,6 +63,10 @@ public:
   void repaint();
   // What the window shows: the letterboxed picture with the overlay, at the sink's size, either leg.
   void presentShot(const char *path);
+  // The last second of window presents as an animated PNG; false when none is held.
+  bool writeClip(const char *path) {
+    return clip_.write(path);
+  }
   // The record picture, or the device's displayed VRAM.
   void shot(const char *path);
   // REPL `preseq`: the next `count` presents written as numbered PPMs.
@@ -106,6 +111,8 @@ private:
   void showPresentImage(SDL_GPUCommandBuffer *cmd);
   // The window's contents drawn into `target`: the present image letterboxed, the overlay on top.
   void recordScreen(SDL_GPUCommandBuffer *cmd, SDL_GPUTexture *target, PixelSize size);
+  // The built present image into the motion clip when it goes to the window.
+  void clipPresent(SDL_GPUCommandBuffer *cmd);
   // One readback of the present image: whether it holds a picture, and where.
   bool probePicture(const std::uint8_t *rgba);
 
@@ -151,6 +158,9 @@ private:
   int recordFade_[4] = {}; // mode, r, g, b
   // The last present's display rect in VRAM, for a Device-path shot.
   gpu::VramRect lastDisplay_{0, 0, 320, 240};
+
+  // The window presents a bug report's motion clip is cut from.
+  PresentClip clip_{device_};
 
   int preseqLeft_ = 0;
   int preseqIndex_ = 0;

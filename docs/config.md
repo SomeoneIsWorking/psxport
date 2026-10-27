@@ -11,8 +11,9 @@ setting.
 
 `launch_setting({keys...})` answers the disc and memory-card paths a title identity names: the first
 key set in the environment, otherwise the first key set in `./.env` (`KEY=value`, trimmed), otherwise
-empty. Disc and card owners pass the title key before the shared `PSXPORT_DISC`/`PSXPORT_CARD`. The
-keys a title asked for are reported as `identity` by the environment audit, not as unknown.
+empty. The disc owner passes the title key before the shared `PSXPORT_DISC`; the memory card has one key
+for every title, `PSXPORT_CARD`, and otherwise the title's default card path. The keys a title asked for
+are reported as `identity` by the environment audit, not as unknown.
 
 ## Precedence
 

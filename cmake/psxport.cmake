@@ -47,7 +47,7 @@ set(PSXPORT_FRAMEWORK_SRC
   ${PSXPORT_ROOT}/runtime/psx/core/core.cpp
   ${PSXPORT_ROOT}/runtime/psx/game/game.cpp
   ${PSXPORT_ROOT}/runtime/psx/game/game_runtime.cpp
-  ${PSXPORT_ROOT}/runtime/psx/game/title_command.cpp
+  ${PSXPORT_ROOT}/runtime/psx/game/title_debug_menu.cpp
   ${PSXPORT_ROOT}/runtime/cpu/execution_exit.cpp
   ${PSXPORT_ROOT}/runtime/cpu/execution_ledger.cpp
   ${PSXPORT_ROOT}/runtime/cpu/execution_control.cpp
@@ -93,7 +93,7 @@ set(PSXPORT_FRAMEWORK_SRC
   ${PSXPORT_ROOT}/runtime/psx/hle/kernel_syscall.cpp
   ${PSXPORT_ROOT}/runtime/cpu/host_turn.cpp
   ${PSXPORT_ROOT}/runtime/psx/gpu/ordering_table.cpp # the guest DrawOTag chain and the tables a walk attributes to
-  ${PSXPORT_ROOT}/runtime/psx/debug/image_writer.cpp      # one checked RGB24 capture-file boundary
+  ${PSXPORT_ROOT}/runtime/psx/debug/image_writer.cpp      # one checked RGB24 capture-file boundary, stills and clips
   ${PSXPORT_ROOT}/runtime/psx/debug/gpu_debug.cpp
   ${PSXPORT_ROOT}/runtime/psx/audio/spu_audio.cpp
   ${PSXPORT_ROOT}/runtime/psx/audio/host_audio_output.cpp
@@ -165,6 +165,7 @@ set(PSXPORT_FRAMEWORK_SRC
   ${PSXPORT_ROOT}/runtime/psx/render/render_device.cpp # the SDL GPU device: bring-up, samplers, pipelines, transfers
   ${PSXPORT_ROOT}/runtime/psx/render/render_submit.cpp # command-buffer submit and the persisted GPU fault latch
   ${PSXPORT_ROOT}/runtime/psx/render/render_present.cpp # a Game's present: build the present image, show it
+  ${PSXPORT_ROOT}/runtime/psx/render/present_clip.cpp # the last second of window presents for a bug report clip
   ${PSXPORT_ROOT}/runtime/psx/gpu/gpu_ports.cpp # GP1 writes and DMA2 into the GPU device
   ${PSXPORT_ROOT}/runtime/psx/present/display_presenter.cpp # the guest display to the screen, once per present
   ${PSXPORT_ROOT}/runtime/psx/render/render_shader.cpp # SPIR-V shader creation
@@ -238,12 +239,11 @@ set(PSXPORT_FRAMEWORK_SRC
   ${PSXPORT_ROOT}/runtime/ui/ui_component.cpp       # Component base + the ONE data->DOM text boundary
   ${PSXPORT_ROOT}/runtime/ui/ui_assets.cpp          # asset resolution that REFUSES to report success
   ${PSXPORT_ROOT}/runtime/ui/mod_row_model.cpp      # what a Mods toggle row means
-  ${PSXPORT_ROOT}/runtime/ui/warp_control.cpp       # the Debug tab's dev area warp
-  ${PSXPORT_ROOT}/runtime/ui/dev_command_control.cpp # the Debug tab's warp entry, items and flag commands
+  ${PSXPORT_ROOT}/runtime/ui/title_debug_rows.cpp   # the Debug tab rows a title's debug menu declares
   ${PSXPORT_ROOT}/runtime/ui/menu_row.cpp           # one <select-button> + its binding
   ${PSXPORT_ROOT}/runtime/ui/menu_pane.cpp          # one tab's page of rows
   ${PSXPORT_ROOT}/runtime/ui/menu_tab_bar.cpp       # the <tab> row and which one is selected
-  ${PSXPORT_ROOT}/runtime/ui/menu_readouts.cpp      # the live video/world/music/warp status lines
+  ${PSXPORT_ROOT}/runtime/ui/menu_readouts.cpp      # the live video, debug status and title readout lines
   ${PSXPORT_ROOT}/runtime/ui/menu_document.cpp      # the tree over assets/rml/menu.rml
   ${PSXPORT_ROOT}/runtime/psx/present/present_ledger.cpp # recorded vs composed producers of a t = 1 present
   ${PSXPORT_ROOT}/vendor/rmlui/Backends/RmlUi_Platform_SDL.cpp)
@@ -365,6 +365,9 @@ target_link_libraries(psxport PUBLIC
   Threads::Threads m)
 # The first-run screen is the host's own; titles never include it.
 target_link_libraries(psxport PRIVATE setup_ui::setup_ui)
+# The bug report's motion clip is an animated PNG.
+find_package(ZLIB REQUIRED)
+target_link_libraries(psxport PRIVATE ZLIB::ZLIB)
 
 # The vendored GPU sources use sscanf/fprintf/stderr without including <stdio.h>. Supply it on the
 # compile line rather than editing the fork — psxport's rule is that beetle changes live in the

@@ -19,7 +19,7 @@
 #include "render_state.h"
 #include "snapshot.h"
 #include "spu_field_cadence.h"
-#include "title_command.h"
+#include "title_debug_menu.h"
 #include "wav_writer.h"
 #include "xa_state.h"
 
@@ -665,9 +665,10 @@ bool DebugCommands::run(Core &core, const CommandArgs &args, const ReplySink &re
       return true;
     }
   }
-  const psx::game::TitleCommandReply title = psx::game::runTitleCommand(core, args);
-  replyLines(reply, title.text);
-  return title.handled;
+  std::string answer;
+  const bool handled = core.runtime.debugMenu().run(core, args, answer);
+  replyLines(reply, answer);
+  return handled;
 }
 
 void DebugCommands::help(const Core &core, std::span<const VerbUsage> transportVerbs, const ReplySink &reply) {
@@ -677,8 +678,8 @@ void DebugCommands::help(const Core &core, std::span<const VerbUsage> transportV
   for (const Verb &verb : kVerbs) {
     reply(lucent::format("  {:<40} {}", verb.usage, verb.summary));
   }
-  for (const VerbUsage &verb : core.runtime.commandUsage()) {
-    reply(lucent::format("  {:<40} {}", verb.usage, verb.summary));
+  for (const psx::game::DebugVerb &verb : core.runtime.debugMenu().verbs()) {
+    reply(lucent::format("  {:<40} {}", psx::game::TitleDebugMenu::usage(verb), verb.summary));
   }
 }
 
