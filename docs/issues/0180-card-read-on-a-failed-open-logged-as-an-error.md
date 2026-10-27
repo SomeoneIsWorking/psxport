@@ -17,3 +17,5 @@ failed wrongly would land there too).
 
 ## Proof
 `psx-tekken-3/scratch/player-bugs/card2`: the same open/read/close sequence, no error line.
+
+All-title real-time run on psxport `79dcd0e6` (40 s paced, hidden, `scratch/player-bugs/realtime_all.py`, load 4.8-10.9): 0 error lines in all 11 titles; Spyro, Crash, X4 and Tekken 3 0 missed, CTR, Tomba, Spider-Man, Vagrant and Crash Bash at most 0.19%, Toy Story 2 0.74% (its boot hold, issue 0057), C-12 12.5% (psx-c12 issue 0006).
