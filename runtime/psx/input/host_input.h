@@ -48,7 +48,9 @@ class QuitScope;
 
 class HostInput {
 public:
-  HostInput() = default;
+  // Brings SDL's gamepad subsystem up for the process: its device scan takes hundreds of ms, so never mid-run.
+  HostInput();
+  ~HostInput();
   HostInput(const HostInput &) = delete;
   HostInput &operator=(const HostInput &) = delete;
 
@@ -113,7 +115,6 @@ private:
 #ifdef PSXPORT_SDL
   bool keyDown(int scancode) const;
   void noteHostKey(int scancode, bool down);
-  void ensureGamepadSubsystem();
   void rescanControllers(bool shown);
   // PSXPORT_PAD_NOPAD: ignore every controller and use the keyboard only. For a machine where a
   // connected or phantom pad reports a drifting analog stick and cannot be unplugged.
@@ -141,7 +142,7 @@ private:
   static constexpr int kMaxGamepads = 4;
   SDL_Gamepad *mGamepads[kMaxGamepads] = {};
   int mGamepadInstance[kMaxGamepads] = {-1, -1, -1, -1}; // SDL_JoystickID per slot (-1 = empty)
-  bool mGamepadSubsystemInit = false;                    // lazily added the gamepad subsystem?
+  bool mGamepadSubsystem = false;                        // this owner's reference on SDL_INIT_GAMEPAD
   int mNoPad = -1;                                       // PSXPORT_PAD_NOPAD cache (-1 = not read)
   bool mPrevPauseKey = false;                            // P / '.' debug-key edge detectors
   bool mPrevStepKey = false;
