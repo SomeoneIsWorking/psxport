@@ -93,8 +93,8 @@ PresentedImage RenderState::newestPresentedPicture() const {
   return lastPresented();
 }
 
-// A picture is lit on a quarter of a sample grid and locally coherent on two thirds of its neighbour
-// pairs, which rejects a logo on black and uninitialised memory.
+// Lit on a quarter of a sample grid (not a logo on black) and coherent on two fifths of its neighbour
+// pairs (not uninitialised memory, about a fifth); a lit 3D scene sits near half.
 bool RenderState::probePicture(const std::uint8_t *rgba) {
   const int w = presentImageSize_.width;
   const int h = presentImageSize_.height;
@@ -122,7 +122,7 @@ bool RenderState::probePicture(const std::uint8_t *rgba) {
       }
     }
   }
-  return lit >= kSamples / 4 && coherent >= (pairs * 2) / 3;
+  return lit >= kSamples / 4 && coherent >= (pairs * 2) / 5;
 }
 
 // The hold is refreshed every kHoldRefreshPresents presents from the probe's own readback: this SDL has
