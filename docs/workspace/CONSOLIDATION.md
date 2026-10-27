@@ -244,7 +244,7 @@ Flagged: frame_presenter\*, display_presenter\*, gpu_vk_present\*, gpu_vk_record
   - **Submit and readback.**
     - `submitAndWait` is the one bounded fence wait; the pane loop, `kFenceBudgetMs` and `OneShotWait` are deleted.
     - One device texture download plus one RGBA-to-RGB24 shot writer that counts non-black pixels serve `download_present_image`, `present_shot` and the pane shot.
-    - One sampled-texture create plus upload helper serves `ensureImageTexture`, `ensure_targets`, `build_image`, `upload_device_vram`, `retainFilledPresentImage`, `makeTexture`, `PanelLogo` and the pane's white texture. Those last two submit through `GpuDevice::submit`.
+    - One sampled-texture create plus upload helper serves `ensureImageTexture`, `ensure_targets`, `build_image`, `upload_device_vram`, `makeTexture`, `PanelLogo` and the pane's white texture. Those last two submit through `GpuDevice::submit`.
     - `beginClearedPass`/`drawFullscreen` in the present sink serve the four fullscreen passes.
   - **Present sizing and display rect.**
     - `presentImageSize()` is the one present-size rule; `videoStatus`, `presentInputs` and `build_image_present_image` use it.

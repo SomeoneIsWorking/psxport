@@ -49,10 +49,10 @@ RenderState::~RenderState() {
     return;
   }
   record_.reset();
-  for (SDL_GPUTexture **texture : {&vramTexture_, &hostImage_, &presentImage_, &filled_, &screenImage_}) {
+  for (SDL_GPUTexture **texture : {&vramTexture_, &hostImage_, &presentImage_, &screenImage_}) {
     device_.release(*texture);
   }
-  for (SDL_GPUTransferBuffer **buffer : {&vramUpload_, &hostUpload_, &presentReadback_, &screenReadback_}) {
+  for (SDL_GPUTransferBuffer **buffer : {&vramUpload_, &hostUpload_, &screenReadback_}) {
     device_.release(*buffer);
   }
 }
@@ -91,11 +91,8 @@ void RenderState::ensurePresentImage(PixelSize size) {
     return;
   }
   device_.release(presentImage_);
-  device_.release(presentReadback_);
   presentImage_ =
       device_.makeTexture(size, kPresentImageFormat, SDL_GPU_TEXTUREUSAGE_SAMPLER | SDL_GPU_TEXTUREUSAGE_COLOR_TARGET);
-  presentReadback_ = device_.makeTransferBuffer(SDL_GPU_TRANSFERBUFFERUSAGE_DOWNLOAD,
-                                                static_cast<std::uint32_t>(size.width) * size.height * 4);
   presentImageSize_ = size;
   lucent::info("render", "present image {}x{}", size.width, size.height);
 }

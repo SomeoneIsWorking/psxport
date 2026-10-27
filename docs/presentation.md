@@ -470,8 +470,8 @@ builds panes into its present image (`DisplayPresenter::buildPanes` → `RenderS
 shows it through `showPresentImage`, so the overlay, the RmlUi menu and host input are the ones a title
 frame has. The picker's loop builds, paces with `FramePacer::hostScreenPace` and shows itself only on an
 iteration where no panel presented, and skips the pace when the panel's step already paced its fields (`title-host.md`). A pane
-samples the session's live present image (`RenderState::newestPresentedPicture`; `title-host.md` for
-the fallback).
+samples the session's newest present image (`RenderState::lastPresented`; `title-host.md` for when a
+panel counts as ready).
 
 A pane's present image is filled, not letterboxed: `PresentInputs::fill` centre-crops the picture to
 the image's shape at its displayed 4:3 aspect, at the rendered resolution. The

@@ -140,9 +140,9 @@ running panel (`Mods::reload`). D-pad Left/Right and `select left|right` step th
 (`PanelSessions::step`); Cross or Start confirms. Panel 0 starts selected and
 audible. Each panel presents at its settled cover size and is drawn 1:1 (`presentation.md`). The selected
 panel's share of the window width is the settings file's `picker_selected_share` (default 0.6) and the
-others split the rest evenly (`PickerLayout::retarget`), so two titles are 60/40 and three 60/20/20. A panel is probed (`RenderState::retainFilledPresentImage`, a GPU→CPU→GPU round trip) only while it
-boots, until it first holds a picture, and once more when it is deselected (a picture is lit on a quarter of a 16x16 sample grid and coherent on two fifths of its neighbour pairs, `RenderState::probePicture`), so a panel paused on a fade
-falls back to the held picture; the selected panel shows its live presents, fades included (issue 0162). The selector logs its end state with the panel
+others split the rest evenly (`PickerLayout::retarget`), so two titles are 60/40 and three 60/20/20. A panel is ready once its title is past its boot prefix and has presented a field with the guest display enabled
+(GP1(03), `DisplayArea::enabled`; `TitleSession::showsTitlePicture`); no pixels are sampled. Every panel shows its
+newest present, so a panel deselected during a fade holds that faded frame (issue 0181). The selector logs its end state with the panel
 summary (`selector ended ... ; panels: [0]*slug demo ...`).
 
 `ProductHost` hands every session its `SessionServices`: the presentation device, the process

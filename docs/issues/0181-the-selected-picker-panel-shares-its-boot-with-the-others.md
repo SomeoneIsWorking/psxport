@@ -1,7 +1,7 @@
 # 0181 — The selected picker panel shares its boot with the others
 
 Status: closed (2026-10-27). Owners: `runtime/psx/host/panel_sessions.cpp` (`PanelSessions::nextPanelNeedingWork`),
-`runtime/psx/render/render_readback.cpp` (`RenderState::probePicture`).
+`runtime/psx/host/title_session.cpp` (`TitleSession::step`, `showsTitlePicture`).
 
 ## Observed
 Spyro player report `20261023-181726-spyro-1-loads-very-late`: in the selector, the Spyro 1 panel (selected, panel 0)
@@ -30,3 +30,17 @@ Cost: Spyro 2 and 3 start their boots only once Spyro 1 shows, so they show late
 8.3-8.6 s at load 7-9, against 5.3 s and 8.2 s round-robin). At load 12-18 they did not show within 14 s.
 
 All-title real-time run on psxport `79dcd0e6` (40 s paced, hidden, `scratch/player-bugs/realtime_all.py`, load 4.8-10.9): 0 error lines in all 11 titles; Spyro, Crash, X4 and Tekken 3 0 missed, CTR, Tomba, Spider-Man, Vagrant and Crash Bash at most 0.19%, Toy Story 2 0.74% (its boot hold, issue 0057), C-12 12.5% (psx-c12 issue 0006).
+
+## Readiness from guest state, 2026-10-27
+The luma probe answered a question the guest state already answers. `RenderState::probePicture`,
+`retainFilledPresentImage`, `newestPresentedPicture` and the held copy are deleted. A panel is ready once its title is
+past its boot prefix (`FrameDriver::pastBootPrefix`) and a step presented a field while the guest display was enabled
+(GP1(03), `GpuDevice::displayArea().enabled`). A panel shows its newest present, so one deselected mid-fade holds the
+faded frame.
+
+Proof: Spyro selector, paced, hidden, `PSXPORT_DEBUG=picker`, sink 3840x2160, `PSXPORT_NATIVE_FRAMES=1200`, load 8
+(`psx-spyro/scratch/player-bugs-2/picker-ready3`). From the panels being made, Spyro 1 shows a picture after 0.55 s,
+Spyro 2 after 5.9 s and Spyro 3 after 9.2 s; all three reach their demos.
+
+The Spyro 2/3 wait is accepted: it is their own boot prefixes, run unpaced inside each selector frame's pre-roll
+budget, after the selected panel. Round-robin bought them about 0.6 s and cost the panel in focus about 2 s.
