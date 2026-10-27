@@ -141,7 +141,8 @@ class SpuState:
 
 @dataclass(frozen=True)
 class Output:
-    """The SPU's mixed output over the last field each core ran, before any title-owned music."""
+    """Each core's output over the last field it ran: everything the player hears (the console's libretro
+    output; the product's SPU mix with the title's own music mixed in)."""
     samples: int
     nonzero: int
     peak: int

@@ -71,11 +71,22 @@ keyed (ADSR phase not release), sounding (envelope nonzero), pitch, start addres
 controls and the reverb/FM/noise bits; per SPU the control register (less its transfer-mode bits), main,
 reverb, CD and external volumes, the reverb base and the 0x1C0 configuration block. Envelope level,
 decode address, loop address and sweep progress are informational: removed loads mean the two SPU clocks
-never line up sample for sample. Whether each core's last field mixed any output at all is decisive.
-The report names the first divergent voice or register and lists both cores' sounding voices.
+never line up sample for sample. Whether each core's last field put out any sound at all is decisive: on
+the console that is its whole libretro output, on the product the SPU mix with the title's own music
+(`TitleAudio::mixFrame`) mixed in, so both sides are what the player hears. The report names the first
+divergent voice or register and lists both cores' sounding voices.
 
-Blind spot: the CD audio samples the SPU mixes in are not compared, only the CD volume and enable bits;
-the product streams XA natively.
+Blind spot: the CD audio samples the SPU mixes in are not compared, only the CD volume and enable bits.
+A register difference at one checkpoint can be phase: Tomba! 2's `field` checkpoint reports SPUCNT CD enable
+`0xC081` against `0xC080` and CD volume `0x0000` against `0x6388`, both written by the guest's own CD-mix
+sequence (`C0A0`/`C0A1` toggles and per-frame CD volume fades), which the product reaches 288 game frames
+sooner; the registers agree again at `gameplay[0]`.
+
+Validated 2026-10-27 (`scratch/player-bugs-2/spu-validate/validate.py`, `validate.log`) on a product dump and a
+console dump from the same Tomba! 2 checkpoint: each against itself matches with no difference rows; a
+seeded voice 5 pitch, SPUCNT or voice 7 envelope byte reports exactly that field first (the envelope as
+`sounding`, with the level row informational); a silent output against an audible one reports
+`output audible`. No cross-core checkpoint has matched yet.
 
 ## Evidence rules
 
