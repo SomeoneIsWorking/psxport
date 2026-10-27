@@ -7,6 +7,7 @@
 #include "owner_ledger.h"
 
 #include <cstdint>
+#include <optional>
 #include <span>
 #include <vector>
 
@@ -14,7 +15,8 @@ namespace psx::present {
 
 class OwnershipVerdict {
 public:
-  // Judges S' (`from`) to S (`to`); true when every unowned group of S is drawn word for word as in S'.
+  // Judges S' (`from`) to S (`to`); true when every unowned group of S is drawn word for word as in S' and no writer
+  // amended an owned packet.
   bool judge(const FrameRecord &from, const FrameRecord &to, const OwnerLedger &ledger);
   // The last judgement's findings: moving unowned and port groups, and amended packets.
   std::span<const OwnerFinding> findings() const {
@@ -48,6 +50,7 @@ private:
 
   std::vector<Group> from_;
   std::vector<Group> to_;
+  std::optional<std::uint64_t> toSequence_; // the record to_ was collected from
   std::vector<OwnerFinding> findings_;
 };
 

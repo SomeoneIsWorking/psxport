@@ -38,6 +38,8 @@ struct PresentStability {
   std::uint64_t withoutInBetween = 0;
   std::uint64_t repeats = 0;
   std::uint64_t backwards = 0;
+  // Composed presents whose guest moment did not advance: the interval had fewer fields than presents.
+  std::uint64_t stalled = 0;
 };
 
 class FramePresenter {
@@ -87,8 +89,6 @@ private:
   static constexpr std::size_t kRecordHistory = 3;
   // A longer gap between two draw entries is a pause or a load, not a logic frame.
   static constexpr std::uint32_t kMaxIntervalFields = 8;
-  // Intervals of shorter frames before the latency drops to them.
-  static constexpr int kLatencySettle = 8;
   // A sealed record and the producer states its packets were drawn from, in storage kept across frames.
   struct RecordSlot {
     present::FrameRecord record;
@@ -97,8 +97,9 @@ private:
   struct SealedRecord {
     const present::FrameRecord *record = nullptr;
     const present::FrameState *state = nullptr;
-    bool cut = false;     // a cut was sealed since the drawing record before it
-    bool follows = false; // every record since the drawing record before it was committed and complete
+    bool cut = false;         // a cut was sealed since the drawing record before it
+    bool follows = false;     // every record since the drawing record before it was committed and complete
+    std::uint64_t screen = 0; // the title's screen key when the record was sealed
   };
 
   // A slot neither the current record nor the history holds.
@@ -119,18 +120,25 @@ private:
   // The record path at 60 fps: a frame of n fields is n presents, the shown record at t = k / n from the one
   // shown before.
   void presentRecords(Core &core, const present::StateProducers *producers, int guestFields);
-  // N's present; with `shown` and `compose`, the shown record composed at `t` from `from` (at t = 1 alone), else as
-  // the guest drew it.
+  // `shown` composed by `composer` at `t` from `from` (a whole frame at t = 1 when null); null when it is drawn as
+  // the guest drew it. A refusal is journaled and holds the interval.
+  const present::FrameRecord *composeShown(Core &core,
+                                           present::FrameComposer &composer,
+                                           const present::StateProducers *producers,
+                                           const SealedRecord &shown,
+                                           const present::FrameState *from,
+                                           float t);
+  // N's present: `composedFrame` when one was composed, else the shown record as the guest drew it.
   void presentCurrent(Core &core,
-                      const present::StateProducers *producers,
                       FieldCadence cadence,
                       const SealedRecord *shown,
-                      bool compose,
+                      const present::FrameRecord *composedFrame,
                       const SealedRecord *from = nullptr,
                       float t = 1.0f,
                       int interval = 0);
-  // Raises the latency to `wanted` at once; lowers it only after kLatencySettle calm intervals.
-  void settleLatency(int wanted);
+  // The latency for an interval of `fields` fields shown over `presents` presents, `lead` fields after S's draw
+  // entry at display field `entry`: unchanged when the interval allows, never showing a moment again or one before S'.
+  int intervalLatency(std::int64_t entry, int lead, int presents, int fields) const;
   // Fields from `record`'s draw entry to now; 0 when it has none.
   static int fieldsSinceDrawEntry(const Core &core, const present::FrameRecord &record);
   // The fields between `from`'s and `to`'s draw entries; `fallback` when either is unknown or out of range.
@@ -141,7 +149,8 @@ private:
   uint64_t fence_ = 0;
   int dumpSequence_ = 0;
   int latency_ = 1;
-  int calmIntervals_ = 0;
+  // The guest moment, in display fields, the last record present showed; unknown after a present off the record path.
+  std::optional<std::int64_t> shownMoment_;
   // The history, the current record and the one being sealed.
   std::array<RecordSlot, kRecordHistory + 2> slots_;
   const present::FrameRecord *current_ = &slots_.front().record;
@@ -158,6 +167,8 @@ private:
   // The record whose picture the last present showed.
   std::optional<std::uint64_t> shownSequence_;
   present::FrameComposer composer_;
+  // The interval's last present, composed before its in-betweens are shown and kept for its own present.
+  present::FrameComposer endComposer_;
   present::OwnershipVerdict verdict_;
   const present::FrameRecord *composed_ = nullptr;
   bool composedAdvances_ = false;

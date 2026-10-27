@@ -8,12 +8,17 @@
 
 namespace psx::testprog {
 
-inline constexpr std::array<std::string_view, 5> kSceneNames{
-    "owned-square", "unowned-moving", "mmio-port", "block-dma-port", "reused-slot"};
+inline constexpr std::array<std::string_view, 6> kSceneNames{
+    "owned-square", "unowned-moving", "mmio-port", "block-dma-port", "reused-slot", "amended-square"};
 
 class DebugMenu final : public psx::game::TitleDebugMenu {
 public:
   DebugMenu();
+
+  // The program is built from testprog/guest/testprog.c; rows cite that source, not a decompilation.
+  std::optional<psx::game::DecompImage> decompImage(Core &, std::string_view, bool) const override {
+    return std::nullopt;
+  }
 };
 
 } // namespace psx::testprog

@@ -32,7 +32,7 @@ enum class HeldCause : std::uint8_t {
   NoState,         // an owned object with no render or no saved state
   ProducerRefused, // a producer's composition refused t
   Unplaceable,     // a render named a slot S never walked, or the CLUT pool was full
-  Unpaired,        // an owned object S has and S' did not draw (no from state, no rest)
+  Unpaired,        // an owned object S' drew with no single state (ambiguous)
 };
 
 const char *ownerReasonName(OwnerReason reason);
@@ -73,8 +73,9 @@ class OwnerJournal {
 public:
   OwnerJournal();
 
-  // The screen the machine shows now; a change writes the journal file first.
-  void observeScreen(Core &core);
+  // The screen `key` (TitleDebugMenu::screenKey) the presented interval belongs to; a change writes the journal file
+  // first.
+  void observeScreen(Core &core, std::uint64_t key);
   // One finding of the interval being presented; `lost` when that interval was held.
   void record(Core &core, const OwnerFinding &finding, bool lost);
   // The rows, most intervals lost first, at most `limit`, one line each, for the `owners` verb.
@@ -96,6 +97,8 @@ private:
   static constexpr std::size_t kMaxScreens = 256;
 
   std::string rowJson(Core &core, const OwnerRow &row) const;
+  // The decomp_pipeline.py line that decompiles the row's code from its image; empty when the title names no image.
+  std::string decompCommand(Core &core, const OwnerRow &row) const;
   std::string path(Core &core) const;
 
   std::vector<OwnerRow> rows_;

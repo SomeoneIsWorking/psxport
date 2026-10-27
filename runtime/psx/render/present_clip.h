@@ -1,5 +1,6 @@
 // present_clip.h — PresentClip: the last second of a Game's window presents, kept downscaled on the GPU for a
-// bug report's motion clip. Fixed size, allocated once; recording a present is one GPU blit.
+// bug report's motion clip. Fixed size (about 55 MB), allocated at the first present; recording a present is one GPU
+// blit. Off (PSXPORT_BUG_REPORT_CLIP=0) it holds nothing and costs nothing.
 #pragma once
 #include "pixel_size.h"
 
@@ -16,11 +17,11 @@ using present::PixelSize;
 
 class PresentClip {
 public:
-  // About one second of presents at 60 Hz, at 960x540.
+  // About one second of presents at 60 Hz, at 640x360.
   inline static constexpr int kFrames = 60;
-  inline static constexpr PixelSize kSize{960, 540};
+  inline static constexpr PixelSize kSize{640, 360};
 
-  explicit PresentClip(RenderDevice &device) : device_(device) {}
+  PresentClip(RenderDevice &device, bool enabled) : device_(device), enabled_(enabled) {}
   ~PresentClip();
   PresentClip(const PresentClip &) = delete;
   PresentClip &operator=(const PresentClip &) = delete;
@@ -32,6 +33,7 @@ public:
 
 private:
   RenderDevice &device_;
+  bool enabled_ = false;
   SDL_GPUTexture *frames_ = nullptr; // a 2D array, one layer per frame
   int next_ = 0;
   int held_ = 0;

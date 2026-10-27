@@ -101,8 +101,10 @@ private:
   std::uint64_t listStart_ = 0; // scopes opened before the last draw list was submitted
   std::vector<GuestWriter> writers_;
   std::vector<std::uint32_t> writerSlots_; // open addressing: writer index + 1, 0 empty
-  // The last writer interned and what named it, so a run of stores from one block costs no lookup.
+  // The last writer interned, what named it and the catalog revision it was resolved at, so a run of stores from one
+  // block costs no lookup until an image changes.
   GuestWriter last_{};
+  std::uint64_t lastRevision_ = 0;
   OwnerHandle lastHandle_ = kNoOwner;
   bool overflowReported_ = false;
 };

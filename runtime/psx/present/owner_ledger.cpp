@@ -111,10 +111,12 @@ OwnerHandle OwnerLedger::port(WriterKind kind) {
                             .blockPc = core_.writerLatch.blockPc(),
                             .function = core_.writerLatch.function(),
                             .dispatched = core_.callAttribution.top()};
-  if (lastHandle_ != kNoOwner && sameCode(running, last_)) {
+  const std::uint64_t revision = core_.imageCatalog().revision();
+  if (lastHandle_ != kNoOwner && lastRevision_ == revision && sameCode(running, last_)) {
     return lastHandle_;
   }
   last_ = running;
+  lastRevision_ = revision;
   lastHandle_ = intern(running);
   return lastHandle_;
 }

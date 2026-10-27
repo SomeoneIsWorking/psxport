@@ -24,7 +24,7 @@ PresentClip::~PresentClip() {
 }
 
 void PresentClip::record(SDL_GPUCommandBuffer *cmd, SDL_GPUTexture *image, PixelSize size) {
-  if (image == nullptr || size.width <= 0 || size.height <= 0) {
+  if (!enabled_ || image == nullptr || size.width <= 0 || size.height <= 0) {
     return;
   }
   if (frames_ == nullptr) {

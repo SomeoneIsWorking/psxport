@@ -20,7 +20,8 @@ public:
   // `shown` with the entries of every object a render covers replaced by that render at `t`, placed in
   // the OT slots it emits. An object is covered when its producer has a render and `to` holds its state;
   // `from` null (a cut) renders every object at `to`. An object one of the two frames skipped, whose
-  // producer names the skip as a state (StateProducer::rests), moves from or toward that state. The n-th
+  // producer names the skip as a state (StateProducer::rests), moves from or toward that state; one S' skipped
+  // with no such state is left out of the in-between and appears at t = 1. The n-th
   // primitive in a slot goes where the object's n-th entry in it was (after its last when there are fewer),
   // else at the slot's head, else where the table's walk order puts that slot. A CLUT `shown` never sampled
   // is read from `vram`. An object whose render names a table `shown` never walked keeps its entries.
@@ -34,12 +35,13 @@ public:
                              const StateProducers &producers,
                              std::span<const std::uint16_t> vram);
 
-  // Why the last compose returned null for an in-between, and the producer involved; `baked` when its object's
-  // pixels were baked into an upload.
+  // Why the last compose returned null for an in-between, the producer involved and one of its object's entries in
+  // `shown`; `baked` when its object's pixels were baked into an upload.
   struct Refusal {
     HeldCause cause = HeldCause::None;
     std::uint32_t producer = 0;
     bool baked = false;
+    std::size_t entry = SIZE_MAX;
 
     bool refused() const {
       return baked || cause != HeldCause::None;

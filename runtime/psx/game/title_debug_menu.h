@@ -5,6 +5,7 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <filesystem>
 #include <functional>
 #include <optional>
 #include <span>
@@ -104,6 +105,12 @@ struct DebugReadout {
   std::function<std::string(Core &)> text;
 };
 
+// The decomp_pipeline.py input that holds a code image's bytes: its tools/decomp/manifest.json entry and the file.
+struct DecompImage {
+  std::string manifestName;
+  std::filesystem::path file;
+};
+
 class TitleDebugMenu {
 public:
   // A heading on the Debug tab and the verbs and readouts registered under it.
@@ -147,6 +154,9 @@ public:
   std::string screenRoute(Core &core, std::uint64_t key) const {
     return screenRoute_ ? screenRoute_(core, key) : std::string{};
   }
+  // The decomp input for the code image the catalog names `imageName`: the booted executable when `resident`; a title
+  // with overlays names each overlay's manifest entry and file. Empty when the manifest has no entry for it.
+  virtual std::optional<DecompImage> decompImage(Core &core, std::string_view imageName, bool resident) const;
 
 protected:
   // Later verbs and readouts go under this heading.

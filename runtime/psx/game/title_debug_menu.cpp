@@ -2,6 +2,7 @@
 
 #include "command_args.h"
 #include "core.h"
+#include "game.h"
 #include "game_runtime.h"
 #include "number_text.h"
 
@@ -251,6 +252,15 @@ void TitleDebugMenu::screen(std::function<std::uint64_t(Core &)> key,
 
 void TitleDebugMenu::aboutLine(std::string_view line) {
   about_.push_back(line);
+}
+
+std::optional<DecompImage>
+TitleDebugMenu::decompImage(Core &core, std::string_view /*imageName*/, bool resident) const {
+  const psx::host::TitleIdentity *title = core.game->title;
+  if (!resident || title == nullptr || core.game->executable.empty()) {
+    return std::nullopt;
+  }
+  return DecompImage{std::string(title->slug), core.game->executable};
 }
 
 } // namespace psx::game
