@@ -1,6 +1,6 @@
 # 0180 — Card read on a failed open logged as an error
 
-Status: closed (2026-10-27). Owner: `runtime/psx/platform/memcard.cpp` (`file_read`, `file_write`).
+Status: closed (2026-10-27). Owner: `runtime/psx/platform/memcard.cpp` (`file_read`).
 
 ## Observed
 Tekken 3 logs `[card:error] read on fd -1 which is not an open card file — returning -1` at boot on a fresh card.
@@ -11,7 +11,9 @@ the returned fd -1. The guest reads its save without checking the open, and the 
 which is what `file_read` returns. The error level and the comment claiming no guest reaches this path were wrong.
 
 ## Fix
-The bad-descriptor read and write log at debug level; the comment states the case.
+The bad-descriptor read logs at debug level; the comment states the case. The bad-descriptor write stays an error:
+no title has been seen writing after a failed open, so one there is still a defect to trace (an open of ours that
+failed wrongly would land there too).
 
 ## Proof
 `psx-tekken-3/scratch/player-bugs/card2`: the same open/read/close sequence, no error line.
