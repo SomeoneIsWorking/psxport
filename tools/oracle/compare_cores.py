@@ -125,20 +125,15 @@ class NativeReplSession:
 
     def hold(self, buttons: frozenset[str]) -> None:
         _validate_buttons(buttons)
-        echo = ""
-        for name in sorted(self._held - buttons):
-            self._send(f"release {name}")
-            echo = self._expect("held=")
-        for name in sorted(buttons - self._held):
-            self._send(f"press {name}")
-            echo = self._expect("held=")
+        changes = [f"release {name}" for name in sorted(self._held - buttons)]
+        changes += [f"press {name}" for name in sorted(buttons - self._held)]
+        for change in changes:
+            # The product presses the button on its virtual gamepad; the guest's pad words are compared as RAM.
+            self._send(change)
+            reply = self._expect("gamepad")
+            if "no virtual pad" in reply:
+                raise CoreError(f"native REPL could not {change}: {reply}")
         self._held = buttons
-        if echo:
-            expected = 0xFFFF & ~sum(PSX_BUTTON_BITS[name] for name in buttons)
-            held = int(echo.rsplit("held=", 1)[1][:4], 16)
-            if held != expected:
-                raise CoreError(f"native REPL held mask {held:04X} after holding {sorted(buttons)}, "
-                                f"expected {expected:04X}: a button name mapped to the wrong bit")
 
     def step(self, frames: int) -> None:
         if frames <= 0:

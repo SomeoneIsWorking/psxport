@@ -181,13 +181,30 @@ std::string InputInjection::gamepadButton(std::string_view name, InjectedPress p
     return lucent::format(
         "gamepad: \"{}\" is not a button; buttons: {}; or `gamepad axis <name> <value>`", name, gamepadButtonNames());
   }
+  return gamepadButton(static_cast<int>(button), press, holdTurns);
+}
+
+std::string InputInjection::gamepadButton(int button, InjectedPress press, int holdTurns) {
   if (!setGamepadButton(button, press != InjectedPress::Up)) {
     return lucent::format("gamepad: no virtual pad: {}", SDL_GetError());
   }
   if (press == InjectedPress::Tap) {
     schedule(Device::GamepadButton, button, WindowId{}, holdTurns);
   }
-  return lucent::format("gamepad {} {}", SDL_GetGamepadStringForButton(button), pressText(press, holdTurns));
+  return lucent::format("gamepad {} {}",
+                        SDL_GetGamepadStringForButton(static_cast<SDL_GamepadButton>(button)),
+                        pressText(press, holdTurns));
+}
+
+std::string InputInjection::gamepadTrigger(int axis, InjectedPress press, int holdTurns) {
+  if (!setGamepadTrigger(axis, press != InjectedPress::Up)) {
+    return lucent::format("gamepad: no virtual pad: {}", SDL_GetError());
+  }
+  if (press == InjectedPress::Tap) {
+    schedule(Device::GamepadTrigger, axis, WindowId{}, holdTurns);
+  }
+  return lucent::format(
+      "gamepad {} {}", SDL_GetGamepadStringForAxis(static_cast<SDL_GamepadAxis>(axis)), pressText(press, holdTurns));
 }
 
 std::string InputInjection::gamepadAxis(std::string_view name, int value) {
@@ -198,7 +215,7 @@ std::string InputInjection::gamepadAxis(std::string_view name, int value) {
   if (value < SDL_JOYSTICK_AXIS_MIN || value > SDL_JOYSTICK_AXIS_MAX) {
     return lucent::format("gamepad axis: {} is outside {}..{}", value, SDL_JOYSTICK_AXIS_MIN, SDL_JOYSTICK_AXIS_MAX);
   }
-  if (!ensureVirtualPad() || !SDL_SetJoystickVirtualAxis(virtualPad_, axis, static_cast<Sint16>(value))) {
+  if (!setGamepadAxis(axis, static_cast<std::int16_t>(value))) {
     return lucent::format("gamepad: no virtual pad: {}", SDL_GetError());
   }
   return lucent::format("gamepad axis {} = {}", SDL_GetGamepadStringForAxis(axis), value);
@@ -254,6 +271,9 @@ void InputInjection::afterInputTurn() {
     case Device::GamepadButton:
       setGamepadButton(it->code, false);
       break;
+    case Device::GamepadTrigger:
+      setGamepadTrigger(it->code, false);
+      break;
     case Device::Finger:
       pushFinger(it->windowId, it->code, false, fingerAt_[it->code]);
       break;
@@ -299,6 +319,27 @@ bool InputInjection::setGamepadButton(int button, bool down) {
   return ensureVirtualPad() && SDL_SetJoystickVirtualButton(virtualPad_, button, down);
 }
 
+bool InputInjection::setGamepadTrigger(int axis, bool pulled) {
+  return setGamepadAxis(axis, pulled ? std::int16_t{SDL_JOYSTICK_AXIS_MAX} : std::int16_t{0});
+}
+
+bool InputInjection::setGamepadAxis(int axis, std::int16_t value) {
+  if (!ensureVirtualPad() || !SDL_SetJoystickVirtualAxis(virtualPad_, axis, value)) {
+    return false;
+  }
+  axes_[axis] = value;
+  return true;
+}
+
+void InputInjection::afterGamepadOpened(std::uint32_t id) {
+  if (virtualPad_ == nullptr || id != virtualPadId_) {
+    return;
+  }
+  for (int axis = 0; axis < kAxes; ++axis) {
+    SDL_SetJoystickVirtualAxis(virtualPad_, axis, axes_[axis]);
+  }
+}
+
 void InputInjection::pushFinger(WindowId windowId, int finger, bool down, WindowXY normalised) {
   const bool moved = down && fingerDown_[finger];
   SDL_Event event{};
@@ -337,7 +378,8 @@ bool InputInjection::ensureVirtualPad() {
   SDL_VirtualJoystickDesc desc;
   SDL_INIT_INTERFACE(&desc);
   desc.type = SDL_JOYSTICK_TYPE_GAMEPAD;
-  desc.naxes = SDL_GAMEPAD_AXIS_COUNT;
+  static_assert(kAxes == SDL_GAMEPAD_AXIS_COUNT);
+  desc.naxes = kAxes;
   desc.nbuttons = SDL_GAMEPAD_BUTTON_COUNT;
   desc.axis_mask = (1u << SDL_GAMEPAD_AXIS_COUNT) - 1u;
   desc.button_mask = (1u << SDL_GAMEPAD_BUTTON_COUNT) - 1u;

@@ -22,7 +22,7 @@
 namespace psx::state {
 namespace {
 
-constexpr std::uint8_t kBusLayoutVersion = 4;
+constexpr std::uint8_t kBusLayoutVersion = 5;
 
 // psx::cd::CdController's queue, verbatim. `psx::cd::CdcIrqEnt` is a plain-C struct so it is written field by field
 // rather than memcpy'd: a memcpy would put the struct's padding in the file, and padding is not a contract.
@@ -378,10 +378,6 @@ void writeSioSection(Game &game, psx::platform::BlobWriter &out) {
   out.u64(sio.ackTicks);
   out.u64(sio.ackPulseEndTicks);
   out.u16(pad.buttons);
-  out.u16(pad.repl_hold);
-  out.u16(pad.repl_tap);
-  out.i32(pad.repl_tap_n);
-  out.i32(pad.repl_on);
 }
 
 bool readSioSection(Game &game, psx::platform::BlobReader &in, std::string &error) {
@@ -400,10 +396,6 @@ bool readSioSection(Game &game, psx::platform::BlobReader &in, std::string &erro
   const std::uint64_t ackPulseEnd = in.u64();
   Pad &pad = game.pad;
   const std::uint16_t buttons = in.u16();
-  const std::uint16_t replHold = in.u16();
-  const std::uint16_t replTap = in.u16();
-  const std::int32_t replTapN = in.i32();
-  const std::int32_t replOn = in.i32();
   if (!in.decoded("sio", error)) {
     return false;
   }
@@ -417,10 +409,6 @@ bool readSioSection(Game &game, psx::platform::BlobReader &in, std::string &erro
   sio.ackTicks = ack;
   sio.ackPulseEndTicks = ackPulseEnd;
   pad.buttons = buttons;
-  pad.repl_hold = replHold;
-  pad.repl_tap = replTap;
-  pad.repl_tap_n = replTapN;
-  pad.repl_on = replOn;
   // The button EDGE sampler is re-seeded from the restored mask rather than carrying its own state
   // across: an edge is a CHANGE, and restoring a stale "pressed" bit would make the first frame of
   // the loaded run invent a release the guest never saw.

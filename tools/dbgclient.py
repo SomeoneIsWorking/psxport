@@ -91,9 +91,9 @@ class LiveClient:
         return found
 
     def tap(self, button: str, frames: int = 4) -> str:
-        """Press and release across `frames` presented frames. A pad EDGE has to span a frame the guest
-        samples: a `press` immediately followed by a `release` can be serviced inside one frame and be
-        invisible to the game, which is a real hazard when driving over a non-blocking endpoint."""
+        """Press a pad button on the product's virtual gamepad and let go after `frames` input turns. A pad
+        EDGE has to span a frame the guest samples: a `press` immediately followed by a `release` can be
+        serviced inside one frame and be invisible to the game."""
         return self.send(f"tap {button} {frames}")
 
     def press(self, button: str) -> str:

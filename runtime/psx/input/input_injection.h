@@ -44,6 +44,10 @@ public:
   std::string mouseWheel(WindowId windowId, WindowXY scroll);
   // `name` is an SDL gamepad button name (a, b, start, dpup); the virtual pad attaches on first use.
   std::string gamepadButton(std::string_view name, InjectedPress press, int holdTurns);
+  // The same by SDL_GamepadButton value.
+  std::string gamepadButton(int button, InjectedPress press, int holdTurns);
+  // An SDL_GamepadAxis trigger pulled fully or let go.
+  std::string gamepadTrigger(int axis, InjectedPress press, int holdTurns);
   // `name` is an SDL gamepad axis name (leftx, lefttrigger); `value` is the raw axis value.
   std::string gamepadAxis(std::string_view name, int value);
   // Down and tap need the finger up, up needs it down.
@@ -55,9 +59,11 @@ public:
   void afterInputTurn();
   // After a drain: the queue no longer holds a text event that points into this owner.
   void afterDrain();
+  // A gamepad was opened: the virtual pad's axes set before then did not reach it, so they are set again.
+  void afterGamepadOpened(std::uint32_t id);
 
 private:
-  enum class Device : std::uint8_t { Key, MouseButton, GamepadButton, Finger };
+  enum class Device : std::uint8_t { Key, MouseButton, GamepadButton, GamepadTrigger, Finger };
   struct PendingRelease {
     Device device;
     int code;
@@ -68,6 +74,8 @@ private:
   void pushKey(WindowId windowId, int scancode, bool down);
   void pushMouseButton(WindowId windowId, int button, bool down);
   bool setGamepadButton(int button, bool down);
+  bool setGamepadTrigger(int axis, bool pulled);
+  bool setGamepadAxis(int axis, std::int16_t value);
   void pushFinger(WindowId windowId, int finger, bool down, WindowXY normalised);
   // Window coordinates as the 0..1 a touch event carries.
   static std::optional<WindowXY> normalise(WindowId windowId, WindowXY at);
@@ -83,6 +91,8 @@ private:
   bool fingerDown_[kMaxFingers] = {};
   WindowXY fingerAt_[kMaxFingers] = {};
   SDL_Joystick *virtualPad_ = nullptr;
+  static constexpr int kAxes = 6;
+  std::int16_t axes_[kAxes] = {};
   std::uint32_t virtualPadId_ = 0;
 };
 

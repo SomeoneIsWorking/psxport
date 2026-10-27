@@ -1,4 +1,4 @@
-// class Pad: the controller as the guest sees it (c->game->pad). It resolves host, forced, REPL and
+// class Pad: the controller as the guest sees it (c->game->pad). It resolves host, forced and
 // replayed input into one active-low mask per pad frame and delivers the digital packet; HostInput owns the host.
 #pragma once
 #include "active_low_edges.h"
@@ -16,24 +16,12 @@ public:
   explicit Pad(psx::input::HostInput &host) : mHost(host) {}
 
   Game *game = nullptr;
-  uint16_t buttons = psx::input::kNoButtons;   // current effective mask, active-low (0 bit = pressed)
-  uint16_t repl_hold = psx::input::kNoButtons; // REPL: bits cleared = held down
-  uint16_t repl_tap = psx::input::kNoButtons;  // REPL: active-low mask pressed for repl_tap_n frames
-  int repl_tap_n = 0;                          // REPL: tap countdown frames
-  int repl_on = 0;                             // REPL drive active
+  uint16_t buttons = psx::input::kNoButtons; // current effective mask, active-low (0 bit = pressed)
 
   void init(); // nothing pressed
 
   // The one host-input pump: resolves the host mask and the P / '.' / B debug keys, advancing no frame.
   void pollHostInput();
-
-  void driveHold(uint16_t activeLowMask);
-  struct Tap {
-    uint16_t activeLowMask = psx::input::kNoButtons;
-    int frames = 0;
-  };
-  void driveTap(Tap tap);
-  void driveRelease();
 
   // Once per pad frame: resolve every source into `buttons`, record or replay it, run the pad-frame
   // probes and deliver the packet. Advances the pad-frame clock.

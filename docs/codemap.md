@@ -78,7 +78,7 @@ Dependency direction: title repo → `runtime/psx/game/` (the title interface) �
 - `runtime/psx/present/gte_control.*` — GTE control registers saved, blended and restored around a render
 - `runtime/psx/present/guest_widescreen_projection.*`, `viewport_layout.h`, `proj_params.*`, `picture_announce.*` — widescreen / 16:9: aspect policy, canvas margins, projection constants, picture geometry announce
 - `runtime/psx/present/pane_host.h`, `rgb24_picture.h` — a session presenting into a host screen's pane, host pictures
-- `runtime/psx/input/host_input.*` — the process's one SDL event drain, keyboard state, gamepads, quit scope, event routing to the live overlay
+- `runtime/psx/input/host_input.*` — the process's one SDL event drain, keyboard state, gamepads and the one PSX-to-SDL button binding (pad verbs `tap`/`press`/`release`/`hold`), quit scope, event routing to the live overlay
 - `runtime/psx/input/input_injection.*` — control-channel input pushed as SDL events: keys, text, mouse, touch, virtual gamepad
 - `runtime/psx/input/pad_input.*`, `sio_pad.*`, `pad_delivery.h`, `stock_pad_buffers.*` — controller / pad as the guest sees it: SIO0, digital packet, fixed pad buffers
 - `runtime/psx/input/pad_recording.*`, `pad_record_replay.*`, `pad_phase_replay.*`, `input_phase.h` — `.pad` record and replay keyed on input phase

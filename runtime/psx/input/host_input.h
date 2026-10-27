@@ -7,7 +7,8 @@
 //   * which overlay takes the events: the one of the Game holding the player's input;
 //   * whether the GAME or the overlay currently owns the keyboard;
 //   * the P / '.' / B debug-key edges, latched here and acted on by whoever owns the action;
-//   * the control channel's injected input, pushed into the same queue (InputInjection).
+//   * the control channel's injected input, pushed into the same queue (InputInjection), and the one
+//     PSX-to-SDL gamepad binding that both reads controllers and presses PSX buttons on the virtual pad.
 //
 // It knows nothing about the PSX guest, the pad packet, the frame clock, a recording or a replay:
 // those belong to psx::input::Pad, which consumes the mask this owner produces. One per process, like
@@ -17,6 +18,7 @@
 #include "input_injection.h"
 
 #include <cstdint>
+#include <string>
 #include <vector>
 
 class RmlOverlay;
@@ -89,6 +91,8 @@ public:
   InputInjection &injection() {
     return mInjection;
   }
+  // One PSX button (a kButton bit) on the virtual gamepad, through the binding the controllers are read with.
+  std::string padButton(std::uint16_t bit, InjectedPress press, int holdTurns);
 
   // Take the P (pause / resume) edge a poll detected, and the '.' (freeze, advance one frame) edge.
   // Latched until taken, so one press is one action whichever Game's poll saw it. Taking is separate from asking
