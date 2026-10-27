@@ -7,7 +7,7 @@ console reference cuts it out of `retro_serialize`. This module decodes the sect
 compares the two per voice and per register. A field is decisive when it is guest-visible state the
 two guests must agree on at the same game frame; sample-clock position (envelope level, decode
 address, sweep progress) is informational, because loading removal means the cores' SPU clocks never
-line up sample for sample.
+line up sample for sample, and so are the parameters of a voice silent on both cores.
 """
 
 from __future__ import annotations
@@ -22,6 +22,7 @@ VOICES = 24
 ADSR_RELEASE = 3
 REVERB_REGISTERS = 0xE0  # regs.Regs index of 0x1F801DC0, the reverb configuration block
 SPUCNT_TRANSFER_MODE = 0x0030  # DMA/manual transfer mode bits change mid-upload; not mix state
+KEYED, SOUNDING = 0, 1  # positions of a voice's key and envelope fields in SpuState.voices
 
 
 def sections(state: bytes) -> dict[str, bytes]:
@@ -157,9 +158,13 @@ def compare(native: SpuState, console: SpuState,
     first decisive divergence."""
     rows: list[dict] = []
     for n, (ours, theirs) in enumerate(zip(native.voices, console.voices)):
-        for a, b in zip(ours, theirs):
+        # A voice silent on both cores is heard by nobody: its pitch, address, ADSR and volumes are what its
+        # last note left, and a note played during a load the product removed leaves different ones.
+        heard = ours[SOUNDING].value or theirs[SOUNDING].value
+        for index, (a, b) in enumerate(zip(ours, theirs)):
             if a.value != b.value:
-                rows.append({"where": f"voice {n}", "field": a.name, "decisive": a.decisive,
+                decisive = a.decisive and (heard or index in (KEYED, SOUNDING))
+                rows.append({"where": f"voice {n}", "field": a.name, "decisive": decisive,
                              "native": a.value, "console": b.value})
     for a, b in zip(native.registers, console.registers):
         if a.value != b.value:

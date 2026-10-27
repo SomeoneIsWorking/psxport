@@ -53,3 +53,19 @@ All-title real-time run with the timed SPU and issue 0184 (40 s paced, hidden, `
 load 3.3-16.7): no error lines. Missed: Spyro, Crash, X4, Tekken 3 0; Crash Bash, Tomba, Spider-Man, Vagrant at most
 0.05%; CTR 0.09% (one 184 ms present, psx-crash-team-racing issue 0040); Toy Story 2 0.50% (501 ms boot hold, issue 0057);
 C-12 3.98% (psx-c12 issue 0006). Worst intervals otherwise 17-78 ms; Tekken 3 24 ms.
+
+## The Tomba! 2 checkpoint divergences are the removed loads (2026-10-28)
+Per-frame traces of both cores (`psx-tomba/scratch/player-bugs-3/song_trace.log`, `game_leg.log`,
+`gameplay_notes.log`):
+- `game_stage` voices 12/13: the menu confirm sound keys at the start of the title-to-game load (sm[0x48]=5) and
+  plays 17 frames on both cores. The console's load lasts 37 frames, so it is silent on arrival; the product's
+  lasts 2.
+- `free_roam` voice sets and voice 0 pitch `0x400`/`0x47D`: song 4 (the fisherman dialog) plays the same notes on
+  both cores until the area load (sm[0x4e]=8). The console stays in it 30 frames and its song keys three more
+  notes (voice 3 `0x390`, voices 0/5/6 at f50, voices 1/2 at f57); the product's load is one frame and the song
+  stops before them.
+- `gameplay[1]`: song 2's notes start on the same frame on both cores; the voices still releasing song 4's extra
+  notes on the console make libsnd allocate and steal different voices.
+None is a product defect in the sequencer, the Start skip or the SPU. The comparator now treats a voice silent on
+both cores as heard by nobody (`tools/oracle/spu_state.py`, docs/oracle.md), and Tomba! 2's `gameplay[0]` matches
+across cores (`psx-tomba/scratch/player-bugs-3/oracle-b.log`).

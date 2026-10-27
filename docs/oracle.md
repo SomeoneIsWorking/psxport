@@ -68,7 +68,9 @@ Every checkpoint and gameplay segment also compares the SPU. Both cores run Beet
 `spu <path>` verb (`runtime/psx/debug/debug_commands.cpp`), the console cuts it out of
 `retro_serialize`, and `tools/oracle/spu_state.py` decodes both by entry name. Per voice it compares
 keyed (ADSR phase not release), sounding (envelope nonzero), pitch, start address, ADSR, volume
-controls and the reverb/FM/noise bits; per SPU the control register (less its transfer-mode bits), main,
+controls and the reverb/FM/noise bits (for a voice silent on both cores only keyed and sounding are decisive: the
+rest is what its last note left, and a note played during a load the product removed leaves other values); per
+SPU the control register (less its transfer-mode bits), main,
 reverb, CD and external volumes, the reverb base and the 0x1C0 configuration block. Envelope level,
 decode address, loop address and sweep progress are informational: removed loads mean the two SPU clocks
 never line up sample for sample. Whether each core's last field put out any sound at all is decisive: on
@@ -86,7 +88,14 @@ Validated 2026-10-27 (`scratch/player-bugs-2/spu-validate/validate.py`, `validat
 console dump from the same Tomba! 2 checkpoint: each against itself matches with no difference rows; a
 seeded voice 5 pitch, SPUCNT or voice 7 envelope byte reports exactly that field first (the envelope as
 `sounding`, with the level row informational); a silent output against an audible one reports
-`output audible`. No cross-core checkpoint has matched yet.
+`output audible`. First cross-core match 2026-10-28: Tomba! 2 `gameplay[0]` (RAM and SPU, sounding voices
+19-23 on both; `psx-tomba/scratch/player-bugs-3/oracle-b.log`).
+
+What a removed load does to the audio: Tomba! 2's fisherman dialog song keeps playing through the console's
+30-frame area load and keys three more notes; the product's load takes one frame, so its song stops three notes
+sooner. The voices those notes used then differ (`free_roam`), and so does which voices libsnd steals for the
+next song (`gameplay[1]`). The same holds at `game_stage`: the menu confirm sound plays its full 17 frames on both
+cores, but the console spends them inside the load, so it is silent at arrival and the product is not.
 
 ## Evidence rules
 
