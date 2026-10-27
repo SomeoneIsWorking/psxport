@@ -3,6 +3,7 @@
 #include "diagnostic_config.h"
 #include "host_backtrace.h"
 #include "spu_device.h"
+#include "spu_field_cadence.h"
 #include "spu_state.h"
 #include <lucent/log.h>
 #include <stdbool.h>
@@ -11,6 +12,25 @@
 namespace {
 
 constexpr lucent::Channel spuChannel{"spu"};
+
+constexpr uint32_t kKeyOnLow = 0x188;
+constexpr uint32_t kKeyOffHigh = 0x18E;
+constexpr std::size_t kKeyOffHalf = 2;
+
+// Untimed writes land before the field's samples; run one so a key latch is taken before it is rewritten.
+void takePendingKeys(SpuDevice &spu, uint32_t off, uint16_t val) {
+  if (off < kKeyOnLow || off > kKeyOffHigh || (off & 1) != 0) {
+    return;
+  }
+  const std::size_t half = (off - kKeyOnLow) / 2;
+  const bool offAfterOn = half >= kKeyOffHalf && (spu.pendingKeys[half - kKeyOffHalf] & val) != 0;
+  if (spu.pendingKeys[half] != 0 || offAfterOn) {
+    SPU_UpdateFromCDC(static_cast<int32_t>(SpuFieldCadence::kClocksPerSample));
+    spu.clocksAhead += static_cast<int32_t>(SpuFieldCadence::kClocksPerSample);
+    spu.pendingKeys = {};
+  }
+  spu.pendingKeys[half] |= val;
+}
 
 } // namespace
 
@@ -117,6 +137,7 @@ void write(uint32_t addr, uint32_t val) {
         lucent::Level::Info, "spubt", std::span<void *const>(frames, static_cast<std::size_t>(n)).subspan(1));
     lucent::info("spubt", "----");
   }
+  takePendingKeys(spu, off, static_cast<uint16_t>(val));
   SPU_Write(0, off, static_cast<uint16_t>(val));
 }
 
@@ -146,7 +167,14 @@ int dmaRead(uint32_t *words, int count) {
 }
 
 int32_t update(int32_t clocks) {
-  return SPU_UpdateFromCDC(clocks);
+  SpuDevice &spu = *SpuDevice::bound();
+  const int32_t owed = clocks - spu.clocksAhead;
+  spu.clocksAhead = owed < 0 ? -owed : 0;
+  if (owed <= 0) {
+    return 0;
+  }
+  spu.pendingKeys = {};
+  return SPU_UpdateFromCDC(owed);
 }
 
 int render(int16_t *out, int max_frames) {
