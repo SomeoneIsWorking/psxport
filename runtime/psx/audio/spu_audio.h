@@ -1,5 +1,6 @@
-// class SpuAudio: one Game's audio output. frame() advances the SPU by one display field's exact share of its
-// clock, drains the mixed 44.1 kHz PCM, lets the title mix its music, and feeds the host stream and WAV capture.
+// class SpuAudio: one Game's audio output. frame() finishes the SPU's run through one display field's exact share
+// of its clock (register accesses inside the field run it to the guest's time first), drains the mixed 44.1 kHz
+// PCM, lets the title mix its music, and feeds the host stream and WAV capture.
 #pragma once
 #include "audio_queue_policy.h"
 #include "host_audio_output.h"
@@ -33,7 +34,7 @@ public:
   psx::audio::HostAudioOutput &output() {
     return output_;
   }
-  // The SPU's own mix over the last field, before the title mixes its music in.
+  // The last field's output as the player hears it: the SPU mix with the title's music mixed in.
   const SpuOutputSummary &lastField() const {
     return mLastField;
   }
@@ -54,13 +55,15 @@ private:
   uint32_t mWavSynced = 0; // data bytes at the last header patch
 
   SpuFieldCadence mCadence;
+  // The field in progress, planned at the previous frame() so register accesses inside it are timed.
+  std::optional<SpuFieldAdvance> mField;
   SpuOutputSummary mLastField;
 
   // One PAL field plus slack; a title's music mixes into it through TitleAudio::mixFrame.
   static constexpr uint32_t kRenderSlack = 64;
   int16_t mMixBuf[2 * (SpuFieldCadence::kMaximumStandardSamplesPerField + kRenderSlack)] = {};
 
-  // `debug spuprof`: average spu::update() wall time every 60 fields.
+  // `debug spuprof`: average spu::finishField() wall time every 60 fields.
   double mProfAccumMs = 0;
   double mProfLoopMs = 0;
   int mProfN = 0;
