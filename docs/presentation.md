@@ -451,8 +451,11 @@ present mode and runs the same build, pace and show, so a tool run stamps `GpuPe
 counts it as shown, the compositor never maps it, and its swapchain presents (MAILBOX) without waiting. Elsewhere
 it is `SDL_WINDOW_HIDDEN`, for which SDL_GPU's acquire returns success with no texture before Vulkan is
 asked (`VULKAN_INTERNAL_AcquireSwapchainTexture`, SDL 3.4), so every show is skipped and logged once
-(`[sinkidle]`) and the run reports `intervals=0`. Host input, the audio device and the default pad
-recording follow `RenderDevice::shown()`; presenting never does. `PSXPORT_PRESENT_SINK=WxH` creates the
+(`[sinkidle]`) and the run reports `intervals=0`. The audio device, the default pad recording and
+which controllers open follow `RenderDevice::shown()`; presenting never does. A hidden run opens only the
+control channel's virtual gamepad and reads the input it injects through the same drain; the hidden
+window sets `SDL_HINT_JOYSTICK_ALLOW_BACKGROUND_EVENTS`, since SDL drops controller input while no window
+has keyboard focus. `PSXPORT_PRESENT_SINK=WxH` creates the
 window with exactly that drawable in pixels; otherwise it is `kWindowSize` in display units. Check: the log's `[render] window ... roleless, never mapped` line, and KWin's window list
 (`qdbus --literal org.kde.KWin /WindowsRunner org.kde.krunner1.Match <title>`) never names it. Unpaced presents (the boot black, a movie's end, a boot card's last frame) build and show at
 once. A movie frame is decoded and built before its field wait and shown after it (`Fmv::buildFrame`,

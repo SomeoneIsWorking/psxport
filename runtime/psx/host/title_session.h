@@ -17,8 +17,9 @@ class Core;
 class Game;
 
 namespace psx::input {
+class HostInput;
 class QuitScope;
-}
+} // namespace psx::input
 
 namespace psx::host {
 
@@ -26,6 +27,7 @@ namespace psx::host {
 struct SessionServices {
   const psx::config::Config &config;
   psx::render::RenderDevice &presentation;
+  psx::input::HostInput &input;
   psx::input::QuitScope &quit;
   RunBudget &budget;
   // Tracks which Core the process-global devices are bound to across every session.

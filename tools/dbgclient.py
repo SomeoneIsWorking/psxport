@@ -11,39 +11,35 @@
 #   tools/dbgclient.py                       # interactive prompt (REPL); 'quit' to exit
 #   tools/dbgclient.py --port 5959 stage
 #
-# Each reply is terminated by a line "---END---".
+# The channel is HTTP (lucent::http::Server): each command is one `POST /command` whose body is the
+# command line, and the response body is its reply.
 #
-# `LiveClient` is the same protocol as a class, for a driver that needs to keep a session: a tool that
-# plays the game, samples guest state and captures frames has no business re-implementing the socket
-# handshake, and a second copy would be free to disagree about when a reply has arrived.
-import socket
+# `LiveClient` is the same protocol as a class, for a driver that keeps issuing commands; a tool has no
+# business re-implementing the request.
+import http.client
 import sys
 
 DEFAULT_PORT = 5959
-END_MARKER = b"---END---\n"
 
 
 class LiveClient:
-    """One connection to the live endpoint. A fresh connection per command is allowed and is what the
-    CLI does, because the server handles them independently; a driver that interleaves reads with
-    input keeps one connection so its commands are ordered against each other."""
+    """The live endpoint at one port. Each command is its own request; one client sends them in order."""
 
     def __init__(self, port: int = DEFAULT_PORT, host: str = "127.0.0.1", timeout: float = 120.0):
         self.port = port
         self.host = host
         self.timeout = timeout
-        self._sock = socket.create_connection((host, port), timeout=timeout)
+        self.send("frame")  # refuses at construction when nothing listens, as a connect would
 
     def send(self, line: str) -> str:
-        """One command, one reply, without the terminator."""
-        self._sock.sendall((line + "\n").encode())
-        buf = b""
-        while END_MARKER not in buf:
-            chunk = self._sock.recv(65536)
-            if not chunk:
-                break
-            buf += chunk
-        return buf.split(END_MARKER)[0].decode(errors="replace")
+        """One command, one reply."""
+        connection = http.client.HTTPConnection(self.host, self.port, timeout=self.timeout)
+        try:
+            connection.request("POST", "/command", body=line.encode(), headers={"Content-Type": "text/plain"})
+            response = connection.getresponse()
+            return response.read().decode(errors="replace")
+        finally:
+            connection.close()
 
     def word(self, address: int) -> int:
         """One guest RAM word. The reply is `ADDR: HEXHEX...`; a short or unparsable reply is an
@@ -118,10 +114,7 @@ class LiveClient:
             self.close()
 
     def close(self) -> None:
-        try:
-            self._sock.close()
-        except OSError:
-            pass
+        pass
 
     def __enter__(self) -> "LiveClient":
         return self

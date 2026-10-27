@@ -66,11 +66,9 @@ public:
   void useLiveInputOnly() {
     mLiveInputOnly = true;
   }
-  // The host owns the player's input; the guest, the recording and a replay all see nothing pressed, and
-  // the P / '.' / B debug keys do nothing here.
-  void setPlayerInputSuppressed(bool suppressed) {
-    mPlayerInputSuppressed = suppressed;
-  }
+  // The host owns the player's input; the guest, the recording and a replay all see nothing pressed,
+  // the P / '.' / B debug keys do nothing here and this Game's overlay takes no host events.
+  void setPlayerInputSuppressed(bool suppressed);
 
 private:
   psx::input::HostInput &mHost;

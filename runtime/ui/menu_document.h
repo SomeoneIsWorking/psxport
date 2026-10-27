@@ -56,20 +56,7 @@ public:
   // to RmlUi's SDL input translation (hover, text, wheel).
   bool handle_key(SDL_Keycode key);
 
-  // ---- headless driving surface ---------------------------------------------------------------
-  // AGENTS MAY NOT RUN WINDOWED (docs/workspace/PROTOCOL.md), and the menu is driven by SDL keyboard events
-  // that do not exist without a window. Without these the entire UI is unreachable by every
-  // instrument this project actually uses — which is the same class of blindness as the
-  // windowed-only init that was already removed. They are a DRIVING surface, like the REPL's
-  // press/tap: host UI state only, no guest state, no behaviour switch.
-  void select_tab(int index) {
-    if (mTabBar) {
-      mTabBar->select(index);
-    }
-  }
-  // Enumerate the whole menu as it currently stands: every tab, every pane, every row with its
-  // kind, id, label and the text actually in the DOM. This is the instrument that answers "did
-  // the restructure lose a row?" by MEASURING rather than by counting two files by hand.
+  // Every tab, pane and row with its kind, id, label and the text in the DOM, to the log.
   void dump() const;
 
   // ---- census, for the load-time report and for tests -----------------------------------------

@@ -57,7 +57,8 @@ empty disarms) is where the owner journal writes its JSONL at each screen change
 
 ## The live debug endpoint
 
-`PSXPORT_DEBUG_SERVER` names a loopback TCP port for the live, non-blocking debug endpoint, where `1`
+`PSXPORT_DEBUG_SERVER` names a loopback port for the live debug endpoint, an HTTP server (`POST /command`,
+the body is one command line, the reply its text), where `1`
 asks for the default port 5959 and a number asks for that port; unset, empty, `0` and anything that is
 not a number in range leave it off. The text is interpreted once, by `debug_server_port()` in
 `runtime/psx/debug/dbg_server.h`, and both of its readers use it: `DbgServer::start` binds the port, and

@@ -15,12 +15,16 @@ void RenderWindow::create(bool shown, const char *title, present::PixelSize size
   const SDL_PropertiesID props = SDL_CreateProperties();
   if (shown) {
     flags |= psx::config::fullscreen_requested() ? SDL_WINDOW_FULLSCREEN : SDL_WINDOW_RESIZABLE;
-  } else if (SDL_strcmp(SDL_GetCurrentVideoDriver(), "wayland") == 0) {
-    // SDL_GPU gives an SDL-hidden window no swapchain image; a roleless surface counts as shown to SDL and the
-    // compositor never maps it.
-    SDL_SetBooleanProperty(props, SDL_PROP_WINDOW_CREATE_WAYLAND_SURFACE_ROLE_CUSTOM_BOOLEAN, true);
   } else {
-    flags |= SDL_WINDOW_HIDDEN;
+    // SDL drops controller input while no window has keyboard focus, and an unmapped window never takes it.
+    SDL_SetHint(SDL_HINT_JOYSTICK_ALLOW_BACKGROUND_EVENTS, "1");
+    if (SDL_strcmp(SDL_GetCurrentVideoDriver(), "wayland") == 0) {
+      // SDL_GPU gives an SDL-hidden window no swapchain image; a roleless surface counts as shown to SDL and the
+      // compositor never maps it.
+      SDL_SetBooleanProperty(props, SDL_PROP_WINDOW_CREATE_WAYLAND_SURFACE_ROLE_CUSTOM_BOOLEAN, true);
+    } else {
+      flags |= SDL_WINDOW_HIDDEN;
+    }
   }
   SDL_SetStringProperty(props, SDL_PROP_WINDOW_CREATE_TITLE_STRING, title);
   SDL_SetNumberProperty(props, SDL_PROP_WINDOW_CREATE_WIDTH_NUMBER, size.width);

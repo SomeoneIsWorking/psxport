@@ -99,6 +99,7 @@ set(PSXPORT_FRAMEWORK_SRC
   ${PSXPORT_ROOT}/runtime/psx/audio/host_audio_output.cpp
   ${PSXPORT_ROOT}/runtime/psx/audio/wav_writer.cpp
   ${PSXPORT_ROOT}/runtime/psx/input/host_input.cpp
+  ${PSXPORT_ROOT}/runtime/psx/input/input_injection.cpp
   ${PSXPORT_ROOT}/runtime/psx/input/pad_input.cpp
   ${PSXPORT_ROOT}/runtime/psx/input/stock_pad_buffers.cpp
   ${PSXPORT_ROOT}/runtime/psx/input/pad_recording.cpp

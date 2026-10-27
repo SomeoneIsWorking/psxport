@@ -24,13 +24,17 @@ psx::game::FrameDriver &Game::requireFrameDriver() const {
 
 Game::Game(psx::game::GameRuntime &runtime, const psx::config::Config &config)
     : config(config), ownedRenderDevice(std::make_unique<psx::render::RenderDevice>()),
-      renderDevice(*ownedRenderDevice), core(runtime),
-      render_(std::make_unique<psx::render::RenderState>(*this, renderDevice)), runtime(runtime) {
+      renderDevice(*ownedRenderDevice), ownedHostInput(std::make_unique<psx::input::HostInput>()), core(runtime),
+      hostInput(*ownedHostInput), render_(std::make_unique<psx::render::RenderState>(*this, renderDevice)),
+      runtime(runtime) {
   wireRuntimeMembers();
 }
 
-Game::Game(psx::game::GameRuntime &runtime, psx::render::RenderDevice &presentation, const psx::config::Config &config)
-    : config(config), renderDevice(presentation), core(runtime),
+Game::Game(psx::game::GameRuntime &runtime,
+           psx::render::RenderDevice &presentation,
+           psx::input::HostInput &input,
+           const psx::config::Config &config)
+    : config(config), renderDevice(presentation), core(runtime), hostInput(input),
       render_(std::make_unique<psx::render::RenderState>(*this, renderDevice)), runtime(runtime) {
   wireRuntimeMembers();
 }
@@ -40,7 +44,7 @@ void Game::wireRuntimeMembers() {
   g_producer_census_armed = psx::config::producer_census();
   core.game = this;
   timing.game = this;
-  hostInput.attachOverlay(&rml_overlay); // one drain feeds the pad's key state AND the overlay
+  hostInput.attachOverlay(&rml_overlay);
   pad.game = this;
   hle.game = this;
   sio.game = this;
@@ -80,6 +84,7 @@ void Game::releaseHardwareBindings() {
 }
 
 Game::~Game() {
+  hostInput.detachOverlay(&rml_overlay);
   core.rsub.census.report("producer census at shutdown");
   releaseHardwareBindings();
   // Unconditional, because the interesting answer is often "nothing was ever read". A run that

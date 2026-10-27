@@ -217,5 +217,5 @@ the event drain, so it reaches the run-end report like a client `quit`.
 
 Picker frame time is read
 from consecutive `[picker] panels:` lines of a paced run (`PSXPORT_DEBUG=picker,pacer`, no NOPACE). The headless walk (`picker`, `select left|right`, `tap left|right`, `pshot <path>` for the
-selector's frame, `menu on|dump|nav`, `pick <slug>`, `session return`, `pick <slug>`) runs on a built port with `PSXPORT_DEBUG_SERVER` and
+selector's frame, `key`/`mouse`/`gamepad` input, `pick <slug>`, `session return`, `pick <slug>`) runs on a built port with `PSXPORT_DEBUG_SERVER` and
 `tools/dbgclient.py`; see the consuming port's docs for its route.
