@@ -522,10 +522,9 @@ void file_read(Core *c) {
     return;
   }
   auto *f = m.fdAt(fd);
-  // A bad descriptor is a BIOS ARGUMENT error — synchronous, -1, and no card event, because no card
-  // operation was ever started. libmcrd cannot reach here (it abandons the op when open fails).
+  // A bad descriptor returns -1 with no card event; a guest that reads after a failed open lands here.
   if (!f) {
-    lucent::error("card", "read on fd {} which is not an open card file — returning -1", fd);
+    lucent::debug("card", "read on fd {}, not an open card file: -1", fd);
     c->r[psx::cpu::kV0] = 0xFFFFFFFFu;
     return;
   }
@@ -573,8 +572,8 @@ void file_write(Core *c) {
     return;
   }
   auto *f = m.fdAt(fd);
-  if (!f) { // see file_read: argument error
-    lucent::error("card", "write on fd {} which is not an open card file — returning -1", fd);
+  if (!f) { // see file_read
+    lucent::debug("card", "write on fd {}, not an open card file: -1", fd);
     c->r[psx::cpu::kV0] = 0xFFFFFFFFu;
     return;
   }
