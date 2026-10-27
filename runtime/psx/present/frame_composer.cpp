@@ -8,6 +8,7 @@
 #include <algorithm>
 #include <array>
 #include <cstddef>
+#include <cstdint>
 #include <optional>
 #include <tuple>
 #include <utility>
@@ -118,7 +119,7 @@ bool FrameComposer::index(const FrameRecord &shown,
                       shown.sequence(),
                       primitive->key->producer,
                       primitive->key->object);
-        refusal_ = {HeldCause::None, primitive->key->producer, true};
+        refusal_ = {HeldCause::None, primitive->key->producer, true, i};
         return false;
       }
       continue;
@@ -157,7 +158,7 @@ bool FrameComposer::index(const FrameRecord &shown,
                     shown.sequence(),
                     id.producer,
                     id.object);
-      refusal_ = {HeldCause::NoState, id.producer};
+      refusal_ = {HeldCause::NoState, id.producer, false, firstEntry};
       return false;
     }
     begin = end;
@@ -240,7 +241,7 @@ FrameComposer::Placement FrameComposer::place(const FrameRecord &shown,
                     id.producer,
                     id.object,
                     states.t);
-      refusal_ = {HeldCause::ProducerRefused, id.producer};
+      refusal_ = {HeldCause::ProducerRefused, id.producer, false, run.empty() ? SIZE_MAX : run.front().entry};
       return Placement::Refused;
     }
     return Placement::Kept;
@@ -297,7 +298,7 @@ FrameComposer::Placement FrameComposer::place(const FrameRecord &shown,
                       shown.sequence(),
                       id.producer,
                       id.object);
-        refusal_ = {HeldCause::Unplaceable, id.producer};
+        refusal_ = {HeldCause::Unplaceable, id.producer, false, run.empty() ? SIZE_MAX : run.front().entry};
         return Placement::Refused;
       }
       return Placement::Kept;
@@ -363,18 +364,26 @@ const FrameRecord *FrameComposer::compose(const FrameRecord &shown,
   for (const Covered &object : covered_) {
     std::optional<std::span<const std::byte>> earlier = from ? from->find(object.id) : std::nullopt;
     // Only an object the previous frame skipped appears from rest; one it drew ambiguously has no state.
-    if (!earlier && inBetween && !from->holds(object.id) &&
-        object.render->rests(object.to, resting(object.to.size()))) {
+    const bool born = inBetween && !from->holds(object.id);
+    if (!earlier && born && object.render->rests(object.to, resting(object.to.size()))) {
       earlier = std::span<const std::byte>(resting_);
     }
-    // An object with no state in S' would draw S's moment inside an in-between: the interval is held.
+    // An object S' skipped with no state to appear from is born at S: absent, as in S', until t = 1.
+    if (!earlier && born) {
+      replaced = true;
+      for (std::size_t at = object.begin; at < object.end; ++at) {
+        removed_[keyed_[at].entry] = true;
+      }
+      continue;
+    }
+    // An object S' drew with no single state would draw S's moment inside an in-between: the interval is held.
     if (!earlier && inBetween) {
       lucent::debug(composeChannel,
                     "record={} in-between held: object {:#010x}/{:#010x} has no state in S'",
                     shown.sequence(),
                     object.id.producer,
                     object.id.object);
-      refusal_ = {HeldCause::Unpaired, object.id.producer};
+      refusal_ = {HeldCause::Unpaired, object.id.producer, false, object.firstEntry};
       return nullptr;
     }
     const StateInterval states{.from = earlier.value_or(object.to), .to = object.to, .t = t};

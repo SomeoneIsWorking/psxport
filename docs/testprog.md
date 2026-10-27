@@ -24,10 +24,22 @@ by DMA6 and submitted by DMA2, and calls VSync once per field. Each scene runs 2
 | `mmio-port` | `mmio_bar_draw`, a TILE written to GP0 | `Port mmio-gp0` for `mmio_bar_draw` |
 | `block-dma-port` | `dma_bar_draw`, a TILE sent by block DMA2 | `Port block-dma` for `dma_bar_draw` |
 | `reused-slot` | `square_draw` on a slot a new object takes every 12 frames | none in this stage |
+| `amended-square` | `square_draw`, then `amend_draw` stores the packet's colour word before submit | `Overwrote` for `amend_draw`, producer `square_draw` |
 
-`backdrop_draw`, a still TILE every scene draws without an owner, must never make a row. An interval
-spanning a scene change holds once for the drawer that vanished, labelled with the new scene. The reused
-slot is pinned only by incarnations (stage 4); closure (`ClosureFailed`) and `BranchChange` rows are stage 4.
+`backdrop_draw`, a still TILE every scene draws without an owner, must never make a row. Besides the rows
+above the journal holds, by design:
+
+- one `IntervalHeld/stale-shown` and one `IntervalHeld/no-previous` row on `scene owned-square` from the first
+  presents after boot, before a drawing record and a shown predecessor exist;
+- at every scene change, one held interval for the drawer of the scene that ended (it vanished from S), on the
+  row of that drawer's reason with the new scene as its screen, since S belongs to the new scene. A run that
+  cycles the scenes k times has about k such intervals per scene change.
+
+The planted cases cover the stage 2 reasons the framework can raise today (`UnownedMoving`, `Port`,
+`Overwrote`). `Baked`, `ReplayRefused`, `PlacelessVertex`, `ClosureFailed` and `BranchChange` have no case: the
+first two need a texture-feedback upload and a guest redraw the program does not yet make, the last three are
+reasons of stages 3 and 4 that the framework does not raise yet. The reused slot is pinned only by
+incarnations (stage 4).
 
 ## Host
 
@@ -41,5 +53,8 @@ as the journal's screen with `scene <name>` as its route.
     CC=clang CXX=clang++ uv run --frozen python tools/build.py --build build/agent
     PSXPORT_NOPACE=1 PSXPORT_SHOW_WINDOW=0 PSXPORT_DEBUG=presentseq build/agent/bin/psxtest_port
 
-then `owners` on the control channel (or the JSONL under `PSXPORT_OWNERS_DIR`) lists exactly the rows above,
-and `presentseq` shows the owned square at `t` = 1/3, 2/3, 1 and 1/2, 1 alternating.
+then `owners` on the control channel (or the JSONL under `PSXPORT_OWNERS_DIR`) lists the rows above and the
+by-design rows, and `presentseq` shows the owned square at `t` = 1/3, 2/3, 1 and 1/2, 1 alternating, never
+`t = 0`; the run-end `records:` line counts at most one `stalled` present per switch into the alternating
+cadence. On 2026-10-27 a 60 s unpaced run gave exactly that: 10 rows (4 planted, 4 scene-change, 2 boot) and
+`stalled=0`.

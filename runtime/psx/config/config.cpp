@@ -64,6 +64,8 @@ Var<std::string> cv_override_diff_report("PSXPORT_OVERRIDE_DIFF_REPORT",
                                          kRunOnly);
 Var<std::string> cv_reach_report("PSXPORT_REACH_REPORT", "", kRunOnly);
 Var<std::string> cv_owners_dir("PSXPORT_OWNERS_DIR", "scratch/owners", kRunOnly);
+Var<std::string> cv_card("PSXPORT_CARD", "", kRunOnly);
+Var<bool> cv_bug_report_clip("PSXPORT_BUG_REPORT_CLIP", true, kSaved);
 Var<bool> cv_fullscreen("PSXPORT_FULLSCREEN", false, kRunOnly);
 Var<bool> cv_windowed("PSXPORT_WINDOWED", true, kRunOnly);
 Var<std::string> cv_picker_titles("PSXPORT_PICKER_TITLES", "", kRunOnly);
@@ -101,6 +103,8 @@ const Registration kRegistration{
     cv_override_diff_report,
     cv_reach_report,
     cv_owners_dir,
+    cv_card,
+    cv_bug_report_clip,
     cv_fullscreen,
     cv_windowed,
     cv_picker_titles,
@@ -202,6 +206,14 @@ psx::cpu::OverrideDifferentialConfig override_differential_config() {
 
 std::string function_reach_report_path() {
   return cv_reach_report.get();
+}
+
+bool bug_report_clip() {
+  return cv_bug_report_clip.get();
+}
+
+std::string card_path() {
+  return std::string(lucent::text::trim(cv_card.get()));
 }
 
 std::string owners_dir() {

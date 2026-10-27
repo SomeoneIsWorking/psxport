@@ -12,24 +12,22 @@
 #include <algorithm>
 #include <chrono>
 #include <ctime>
+#include <filesystem>
 #include <fstream>
 #include <vector>
 
 namespace psx::present {
 namespace {
 
-bool sameRow(const OwnerRow &row, const OwnerFinding &finding, std::size_t screen, const GuestWriter *writer) {
+std::uint32_t writerCode(const GuestWriter &writer) {
+  return writer.function != 0 ? writer.function : writer.blockPc;
+}
+
+bool sameRow(const OwnerRow &row, const OwnerFinding &finding, std::size_t screen, const GuestWriter &writer) {
   const OwnerFinding &key = row.key;
-  if (row.screen != screen || key.reason != finding.reason || key.cause != finding.cause ||
-      key.producer != finding.producer || key.table != finding.table) {
-    return false;
-  }
-  if (writer == nullptr) {
-    return row.writer.blockPc == 0 && row.writer.function == 0;
-  }
-  const std::uint32_t code = writer->function != 0 ? writer->function : writer->blockPc;
-  const std::uint32_t rowCode = row.writer.function != 0 ? row.writer.function : row.writer.blockPc;
-  return row.writer.kind == writer->kind && rowCode == code && row.writer.dispatched == writer->dispatched;
+  return row.screen == screen && key.reason == finding.reason && key.cause == finding.cause &&
+         key.producer == finding.producer && key.table == finding.table && row.writer.kind == writer.kind &&
+         writerCode(row.writer) == writerCode(writer) && row.writer.dispatched == writer.dispatched;
 }
 
 std::string hex(std::uint32_t value) {
@@ -104,9 +102,8 @@ OwnerJournal::OwnerJournal() {
   stamp_ = buffer;
 }
 
-void OwnerJournal::observeScreen(Core &core) {
+void OwnerJournal::observeScreen(Core &core, std::uint64_t key) {
   const psx::game::TitleDebugMenu &menu = core.runtime.debugMenu();
-  const std::uint64_t key = menu.screenKey(core);
   if (screenKnown_ && screens_[screen_].key == key) {
     return;
   }
@@ -136,9 +133,16 @@ void OwnerJournal::observeScreen(Core &core) {
 
 void OwnerJournal::record(Core &core, const OwnerFinding &finding, bool lost) {
   if (!screenKnown_) {
-    observeScreen(core);
+    observeScreen(core, core.runtime.debugMenu().screenKey(core));
   }
-  const GuestWriter *writer = core.owners.writer(finding.writer);
+  // A finding with no writer names the declared owner's function, the code that drew the object.
+  GuestWriter writer;
+  if (const GuestWriter *known = core.owners.writer(finding.writer)) {
+    writer = *known;
+  } else if (finding.producer != 0) {
+    writer.function = finding.producer;
+    writer.image = core.imageCatalog().resolve(finding.producer).value_or(cpu::ImageIdentity{});
+  }
   auto row = std::find_if(rows_.begin(), rows_.end(), [&](const OwnerRow &candidate) {
     return sameRow(candidate, finding, screen_, writer);
   });
@@ -152,11 +156,7 @@ void OwnerJournal::record(Core &core, const OwnerFinding &finding, bool lost) {
       }
       return;
     }
-    OwnerRow added{.key = finding,
-                   .writer = writer != nullptr ? *writer : GuestWriter{},
-                   .screen = screen_,
-                   .firstField = field,
-                   .firstPresent = present};
+    OwnerRow added{.key = finding, .writer = writer, .screen = screen_, .firstField = field, .firstPresent = present};
     rows_.push_back(added);
     row = rows_.end() - 1;
     lucent::info("owners",
@@ -220,27 +220,46 @@ std::string OwnerJournal::describe(std::size_t limit) const {
   return out;
 }
 
+std::string OwnerJournal::decompCommand(Core &core, const OwnerRow &row) const {
+  const psx::host::TitleIdentity *title = core.game->title;
+  const std::optional<cpu::ImageDescription> described = core.imageCatalog().describe(row.writer.image);
+  if (title == nullptr || !described || writerCode(row.writer) == 0) {
+    return {};
+  }
+  const bool resident =
+      !described->ranges.empty() && described->ranges.front().begin == (title->textAddress & 0x1FFFFFFFu);
+  const std::optional<psx::game::DecompImage> image =
+      core.runtime.debugMenu().decompImage(core, described->name, resident);
+  if (!image) {
+    return {};
+  }
+  std::error_code error;
+  const std::filesystem::path cwd = std::filesystem::current_path(error);
+  const std::filesystem::path file = error ? image->file : image->file.lexically_proximate(cwd);
+  // The function is decompiled whole; the block PC is asked only when it is a label inside some function.
+  std::string queries;
+  if (row.writer.function != 0) {
+    queries += " --target " + hex(row.writer.function);
+  }
+  if (row.writer.blockPc != 0 && row.writer.blockPc != row.writer.function) {
+    queries += " --function-at " + hex(row.writer.blockPc);
+  }
+  return lucent::format("uv run --frozen python external/psxport/tools/decomp_pipeline.py --image-name {} --image {}{} "
+                        "--out scratch/decomp/{}",
+                        image->manifestName,
+                        file.string(),
+                        queries,
+                        image->manifestName);
+}
+
 std::string OwnerJournal::rowJson(Core &core, const OwnerRow &row) const {
   const Game &game = *core.game;
   const psx::host::TitleIdentity *title = game.title;
   std::string image;
-  bool resident = false;
   if (const std::optional<cpu::ImageDescription> described = core.imageCatalog().describe(row.writer.image)) {
     image = described->name;
-    resident = title != nullptr && !described->ranges.empty() &&
-               described->ranges.front().begin == (title->textAddress & 0x1FFFFFFFu);
   }
-  const std::uint32_t pc = row.writer.function != 0 ? row.writer.function : row.writer.blockPc;
-  std::string decomp;
-  if (resident && pc != 0) {
-    decomp = lucent::format("uv run --frozen python external/psxport/tools/decomp_pipeline.py --image-name {} --image "
-                            "{} --function-at {} --function-at {} --out scratch/decomp/{}",
-                            title->slug,
-                            game.executable.string(),
-                            hex(pc),
-                            hex(row.writer.blockPc),
-                            title->slug);
-  }
+  const std::string decomp = decompCommand(core, row);
   const std::string &route = row.screen < screens_.size() ? screens_[row.screen].route : std::string{};
   return lucent::format(
       "{{\"title\":{},\"serial\":{},\"reason\":{},\"cause\":{},\"writer_kind\":{},\"function\":{},\"block_pc\":{},"

@@ -160,7 +160,7 @@ private:
   gpu::VramRect lastDisplay_{0, 0, 320, 240};
 
   // The window presents a bug report's motion clip is cut from.
-  PresentClip clip_{device_};
+  PresentClip clip_;
 
   int preseqLeft_ = 0;
   int preseqIndex_ = 0;

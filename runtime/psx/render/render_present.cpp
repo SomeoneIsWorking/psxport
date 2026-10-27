@@ -2,6 +2,7 @@
 // RenderPath::Record, the device's VRAM on Device and for a 24bpp display, or a host picture) letterboxed
 // into the present image, then show that image in the window. The leg decides only whether the built
 // image reaches a window (present_plan.h).
+#include "config_vars.h"
 #include "core.h"
 #include "fs_util.h"
 #include "game.h"
@@ -40,7 +41,8 @@ template <typename T> std::span<const std::byte> bytesOf(const T &value) {
 
 } // namespace
 
-RenderState::RenderState(Game &game, RenderDevice &device) : game_(game), device_(device) {}
+RenderState::RenderState(Game &game, RenderDevice &device)
+    : game_(game), device_(device), clip_(device, psx::config::bug_report_clip()) {}
 
 RenderState::~RenderState() {
   if (!device_.up()) {

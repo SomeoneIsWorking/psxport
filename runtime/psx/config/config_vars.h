@@ -25,6 +25,8 @@ std::string ramdump_path();
 std::string load_state_path();
 // PSXPORT_BUG_REPORT_DIR: B-key bug reports; unset saves under the title's user-data directory.
 std::string bug_report_dir();
+// PSXPORT_BUG_REPORT_CLIP: keep the last second of presents on the GPU for a report's motion clip.
+bool bug_report_clip();
 
 // PSXPORT_PAD_RECORD / _REPLAY / _RESUME: the phase-keyed .pad sink, real-speed replay, and fast-forwarded resume.
 std::string pad_record_path();
@@ -53,7 +55,8 @@ psx::cpu::FallbackPolicy lightrec_fallback_policy();
 // PSXPORT_OVERRIDE_DIFF (+ _FIRST, _EVERY, _DEAD_STACK, _REPORT): the override differential; empty selectors disarm.
 psx::cpu::OverrideDifferentialConfig override_differential_config();
 std::string function_reach_report_path(); // PSXPORT_REACH_REPORT: empty disarms
-std::string owners_dir();                 // PSXPORT_OWNERS_DIR: owner journal JSONL directory, empty disarms
+std::string card_path();  // PSXPORT_CARD: the memory card for every title; empty uses the title's default
+std::string owners_dir(); // PSXPORT_OWNERS_DIR: owner journal JSONL directory, empty disarms
 
 // PSXPORT_RENDER_PATH: record | device; an unknown value warns and gives `fallback`.
 present::RenderPath render_path(present::RenderPath fallback = present::RenderPath::Record);

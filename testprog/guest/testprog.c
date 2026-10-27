@@ -21,7 +21,7 @@ typedef short s16;
 #define SCENE_FRAMES 240
 #define NO_SCENE 0xFFFFFFFFu
 
-enum Scene { OwnedSquare, UnownedMoving, MmioPort, BlockDmaPort, ReusedSlot, SceneCount };
+enum Scene { OwnedSquare, UnownedMoving, MmioPort, BlockDmaPort, ReusedSlot, AmendedSquare, SceneCount };
 
 // An owned object: what square_draw reads, and what the host producer saves.
 struct Square {
@@ -44,8 +44,8 @@ struct Square squares[2];
 u32 dma_tile[4];
 
 // Q12 sine of a 1/64 turn, the first quarter.
-const s16 sine_quarter[17] = {0,    402,  799,  1189, 1567, 1931, 2276, 2598, 2896,
-                                     3166, 3406, 3612, 3784, 3920, 4017, 4076, 4096};
+const s16 sine_quarter[17] = {
+    0, 402, 799, 1189, 1567, 1931, 2276, 2598, 2896, 3166, 3406, 3612, 3784, 3920, 4017, 4076, 4096};
 
 void vsync(u32 mode);
 void square_draw(struct Square *square);
@@ -161,6 +161,12 @@ __attribute__((noinline)) void dma_bar_draw(void) {
   D2_CHCR = 0x01000201u;
 }
 
+// Unowned code storing over the owned square's colour word before the list is submitted: the Overwrote case.
+__attribute__((noinline)) void amend_draw(void) {
+  u32 *p = (u32 *)(0x80000000u | (ot[buffer][4] & 0x00FFFFFFu));
+  p[1] = 0x28000000u | ((frame_counter * 8u) & 0xFFu) << 16 | 0x40E0u;
+}
+
 static void clear_ot(void) {
   D6_MADR = (u32)&ot[buffer][OT_LENGTH - 1];
   D6_BCR = OT_LENGTH;
@@ -234,6 +240,10 @@ void cstart(void) {
       break;
     case ReusedSlot:
       square_draw(&squares[1]);
+      break;
+    case AmendedSquare:
+      square_draw(&squares[0]);
+      amend_draw();
       break;
     default:
       break;

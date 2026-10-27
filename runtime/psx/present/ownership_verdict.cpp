@@ -103,8 +103,14 @@ void OwnershipVerdict::collect(const FrameRecord &record, const OwnerLedger &led
 }
 
 bool OwnershipVerdict::judge(const FrameRecord &from, const FrameRecord &to, const OwnerLedger &ledger) {
-  collect(from, ledger, from_);
+  // The last interval's S is this one's S' when the intervals follow each other.
+  if (toSequence_ && *toSequence_ == from.sequence()) {
+    from_.swap(to_);
+  } else {
+    collect(from, ledger, from_);
+  }
   collect(to, ledger, to_);
+  toSequence_ = to.sequence();
   findings_.clear();
   bool still = true;
   for (const Group &group : to_) {
@@ -146,12 +152,14 @@ bool OwnershipVerdict::judge(const FrameRecord &from, const FrameRecord &to, con
                            .sampleCommand = group.sampleCommand});
     }
   }
-  // An owned packet a writer stored into keeps its key; its render cannot know what the writer changed.
+  // An owned packet a writer stored into keeps its key, but its render cannot know what the writer changed: the
+  // interval is held.
   for (const RecordEntry &entry : to.entries()) {
     const auto *primitive = std::get_if<DrawPrimitive>(&entry);
     if (primitive == nullptr || !primitive->key || !OwnerLedger::isWriter(primitive->mixedOwner)) {
       continue;
     }
+    still = false;
     const auto same = std::find_if(findings_.begin(), findings_.end(), [primitive](const OwnerFinding &finding) {
       return finding.reason == OwnerReason::Overwrote && finding.writer == primitive->mixedOwner &&
              finding.producer == primitive->key->producer;

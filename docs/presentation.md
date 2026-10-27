@@ -188,11 +188,12 @@ The composer builds the frame at `t` from S's record:
 - **Produced entries** (bound to `(P, obj)` of a producer with a render) are removed; `P.render` of
   that object at `t` is emitted instead.
 - **Identity.** An object renders interpolated when S' and S both saved state under the same
-  `(P, obj)`; saved only in S, the interval is held (`Unpaired`); saved only in S', it is not drawn (it is
-  not in the frame). A producer whose skipped draw is itself a state (a fade at zero) names it with
-  `StateProducer::rests`: the object saved only in S then moves from that state, and one saved only in S'
-  moves toward it, placed by slot. An object S' drew with no single state (ambiguous) did not skip its
-  draw, so the interval is held rather than drawn from rest. Identity is the producer, the object's guest address and the title's generation for that
+  `(P, obj)`; saved only in S (born at S), it is left out of the in-betweens and appears at `t = 1`, as it
+  was absent in S'; saved only in S', it is not drawn (it is not in the frame). A producer whose skipped
+  draw is itself a state (a fade at zero) names it with `StateProducer::rests`: the object saved only in S
+  then moves from that state, and one saved only in S' moves toward it, placed by slot. An object S' drew
+  with no single state (ambiguous) did not skip its draw, so the interval is held (`Unpaired`). An object S'
+  drew without a key is an unowned group of S' that vanished, which the verdict holds. Identity is the producer, the object's guest address and the title's generation for that
   address (Crash Bash's `ComponentIncarnation`), never draw order, position or nearest match.
 - **Cut.** A title declares a cut from the guest's own state (camera cut, scene change, teleport);
   across a cut every object renders at `t = 1`. No distance threshold.
@@ -280,9 +281,13 @@ there are no per-vertex keys. An in-between with nothing produced is the shown r
   primitives by writer (kind, function or block PC, dispatched entry), OT table and amended flag, and hashes
   each group's picture relative to the draw offset (so a double-buffered still draw matches). A group that
   moved, appeared or vanished makes a finding (`UnownedMoving`, `Port`, `Overwrote`) and holds the interval.
+  A keyed packet a writer stored into (`mixedOwner`) is an `Overwrote` finding too and holds the interval:
+  its render cannot know what the writer changed. S's groups are kept, so the next interval's S' is not
+  collected again.
 - **One mode per interval.** The interval is composed whole at every present or held at every present,
   including `t = 1`: the presenter composes every later present first, and a refusal at any of them holds
-  all. A held present shows S as the guest drew it.
+  all. A held present shows S as the guest drew it. The last present is composed by its own composer
+  (`endComposer_`) before the in-betweens and kept for its own present, so a 2-field interval composes twice.
 
 - **Shown record.** A present shows the latest held drawing record with a primitive whose draw area is
   the displayed buffer (`drawAreaSpansBuffer`, the canvas rule): the newest drawing record on a
@@ -297,9 +302,14 @@ there are no per-vertex keys. An in-between with nothing produced is the shown r
   field further on; a one-field frame, or any frame with it off, gets one at `t = 1`. Present j shows the guest
   moment a constant latency L before its own field: `t = (j + d + n - L) / n`, where n is the fields between
   S''s and S's draw entries and d those from S's draw entry to this commit, both on the display-field clock
-  (`Timing::displayField`, emulated hsyncs over lines per field). L rises at once to the largest `d + g - 1`
-  and falls only after eight calm intervals, so a 2/3 alternation lands on thirds and halves evenly spaced
-  and a steady cadence still ends on S. The `presentseq` debug channel logs each present as it is shown:
+  (`Timing::displayField`, emulated hsyncs over lines per field). L stays as it was while the interval allows
+  (`FramePresenter::intervalLatency`): it rises to `d + g - 1` so the last present lands on S, but never so far
+  that the first present shows a moment already shown, and falls only when the first present would show a
+  moment before S' (`t < 0`). So every composed present shows the guest one field further on, a 2/3 alternation
+  lands on thirds and halves, a steady cadence ends on S, and a long gap costs one repeat where L rises and one
+  skip where it is forced down, never a run of repeats. A cut or a held interval resets L to `d + g - 1`. A
+  composed present whose moment did not advance (the interval had fewer fields than presents) is counted as
+  `stalled` in the run-end `records:` line. The `presentseq` debug channel logs each present as it is shown:
   host time, record shown (-1 for the displayed VRAM as it stands, with no record composed), from, `t`, n,
   fields, and the deadline it was scheduled for (`due`). With no record drawing the displayed buffer, S' unknown, or a
   record after S' missing or incomplete, the present is `t = 1`.
@@ -540,7 +550,16 @@ writer or producer and screen: `UnownedMoving`, `Port`, `Baked`, `Overwrote`, `R
 `Unplaceable`, `Unpaired`). A row carries the guest function, block PC, dispatched entry, image and
 generation, the OT span, a sample packet address and GP0 command, intervals seen and lost, primitives, the
 screen's title-owned key and warp route (`TitleDebugMenu::screen`) and the `decomp_pipeline.py` command for
-the writer. A new row logs one `owners` line; the `owners [n]` control verb lists them, most intervals lost
+the writer. A finding with no writer (a composer refusal, `Baked`) names the declared producer as the function
+and resolves its image; a refusal also carries the object's first entry, so its row has an OT span, sample
+packet and GP0 command. The screen of an interval is the key `TitleDebugMenu::screenKey` read when S was
+sealed, so rows land on the screen S shows. The decomp command (`OwnerJournal::decompCommand`) names the
+image through `TitleDebugMenu::decompImage`: the booted executable by default, each overlay's manifest entry
+and extracted file where a title declares them (Tomba 2, Toy Story 2); `--target` decompiles the function and
+`--function-at` asks the block PC only when it differs. A route may be several control lines separated by
+`; `, each run once the screen the one before reaches is shown. Rows the presenter makes for itself
+(`StaleShown`, `NoPrevious`, `ChainBreak`, `Cut`) carry no code; they are pacing and history, not RE tasks.
+The GTE ordinal of a row's sample is not recorded yet: it needs the per-word place provenance of stage 3. A new row logs one `owners` line; the `owners [n]` control verb lists them, most intervals lost
 first; each screen change and run end writes the rows as JSONL under `PSXPORT_OWNERS_DIR`, which a bug
 report attaches. The framework test program (`docs/testprog.md`) plants one draw per reason and checks
 that the journal lists exactly those.
@@ -551,10 +570,12 @@ A bug report takes three pictures. `screen.png` is the window's last present. `p
 area from the device VRAM, captured by `BugReportSession::frameSealed` right after `FramePresenter::commit`
 seals the next record, so every title produces it through the one commit path; the report says "not
 captured" only when no frame seals within 4 fields. `motion.png` is an APNG of the last second of window
-presents: `PresentClip` keeps 60 layers of a 960x540 RGBA8 GPU texture array (about 124 MB of VRAM,
+presents: `PresentClip` keeps 60 layers of a 640x360 RGBA8 GPU texture array (about 55 MB of VRAM,
 allocated on the first window present), letterboxes one GPU blit per swapchain present into the next
 layer and records its time, and downloads the ring only when a report is written. Nothing in it is
-CPU work per present, and its size does not depend on the internal resolution.
+CPU work per present, and its size does not depend on the internal resolution. The saved setting
+`PSXPORT_BUG_REPORT_CLIP=0` turns it off on hardware that cannot spare the memory: no texture, no blit, and
+reports carry no `motion.png`.
 
 ## Status
 
