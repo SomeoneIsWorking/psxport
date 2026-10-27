@@ -190,6 +190,8 @@ void StockLibcd::applyCommand(Core &core) const {
   default:
     break;
   }
+  // As after a guest controller write: a command run here can make a response current.
+  core.irqStatLatch();
 }
 
 void StockLibcd::command(Core &core) const {
