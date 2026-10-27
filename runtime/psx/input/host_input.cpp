@@ -10,6 +10,30 @@
 #include <stdlib.h> // atoi (PSXPORT_PAD_NOPAD parse)
 #endif
 
+#ifdef PSXPORT_SDL
+psx::input::HostInput::HostInput() {
+  mGamepadSubsystem = SDL_InitSubSystem(SDL_INIT_GAMEPAD);
+  if (!mGamepadSubsystem) {
+    lucent::error("pad", "SDL_InitSubSystem(GAMEPAD) failed: {}; controllers disabled", SDL_GetError());
+  }
+}
+
+psx::input::HostInput::~HostInput() {
+  for (SDL_Gamepad *&gamepad : mGamepads) {
+    if (gamepad != nullptr) {
+      SDL_CloseGamepad(gamepad);
+      gamepad = nullptr;
+    }
+  }
+  if (mGamepadSubsystem) {
+    SDL_QuitSubSystem(SDL_INIT_GAMEPAD);
+  }
+}
+#else
+psx::input::HostInput::HostInput() = default;
+psx::input::HostInput::~HostInput() = default;
+#endif
+
 void psx::input::HostInput::attachOverlay(RmlOverlay *overlay) {
   mOverlays.push_back({.overlay = overlay, .live = true});
 }
@@ -133,19 +157,6 @@ void applyGamepad(SDL_Gamepad *gamepad, std::uint16_t &mask) {
 
 } // namespace
 
-// Lazily ensure SDL's gamepad subsystem is up. SDL_Init(SDL_INIT_VIDEO) happens with the present
-// device, which this owner does not own; the gamepad subsystem is independent, so it is added on
-// first use. Idempotent.
-void psx::input::HostInput::ensureGamepadSubsystem() {
-  if (mGamepadSubsystemInit) {
-    return;
-  }
-  if ((SDL_WasInit(SDL_INIT_GAMEPAD) & SDL_INIT_GAMEPAD) == 0) {
-    SDL_InitSubSystem(SDL_INIT_GAMEPAD);
-  }
-  mGamepadSubsystemInit = true;
-}
-
 bool psx::input::HostInput::noPadRequested() {
   if (mNoPad < 0) {
     mNoPad = psx::config::no_host_pads() ? 1 : 0;
@@ -168,7 +179,9 @@ void psx::input::HostInput::rescanControllers(bool shown) {
     }
     return;
   }
-  ensureGamepadSubsystem();
+  if (!mGamepadSubsystem) {
+    return;
+  }
   for (int slot = 0; slot < kMaxGamepads; slot++) {
     if (mGamepads[slot] && !SDL_GamepadConnected(mGamepads[slot])) {
       SDL_CloseGamepad(mGamepads[slot]);
@@ -271,10 +284,7 @@ std::uint16_t psx::input::HostInput::poll(bool shown) {
     }
   }
 
-  // SDL_UpdateGamepads() FIRST, because SDL_PumpEvents only refreshes controller state if the gamepad
-  // subsystem happened to be up when it ran, and this owner initialises it lazily — so on the frames
-  // right after a controller is opened the reads below could be stale, and a stale axis reads as a
-  // held direction.
+  // A pad opened this poll has stale state until SDL_UpdateGamepads, and a stale axis reads as a held direction.
   rescanControllers(shown);
   SDL_UpdateGamepads();
   const std::uint16_t keyboardMask = mask;
