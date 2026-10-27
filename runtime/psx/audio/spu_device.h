@@ -3,6 +3,7 @@
 #include "beetle_device_instance.h"
 #include "spu_beetle.h"
 #include "spu_state.h"
+#include <array>
 #include <cstdint>
 #include <optional>
 class Core;
@@ -16,6 +17,10 @@ public:
   psx::audio::spu::DebugCounters debug;
   // PSXPORT_SPUBT: the register offset whose writes print a host backtrace.
   std::optional<uint32_t> writeBacktraceOffset;
+  // KON/KOFF register halves (0x188..0x18E) written since the SPU last ran a sample.
+  std::array<uint16_t, 4> pendingKeys{};
+  // Clocks run early this field to let the SPU take a key latch before it was rewritten.
+  int32_t clocksAhead = 0;
 
   // Make this instance the live SPU with `core` its interrupt target, powering it at first use.
   void bind(Core *core) {

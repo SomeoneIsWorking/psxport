@@ -20,6 +20,7 @@ class SpuFieldCadence {
 public:
   static constexpr uint32_t kClockRateHz = psx::frame::kNominalPsxCpuHz;
   static constexpr uint32_t kSampleRateHz = 44100u;
+  static constexpr uint32_t kClocksPerSample = 768u;
   static constexpr uint32_t kMaximumStandardSamplesPerField = kSampleRateHz / 50u;
 
   SpuFieldAdvance advance(psx::frame::DisplayFieldRate rate) {
