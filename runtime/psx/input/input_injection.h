@@ -22,8 +22,12 @@ struct WindowXY {
   float y = 0.0f;
 };
 
-// What one key, button or finger does: press and hold, let go, or press for some input turns and let go.
+// What one key, button or finger does: press and hold, let go, or press for a while and let go.
 enum class InjectedPress : std::uint8_t { Down, Up, Tap };
+
+// What a tap's hold counts: input turns of the Game holding player input (paused turns included), or the pad
+// frames the guest samples, so a guest-pad tap spans the same guest frames however the run is paced or stepped.
+enum class TapClock : std::uint8_t { InputTurns, PadFrames };
 
 // Every call runs on the thread that pumps the queue and answers one reply line; a refusal names the words
 // it accepts. Coordinates are window coordinates in display units, as a real mouse or finger reports them.
@@ -44,10 +48,10 @@ public:
   std::string mouseWheel(WindowId windowId, WindowXY scroll);
   // `name` is an SDL gamepad button name (a, b, start, dpup); the virtual pad attaches on first use.
   std::string gamepadButton(std::string_view name, InjectedPress press, int holdTurns);
-  // The same by SDL_GamepadButton value.
-  std::string gamepadButton(int button, InjectedPress press, int holdTurns);
+  // The same by SDL_GamepadButton value, a tap held for `hold` ticks of `clock`.
+  std::string gamepadButton(int button, InjectedPress press, int hold, TapClock clock);
   // An SDL_GamepadAxis trigger pulled fully or let go.
-  std::string gamepadTrigger(int axis, InjectedPress press, int holdTurns);
+  std::string gamepadTrigger(int axis, InjectedPress press, int hold, TapClock clock);
   // `name` is an SDL gamepad axis name (leftx, lefttrigger); `value` is the raw axis value.
   std::string gamepadAxis(std::string_view name, int value);
   // Down and tap need the finger up, up needs it down.
@@ -55,8 +59,10 @@ public:
   std::string touchMove(WindowId windowId, int finger, WindowXY at);
 
   // Once per input turn of the Game holding player input, after its drain, paused turns included:
-  // lets go of every tap whose hold ran out.
+  // lets go of every input-turn tap whose hold ran out.
   void afterInputTurn();
+  // Once per pad frame, after the guest's mask is resolved: lets go of every pad-frame tap whose hold ran out.
+  void afterPadFrame();
   // After a drain: the queue no longer holds a text event that points into this owner.
   void afterDrain();
   // A gamepad was opened: the virtual pad's axes set before then did not reach it, so they are set again.
@@ -68,7 +74,8 @@ private:
     Device device;
     int code;
     WindowId windowId;
-    int turnsLeft;
+    TapClock clock;
+    int ticksLeft;
   };
 
   void pushKey(WindowId windowId, int scancode, bool down);
@@ -80,7 +87,8 @@ private:
   // Window coordinates as the 0..1 a touch event carries.
   static std::optional<WindowXY> normalise(WindowId windowId, WindowXY at);
   bool ensureVirtualPad();
-  void schedule(Device device, int code, WindowId windowId, int holdTurns);
+  void schedule(Device device, int code, WindowId windowId, int hold, TapClock clock);
+  void releaseExpired(TapClock clock);
 
   std::vector<PendingRelease> releases_;
   // An SDL text event points at its text; each string lives here until the next drain has taken it.

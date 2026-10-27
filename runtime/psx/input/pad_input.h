@@ -27,6 +27,11 @@ public:
   // probes and deliver the packet. Advances the pad-frame clock.
   void serviceFrame();
 
+  // This pad frame's mask from the keyboard and gamepads, the virtual one included, before forced and replayed input.
+  uint16_t hostButtons() const {
+    return mHostButtons;
+  }
+
   // Edges of the final mask; consumers decide what an edge means.
   void resetButtonEdges(uint16_t current = psx::input::kNoButtons) {
     mButtonEdges.reset(current);
@@ -68,6 +73,7 @@ private:
   bool mForcedRead = false;
   psx::config::ForcedInput mForced;
   uint32_t mFc = 0; // pad frames serviced, the forced pulse's clock
+  uint16_t mHostButtons = psx::input::kNoButtons;
   psx::input::PadRecordReplay mSession;
   bool mLiveInputOnly = false;
   bool mPlayerInputSuppressed = false;

@@ -91,8 +91,9 @@ public:
   InputInjection &injection() {
     return mInjection;
   }
-  // PSX buttons (kButton bits, active high) on the virtual gamepad, through the binding the controllers are read with.
-  std::string padButtons(std::uint16_t bits, InjectedPress press, int holdTurns);
+  // PSX buttons (kButton bits, active high) on the virtual gamepad, through the binding the controllers are read with;
+  // a tap holds for `holdFrames` pad frames the guest samples.
+  std::string padButtons(std::uint16_t bits, InjectedPress press, int holdFrames);
 
   // Take the P (pause / resume) edge a poll detected, and the '.' (freeze, advance one frame) edge.
   // Latched until taken, so one press is one action whichever Game's poll saw it. Taking is separate from asking
@@ -116,13 +117,13 @@ public:
   }
 
 private:
-  std::string padButton(std::uint16_t bit, InjectedPress press, int holdTurns);
+  std::string padButton(std::uint16_t bit, InjectedPress press, int holdFrames);
 #ifdef PSXPORT_SDL
   bool keyDown(int scancode) const;
   void noteHostKey(int scancode, bool down);
   void rescanControllers(bool shown);
-  // PSXPORT_PAD_NOPAD: ignore every controller and use the keyboard only. For a machine where a
-  // connected or phantom pad reports a drifting analog stick and cannot be unplugged.
+  // PSXPORT_PAD_NOPAD: ignore every physical controller and use the keyboard only, for a machine where a
+  // connected or phantom pad reports a drifting analog stick and cannot be unplugged. The virtual pad stays open.
   bool noPadRequested();
 #endif
 

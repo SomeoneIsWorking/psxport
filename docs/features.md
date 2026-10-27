@@ -32,7 +32,7 @@ title answers there. A hop with no title entry runs on the framework alone.
 |---|---|---|
 | 1 | `psx/input/pad_input.cpp:Pad::serviceFrame` → `GameRuntime::deliverPad`; default BIOS pad path, `psx/input/stock_pad_buffers.cpp:StockPadBuffers` for buffer-writing titles | `deliverPad` |
 | 2 | `psx/input/pad_input.cpp:Pad::currentPhase` → `GameRuntime::inputPhase` — the phase a `.pad` replay matches on | `inputPhase` |
-| 3 | `psx/input/pad_record_replay.cpp:PadRecordReplay` — `.pad` record and replay; force/hold, REPL drive, host suppression and replay each win over the one before | |
+| 3 | `psx/input/pad_record_replay.cpp:PadRecordReplay` — `.pad` record and replay; host input (keyboard, gamepads and the control channel's virtual gamepad), force/hold, host suppression and replay each win over the one before | |
 | 4 | `psx/input/host_input.cpp:HostInput` — the one SDL drain: key state, the overlay, a window close on the `QuitScope`; no window means no host buttons | |
 | 5 | `psx/input/sio_pad.cpp` — the 4-byte digital packet per VBlank | |
 
@@ -81,7 +81,7 @@ title answers there. A hop with no title entry runs on the framework alone.
 
 | hop | owner | title |
 |---|---|---|
-| 1 | `psx/cd/stock_libcd.cpp:StockLibcd::bind` — stock libcd entries bound at the title's addresses; `GuestInterruptLibcd` when the guest's INT1 delivers readiness | `registerOverrides` |
+| 1 | `psx/cd/stock_libcd.cpp:StockLibcd::bind` — stock libcd entries bound at the title's addresses; `GuestInterruptLibcd` when the guest's INT1 delivers readiness; a command run here latches the interrupt edge it raises (`Core::irqStatLatch`), as a guest controller write does (issue 0186) | `registerOverrides` |
 | 2 | `psx/cd/cdc_native.cpp:CdController` — the CD controller over `psx/cd/disc.cpp:Disc`, opened when the title boots; CHD hunks decoded ahead by `psx/cd/hunk_reader.cpp:HunkReader` | |
 | 3 | `psx/core/guest_code_module.cpp:publishLanding` → `GameRuntime::guestCodeModuleWindow` — a module landed in its window | `guestCodeModuleWindow` |
 | 4 | `psx/cd/cd_stock_read_completion.cpp:announceStockReadLanding` → `GameRuntime::stockCdReadLanded` | `stockCdReadLanded` |
@@ -97,7 +97,7 @@ title answers there. A hop with no title entry runs on the framework alone.
 
 | hop | owner | title |
 |---|---|---|
-| 1 | `psx/cd/stock_libcd.cpp:StockLibcd::read` — a stock `CdRead` lands whole and synchronously | |
+| 1 | `psx/cd/stock_libcd.cpp:StockLibcd::read` — a stock `CdRead` lands whole and synchronously; a landing inside the runtime's code-module window activates it like a DMA3 transfer (`announceStockReadLanding` → `code_module::publishLanding`) | |
 | 2 | `psx/frame/frame_pacer.cpp:FramePacer::plan` — no host sleep while `Game::fastForwarding` | |
 
 ## F-SAVE — cards and states
@@ -117,4 +117,4 @@ title answers there. A hop with no title entry runs on the framework alone.
 | 3 | `psx/game/title_debug_menu.cpp:TitleDebugMenu::soundTest` — `music <track>`, `music-stop` and the now-playing readout over `TitleAudio` track names | `TitleAudio::trackName` |
 | 4 | `psx/debug/producer_census.h:ProducerCensus` — primitives per producer, keyed and rendered | |
 | 5 | `psx/debug/bug_report_session.h:BugReportSession` — the in-app bug report: the reference frame sealed at `FramePresenter::commit`, the last second of presents from `render/present_clip.h:PresentClip`; only the Game holding player input takes P / '.' / B (`input/pad_input.cpp:Pad::pollHostInput`) from the process's one `HostInput` | |
-| 6 | `psx/debug/debug_commands.cpp` `key`/`text`/`mouse`/`gamepad`/`touch` → `input/input_injection.cpp:InputInjection` — SDL events pushed into the window's queue on the main thread; a modifier key sets SDL's modifier state, so a chord is the modifier `down`, the key, the modifier `up`; taps last the player Game's input turns (`Pad::pollHostInput`), the pause loop's included | |
+| 6 | `psx/debug/debug_commands.cpp` `key`/`text`/`mouse`/`gamepad`/`touch` → `input/input_injection.cpp:InputInjection` — SDL events pushed into the window's queue on the main thread; a modifier key sets SDL's modifier state, so a chord is the modifier `down`, the key, the modifier `up`; `key`/`mouse`/`touch`/`gamepad` taps last the player Game's input turns (`Pad::pollHostInput`), the pause loop's included; the guest-pad verbs `tap`/`press`/`release`/`hold` press the virtual gamepad through `HostInput::padButtons`, a `tap` lasting pad frames the guest is served (`Pad::serviceFrame`), so a paused run holds it; they are refused while a pad replay owns input, and `PSXPORT_PAD_NOPAD` leaves the virtual pad open | |
