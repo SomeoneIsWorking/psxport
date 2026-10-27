@@ -36,25 +36,6 @@ void Pad::setPlayerInputSuppressed(bool suppressed) {
   mHost.setOverlayLive(&game->rml_overlay, !suppressed);
 }
 
-void Pad::driveHold(uint16_t activeLowMask) {
-  repl_on = 1;
-  repl_hold = activeLowMask;
-}
-
-void Pad::driveTap(Tap tap) {
-  repl_on = 1;
-  repl_tap = tap.activeLowMask;
-  repl_tap_n = tap.frames;
-}
-
-// Relinquish the drive entirely, so no stale mask keeps overriding host or forced input.
-void Pad::driveRelease() {
-  repl_on = 0;
-  repl_hold = psx::input::kNoButtons;
-  repl_tap = psx::input::kNoButtons;
-  repl_tap_n = 0;
-}
-
 void Pad::serviceFrame() {
   Core *c = &game->core;
   const bool shown = game->renderDevice.shown();
@@ -72,17 +53,6 @@ void Pad::serviceFrame() {
     } else {
       buttons = (mFc % 32u) < 8u ? mForced.pulse.value_or(psx::input::kNoButtons) : psx::input::kNoButtons;
     }
-  }
-  // A tap overrides the hold while it runs; a replay merges this mask rather than swallowing it.
-  uint16_t repl_mask = psx::input::kNoButtons;
-  if (repl_on) {
-    if (repl_tap_n > 0) {
-      repl_mask = repl_tap;
-      repl_tap_n--;
-    } else {
-      repl_mask = repl_hold;
-    }
-    buttons = repl_mask;
   }
   mFc++;
 
@@ -104,7 +74,7 @@ void Pad::serviceFrame() {
             },
     });
   }
-  buttons = mSession.service(c->runtime.inputPhase(*c), {.live = buttons, .repl = repl_mask});
+  buttons = mSession.service(c->runtime.inputPhase(*c), buttons);
   // Edges latch only once every source has resolved to the mask the guest receives.
   mButtonEdges.sample(buttons);
   game->padProbes.service(*game, mSession.frameIndex());

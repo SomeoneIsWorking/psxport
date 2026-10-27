@@ -5,6 +5,9 @@
 #include "rmlui_overlay.h"
 #include <lucent/log.h>
 
+#include <array>
+#include <string>
+
 #ifdef PSXPORT_SDL
 #include <SDL3/SDL.h>
 #include <stdlib.h> // atoi (PSXPORT_PAD_NOPAD parse)
@@ -113,26 +116,40 @@ namespace {
 // Only a deliberate push registers; a resting or stale stick must not hold a direction.
 constexpr Sint16 kDirectionalDeflection = 22000; // ~67% of 32767
 
+// Each PSX button on an SDL gamepad: a button, or for L2/R2 a trigger axis.
+struct GamepadBinding {
+  std::uint16_t bit;
+  SDL_GamepadButton button;
+  SDL_GamepadAxis trigger;
+};
+constexpr std::array kGamepadBindings{
+    GamepadBinding{psx::input::kButtonUp, SDL_GAMEPAD_BUTTON_DPAD_UP, SDL_GAMEPAD_AXIS_INVALID},
+    GamepadBinding{psx::input::kButtonRight, SDL_GAMEPAD_BUTTON_DPAD_RIGHT, SDL_GAMEPAD_AXIS_INVALID},
+    GamepadBinding{psx::input::kButtonDown, SDL_GAMEPAD_BUTTON_DPAD_DOWN, SDL_GAMEPAD_AXIS_INVALID},
+    GamepadBinding{psx::input::kButtonLeft, SDL_GAMEPAD_BUTTON_DPAD_LEFT, SDL_GAMEPAD_AXIS_INVALID},
+    GamepadBinding{psx::input::kButtonStart, SDL_GAMEPAD_BUTTON_START, SDL_GAMEPAD_AXIS_INVALID},
+    GamepadBinding{psx::input::kButtonSelect, SDL_GAMEPAD_BUTTON_BACK, SDL_GAMEPAD_AXIS_INVALID},
+    GamepadBinding{psx::input::kButtonCross, SDL_GAMEPAD_BUTTON_SOUTH, SDL_GAMEPAD_AXIS_INVALID},
+    GamepadBinding{psx::input::kButtonCircle, SDL_GAMEPAD_BUTTON_EAST, SDL_GAMEPAD_AXIS_INVALID},
+    GamepadBinding{psx::input::kButtonSquare, SDL_GAMEPAD_BUTTON_WEST, SDL_GAMEPAD_AXIS_INVALID},
+    GamepadBinding{psx::input::kButtonTriangle, SDL_GAMEPAD_BUTTON_NORTH, SDL_GAMEPAD_AXIS_INVALID},
+    GamepadBinding{psx::input::kButtonL1, SDL_GAMEPAD_BUTTON_LEFT_SHOULDER, SDL_GAMEPAD_AXIS_INVALID},
+    GamepadBinding{psx::input::kButtonR1, SDL_GAMEPAD_BUTTON_RIGHT_SHOULDER, SDL_GAMEPAD_AXIS_INVALID},
+    GamepadBinding{psx::input::kButtonL3, SDL_GAMEPAD_BUTTON_LEFT_STICK, SDL_GAMEPAD_AXIS_INVALID},
+    GamepadBinding{psx::input::kButtonR3, SDL_GAMEPAD_BUTTON_RIGHT_STICK, SDL_GAMEPAD_AXIS_INVALID},
+    GamepadBinding{psx::input::kButtonL2, SDL_GAMEPAD_BUTTON_INVALID, SDL_GAMEPAD_AXIS_LEFT_TRIGGER},
+    GamepadBinding{psx::input::kButtonR2, SDL_GAMEPAD_BUTTON_INVALID, SDL_GAMEPAD_AXIS_RIGHT_TRIGGER},
+};
+
 void applyGamepad(SDL_Gamepad *gamepad, std::uint16_t &mask) {
-#define HOST_BUTTON(button, bit)                                                                                       \
-  if (SDL_GetGamepadButton(gamepad, (button))) {                                                                       \
-    mask &= static_cast<std::uint16_t>(~(bit));                                                                        \
+  for (const GamepadBinding &binding : kGamepadBindings) {
+    const bool down = binding.button != SDL_GAMEPAD_BUTTON_INVALID
+                          ? SDL_GetGamepadButton(gamepad, binding.button)
+                          : SDL_GetGamepadAxis(gamepad, binding.trigger) > kDirectionalDeflection;
+    if (down) {
+      mask &= static_cast<std::uint16_t>(~binding.bit);
+    }
   }
-  HOST_BUTTON(SDL_GAMEPAD_BUTTON_DPAD_UP, psx::input::kButtonUp)
-  HOST_BUTTON(SDL_GAMEPAD_BUTTON_DPAD_RIGHT, psx::input::kButtonRight)
-  HOST_BUTTON(SDL_GAMEPAD_BUTTON_DPAD_DOWN, psx::input::kButtonDown)
-  HOST_BUTTON(SDL_GAMEPAD_BUTTON_DPAD_LEFT, psx::input::kButtonLeft)
-  HOST_BUTTON(SDL_GAMEPAD_BUTTON_START, psx::input::kButtonStart)
-  HOST_BUTTON(SDL_GAMEPAD_BUTTON_BACK, psx::input::kButtonSelect)
-  HOST_BUTTON(SDL_GAMEPAD_BUTTON_SOUTH, psx::input::kButtonCross)
-  HOST_BUTTON(SDL_GAMEPAD_BUTTON_EAST, psx::input::kButtonCircle)
-  HOST_BUTTON(SDL_GAMEPAD_BUTTON_WEST, psx::input::kButtonSquare)
-  HOST_BUTTON(SDL_GAMEPAD_BUTTON_NORTH, psx::input::kButtonTriangle)
-  HOST_BUTTON(SDL_GAMEPAD_BUTTON_LEFT_SHOULDER, psx::input::kButtonL1)
-  HOST_BUTTON(SDL_GAMEPAD_BUTTON_RIGHT_SHOULDER, psx::input::kButtonR1)
-  HOST_BUTTON(SDL_GAMEPAD_BUTTON_LEFT_STICK, psx::input::kButtonL3)
-  HOST_BUTTON(SDL_GAMEPAD_BUTTON_RIGHT_STICK, psx::input::kButtonR3)
-#undef HOST_BUTTON
   const Sint16 lx = SDL_GetGamepadAxis(gamepad, SDL_GAMEPAD_AXIS_LEFTX);
   const Sint16 ly = SDL_GetGamepadAxis(gamepad, SDL_GAMEPAD_AXIS_LEFTY);
   if (ly < -kDirectionalDeflection) {
@@ -147,15 +164,20 @@ void applyGamepad(SDL_Gamepad *gamepad, std::uint16_t &mask) {
   if (lx < -kDirectionalDeflection) {
     mask &= static_cast<std::uint16_t>(~psx::input::kButtonLeft);
   }
-  if (SDL_GetGamepadAxis(gamepad, SDL_GAMEPAD_AXIS_LEFT_TRIGGER) > kDirectionalDeflection) {
-    mask &= static_cast<std::uint16_t>(~psx::input::kButtonL2);
-  }
-  if (SDL_GetGamepadAxis(gamepad, SDL_GAMEPAD_AXIS_RIGHT_TRIGGER) > kDirectionalDeflection) {
-    mask &= static_cast<std::uint16_t>(~psx::input::kButtonR2);
-  }
 }
 
 } // namespace
+
+std::string psx::input::HostInput::padButton(std::uint16_t bit, InjectedPress press, int holdTurns) {
+  for (const GamepadBinding &binding : kGamepadBindings) {
+    if (binding.bit == bit) {
+      return binding.button != SDL_GAMEPAD_BUTTON_INVALID
+                 ? mInjection.gamepadButton(binding.button, press, holdTurns)
+                 : mInjection.gamepadTrigger(binding.trigger, press, holdTurns);
+    }
+  }
+  return lucent::format("pad: 0x{:04X} is not one PSX button", bit);
+}
 
 bool psx::input::HostInput::noPadRequested() {
   if (mNoPad < 0) {
@@ -206,6 +228,7 @@ void psx::input::HostInput::rescanControllers(bool shown) {
           mGamepads[slot] = opened;
           mGamepadInstance[slot] = static_cast<int>(SDL_GetGamepadID(opened));
           lucent::info("pad", "controller {} opened in slot {}: {}", instance, slot, SDL_GetGamepadName(opened));
+          mInjection.afterGamepadOpened(instance);
         }
         break;
       }
@@ -322,6 +345,10 @@ std::uint16_t psx::input::HostInput::poll(bool shown) {
   mFrameStepRequested = false;
   mBugReportRequested = false;
   return kNoButtons;
+}
+
+std::string psx::input::HostInput::padButton(std::uint16_t bit, InjectedPress, int) {
+  return lucent::format("pad: 0x{:04X}: this build has no SDL gamepad", bit);
 }
 
 #endif // PSXPORT_SDL

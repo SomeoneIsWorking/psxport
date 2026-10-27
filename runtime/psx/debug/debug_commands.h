@@ -30,9 +30,6 @@ public:
     const ReplySink &reply;
     DebugCommands &commands;
   };
-
-  // Active-low; press, release and hold edit it.
-  std::uint16_t heldMask = input::kNoButtons;
 };
 
 } // namespace psx::debug

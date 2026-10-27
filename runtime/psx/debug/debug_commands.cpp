@@ -1,11 +1,11 @@
 #include "debug_commands.h"
 
+#include "beetle_device_state.h"
 #include "config.h"
 #include "control_surface_limits.h"
 #include "core.h"
 #include "display_presenter.h"
 #include "execution_control.h"
-#include "beetle_device_state.h"
 #include "execution_ledger.h"
 #include "fs_util.h"
 #include "game.h"
@@ -190,9 +190,19 @@ void watchHits(const Call &call) {
   call.reply(lucent::format("watch hits={}", call.core.storeWatch.hits()));
 }
 
-void driveHeld(const Call &call) {
-  call.core.game->pad.driveHold(call.commands.heldMask);
-  call.reply(lucent::format("held={:04X}", call.commands.heldMask));
+// About a human tap: a tenth of a second of input turns.
+inline constexpr int kDefaultHoldTurns = 6;
+
+// Guest pad buttons by PSX name, pressed on the virtual gamepad like a player's controller.
+std::string padButtons(const Call &call, std::uint16_t bits, input::InjectedPress press, int holdTurns) {
+  std::string reply;
+  for (std::uint16_t bit = 1; bit != 0; bit = static_cast<std::uint16_t>(bit << 1)) {
+    if ((bits & bit) != 0) {
+      reply += reply.empty() ? "" : "; ";
+      reply += call.core.game->hostInput.padButton(bit, press, holdTurns);
+    }
+  }
+  return reply.empty() ? std::string("pad: no button named") : reply;
 }
 
 void press(const Call &call) {
@@ -200,8 +210,7 @@ void press(const Call &call) {
     call.reply("usage: press <button>");
     return;
   }
-  call.commands.heldMask &= static_cast<std::uint16_t>(~padButtonBit(call.args.word(1)));
-  driveHeld(call);
+  call.reply(padButtons(call, padButtonBit(call.args.word(1)), input::InjectedPress::Down, 0));
 }
 
 void release(const Call &call) {
@@ -209,31 +218,32 @@ void release(const Call &call) {
     call.reply("usage: release <button>");
     return;
   }
-  call.commands.heldMask |= padButtonBit(call.args.word(1));
-  driveHeld(call);
+  call.reply(padButtons(call, padButtonBit(call.args.word(1)), input::InjectedPress::Up, 0));
 }
 
+// Every button held where the active-low mask clears its bit, every other one let go.
 void hold(const Call &call) {
   const std::optional<std::uint32_t> mask = call.args.hex(1);
   if (!mask) {
     call.reply("usage: hold <active-low-hex>");
     return;
   }
-  call.commands.heldMask = static_cast<std::uint16_t>(*mask);
-  driveHeld(call);
+  const auto held = static_cast<std::uint16_t>(~*mask);
+  const std::string down = held != 0 ? padButtons(call, held, input::InjectedPress::Down, 0) : std::string();
+  const std::string up = padButtons(call, static_cast<std::uint16_t>(~held), input::InjectedPress::Up, 0);
+  call.reply(down.empty() ? up : down + "; " + up);
 }
 
 void tap(const Call &call) {
   if (call.args.size() < 2) {
-    call.reply("usage: tap <button> [frames]");
+    call.reply("usage: tap <button> [turns]");
     return;
   }
-  std::uint32_t frames = call.args.number(2).value_or(0);
-  frames = frames != 0 ? frames : 4u;
-  call.core.game->pad.driveTap(
-      {.activeLowMask = static_cast<std::uint16_t>(input::kNoButtons & ~padButtonBit(call.args.word(1))),
-       .frames = static_cast<int>(frames)});
-  call.reply(lucent::format("tap {} {}", call.args.word(1), frames));
+  const std::uint32_t turns = call.args.number(2).value_or(0);
+  call.reply(padButtons(call,
+                        padButtonBit(call.args.word(1)),
+                        input::InjectedPress::Tap,
+                        turns != 0 ? static_cast<int>(turns) : kDefaultHoldTurns));
 }
 
 // Every frame's mask is kept from frame 0, so a session in progress can be cut into a replay on demand.
@@ -608,9 +618,6 @@ input::InputInjection &injection(const Call &call) {
   return call.core.game->hostInput.injection();
 }
 
-// About a human tap: a tenth of a second of input turns.
-inline constexpr int kDefaultHoldTurns = 6;
-
 // `down`, `up` or `tap` at word `index` (tap when absent) and the tap's hold in input turns after it.
 struct PressWords {
   std::optional<input::InjectedPress> press;
@@ -713,10 +720,13 @@ inline constexpr std::array kVerbs{
     Verb{"watch", "watch <lo> <hi>", "log every guest store into [lo, hi)", &watch},
     Verb{"unwatch", "unwatch", "stop the store watch", &unwatch},
     Verb{"hits", "hits", "store-watch hits so far", &watchHits},
-    Verb{"press", "press <button>", "hold a pad button (up/down/left/right/x/o/t/sq/start/select)", &press},
-    Verb{"release", "release <button>", "release a held pad button", &release},
-    Verb{"hold", "hold <hex>", "set the raw active-low pad mask", &hold},
-    Verb{"tap", "tap <button> [frames]", "tap a button for n frames (default 4)", &tap},
+    Verb{"press",
+         "press <button>",
+         "hold a pad button (up/down/left/right/x/o/t/sq/start/select/l1..r3) on the virtual gamepad",
+         &press},
+    Verb{"release", "release <button>", "let go of a pad button on the virtual gamepad", &release},
+    Verb{"hold", "hold <hex>", "the virtual gamepad's buttons as an active-low pad mask", &hold},
+    Verb{"tap", "tap <button> [turns]", "a pad button on the virtual gamepad for n input turns (default 6)", &tap},
     Verb{"padrec",
          "padrec [save <path> [frames]]",
          "frames captured / cut the live session into a replay",

@@ -22,3 +22,12 @@ that Game takes them. A standalone `Game` still owns its own.
 Escape. The log shows four `report cancelled` lines for these presses and `picker3-reports/` stays empty. After
 `key Return` picks Spyro 1, ESC opens the title's menu, `gamepad start` reaches the Select Memory Card screen,
 and B then Escape opens and closes the title's form twice (`p4-title-seq.png`, `p4-title-b-seq.png`).
+
+## Follow-up: one input path (2026-10-28)
+The guest-pad verbs `tap`, `press`, `release` and `hold` wrote a second mask straight into `Pad` (`repl_hold`/`repl_tap`,
+merged into replays), beside the player's controller path. They now press PSX buttons on the control channel's virtual
+gamepad through `HostInput::padButton`, which uses the same `kGamepadBindings` table `applyGamepad` reads controllers
+with (L2/R2 as trigger axes). `tap` holds for input turns, like `gamepad tap`. `Pad` lost its drive state, a replay no
+longer merges control input (it is the guest-level recording alone), and the SIO savestate section dropped the four
+drive fields (`kBusLayoutVersion` 5; older states are refused). `tools/oracle/compare_cores.py` checks the gamepad reply
+instead of a `held=` echo; the guest's pad words stay a compared RAM range.
