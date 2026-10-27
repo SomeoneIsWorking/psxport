@@ -352,3 +352,14 @@ std::string psx::input::HostInput::padButton(std::uint16_t bit, InjectedPress, i
 }
 
 #endif // PSXPORT_SDL
+
+std::string psx::input::HostInput::padButtons(std::uint16_t bits, InjectedPress press, int holdTurns) {
+  std::string reply;
+  for (std::uint16_t bit = 1; bit != 0; bit = static_cast<std::uint16_t>(bit << 1)) {
+    if ((bits & bit) != 0) {
+      reply += reply.empty() ? "" : "; ";
+      reply += padButton(bit, press, holdTurns);
+    }
+  }
+  return reply.empty() ? std::string("pad: no button named") : reply;
+}

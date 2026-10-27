@@ -193,24 +193,12 @@ void watchHits(const Call &call) {
 // About a human tap: a tenth of a second of input turns.
 inline constexpr int kDefaultHoldTurns = 6;
 
-// Guest pad buttons by PSX name, pressed on the virtual gamepad like a player's controller.
-std::string padButtons(const Call &call, std::uint16_t bits, input::InjectedPress press, int holdTurns) {
-  std::string reply;
-  for (std::uint16_t bit = 1; bit != 0; bit = static_cast<std::uint16_t>(bit << 1)) {
-    if ((bits & bit) != 0) {
-      reply += reply.empty() ? "" : "; ";
-      reply += call.core.game->hostInput.padButton(bit, press, holdTurns);
-    }
-  }
-  return reply.empty() ? std::string("pad: no button named") : reply;
-}
-
 void press(const Call &call) {
   if (call.args.size() < 2) {
     call.reply("usage: press <button>");
     return;
   }
-  call.reply(padButtons(call, padButtonBit(call.args.word(1)), input::InjectedPress::Down, 0));
+  call.reply(call.core.game->hostInput.padButtons(padButtonBit(call.args.word(1)), input::InjectedPress::Down, 0));
 }
 
 void release(const Call &call) {
@@ -218,7 +206,7 @@ void release(const Call &call) {
     call.reply("usage: release <button>");
     return;
   }
-  call.reply(padButtons(call, padButtonBit(call.args.word(1)), input::InjectedPress::Up, 0));
+  call.reply(call.core.game->hostInput.padButtons(padButtonBit(call.args.word(1)), input::InjectedPress::Up, 0));
 }
 
 // Every button held where the active-low mask clears its bit, every other one let go.
@@ -229,8 +217,10 @@ void hold(const Call &call) {
     return;
   }
   const auto held = static_cast<std::uint16_t>(~*mask);
-  const std::string down = held != 0 ? padButtons(call, held, input::InjectedPress::Down, 0) : std::string();
-  const std::string up = padButtons(call, static_cast<std::uint16_t>(~held), input::InjectedPress::Up, 0);
+  const std::string down =
+      held != 0 ? call.core.game->hostInput.padButtons(held, input::InjectedPress::Down, 0) : std::string();
+  const std::string up =
+      call.core.game->hostInput.padButtons(static_cast<std::uint16_t>(~held), input::InjectedPress::Up, 0);
   call.reply(down.empty() ? up : down + "; " + up);
 }
 
@@ -240,10 +230,9 @@ void tap(const Call &call) {
     return;
   }
   const std::uint32_t turns = call.args.number(2).value_or(0);
-  call.reply(padButtons(call,
-                        padButtonBit(call.args.word(1)),
-                        input::InjectedPress::Tap,
-                        turns != 0 ? static_cast<int>(turns) : kDefaultHoldTurns));
+  call.reply(call.core.game->hostInput.padButtons(padButtonBit(call.args.word(1)),
+                                                  input::InjectedPress::Tap,
+                                                  turns != 0 ? static_cast<int>(turns) : kDefaultHoldTurns));
 }
 
 // Every frame's mask is kept from frame 0, so a session in progress can be cut into a replay on demand.

@@ -45,6 +45,10 @@ public:
   const std::vector<std::uint8_t> &recordingStartCard() const {
     return mSession.startCardImage();
   }
+  // A pad replay is feeding the guest; it replaces live input, the virtual gamepad included.
+  bool replaying() const {
+    return mSession.replayPending();
+  }
   // A PSXPORT_PAD_RESUME replay still feeding the guest: the run is unpaced and unheard.
   bool fastForwarding() const {
     return mSession.fastForwarding();
