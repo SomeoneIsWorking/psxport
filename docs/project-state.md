@@ -188,9 +188,13 @@ worktree, and `psxport_configure_lightrec_dependency()` probes that worktree bef
 GPU device render of the same ordering table), `repro.pad`, `memcard.mcr`, `report.json` and
 `README.md`; replaying that report's recording on a copy of its card and filing again at frame 2400
 produced byte-identical `screen.png`, `psx.png` and `repro.pad`. Gaps: the windowed B key and the
-form's drawing over the window are unrun by an agent (agents do not run windowed); a title gets the
-device render only where its draw kick calls `captureReferenceFrame` (Tomba! 2 only), and the report only
-where its frame loop goes through `FieldTurn::beginField`.
+form's drawing over the window are unrun by an agent (agents do not run windowed). Since 2026-10-27 the
+device render is taken at `FramePresenter::commit` for every title and `motion.png` (the last second of
+presents, 960x540 APNG) is attached: hidden unpaced reports from Toy Story 2 (Level 4 title card after a
+Debug-tab warp), Tomba! 2 and Spyro the Dragon (level 11 after a Debug-tab warp) each hold `psx.png`
+matching the screen and a 60-frame `motion.png`. Only the Game holding player input takes P / '.' / B,
+so a report opened over the title selector no longer opens one in each running panel; that path needs a
+shown window and is unrun by an agent.
 
 ## Blocking dependency
 

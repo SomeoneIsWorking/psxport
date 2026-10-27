@@ -2,7 +2,6 @@
 
 #include "game.h"
 #include "mod_row_model.h"
-#include "number_text.h"
 #include "rml_text.h"
 #include "ui_component.h"
 
@@ -26,23 +25,33 @@ constexpr const char *kAttrAction = "action";
 constexpr const char *kAttrToggle = "toggle";
 constexpr const char *kAttrAdjust = "adjust";
 
-// The Debug tab's adjust rows.
-constexpr const char *kWarpAreaId = "warp_area";
-constexpr const char *kDevCommandIds[] = {"warp_entry", "flag_index", "flag_value"};
-
 // A title's declared settings: adjust rows with this id prefix, added under `#title_settings`.
 constexpr std::string_view kTitleSettingPrefix = "title:";
 constexpr const char *kTitleSettingsHostId = "title_settings";
+// The title's debug menu rows and the About lines.
+constexpr const char *kTitleDebugHostId = "title_debug";
+constexpr const char *kAboutHostId = "about";
+constexpr std::string_view kTitleDebugPrefix = "debug:";
 
 } // namespace
 
 MenuDocument::MenuDocument(Rml::Context *ctx, Rml::ElementDocument *doc, Game *game)
-    : Component(doc), mCtx(ctx), mDoc(doc), mGame(game), mDevCommands(game), mWarp(game, &mDevCommands) {
+    : Component(doc), mCtx(ctx), mDoc(doc), mGame(game), mDebugRows(game, [this](const std::string &reply) {
+        if (mReadouts) {
+          mReadouts->set_status(reply);
+        }
+      }) {
   if (!mDoc) {
     return;
   }
 
   add_title_setting_rows();
+  if (Rml::Element *host = mDoc->GetElementById(kTitleDebugHostId)) {
+    set_markup(host, mDebugRows.debugMarkup());
+  }
+  if (Rml::Element *host = mDoc->GetElementById(kAboutHostId)) {
+    set_markup(host, mDebugRows.aboutMarkup());
+  }
 
   // Before the first tab selection below, which refreshes them.
   mReadouts = &adopt<MenuReadouts>(mDoc, mGame);
@@ -72,7 +81,7 @@ MenuDocument::MenuDocument(Rml::Context *ctx, Rml::ElementDocument *doc, Game *g
   }
 
   lucent::info("rmlui",
-               "menu built: {} tabs, {} panes, {} rows, {} of 4 readouts{}",
+               "menu built: {} tabs, {} panes, {} rows, {} readouts{}",
                tab_count(),
                pane_count(),
                row_count(),
@@ -119,7 +128,7 @@ void MenuDocument::add_title_setting_rows() {
 void MenuDocument::dump() const {
   // Counts first, so the rows below arrive with their denominator.
   lucent::info("rmlui",
-               "MENU: {} tabs, {} panes, {} rows, {} of 4 readouts, {} unrecognised row(s)",
+               "MENU: {} tabs, {} panes, {} rows, {} readouts, {} unrecognised row(s)",
                tab_count(),
                pane_count(),
                row_count(),
@@ -153,6 +162,18 @@ std::unique_ptr<RowBinding> MenuDocument::bind_row(Rml::Element *row) {
 
   // An `action` row is a button even if it also carries `toggle` or `adjust`.
   std::string id = psx::ui::rmlAttributeText(*row, kAttrAction, "");
+  if (id.empty()) {
+    id = psx::ui::rmlAttributeText(*row, kAttrAdjust, "");
+  }
+  if (id.rfind(kTitleDebugPrefix, 0) == 0) {
+    if (std::unique_ptr<RowBinding> binding = mDebugRows.bind(id)) {
+      return binding;
+    }
+    mUnknownRows++;
+    lucent::error("rmlui", "menu row \"{}\" names no verb or parameter of the title's debug menu", id);
+    return nullptr;
+  }
+  id = psx::ui::rmlAttributeText(*row, kAttrAction, "");
   if (!id.empty()) {
     return make_action_binding(
         [this, id] {
@@ -178,14 +199,6 @@ std::unique_ptr<RowBinding> MenuDocument::bind_row(Rml::Element *row) {
 
   id = psx::ui::rmlAttributeText(*row, kAttrAdjust, "");
   if (!id.empty()) {
-    if (id == kWarpAreaId) {
-      return make_warp_area_binding(&mWarp);
-    }
-    for (const char *devId : kDevCommandIds) {
-      if (id == devId) {
-        return make_dev_command_binding(&mDevCommands, id);
-      }
-    }
     if (id.rfind(kTitleSettingPrefix, 0) == 0) {
       const psx::game::TitleIntSetting *setting =
           find_title_setting(std::string_view(id).substr(kTitleSettingPrefix.size()));
@@ -222,32 +235,6 @@ void MenuDocument::run_action(const std::string &id) {
     hide();
     if (mGame) {
       mGame->session.requestReturn();
-    }
-    return;
-  }
-  if (id == "warp_go") {
-    if (mReadouts) {
-      mReadouts->set_warp_status(mWarp.arm());
-    }
-    return;
-  }
-  if (id == "items_all" || id == "flag_read" || id == "flag_write") {
-    if (mReadouts) {
-      mReadouts->set_warp_status(id == "items_all"   ? mDevCommands.grantAllItems()
-                                 : id == "flag_read" ? mDevCommands.readFlag()
-                                                     : mDevCommands.writeFlag());
-    }
-    return;
-  }
-  // Sound Test: action="music_<n>" plays catalogued track n; action="music_stop" stops.
-  if (id.rfind("music_", 0) == 0) {
-    psx::game::TitleAudio *audio = mGame ? mGame->runtime.audio(mGame->core) : nullptr;
-    if (!audio) {
-      return;
-    }
-    audio->soundTestPlay(id == "music_stop" ? -1 : psx::config::parseInt(std::string_view(id).substr(6)).value_or(0));
-    if (mReadouts) {
-      mReadouts->update();
     }
     return;
   }

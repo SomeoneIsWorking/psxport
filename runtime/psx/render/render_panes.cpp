@@ -64,6 +64,7 @@ void RenderState::buildPanes(std::span<const Pane> panes) {
     ++drawn;
   }
   SDL_EndGPURenderPass(pass);
+  clipPresent(cmd);
   device_.submit(cmd, "panes build");
   viewport_ = present::PaneRect{0, 0, size.width, size.height};
   ++presentSerial_;

@@ -66,7 +66,8 @@ public:
   void useLiveInputOnly() {
     mLiveInputOnly = true;
   }
-  // The host owns the player's input; the guest, the recording and a replay all see nothing pressed.
+  // The host owns the player's input; the guest, the recording and a replay all see nothing pressed, and
+  // the P / '.' / B debug keys do nothing here.
   void setPlayerInputSuppressed(bool suppressed) {
     mPlayerInputSuppressed = suppressed;
   }

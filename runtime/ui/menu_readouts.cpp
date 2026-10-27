@@ -3,6 +3,8 @@
 #include "game.h"
 #include "render.h"
 #include "rml_text.h" // RML_TEXT_SEP — a real U+00B7 in the DATA, never an entity
+#include "title_debug_menu.h"
+#include "title_debug_rows.h"
 
 #include <lucent/log.h>
 
@@ -19,19 +21,23 @@ MenuReadouts::MenuReadouts(Rml::Element *root, Game *game) : Component(root), mG
     return;
   }
   mVideo = doc->GetElementById("video_readout");
-  mWorld = doc->GetElementById("world_readout");
-  mMusic = doc->GetElementById("music_readout");
-  mWarp = doc->GetElementById("warp_readout");
-  mFound = (mVideo ? 1 : 0) + (mWorld ? 1 : 0) + (mMusic ? 1 : 0) + (mWarp ? 1 : 0);
-  // The denominator, named. "readouts: 3 of 4" plus which one is absent is the difference between
-  // a document that legitimately has no warp section and one whose id was mistyped.
-  lucent::debug("rmlui",
-                "readouts: {} of 4 present (video={} world={} music={} warp={})",
-                mFound,
-                mVideo ? "y" : "n",
-                mWorld ? "y" : "n",
-                mMusic ? "y" : "n",
-                mWarp ? "y" : "n");
+  mStatus = doc->GetElementById("debug_status");
+  mFound = (mVideo ? 1 : 0) + (mStatus ? 1 : 0);
+  if (mGame) {
+    const std::size_t declared = mGame->runtime.debugMenu().readouts().size();
+    for (std::size_t i = 0; i < declared; ++i) {
+      if (Rml::Element *element = doc->GetElementById(TitleDebugRows::readoutId(i))) {
+        mTitle.emplace_back(element, i);
+      }
+    }
+    mFound += static_cast<int>(mTitle.size());
+    lucent::debug("rmlui",
+                  "readouts: video={} status={} title {} of {}",
+                  mVideo ? "y" : "n",
+                  mStatus ? "y" : "n",
+                  mTitle.size(),
+                  declared);
+  }
 }
 
 void MenuReadouts::update() {
@@ -51,21 +57,19 @@ void MenuReadouts::update() {
            video.ires);
   set_text(mVideo, buf);
 
-  std::string music = "stopped";
-  if (const psx::game::TitleAudio *audio = mGame ? mGame->runtime.audio(mGame->core) : nullptr) {
-    if (const char *name = audio->nowPlayingName()) {
-      music = std::string("playing: ") + name;
+  if (mGame) {
+    const std::span<const psx::game::DebugReadout> readouts = mGame->runtime.debugMenu().readouts();
+    for (const auto &[element, index] : mTitle) {
+      const psx::game::DebugReadout &readout = readouts[index];
+      set_text(element, std::string(readout.label) + ": " + readout.text(mGame->core));
     }
   }
-  set_text(mMusic, music);
-
-  set_text(mWorld, mGame ? mGame->runtime.worldReadout(mGame->core) : std::string());
 
   Component::update();
 }
 
-void MenuReadouts::set_warp_status(const std::string &text) {
-  set_text(mWarp, text);
+void MenuReadouts::set_status(const std::string &text) {
+  set_text(mStatus, text);
 }
 
 } // namespace psx::ui

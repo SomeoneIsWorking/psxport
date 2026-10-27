@@ -4,10 +4,8 @@
 // it tears down exactly those lifetimes. Stylesheet-visible state lives in DOM pseudo-classes, and
 // `focus()` walks into children when the component itself is not focusable.
 //
-// Components adopt elements from the shipped
-// `assets/rml/menu.rml` already authored, because the menu's structure is content, not code — a
-// game ships its own `menu.rml` and the framework must not hard-code Tomba!2's six tabs in C++.
-// `adopt<T>(element, …)` makes that ownership transfer explicit.
+// Components adopt elements the shell `assets/rml/menu.rml` authors or a document generates from title
+// declarations; `adopt<T>(element, …)` makes that ownership transfer explicit.
 //
 // WHY PSEUDO-CLASS AND NOT `SetClass`. RmlUi's `class` attribute is authored content: the document
 // says `<tab class="selected">` for the initially-selected tab, and a C++ `SetClass` writes into

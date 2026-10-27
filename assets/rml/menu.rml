@@ -1,6 +1,6 @@
 <rml>
 <head>
-	<title>Tomba2Engine</title>
+	<title>psxport</title>
 	<link type="text/rcss" href="rml.rcss"/>
 	<link type="text/rcss" href="menu.rcss"/>
 </head>
@@ -10,7 +10,6 @@
 			<tab>Display</tab>
 			<tab>Debug</tab>
 			<tab>Game</tab>
-			<tab>Sound</tab>
 			<tab>About</tab>
 		</tab-bar>
 		<content id="content">
@@ -28,7 +27,7 @@
 			     A row carries EXACTLY ONE of three attributes, and there is no fourth:
 			       toggle="<id>"  cycles a named state (Off/On, or Vanilla/16:9/21:9/Auto)
 			       adjust="<id>"  steps a number, and is the only kind Left/Right act on
-			       action="<id>"  is a one-shot button (quit / close / return_to_selector / warp_go / music_*)
+			       action="<id>"  is a one-shot button (quit / close / return_to_selector, or a title debug verb)
 			     (An earlier version of this note also listed `cycle="<id>"`. NOTHING has ever
 			     read that attribute — a row carrying it would be inert. `toggle` already
 			     handles multi-state rows. Do not reintroduce it.)
@@ -37,7 +36,6 @@
 			     by psx::ui::MenuDocument every frame the menu is open. -->
 			<pane>
 				<div id="video_readout" class="readout">render -</div>
-				<div id="world_readout" class="readout"></div>
 
 				<div class="section-heading">Display</div>
 				<select-button toggle="aspect"><key>Aspect Ratio</key><value>Vanilla</value></select-button>
@@ -48,21 +46,10 @@
 			</pane>
 
 			<pane>
-				<div class="section-heading">Area Warp</div>
-				<div id="warp_readout" class="readout"></div>
-				<select-button adjust="warp_area"><key>Destination</key><value>Area 0</value></select-button>
-				<select-button adjust="warp_entry"><key>Entry</key><value>0</value></select-button>
-				<select-button action="warp_go"><key>Warp There</key><value>&#8594;</value></select-button>
-				<p class="hint">Only from the field &#8212; the warp runs the game's own door transition (fade, teardown, reload), so it needs a running field. Unnamed areas show as "Area N"; names live in docs/areas.md. The entry picks the door or spawn point in the destination.</p>
-
-				<div class="section-heading spaced">Items and Event Flags</div>
-				<select-button action="items_all"><key>Grant All Items</key><value>&#8594;</value></select-button>
-				<select-button adjust="flag_index"><key>Flag</key><value>0</value></select-button>
-				<select-button adjust="flag_value"><key>Value</key><value>0</value></select-button>
-				<select-button action="flag_read"><key>Read Flag</key><value>&#8594;</value></select-button>
-				<select-button action="flag_write"><key>Write Flag</key><value>&#8594;</value></select-button>
-				<p class="hint">Sent to the game as control-channel commands and written at the next frame. A game without them answers "not supported". Results show in the line under Area Warp.</p>
-				<p class="hint">&#8592;&#8594; switch tab &#183; &#8593;&#8595; move &#183; Enter / A change &#183; Esc close</p>
+				<div id="debug_status" class="readout"></div>
+				<!-- Filled from the title's debug menu (psx::game::TitleDebugMenu). -->
+				<div id="title_debug"></div>
+				<p class="hint">&#8592;&#8594; step a value or switch tab &#183; &#8593;&#8595; move &#183; Enter / A run &#183; Esc close</p>
 			</pane>
 
 			<pane>
@@ -74,27 +61,9 @@
 			</pane>
 
 			<pane>
-				<div class="section-heading">Sound Test</div>
-				<div id="music_readout" class="readout">stopped</div>
-				<select-button action="music_0"><key>Song 0 (jingle)</key><value>&#9654;</value></select-button>
-				<select-button action="music_1"><key>Song 1 (jingle)</key><value>&#9654;</value></select-button>
-				<select-button action="music_2"><key>Song 2 (jingle)</key><value>&#9654;</value></select-button>
-				<select-button action="music_3"><key>Song 3 (jingle)</key><value>&#9654;</value></select-button>
-				<select-button action="music_4"><key>Song 4 (cue)</key><value>&#9654;</value></select-button>
-				<select-button action="music_5"><key>Song 5 (cue)</key><value>&#9654;</value></select-button>
-				<select-button action="music_6"><key>Song 6 (cue)</key><value>&#9654;</value></select-button>
-				<select-button action="music_7"><key>Song 7 (field)</key><value>&#9654;</value></select-button>
-				<select-button action="music_8"><key>Song 8 (field)</key><value>&#9654;</value></select-button>
-				<select-button action="music_9"><key>Song 9 (field)</key><value>&#9654;</value></select-button>
-				<select-button action="music_stop"><key>Stop</key><value>&#9632;</value></select-button>
-				<p class="hint">Native PC audio engine (engine/audio/) &#183; replaces the libsnd music path.</p>
-				<p class="hint">&#8592;&#8594; switch tab &#183; &#8593;&#8595; move &#183; Enter / A play &#183; Esc close</p>
-			</pane>
-
-			<pane>
 				<div class="section-heading">About</div>
-				<p>Tomba! 2 &#8212; PC-native engine port (Tomba2Engine).</p>
-				<p class="hint">RmlUi (HTML/CSS) menu over the Vulkan renderer.</p>
+				<!-- Filled from the product, the title and its debug menu's About lines. -->
+				<div id="about"></div>
 			</pane>
 		</content>
 	</window>

@@ -10,10 +10,10 @@ Dependency direction: title repo → `runtime/psx/game/` (the title interface) �
 - `runtime/psx/host/executable_provisioner.*` — extract and authenticate a missing boot executable (SCUS/SLUS) from the title's own disc
 - `runtime/psx/boot/run_end_report.*` — run-end report: executor ledger, guest-call census, RAM dump, title lines
 - `runtime/psx/catalog/` — title catalog, title identity (serial, hashes, disc key, executable path), single-title product, availability probe, executable selection and authentication, logo image
-- `runtime/psx/game/game_runtime.*` — the title interface: GameRuntime virtuals, FrameDriver, title audio, dev warp, host identity, control-channel line
+- `runtime/psx/game/game_runtime.*` — the title interface: GameRuntime virtuals, FrameDriver, title audio and sound-test track names, host identity, the title's debug menu
 - `runtime/psx/game/game.*` — one machine instance: Core, devices, presenters, session wiring
 - `runtime/psx/game/session_run.*` — a title asking to end its run
-- `runtime/psx/game/title_command.*` — title command reply capture for debug verbs and the Debug tab
+- `runtime/psx/game/title_debug_menu.*` — TitleDebugMenu: a title's debug verbs (warp, teleport, items), typed parameters (integer range, hex, named enumeration, word list, optional), refusals, sections, readouts, sound test, About lines; one table behind the control channel, REPL, `help` and the Debug tab
 - `runtime/psx/game/title_settings.h`, `mods.*` — per-Game live player settings (aspect / widescreen, internal resolution / ires, fps60, selector layout), the settings file, title-declared integer settings
 - `runtime/psx/game/crt0_boot.*`, `crt0_scan.h` — PSY-Q crt0 boot group decoded from the guest prologue and replayed natively: gp, sp, heap, InitHeap, .bss
 - `runtime/psx/game/psx_exe_image.*`, `disc_executable.*` — PS-X EXE header parse, top-level executable load and entry registers, second executable from disc (boot stub hand-off)
@@ -61,6 +61,7 @@ Dependency direction: title repo → `runtime/psx/game/` (the title interface) �
 - `runtime/psx/gpu/record_geometry.*`, `record_raster_*`, `vram_bitmap.h` — record raster plan: entry write rects, gpu.c coverage per primitive at internal resolution, canvas margins, written-region bitmaps
 - `runtime/psx/render/record_rasterizer.*`, `record_present.cpp` — record raster on the GPU: ops into VRAM image and canvases, Record-path present, recordcheck, record shot
 - `runtime/psx/render/render_device.*`, `render_window.*`, `render_submit.cpp`, `render_shader.*`, `render_check.h`, `present_sink.h`, `present_mode.h` — SDL3 GPU device (RenderDevice): window shown or unmapped (PSXPORT_SHOW_WINDOW, hidden tool window), swapchain, present mode, samplers, pipelines, upload, download, submit
+- `runtime/psx/render/present_clip.*` — motion clip ring: the last second of window presents downscaled to 960x540 in a GPU texture array, written as an APNG for the bug report
 - `runtime/psx/render/render_state.h`, `render_present.cpp`, `render_panes.cpp`, `render_pane.h`, `render_screen.cpp`, `render_readback.cpp`, `render_api.cpp`, `render.h` — per-Game present (RenderState): present image build and show, panes built into the present image, pane target, present and device shots, VRAM captures, video status
 - `runtime/psx/shaders_gpu/`, `cmake/gpu_shaders.cmake`, `tools/gen_gpu_shaders.py` — shaders and SPIR-V, generated record op layout
 - `runtime/psx/present/display_presenter.*`, `present_plan.h`, `present_ledger.*`, `video_plan.h`, `pixel_size.h` — present: guest display to screen, letterbox, fade, 24bpp, internal resolution scale, present ledger
@@ -89,9 +90,9 @@ Dependency direction: title repo → `runtime/psx/game/` (the title interface) �
 - `runtime/psx/debug/debug_commands.*`, `command_args.*`, `control_surface_limits.h` — debug verbs table shared by transports, command words, reply caps
 - `runtime/psx/debug/dbg_server.*`, `repl.*` — control channel loopback server, stdin REPL
 - `runtime/psx/debug/producer_census.*`, `ot_attr.*` — primitives per guest submitter, OT / GTE submission attribution
-- `runtime/psx/debug/gpu_debug.*`, `gpu_perf.*`, `memcensus.*`, `field_digest.*`, `image_writer.*`, `snapshot.*`, `store_watch.*`, `pad_frame_probes.*`, `frame_schedule.*`, `host_backtrace.*` — diagnostics: scene dump, CPU phase profiler, memmove census, per-field digest, PNG / PPM capture, RAM snapshot, store watch, pad-frame probes, host backtrace
-- `runtime/psx/debug/bug_report_session.*` — in-app bug report
-- `runtime/ui/` — RmlUi overlay menu: library (one Rml::Initialise per device), document, tabs, rows, readouts, toggles, wrapped stepping, Debug tab warp and dev commands, SDL_GPU render interface, assets
+- `runtime/psx/debug/gpu_debug.*`, `gpu_perf.*`, `memcensus.*`, `field_digest.*`, `image_writer.*`, `snapshot.*`, `store_watch.*`, `pad_frame_probes.*`, `frame_schedule.*`, `host_backtrace.*` — diagnostics: scene dump, CPU phase profiler, memmove census, per-field digest, PNG / APNG / PPM capture, RAM snapshot, store watch, pad-frame probes, host backtrace
+- `runtime/psx/debug/bug_report_session.*` — in-app bug report: reference frame at the next sealed frame, motion clip, reproduction command
+- `runtime/ui/` — RmlUi overlay menu: library (one Rml::Initialise per device), document, tabs, rows, readouts, toggles, wrapped stepping, Debug and About tabs generated from the title debug menu (`title_debug_rows`), SDL_GPU render interface, assets
 - `assets/rml/` — overlay menu markup, styles, fonts
 - `bios/`, `scripts/build_openbios.py`, `patches/openbios/` — fast-boot OpenBIOS image
 - `tools/port/` — tooling every title runs: consumer build, launcher, launch environment, capture checks

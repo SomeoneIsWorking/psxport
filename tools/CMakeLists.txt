@@ -1,6 +1,6 @@
 # Framework tools. Native binaries are CMake targets; RE and analysis automation is Python. The
 # game-asset exporters (menu_bg_export, tex_export)
-# moved to the consuming game repo (Tomba2Engine) with the assets they read.
+# moved to the consuming game repo (psx-tomba) with the assets they read.
 # crt0_extract dumps an executable's crt0 through the shipping scanCrt0/planCrt0.
 add_executable(crt0_extract crt0_extract.cpp)
 target_link_libraries(crt0_extract PRIVATE psxport psxport_internal lucent::lucent)

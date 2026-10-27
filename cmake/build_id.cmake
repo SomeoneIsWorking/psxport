@@ -9,7 +9,7 @@
 #
 # WHY TWO IDS, and this is a CORRECTION to kanban #91's fix text, which asked only for a psxport stamp.
 # A producer's DB key is decided by GAME code as much as by framework code — the fossil that motivated
-# the card was created by Tomba2Engine's own `Render::resolvePerModeEmitter` (a GAME commit, 9c94008),
+# the card was created by psx-tomba's own `Render::resolvePerModeEmitter` (a GAME commit, 9c94008),
 # and a framework-only stamp would have recorded the fossil and its re-earn under the SAME id. The
 # mechanism would have been dead by construction. So both repos are described: the framework at
 # PSXPORT_ROOT and the consuming project at APP_ROOT (they are the same directory when psxport is built

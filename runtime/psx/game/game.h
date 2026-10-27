@@ -35,6 +35,7 @@
 #include "spu_audio.h"
 #include "spu_device.h"
 #include "timing.h"
+#include "title_catalog.h"
 #include "typed_config.h"
 #include "xa_state.h"
 
@@ -101,6 +102,10 @@ public:
 
   // The title's runtime, shared with core.runtime; the caller owns it and it outlives this Game.
   psx::game::GameRuntime &runtime;
+
+  // The product this Game runs in and the catalog title it runs; null for the selector.
+  std::string_view productName;
+  const psx::host::TitleIdentity *title = nullptr;
 
   // The title's card and user-data names; fields are null when the title declares none.
   psx::game::HostIdentity hostIdentity() const;
