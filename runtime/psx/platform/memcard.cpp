@@ -572,8 +572,9 @@ void file_write(Core *c) {
     return;
   }
   auto *f = m.fdAt(fd);
-  if (!f) { // see file_read
-    lucent::debug("card", "write on fd {}, not an open card file: -1", fd);
+  // No title is known to write after a failed open, so a write here is still our defect until one is.
+  if (!f) {
+    lucent::error("card", "write on fd {}, not an open card file: -1", fd);
     c->r[psx::cpu::kV0] = 0xFFFFFFFFu;
     return;
   }
