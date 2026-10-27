@@ -25,7 +25,7 @@ already readable and debuggable, so decompiling it buys nothing. Code that runs 
 translated block is exactly what (b) selects.
 
 **The boundary, stated once so it is not re-litigated.** The decompiled C is a **reading and porting
-aid**, exactly as `decomp-port` documents it: it references absolute addresses and Ghidra intrinsics
+aid**, exactly as `ghidra-re` documents it: it references absolute addresses and Ghidra intrinsics
 and is not buildable. What ships is a **hand-written native override that owns the recovered
 behaviour**, with the JIT still executing everything else. That is the architecture this workspace
 already mandates — "hand-written native overrides own recovered behavior; all other guest code runs
