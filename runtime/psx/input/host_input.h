@@ -91,8 +91,8 @@ public:
   InputInjection &injection() {
     return mInjection;
   }
-  // One PSX button (a kButton bit) on the virtual gamepad, through the binding the controllers are read with.
-  std::string padButton(std::uint16_t bit, InjectedPress press, int holdTurns);
+  // PSX buttons (kButton bits, active high) on the virtual gamepad, through the binding the controllers are read with.
+  std::string padButtons(std::uint16_t bits, InjectedPress press, int holdTurns);
 
   // Take the P (pause / resume) edge a poll detected, and the '.' (freeze, advance one frame) edge.
   // Latched until taken, so one press is one action whichever Game's poll saw it. Taking is separate from asking
@@ -116,6 +116,7 @@ public:
   }
 
 private:
+  std::string padButton(std::uint16_t bit, InjectedPress press, int holdTurns);
 #ifdef PSXPORT_SDL
   bool keyDown(int scancode) const;
   void noteHostKey(int scancode, bool down);
