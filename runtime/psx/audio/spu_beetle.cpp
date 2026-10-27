@@ -66,6 +66,8 @@ void write(uint32_t addr, uint32_t val) {
         lucent::debug(spuChannel, "[spudbg] V{:02} pitch={:04X}", vno, val & 0xFFFF);
       } else if (vreg == 0x6) {
         lucent::debug(spuChannel, "[spudbg] V{:02} start={:04X}", vno, val & 0xFFFF);
+      } else if (vreg == 0x8 || vreg == 0xA) {
+        lucent::debug(spuChannel, "[spudbg] V{:02} adsr{}={:04X}", vno, vreg == 0x8 ? 1 : 2, val & 0xFFFF);
       }
     }
     if (off == 0x188 || off == 0x18A) {
@@ -74,12 +76,17 @@ void write(uint32_t addr, uint32_t val) {
       lucent::debug(spuChannel, "[spudbg] KOFF off={:03X} val={:04X} (writes={})", off, val & 0xFFFF, n);
     } else if (off == 0x1AA) {
       lucent::debug(spuChannel,
-                    "[spudbg] SPUCNT={:04X} enable={} cdaudio={} xfermode={} (writes={})",
+                    "[spudbg] SPUCNT={:04X} enable={} cdaudio={} reverb={} xfermode={} (writes={})",
                     val & 0xFFFF,
                     (val >> 15) & 1,
                     val & 1,
+                    (val >> 7) & 1,
                     (val >> 4) & 3,
                     n);
+    } else if (off == 0x184 || off == 0x186 || off == 0x198 || off == 0x19A || off == 0x1A2 ||
+               (off >= 0x1C0 && off < 0x200)) {
+      // Reverb output volume, per-voice reverb enable, work-area base and the 0x1C0.. configuration.
+      lucent::debug(spuChannel, "[spudbg] REVERB off={:03X} val={:04X} (writes={})", off, val & 0xFFFF, n);
     } else if (off == 0x1B0 || off == 0x1B2) {
       lucent::debug(spuChannel, "[spudbg] CDVOL off={:03X} val={:04X} (writes={})", off, val & 0xFFFF, n);
     } else if (off == 0x1A6) {
