@@ -14,8 +14,9 @@
 # The channel is HTTP (lucent::http::Server): each command is one `POST /command` whose body is the
 # command line, and the response body is its reply.
 #
-# `LiveClient` is the same protocol as a class, for a driver that keeps issuing commands; a tool has no
-# business re-implementing the request.
+# `LiveClient` is the same protocol as a class, for a driver that issues many commands; a tool has no
+# business re-implementing the request. Constructing one sends nothing: the first command finds out
+# whether anything listens.
 import http.client
 import sys
 
@@ -29,7 +30,6 @@ class LiveClient:
         self.port = port
         self.host = host
         self.timeout = timeout
-        self.send("frame")  # refuses at construction when nothing listens, as a connect would
 
     def send(self, line: str) -> str:
         """One command, one reply."""
@@ -110,17 +110,6 @@ class LiveClient:
             self.send("quit")
         except OSError:
             pass  # the product may close the socket as it exits; the reply is not needed to leave
-        finally:
-            self.close()
-
-    def close(self) -> None:
-        pass
-
-    def __enter__(self) -> "LiveClient":
-        return self
-
-    def __exit__(self, *exception) -> None:
-        self.close()
 
 
 def main() -> int:
@@ -129,21 +118,21 @@ def main() -> int:
     if len(args) >= 2 and args[0] == "--port":
         port = int(args[1])
         args = args[2:]
-    with LiveClient(port) as client:
-        if args:
-            sys.stdout.write(client.send(" ".join(args)))
+    client = LiveClient(port)
+    if args:
+        sys.stdout.write(client.send(" ".join(args)))
+        return 0
+    print(f"[dbgclient] http://127.0.0.1:{port}/command; 'help' for commands, 'quit' to exit")
+    while True:
+        try:
+            line = input("dbg> ").strip()
+        except (EOFError, KeyboardInterrupt):
+            print()
             return 0
-        print(f"[dbgclient] connected to 127.0.0.1:{port}; 'help' for commands, 'quit' to exit")
-        while True:
-            try:
-                line = input("dbg> ").strip()
-            except (EOFError, KeyboardInterrupt):
-                print()
-                return 0
-            if line in ("quit", "q", "exit"):
-                return 0
-            if line:
-                sys.stdout.write(client.send(line))
+        if line in ("quit", "q", "exit"):
+            return 0
+        if line:
+            sys.stdout.write(client.send(line))
 
 
 if __name__ == "__main__":

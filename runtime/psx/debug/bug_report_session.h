@@ -20,7 +20,6 @@
 #include <cstdint>
 #include <filesystem>
 #include <optional>
-#include <string>
 #include <string_view>
 
 class Core;
@@ -35,9 +34,6 @@ class BugReportSession {
 public:
   // Ask for a report at the next frame boundary. Repeated requests before it opens are one report.
   void request();
-  // The same, but the form is filled and saved without a player: the REPL's `bugreport <summary>`,
-  // so a headless run exercises the whole path.
-  void requestScripted(std::string summary);
 
   // A logic frame was sealed: the device has drawn it into its draw area.
   void frameSealed(Core &core);
@@ -56,7 +52,6 @@ private:
   State mState = State::Idle;
   int mFieldsCapturing = 0;
   bool mPruned = false;
-  std::optional<std::string> mScriptedSummary;
   std::optional<psx::gpu::Rgb24Picture> mReference;
 };
 

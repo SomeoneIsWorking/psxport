@@ -71,7 +71,8 @@ driver still has to call `DbgServer::start()` once, `DbgServer::honourPause()` b
 disagree about what a pause does. A title that omits those calls has no endpoint, and the symptom is a
 connection refused against a product that is otherwise running normally.
 
-`tools/dbgclient.py` is the client: a one-shot CLI, and `LiveClient` for a driver that keeps a session.
+`tools/dbgclient.py` is the client: a one-shot CLI, and `LiveClient` for a driver that sends many commands;
+each command is its own request, so there is no connection to open or close.
 Two commands exist so a running product can be QUERIED rather than read out of its log: `cvars` answers
 the effective configuration with the layer each value came from, and `guest` answers the dynarec's own
 denominators (translated and executed blocks and instructions, cache hit/miss, host dispatches,

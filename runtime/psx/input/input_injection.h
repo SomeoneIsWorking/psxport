@@ -22,7 +22,7 @@ struct WindowXY {
   float y = 0.0f;
 };
 
-// What one key, button or finger does: press and hold, let go, or press for some pad frames and let go.
+// What one key, button or finger does: press and hold, let go, or press for some input turns and let go.
 enum class InjectedPress : std::uint8_t { Down, Up, Tap };
 
 // Every call runs on the thread that pumps the queue and answers one reply line; a refusal names the words
@@ -34,22 +34,25 @@ public:
   InputInjection &operator=(const InputInjection &) = delete;
   ~InputInjection();
 
-  // `name` is an SDL scancode name (Escape, B, Return, Up) or a scancode number.
-  std::string key(WindowId windowId, std::string_view name, InjectedPress press, int holdFrames);
+  // `name` is an SDL scancode name (Escape, B, Return, Up) or a scancode number; a modifier key held down
+  // sets SDL's modifier state, as a real keyboard does, so a chord is the modifier down, the key, the modifier up.
+  std::string key(WindowId windowId, std::string_view name, InjectedPress press, int holdTurns);
   std::string text(WindowId windowId, std::string_view utf8);
   std::string mouseMove(WindowId windowId, WindowXY at);
   // `name` is left, middle, right, x1 or x2.
-  std::string mouseButton(WindowId windowId, std::string_view name, InjectedPress press, int holdFrames);
+  std::string mouseButton(WindowId windowId, std::string_view name, InjectedPress press, int holdTurns);
   std::string mouseWheel(WindowId windowId, WindowXY scroll);
   // `name` is an SDL gamepad button name (a, b, start, dpup); the virtual pad attaches on first use.
-  std::string gamepadButton(std::string_view name, InjectedPress press, int holdFrames);
+  std::string gamepadButton(std::string_view name, InjectedPress press, int holdTurns);
   // `name` is an SDL gamepad axis name (leftx, lefttrigger); `value` is the raw axis value.
   std::string gamepadAxis(std::string_view name, int value);
-  // Down on a finger already down moves it.
-  std::string touch(WindowId windowId, int finger, InjectedPress press, WindowXY at, int holdFrames);
+  // Down and tap need the finger up, up needs it down.
+  std::string touch(WindowId windowId, int finger, InjectedPress press, WindowXY at, int holdTurns);
+  std::string touchMove(WindowId windowId, int finger, WindowXY at);
 
-  // Once per pad frame, after the host read: lets go of every tap whose hold ran out.
-  void afterPadFrame();
+  // Once per input turn of the Game holding player input, after its drain, paused turns included:
+  // lets go of every tap whose hold ran out.
+  void afterInputTurn();
   // After a drain: the queue no longer holds a text event that points into this owner.
   void afterDrain();
 
@@ -59,7 +62,7 @@ private:
     Device device;
     int code;
     WindowId windowId;
-    int framesLeft;
+    int turnsLeft;
   };
 
   void pushKey(WindowId windowId, int scancode, bool down);
@@ -69,7 +72,7 @@ private:
   // Window coordinates as the 0..1 a touch event carries.
   static std::optional<WindowXY> normalise(WindowId windowId, WindowXY at);
   bool ensureVirtualPad();
-  void schedule(Device device, int code, WindowId windowId, int holdFrames);
+  void schedule(Device device, int code, WindowId windowId, int holdTurns);
 
   std::vector<PendingRelease> releases_;
   // An SDL text event points at its text; each string lives here until the next drain has taken it.

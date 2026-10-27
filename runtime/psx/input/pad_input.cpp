@@ -18,6 +18,8 @@ void Pad::pollHostInput() {
   if (mPlayerInputSuppressed) {
     return;
   }
+  // Injected taps last this Game's input turns, the pause loop's included, so a tap releases while paused.
+  mHost.injection().afterInputTurn();
   if (mHost.takePauseRequest()) {
     game->dbg_server.togglePause();
   }
@@ -57,10 +59,6 @@ void Pad::serviceFrame() {
   Core *c = &game->core;
   const bool shown = game->renderDevice.shown();
   pollHostInput();
-  // Injected taps last the player's pad frames, not every Game's.
-  if (!mPlayerInputSuppressed) {
-    mHost.injection().afterPadFrame();
-  }
 
   if (!mForcedRead) {
     mForcedRead = true;

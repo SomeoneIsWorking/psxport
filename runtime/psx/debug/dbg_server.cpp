@@ -23,8 +23,8 @@
 
 namespace {
 
-// The process-lifetime handoff between the listener thread and whichever Game holds the claim.
-// The thread never ends, so nothing it touches may belong to one Game.
+// The process-lifetime handoff between the HTTP server's thread and whichever Game holds the claim.
+// The server lives until static destruction, past every Game, so nothing it touches may belong to one.
 class DebugChannel {
 public:
   static DebugChannel process;
@@ -57,7 +57,7 @@ public:
     }
   }
 
-  // The first call opens the loopback listener on `port`; it then serves for the process's life.
+  // The first call opens the loopback server on `port`; it then serves until static destruction.
   void listen(int port) {
     const std::lock_guard lock(mutex_);
     if (server_ != nullptr) {
@@ -97,7 +97,7 @@ public:
     changed_.notify_all();
   }
 
-  // Listener thread: queue one command and wait for its reply, abandoning it after a bounded wait.
+  // Server thread: queue one command and wait for its reply, abandoning it after a bounded wait.
   std::string submit(std::string_view line) {
     const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(4);
     std::unique_lock lock(mutex_);
