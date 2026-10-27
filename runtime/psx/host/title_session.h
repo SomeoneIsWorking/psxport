@@ -103,18 +103,12 @@ public:
   // a session handed on as the product owns the window, and a host left attached would composite a
   // selector that is no longer on screen.
   void setPaneHost(psx::present::PaneHost host);
-  // Past its retail boot prefix and drawing its own scene rather than a card the guest uploaded.
-  // Both answers are the title's — its frame driver and its presentation owner — because no pixel
-  // test can tell an animated publisher logo from an attract demo.
-  bool showsTitlePicture() const;
-  // A cold boot presents black for its first frames, and a panel that stops there is
-  // indistinguishable from a title that did not start. Looking costs a GPU readback, so it is asked
-  // only of a session still coming up; holding the answer costs nothing.
-  bool heldPicture() const {
-    return contentSeen_;
+  // Presented a frame that began past the title's boot prefix with the guest display enabled (GP1(03)).
+  // Guest state answers it: the frame driver knows its prefix, the GPU knows the display is on.
+  bool showsTitlePicture() const {
+    return showsTitlePicture_;
   }
-  void refreshPicture() const;
-  // The newest presented frame with a picture, at the size this session built it.
+  // The newest presented frame, at the size this session built it.
   psx::render::PresentedImage presentedPicture() const;
 
   // ---- what a panel session is allowed to do
@@ -163,11 +157,7 @@ private:
   bool preRolling_ = false;
   bool paneDestination_ = false;
   psx::present::PixelSize paneImage_;
-  // The last content answer and the step it was taken at, because the answer only changes when the
-  // guest draws something new. Mutable since it is a cache of this session's own frame, not state
-  // anyone else can observe.
-  mutable bool contentSeen_ = false;
-  mutable std::uint64_t contentCheckedAtStep_ = 0;
+  bool showsTitlePicture_ = false;
   std::uint64_t steps_ = 0;
   unsigned long long lastStepPacedFields_ = 0;
   // A pane host attached before boot(), waiting for a machine to attach it to.

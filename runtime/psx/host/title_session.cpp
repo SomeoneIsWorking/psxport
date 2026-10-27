@@ -7,6 +7,7 @@
 #include "frame_loop_shell.h"
 #include "game.h"
 #include "game_runtime.h"
+#include "gpu_device.h"
 #include "host_input.h"
 #include "host_turn.h"
 #include "psx_exe_image.h"
@@ -198,7 +199,11 @@ void TitleSession::step() {
   fieldTurn.beginField(game.core);
   ++steps_;
   const unsigned long long pacedBefore = game.framePacer.pacedFields();
+  const bool pastPrefix = game.requireFrameDriver().pastBootPrefix();
+  const std::uint64_t presentsBefore = game.render().presentSerial();
   services_.frameLoop.step(game.core, static_cast<std::uint32_t>(steps_));
+  showsTitlePicture_ = showsTitlePicture_ || (pastPrefix && game.core.gpuDevice().displayArea().enabled &&
+                                              game.render().presentSerial() != presentsBefore);
   if (product) {
     services_.budget.step();
     game.repl.afterStep();
@@ -222,36 +227,11 @@ Core &TitleSession::core() {
   return parts_->game->core;
 }
 
-bool TitleSession::showsTitlePicture() const {
-  if (!parts_->booted || parts_->game == nullptr) {
-    return false;
-  }
-  // The driver knows when the retail boot prefix has returned; a pixel test cannot tell an
-  // animated publisher logo from an attract demo.
-  return parts_->game->requireFrameDriver().pastBootPrefix();
-}
-
-void TitleSession::refreshPicture() const {
-  if (!parts_->booted) {
-    return;
-  }
-  // Each ask reads the presented image back off the GPU, and a boot runs for thousands of steps
-  // whose first ones are black anyway.
-  constexpr std::uint64_t kProbeEverySteps = 12;
-  if (steps_ != 0 && steps_ - contentCheckedAtStep_ < kProbeEverySteps) {
-    return;
-  }
-  contentCheckedAtStep_ = steps_;
-  // The probe holds the frame it read: asked again while the session runs, never once it is
-  // paused, since a frozen panel's picture cannot change.
-  contentSeen_ = parts_->game->render().retainFilledPresentImage();
-}
-
 psx::render::PresentedImage TitleSession::presentedPicture() const {
   if (!parts_->booted) {
     return {};
   }
-  return parts_->game->render().newestPresentedPicture();
+  return parts_->game->render().lastPresented();
 }
 
 void TitleSession::applyPresentRoute() {

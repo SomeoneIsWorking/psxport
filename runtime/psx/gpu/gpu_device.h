@@ -21,7 +21,8 @@ struct DisplayArea {
   int width = 0;
   int height = 0;
   bool depth24 = false;
-  bool pal = false; // GP1(08) video mode: 50 Hz fields
+  bool pal = false;    // GP1(08) video mode: 50 Hz fields
+  bool enabled = false; // GP1(03) display enable: off scans out black
 };
 
 // One machine's GPU. gpu.c keeps its state in globals, so one device is bound to them at a time:

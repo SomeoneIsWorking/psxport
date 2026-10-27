@@ -362,6 +362,7 @@ DisplayArea GpuDevice::displayArea() {
   area.height = std::max(lines, 0) * (interlaced480 ? 2 : 1);
   area.depth24 = (GPU.DisplayMode & DISP_RGB24) != 0;
   area.pal = (GPU.DisplayMode & DISP_PAL) != 0;
+  area.enabled = !GPU.DisplayOff;
   return area;
 }
 

@@ -91,11 +91,10 @@ public:
   PresentedImage lastPresented() const {
     return {presentImage_, presentImageSize_.width, presentImageSize_.height, viewport_};
   }
-  // What a pane shows: the live present image, unless the newest present was probed blank (a fade, a
-  // load screen), then the retained copy.
-  PresentedImage newestPresentedPicture() const;
-  // Holds the newest presented frame that has a picture; true when one is held.
-  bool retainFilledPresentImage();
+  // Counts presents built; a pane host compares it across a step.
+  std::uint64_t presentSerial() const {
+    return presentSerial_;
+  }
 
 private:
   void ensureVramTexture();
@@ -113,8 +112,6 @@ private:
   void recordScreen(SDL_GPUCommandBuffer *cmd, SDL_GPUTexture *target, PixelSize size);
   // The built present image into the motion clip when it goes to the window.
   void clipPresent(SDL_GPUCommandBuffer *cmd);
-  // One readback of the present image: whether it holds a picture, and where.
-  bool probePicture(const std::uint8_t *rgba);
 
   Game &game_;
   RenderDevice &device_;
@@ -130,7 +127,6 @@ private:
 
   // The presented picture at sink resolution: what the window shows and what a present shot reads.
   SDL_GPUTexture *presentImage_ = nullptr;
-  SDL_GPUTransferBuffer *presentReadback_ = nullptr;
   PixelSize presentImageSize_;
   present::PaneRect viewport_{0, 0, 0, 0}; // where the picture sits in that image
   SinkIdleState sink_;
@@ -144,13 +140,7 @@ private:
   present::PaneHost paneHost_;
   bool showPending_ = false;
 
-  // The newest presented frame that held a picture, kept through fades and loads for a pane host.
-  SDL_GPUTexture *filled_ = nullptr;
-  PixelSize filledSize_;
-  present::PaneRect filledViewport_{0, 0, 0, 0};
   std::uint64_t presentSerial_ = 0;
-  std::uint64_t probedSerial_ = 0;
-  std::uint64_t blankSerial_ = 0; // the newest present a probe found not to be a picture (issue 0162)
 
   // RenderPath::Record's rasterizer and what the last present took from it.
   std::unique_ptr<RecordRasterizer> record_;

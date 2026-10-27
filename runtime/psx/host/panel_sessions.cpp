@@ -63,24 +63,12 @@ const TitleSession *PanelSessions::session(int panel) const {
   return sessions_[static_cast<std::size_t>(panel)].get();
 }
 
-// Past the title's boot prefix and holding a picture: a publisher logo passes the picture test
-// and fails the prefix.
 bool PanelSessions::panelReady(int panel) const {
   if (panel < 0 || panel >= count() || !booted_[static_cast<std::size_t>(panel)]) {
     return false;
   }
   const TitleSession *session = this->session(panel);
-  // Both, in this order: past the boot prefix (its own driver says so) and holding a frame
-  // (the probe says so).
-  if (session == nullptr || !session->showsTitlePicture()) {
-    return false;
-  }
-  // A panel holding a picture is not probed again: its picture is whatever it last presented.
-  // This is the only place a session is probed outside the one that is running.
-  if (!session->heldPicture()) {
-    session->refreshPicture();
-  }
-  return session->heldPicture();
+  return session != nullptr && session->showsTitlePicture();
 }
 
 psx::render::PresentedImage PanelSessions::picture(int panel) const {
@@ -116,10 +104,6 @@ void PanelSessions::takeLogo(int panel, TitleSession &session) {
 void PanelSessions::select(int panel) {
   if (panel < 0 || panel >= count() || panel == selected_) {
     return;
-  }
-  // The outgoing panel pauses on its last present; one probe here lets a fade fall back to the held picture.
-  if (const TitleSession *outgoing = session(selected_)) {
-    outgoing->refreshPicture();
   }
   selected_ = panel;
   // The demo the player is looking at is the one they hear. The host audio device is a per-process
@@ -229,10 +213,6 @@ unsigned long long PanelSessions::advance(const PreRollBudget &preRoll) {
     current->step();
     lastStep = PreRollBudget::Clock::now() - stepStart;
     pacedFields += current->lastStepPacedFields();
-    // A readback, so only until the panel first holds a picture; after that a pane shows the live image.
-    if (!current->heldPicture()) {
-      current->refreshPicture();
-    }
     // Once, from this session's VRAM while its own screen is still up.
     takeLogo(panel, *current);
     if (current->end() != TitleSession::End::Running) {
