@@ -35,6 +35,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import psx_pad  # noqa: E402
+import spu_state  # noqa: E402
 from compare_cores import (  # noqa: E402
     ConsoleSession,
     CoreError,
@@ -296,14 +297,17 @@ class Comparison:
         self.report = report
 
     def checkpoint(self, name: str) -> bool:
-        """Snapshot both parked cores, compare, record; return whether every decisive range matched."""
+        """Snapshot both parked cores, compare RAM and SPU, record; return whether every decisive
+        range and every decisive SPU field matched."""
         rows = compare(self.title, snapshot(self.title, self.native), snapshot(self.title, self.console))
         native_summary = self.title.summary(self.native)
         console_summary = self.title.summary(self.console)
+        (native_spu, native_out), (console_spu, console_out) = self.native.spu(), self.console.spu()
+        audio = spu_state.compare(native_spu, console_spu, native_out, console_out)
         self.report["checkpoints"].append({
             "checkpoint": name, "native_frames": self.native.frames, "console_vblanks": self.console.frames,
-            "native": native_summary, "console": console_summary, "ranges": rows})
-        ok = all(row["equal"] for row in rows if row["decisive"])
+            "native": native_summary, "console": console_summary, "ranges": rows, "spu": audio})
+        ok = all(row["equal"] for row in rows if row["decisive"]) and audio["match"]
         print(f"[oracle] {name}: {'MATCH' if ok else 'DIVERGE'} native f{self.native.frames} {native_summary} | "
               f"console vb{self.console.frames} {console_summary}")
         for row in rows:
@@ -313,6 +317,9 @@ class Comparison:
                       f"native {row['native_byte']:02X} console {row['console_byte']:02X}, "
                       f"{row['differing_bytes']}/{row['bytes']} bytes differ"
                       + (f" [native {row['native_hex']} console {row['console_hex']}]" if row["decisive"] else ""))
+        print(f"[oracle]   spu: {'match' if audio['match'] else 'first divergence ' + spu_state.describe(audio['first'])}; "
+              f"sounding native {audio['sounding']['native']} console {audio['sounding']['console']}; "
+              f"output peak native {native_out.peak} console {console_out.peak}")
         return ok
 
     def reach(self, checkpoint: Checkpoint, budget: int) -> None:

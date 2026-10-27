@@ -76,6 +76,7 @@ stdout; native core messages go to the stable `scratch/oracle-console/core.log`.
 {"command":"insert_card","card":"/abs/path/blank-formatted.mcr"}
 {"command":"capture"}
 {"command":"ram"}
+{"command":"spu"}
 {"command":"quit"}
 ```
 
@@ -85,7 +86,9 @@ driven. Each step is bounded to 1..3600 core fields. State reports field/video/i
 frame dimensions, timing and all queried option values. Unknown commands or fields fail explicitly.
 Read commands allow 1..256 bytes from main RAM, including its guest aliases. Capture writes only the
 latest copied framebuffer as `frame.png`; RAM writes the current 2 MiB as `ram.bin`. These stable paths
-are overwritten on request, with hashes in the reply. There are no per-frame image/RAM disk writes.
+are overwritten on request, with hashes in the reply. `spu` writes Beetle's `SPU` state section, cut out
+of `retro_serialize`, as `spu.bin`; its reply carries the last field's mixed output (samples, nonzero
+samples, peak). There are no per-frame image/RAM disk writes.
 
 ### Memory card
 

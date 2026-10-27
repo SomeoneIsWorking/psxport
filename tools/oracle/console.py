@@ -66,7 +66,7 @@ def command(session: ConsoleSession, message: dict, output_directory: Path) -> d
                "observe": {"command", "targets", "ranges", "capacity"},
                "observe_read": {"command"}, "observe_off": {"command"},
                "hashes_begin": {"command"}, "hashes": {"command"},
-               "insert_card": {"command", "card"}}
+               "insert_card": {"command", "card"}, "spu": {"command"}}
     if not isinstance(operation, str) or operation not in allowed or set(message) != allowed[operation]:
         raise ValueError("unknown command or missing/extra fields: " + ", ".join(allowed))
     if operation == "buttons":
@@ -111,6 +111,11 @@ def command(session: ConsoleSession, message: dict, output_directory: Path) -> d
         path = output_directory / "frame.png"
         session.framebuffer.save_png(path)
         return {"capture": str(path), "sha256": file_sha256(path), "frame": session.frames}
+    elif operation == "spu":
+        path = output_directory / "spu.bin"
+        path.write_bytes(session.spu_state())
+        return {"spu": str(path), "sha256": file_sha256(path), "frame": session.frames,
+                "output": session.field_output.row()}
     elif operation == "ram":
         path = output_directory / "ram.bin"
         path.write_bytes(session.read_ram(0, RAM_BYTES))
