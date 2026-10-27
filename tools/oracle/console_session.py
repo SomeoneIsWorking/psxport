@@ -7,7 +7,10 @@ import hashlib
 from pathlib import Path
 from typing import Callable
 
+import array
+
 import console_abi as abi
+import spu_state
 from console_capture import CaptureHashes, Framebuffer
 from console_observer import Observer
 
@@ -55,6 +58,8 @@ class ConsoleSession:
         self.video_refreshes = 0
         self.duplicate_frames = 0
         self.audio_frames = 0
+        self.field_output = spu_state.Output(0, 0, 0)  # the SPU mix over the last field run
+        self._field_samples = array.array("h")
         self.input_polls = 0
         self.input_reads = 0
         self.button_mask = 0
@@ -174,6 +179,7 @@ class ConsoleSession:
 
     def _audio_sample(self, left: int, right: int) -> None:
         self.audio_frames += 1
+        self._field_samples.extend((left, right))
         if self.hashes is not None:
             self.hashes.audio_sample(left, right)
 
@@ -181,6 +187,7 @@ class ConsoleSession:
         if frames > 1_000_000 or (frames and not data):
             raise ValueError("invalid libretro audio batch")
         self.audio_frames += frames
+        self._field_samples.frombytes(ct.string_at(data, frames * 4))
         if self.hashes is not None:
             self.hashes.audio_batch(ct.string_at(data, frames * 4))
         return frames  # All frames consumed. SPU/audio timing advances without a playback device.
@@ -273,7 +280,11 @@ class ConsoleSession:
         for _ in range(frames):
             before = self.video_refreshes
             self.library.retro_psx_observer_field(self.frames + 1)
+            self._field_samples = array.array("h")
             self.library.retro_run()
+            self.field_output = spu_state.Output(len(self._field_samples) // 2,
+                                                 sum(1 for value in self._field_samples if value),
+                                                 max((abs(value) for value in self._field_samples), default=0))
             self._check_callbacks()
             if self.video_refreshes == before:
                 raise RuntimeError("retro_run returned without a video refresh; no field evidence")
@@ -300,6 +311,19 @@ class ConsoleSession:
         if not pointer or self.library.retro_get_memory_size(SYSTEM_RAM) != RAM_BYTES:
             raise ValueError("core main RAM owner is missing or changed size")
         return ct.string_at(pointer + physical, size)
+
+    def spu_state(self) -> bytes:
+        """The `SPU` section of the core's own state (Beetle SPU_StateAction), for spu_state.py."""
+        if not self.loaded:
+            raise ValueError("SPU state requires loaded console content")
+        size = self.library.retro_serialize_size()
+        buffer = ct.create_string_buffer(size)
+        if not self.library.retro_serialize(buffer, size):
+            raise ValueError(f"retro_serialize refused a {size}-byte state")
+        state = spu_state.sections(buffer.raw)
+        if "SPU" not in state:
+            raise ValueError(f"the core's state has no SPU section (sections {sorted(state)})")
+        return b"SPU".ljust(32, b"\0") + len(state["SPU"]).to_bytes(4, "little") + state["SPU"]
 
     def status(self) -> dict:
         frame = self.framebuffer

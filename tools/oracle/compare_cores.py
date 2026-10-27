@@ -31,6 +31,7 @@ from typing import Protocol
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from psx_pad import PSX_BUTTON_BITS  # noqa: E402
+from spu_state import Output, SpuState  # noqa: E402
 
 
 class CoreError(RuntimeError):
@@ -51,6 +52,8 @@ class CoreSession(Protocol):
     # render path the picture is never in VRAM, and comparing VRAM there compares two blank buffers
     # and calls them equal (psxport issue 0121).
     def capture(self, destination: Path) -> None: ...
+    # Beetle's SPU state and the SPU's mix over the last field (spu_state.py).
+    def spu(self) -> tuple[SpuState, Output]: ...
     def close(self) -> None: ...
 
 
@@ -76,6 +79,7 @@ class NativeReplSession:
         self._held: frozenset[str] = frozenset()
         self.scan_rows: int | None = None  # set by capture(): rows a console would scan out
         self._log = open(log_path, "w")
+        self._spu_path = log_path.with_suffix(".spu.bin")
         self._lines: queue.Queue[str | None] = queue.Queue()
         self._process = subprocess.Popen(
             [binary, executable], stdin=subprocess.PIPE, stdout=subprocess.DEVNULL,
@@ -187,6 +191,15 @@ class NativeReplSession:
                             f"the scanned-row report, so a picture comparison cannot align: {reply.strip()}")
         self.scan_rows = int(reply.rsplit(marker, 1)[1].split()[0])
 
+    def spu(self) -> tuple[SpuState, Output]:
+        self._send(f"spu {self._spu_path}")
+        reply = self._expect("spu ")
+        if "REFUSED" in reply or "peak=" not in reply:
+            raise CoreError(f"native REPL refused the SPU state: {reply.strip()}")
+        fields = dict(item.split("=", 1) for item in reply.split() if "=" in item)
+        output = Output(int(fields["samples"]), int(fields["nonzero"]), int(fields["peak"]))
+        return SpuState.from_state(self._spu_path.read_bytes()), output
+
     def close(self) -> None:
         if self._process.poll() is None:
             try:
@@ -287,6 +300,12 @@ class ConsoleSession:
         destination.parent.mkdir(parents=True, exist_ok=True)
         result = self._call({"command": "capture"})
         shutil.copyfile(result["capture"], destination)
+
+    def spu(self) -> tuple[SpuState, Output]:
+        result = self._call({"command": "spu"})
+        output = result["output"]
+        return (SpuState.from_state(Path(result["spu"]).read_bytes()),
+                Output(output["samples"], output["nonzero"], output["peak"]))
 
     def close(self) -> None:
         if self._process.poll() is None:

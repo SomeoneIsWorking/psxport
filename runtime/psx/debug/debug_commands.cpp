@@ -5,7 +5,9 @@
 #include "core.h"
 #include "display_presenter.h"
 #include "execution_control.h"
+#include "beetle_device_state.h"
 #include "execution_ledger.h"
+#include "fs_util.h"
 #include "game.h"
 #include "gpu_debug.h"
 #include "gpu_device.h"
@@ -425,6 +427,29 @@ void spuWav(const Call &call) {
   call.reply(lucent::format("wav -> {}", path));
 }
 
+// Beetle's SPU state section and the last field's mix, for the oracle's audio comparison (tools/oracle/spu_state.py).
+void spuState(const Call &call) {
+  if (call.args.size() < 2) {
+    call.reply("usage: spu <path>");
+    return;
+  }
+  const std::string path = call.args.text(1);
+  psx::state::BeetleDeviceState state;
+  std::string error;
+  if (!state.save(call.core, psx::state::BeetleDevice::Spu, error)) {
+    call.reply(lucent::format("spu REFUSED: {}", error));
+    return;
+  }
+  const std::vector<std::uint8_t> bytes = state.bytesOut();
+  if (!Fs::writeFile(path, bytes.data(), bytes.size(), error)) {
+    call.reply(lucent::format("spu REFUSED: {}", error));
+    return;
+  }
+  const SpuOutputSummary &out = call.core.game->spu_audio.lastField();
+  call.reply(lucent::format(
+      "spu -> {} bytes={} samples={} nonzero={} peak={}", path, bytes.size(), out.samples, out.nonzero, out.peak));
+}
+
 // One XA channel of file 1 played off the disc by a clip XaStream, as the SPU would hear it.
 void xaDump(const Call &call) {
   const std::optional<std::uint32_t> channel = call.args.number(1);
@@ -714,6 +739,7 @@ inline constexpr std::array kVerbs{
     Verb{"vkpix", "vkpix <x> <y> [n]", "raw VRAM words at x,y", &vramPixels},
     Verb{"dumpram", "dumpram [path]", "main RAM to path and the scratchpad to path.spad", &dumpRam},
     Verb{"wav", "wav <path>", "record SPU output to a WAV", &spuWav},
+    Verb{"spu", "spu <path>", "Beetle's SPU state section to path; the reply has the last field's mix", &spuState},
     Verb{"xadump",
          "xadump <channel> <lba> <path> [seconds]",
          "play an XA channel of file 1 off the disc to a 44.1 kHz WAV",

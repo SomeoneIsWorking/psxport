@@ -102,7 +102,7 @@ Dependency direction: title repo → `runtime/psx/game/` (the title interface) �
 - `bios/`, `scripts/build_openbios.py`, `patches/openbios/` — fast-boot OpenBIOS image
 - `testprog/`, `tools/testprog/`, `cmake/testprog.cmake` — framework test program: freestanding mipsel guest EXE built with clang, its host title `psxtest_port`, planted owner-journal rows
 - `tools/port/` — tooling every title runs: consumer build, launcher, launch environment, capture checks
-- `tools/oracle/` — CPU oracle / reference emulator: Mednafen snapshot and trace, full-console libretro host, state and picture comparison
+- `tools/oracle/` — CPU oracle / reference emulator: Mednafen snapshot and trace, full-console libretro host, state, SPU voice/register (audio) and picture comparison
 - `tools/decomp_pipeline.py`, `tools/decomp/` — Ghidra headless decompilation, callers, refs
 - `tools/formats/`, `tools/mips/`, `tools/disasm.*`, `tools/discdump.cpp`, `tools/crt0_extract.cpp`, `tools/fmv_export/` — PS-X EXE reader, MIPS decode, disassembly, disc listing and extract, crt0 dump, STR export through the shipping decode
 - `tools/dbgclient.py`, `tools/psx_pad.py`, `tools/prof_hot.py` — control-channel client, pad bit table, host profile symbols

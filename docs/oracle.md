@@ -61,6 +61,22 @@ console's arrival pad, and treats the title's pad words as decisive so a deliver
 before anything downstream. Tomba! 2 (`psx-tomba/tools/oracle_title.py`) and Spyro 1
 (`psx-spyro/tools/oracle_spyro1.py`) are the consumers.
 
+## Audio comparison
+
+Every checkpoint and gameplay segment also compares the SPU. Both cores run Beetle's `spu.c`, so its
+`SPU_StateAction` section is the one description of SPU state: the product writes it through the REPL
+`spu <path>` verb (`runtime/psx/debug/debug_commands.cpp`), the console cuts it out of
+`retro_serialize`, and `tools/oracle/spu_state.py` decodes both by entry name. Per voice it compares
+keyed (ADSR phase not release), sounding (envelope nonzero), pitch, start address, ADSR, volume
+controls and the reverb/FM/noise bits; per SPU the control register (less its transfer-mode bits), main,
+reverb, CD and external volumes, the reverb base and the 0x1C0 configuration block. Envelope level,
+decode address, loop address and sweep progress are informational: removed loads mean the two SPU clocks
+never line up sample for sample. Whether each core's last field mixed any output at all is decisive.
+The report names the first divergent voice or register and lists both cores' sounding voices.
+
+Blind spot: the CD audio samples the SPU mixes in are not compared, only the CD volume and enable bits;
+the product streams XA natively.
+
 ## Evidence rules
 
 - Validate the comparator with a matching case and a deliberately seeded register/RAM divergence.
@@ -79,6 +95,7 @@ before anything downstream. Tomba! 2 (`psx-tomba/tools/oracle_title.py`) and Spy
 | Test-only flat MIPS interpreter | Guest CPU/RAM behavior on reached paths using psxport state/memory seams | Shares psxport platform models and is not an independent device oracle |
 | `RenderPath::Device` picture | The guest's own GP0 stream as drawn by the GPU device | Does not prove producer renders or record rasterizer correctness; shows only what the guest programmed (a title that bypasses PutDispEnv leaves the device's display mode at reset) |
 | Guest dispatch tables and no-op arms | Whether original title data selects/submits a behavior or draw | Says nothing about final appearance |
+| SPU state section at a checkpoint | Each voice's key state, pitch, ADSR and volumes, and the SPU registers, against Beetle on the console | CD audio input samples; sample-exact envelope timing |
 | Record renderer readback | What the record rasterizer presented | Cannot establish what original hardware should produce by itself |
 
 ## Retained observations

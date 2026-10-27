@@ -14,14 +14,9 @@
 
 namespace {
 
-struct PcmSummary {
-  uint32_t hash = 2166136261u;
-  uint32_t nonzero = 0;
-  uint32_t peak = 0;
-};
-
-PcmSummary summarizePcm(const int16_t *samples, int frames) {
-  PcmSummary summary;
+SpuOutputSummary summarizePcm(const int16_t *samples, int frames) {
+  SpuOutputSummary summary;
+  summary.samples = static_cast<uint32_t>(frames > 0 ? frames : 0);
   const size_t count = static_cast<size_t>(frames > 0 ? frames : 0) * 2u;
   for (size_t i = 0; i < count; ++i) {
     const uint16_t value = static_cast<uint16_t>(samples[i]);
@@ -133,8 +128,9 @@ void SpuAudio::frame() {
     frames = static_cast<int>(advance.samples);
     memset(buf, 0, static_cast<size_t>(frames) * 2 * sizeof(int16_t));
   }
+  mLastField = summarizePcm(buf, frames);
   if (kAudioField) {
-    const PcmSummary pcm = summarizePcm(buf, frames);
+    const SpuOutputSummary &pcm = mLastField;
     lucent::debug(kAudioField,
                   "field={} pal={} expected_samples={} expected_clocks={} rendered_samples={} queued_samples={} "
                   "pcm_hash={:08X} pcm_nonzero={} pcm_peak={} xa_wr={} xa_rd={:.3f} xa_pulls={} xa_sectors={} "

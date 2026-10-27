@@ -12,6 +12,14 @@
 class Game;
 class Core;
 
+// One field of mixed SPU output: its samples, how many were nonzero and the largest magnitude.
+struct SpuOutputSummary {
+  uint32_t samples = 0;
+  uint32_t hash = 2166136261u;
+  uint32_t nonzero = 0;
+  uint32_t peak = 0;
+};
+
 class SpuAudio {
 public:
   Game *game = nullptr;
@@ -24,6 +32,10 @@ public:
   void reportQueue() const;
   psx::audio::HostAudioOutput &output() {
     return output_;
+  }
+  // The SPU's own mix over the last field, before the title mixes its music in.
+  const SpuOutputSummary &lastField() const {
+    return mLastField;
   }
 
 private:
@@ -42,6 +54,7 @@ private:
   uint32_t mWavSynced = 0; // data bytes at the last header patch
 
   SpuFieldCadence mCadence;
+  SpuOutputSummary mLastField;
 
   // One PAL field plus slack; a title's music mixes into it through TitleAudio::mixFrame.
   static constexpr uint32_t kRenderSlack = 64;

@@ -57,6 +57,8 @@ def load_library(path: Path) -> ct.CDLL:
         "retro_get_system_av_info": (None, [ct.POINTER(SystemAvInfo)]),
         "retro_get_memory_data": (ct.c_void_p, [ct.c_uint]),
         "retro_get_memory_size": (ct.c_size_t, [ct.c_uint]),
+        "retro_serialize_size": (ct.c_size_t, []),
+        "retro_serialize": (ct.c_bool, [ct.c_void_p, ct.c_size_t]),
     }
     for name, (result, arguments) in declarations.items():
         function = getattr(library, name)
