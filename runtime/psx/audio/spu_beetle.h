@@ -26,8 +26,11 @@ void write(std::uint32_t addr, std::uint32_t val);
 std::uint32_t read(std::uint32_t addr);
 void dmaWrite(const std::uint32_t *words, int count);
 int dmaRead(std::uint32_t *words, int count);
-// Advance the mixer by `clocks` CPU cycles; returns Beetle's clocks until the next SPU event.
-std::int32_t update(std::int32_t clocks);
+// A field owing `clocks` starts at emulated CPU tick `now`: register and DMA accesses inside it first run
+// the SPU to the guest's time, up to those clocks.
+void beginField(std::uint64_t now, std::int32_t clocks);
+// End the field: run whatever of its `clocks` the accesses did not.
+void finishField(std::int32_t clocks);
 // Drain up to `maxFrames` mixed 44.1 kHz stereo frames; returns the frames written.
 int render(std::int16_t *out, int maxFrames);
 // The SPU interrupt line into `core` (spu_device.cpp).

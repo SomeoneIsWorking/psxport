@@ -1,6 +1,8 @@
 // The guest SPU interface over Beetle's spu.c (compiled as-is), and the externs spu.c links against.
 #include "spu_beetle.h"
+#include "core.h"
 #include "diagnostic_config.h"
+#include "game.h"
 #include "host_backtrace.h"
 #include "spu_device.h"
 #include "spu_field_cadence.h"
@@ -8,6 +10,8 @@
 #include <lucent/log.h>
 #include <stdbool.h>
 #include <stdint.h>
+
+#include <algorithm>
 
 namespace {
 
@@ -17,7 +21,33 @@ constexpr uint32_t kKeyOnLow = 0x188;
 constexpr uint32_t kKeyOffHigh = 0x18E;
 constexpr std::size_t kKeyOffHalf = 2;
 
-// Untimed writes land before the field's samples; run one so a key latch is taken before it is rewritten.
+// Run `clocks`; a key latch written before a sample that ran has been taken.
+void run(SpuDevice &spu, int32_t clocks) {
+  if (clocks <= 0) {
+    return;
+  }
+  const bool sampled = spu.untilSample <= 0 || clocks >= spu.untilSample;
+  spu.untilSample = SPU_UpdateFromCDC(clocks);
+  spu.fieldRun += clocks;
+  if (sampled) {
+    spu.pendingKeys = {};
+  }
+}
+
+// Run the SPU to the guest's emulated time. A guest past its field's end (frame() comes at the title's own
+// boundary) runs on into the next field, at most one field ahead.
+void catchUp(SpuDevice &spu) {
+  if (!spu.fieldOpen || spu.core() == nullptr || spu.core()->game == nullptr) {
+    return;
+  }
+  const uint64_t now = spu.core()->game->timing.emulatedCpuTicks();
+  const uint64_t limit = 2 * static_cast<uint64_t>(spu.fieldBudget);
+  const uint64_t elapsed = now > spu.fieldOrigin ? std::min(now - spu.fieldOrigin, limit) : 0;
+  run(spu, static_cast<int32_t>(elapsed) - spu.fieldRun);
+}
+
+// Writes with no guest time between them (a native override, a guest a field ahead) still reach a
+// key latch before the SPU samples it; run to the next sample so the latch is taken before it is rewritten.
 void takePendingKeys(SpuDevice &spu, uint32_t off, uint16_t val) {
   if (off < kKeyOnLow || off > kKeyOffHigh || (off & 1) != 0) {
     return;
@@ -25,9 +55,7 @@ void takePendingKeys(SpuDevice &spu, uint32_t off, uint16_t val) {
   const std::size_t half = (off - kKeyOnLow) / 2;
   const bool offAfterOn = half >= kKeyOffHalf && (spu.pendingKeys[half - kKeyOffHalf] & val) != 0;
   if (spu.pendingKeys[half] != 0 || offAfterOn) {
-    SPU_UpdateFromCDC(static_cast<int32_t>(SpuFieldCadence::kClocksPerSample));
-    spu.clocksAhead += static_cast<int32_t>(SpuFieldCadence::kClocksPerSample);
-    spu.pendingKeys = {};
+    run(spu, spu.untilSample > 0 ? spu.untilSample : static_cast<int32_t>(SpuFieldCadence::kClocksPerSample));
   }
   spu.pendingKeys[half] |= val;
 }
@@ -56,7 +84,8 @@ void IRQ_Assert(int which, bool asserted) {
 
 } // extern "C"
 
-// Beetle addresses the registers at 0x1F801C00.. by their low 10 bits; timestamp 0 is its untimed access.
+// Beetle addresses the registers at 0x1F801C00.. by their low 10 bits; timestamp 0 is its untimed access,
+// so every access first runs the SPU to the guest's time (catchUp).
 namespace psx::audio::spu {
 
 void init() {
@@ -67,6 +96,7 @@ void init() {
 void write(uint32_t addr, uint32_t val) {
   const uint32_t off = addr & 0x3FF;
   SpuDevice &spu = *SpuDevice::bound();
+  catchUp(spu);
   if (spuChannel) {
     DebugCounters &sd = spu.debug;
     const long n = ++sd.writes;
@@ -91,9 +121,11 @@ void write(uint32_t addr, uint32_t val) {
       }
     }
     if (off == 0x188 || off == 0x18A) {
-      lucent::debug(spuChannel, "[spudbg] KON off={:03X} val={:04X} (writes={})", off, val & 0xFFFF, n);
+      lucent::debug(
+          spuChannel, "[spudbg] KON off={:03X} val={:04X} (writes={}) field+{}", off, val & 0xFFFF, n, spu.fieldRun);
     } else if (off == 0x18C || off == 0x18E) {
-      lucent::debug(spuChannel, "[spudbg] KOFF off={:03X} val={:04X} (writes={})", off, val & 0xFFFF, n);
+      lucent::debug(
+          spuChannel, "[spudbg] KOFF off={:03X} val={:04X} (writes={}) field+{}", off, val & 0xFFFF, n, spu.fieldRun);
     } else if (off == 0x1AA) {
       lucent::debug(spuChannel,
                     "[spudbg] SPUCNT={:04X} enable={} cdaudio={} reverb={} xfermode={} (writes={})",
@@ -142,11 +174,13 @@ void write(uint32_t addr, uint32_t val) {
 }
 
 uint32_t read(uint32_t addr) {
+  catchUp(*SpuDevice::bound());
   return SPU_Read(0, addr & 0x3FF);
 }
 
 // DMA4: one 32-bit word (two SPU-RAM samples) per Beetle call.
 void dmaWrite(const uint32_t *words, int count) {
+  catchUp(*SpuDevice::bound());
   if (spuChannel) {
     DebugCounters &sd = SpuDevice::bound()->debug;
     sd.dmaCalls++;
@@ -160,21 +194,32 @@ void dmaWrite(const uint32_t *words, int count) {
 }
 
 int dmaRead(uint32_t *words, int count) {
+  catchUp(*SpuDevice::bound());
   for (int i = 0; i < count; i++) {
     words[i] = SPU_ReadDMA();
   }
   return count;
 }
 
-int32_t update(int32_t clocks) {
+// Fields follow each other on the emulated clock; a clock more than a field away (a restored state, a guest
+// call that ran ahead) starts the field where the clock is.
+void beginField(uint64_t now, int32_t clocks) {
   SpuDevice &spu = *SpuDevice::bound();
-  const int32_t owed = clocks - spu.clocksAhead;
-  spu.clocksAhead = owed < 0 ? -owed : 0;
-  if (owed <= 0) {
-    return 0;
+  spu.fieldOrigin = spu.fieldStarted ? spu.fieldOrigin + static_cast<uint64_t>(spu.fieldBudget) : now;
+  const int64_t offset = static_cast<int64_t>(now - spu.fieldOrigin);
+  if (offset < -clocks || offset > clocks) {
+    spu.fieldOrigin = now;
   }
-  spu.pendingKeys = {};
-  return SPU_UpdateFromCDC(owed);
+  spu.fieldStarted = true;
+  spu.fieldOpen = true;
+  spu.fieldBudget = clocks;
+}
+
+void finishField(int32_t clocks) {
+  SpuDevice &spu = *SpuDevice::bound();
+  run(spu, clocks - spu.fieldRun);
+  spu.fieldRun = std::max(spu.fieldRun - clocks, 0);
+  spu.fieldOpen = false;
 }
 
 int render(int16_t *out, int max_frames) {

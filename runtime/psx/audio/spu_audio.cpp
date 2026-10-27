@@ -92,7 +92,8 @@ void SpuAudio::frame() {
     openHostDevice();
   }
   const bool pal = game->core.gpuDevice().displayArea().pal;
-  const SpuFieldAdvance advance = mCadence.advance(psx::frame::displayFieldRate(pal));
+  const psx::frame::DisplayFieldRate rate = psx::frame::displayFieldRate(pal);
+  const SpuFieldAdvance advance = mField ? *mField : mCadence.advance(rate);
   const uint32_t xaWrBefore = game->xa.wr;
   const double xaRdBefore = game->xa.rd;
   const uint32_t xaPullsBefore = game->xa.pulls;
@@ -104,12 +105,12 @@ void SpuAudio::frame() {
     if (mProfPrevNs) {
       mProfLoopMs += msSince(*mProfPrevNs, a);
     }
-    psx::audio::spu::update(static_cast<int32_t>(advance.clocks));
+    psx::audio::spu::finishField(static_cast<int32_t>(advance.clocks));
     mProfAccumMs += msSince(a, psx::platform::hostNowNs());
     mProfPrevNs = a;
     if (++mProfN >= 60) {
       lucent::info("spu_prof",
-                   "spu::update {:.4f} ms | full frame iter {:.4f} ms | spu share {:.1f}%",
+                   "spu::finishField {:.4f} ms | full frame iter {:.4f} ms | spu share {:.1f}%",
                    mProfAccumMs / mProfN,
                    mProfLoopMs / mProfN,
                    mProfLoopMs > 0 ? 100.0 * mProfAccumMs / mProfLoopMs : 0.0);
@@ -118,8 +119,10 @@ void SpuAudio::frame() {
       mProfN = 0;
     }
   } else {
-    psx::audio::spu::update(static_cast<int32_t>(advance.clocks));
+    psx::audio::spu::finishField(static_cast<int32_t>(advance.clocks));
   }
+  mField = mCadence.advance(rate);
+  psx::audio::spu::beginField(game->timing.emulatedCpuTicks(), static_cast<int32_t>(mField->clocks));
 
   const int renderedFrames = psx::audio::spu::render(buf, static_cast<int>(advance.samples + kRenderSlack));
   int frames = renderedFrames;
@@ -128,6 +131,10 @@ void SpuAudio::frame() {
     frames = static_cast<int>(advance.samples);
     memset(buf, 0, static_cast<size_t>(frames) * 2 * sizeof(int16_t));
   }
+  if (psx::game::TitleAudio *titleAudio = game->runtime.audio(game->core)) {
+    titleAudio->mixFrame(buf, frames);
+  }
+
   mLastField = summarizePcm(buf, frames);
   if (kAudioField) {
     const SpuOutputSummary &pcm = mLastField;
@@ -152,10 +159,6 @@ void SpuAudio::frame() {
                   game->xa.rd - xaRdBefore,
                   game->xa.pulls - xaPullsBefore,
                   game->xa.sectors - xaSectorsBefore);
-  }
-
-  if (psx::game::TitleAudio *titleAudio = game->runtime.audio(game->core)) {
-    titleAudio->mixFrame(buf, frames);
   }
 
   if (mWav && mWav->dataBytes() < kWavMaxBytes) {

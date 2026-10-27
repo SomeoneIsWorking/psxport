@@ -91,7 +91,7 @@ title answers there. A hop with no title entry runs on the framework alone.
 | hop | owner | title |
 |---|---|---|
 | 1 | `psx/audio/spu_audio.cpp:SpuAudio::frame` → `GameRuntime::audio` (`TitleAudio::mixFrame`) → `psx/audio/host_audio_output.cpp:HostAudioOutput::Stream` | `audio` |
-| 2 | `psx/audio/spu_device.cpp`, `psx/audio/xa_stream.cpp:XaStream` — the SPU and the XA streamer; `psx/audio/spu_beetle.cpp` runs a sample before a KON/KOFF latch is rewritten (issue 0183) | |
+| 2 | `psx/audio/spu_device.cpp`, `psx/audio/xa_stream.cpp:XaStream` — the SPU and the XA streamer; `psx/audio/spu_beetle.cpp` runs the SPU to the guest's emulated time at every register and DMA access, and to the next sample before a KON/KOFF latch written with no time between is rewritten (issue 0183) | |
 
 ## F-LOAD — loading removal
 
