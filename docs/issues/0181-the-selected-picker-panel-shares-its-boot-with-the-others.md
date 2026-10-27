@@ -28,3 +28,5 @@ the unpaced boot prefix itself takes 2.8-3.0 s.
 
 Cost: Spyro 2 and 3 start their boots only once Spyro 1 shows, so they show later by about that time (5.8-5.9 s and
 8.3-8.6 s at load 7-9, against 5.3 s and 8.2 s round-robin). At load 12-18 they did not show within 14 s.
+
+All-title real-time run on psxport `79dcd0e6` (40 s paced, hidden, `scratch/player-bugs/realtime_all.py`, load 4.8-10.9): 0 error lines in all 11 titles; Spyro, Crash, X4 and Tekken 3 0 missed, CTR, Tomba, Spider-Man, Vagrant and Crash Bash at most 0.19%, Toy Story 2 0.74% (its boot hold, issue 0057), C-12 12.5% (psx-c12 issue 0006).
