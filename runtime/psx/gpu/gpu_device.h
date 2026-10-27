@@ -36,6 +36,8 @@ public:
   void gp0(uint32_t word, const Gp0Origin &origin = {});
   // The next GP0 words come from a new OT node.
   void beginPacket();
+  // Draw work enters the GPU in display field `field` (an OT walk, a block DMA, a GP0 port write).
+  void noteDrawEntry(std::uint32_t field);
   // The OT walk reached a named bucket, or left the named tables (nullopt).
   void enterSlot(const std::optional<present::OtSlot> &slot, bool descending);
   // The device's scanline clock runs from `now`.
@@ -44,7 +46,8 @@ public:
   uint32_t status(frame::CpuTicks now);
 
   // A CPU->VRAM upload the guest's libgpu would have sent as GP0(A0) (an HLE'd LoadImage).
-  void loadImage(VramRect rect, std::span<const uint16_t> pixels);
+  // `owner` is the OwnerLedger handle of the code uploading (a LoadImage port writer).
+  void loadImage(VramRect rect, std::span<const uint16_t> pixels, std::uint32_t owner);
 
   // 1024x512 1555 halfwords, row-major.
   std::span<const uint16_t> vram();

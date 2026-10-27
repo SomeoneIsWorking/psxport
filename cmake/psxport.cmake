@@ -122,6 +122,9 @@ set(PSXPORT_FRAMEWORK_SRC
   ${PSXPORT_ROOT}/runtime/psx/present/gp0_primitive_decode.cpp # a GP0 draw packet's words to a record primitive
   ${PSXPORT_ROOT}/runtime/psx/present/frame_record.cpp # one logic frame's GPU work in execution order
   ${PSXPORT_ROOT}/runtime/psx/present/emission_scope.cpp # producer scopes and the packet keys they bind
+  ${PSXPORT_ROOT}/runtime/psx/present/owner_ledger.cpp # owner of every RAM word: scope instance or unowned writer
+  ${PSXPORT_ROOT}/runtime/psx/present/ownership_verdict.cpp # unowned draws still or moving across an interval
+  ${PSXPORT_ROOT}/runtime/psx/present/owner_journal.cpp # rows of unowned draws and held intervals
   ${PSXPORT_ROOT}/runtime/psx/present/frame_state.cpp # producer states by scope serial, collected per record
   ${PSXPORT_ROOT}/runtime/psx/present/state_producer.cpp # the registry of producer renders
   ${PSXPORT_ROOT}/runtime/psx/present/emit_memory.cpp # guest or host bytes a packet-emitting body runs over

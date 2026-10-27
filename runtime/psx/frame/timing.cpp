@@ -150,6 +150,10 @@ void Timing::frameTick() {
   vblank += 1u;
 }
 
+uint64_t Timing::displayField() const {
+  return hSyncTotal() / displayLinesPerField(displayFieldRate() == DISPLAY_FIELD_RATE_PAL);
+}
+
 Timing::ClockSnapshot Timing::clockSnapshot() const {
   return {mEmulatedTime.q32(),
           static_cast<uint64_t>(mDisplayFieldPhaseNumerator),

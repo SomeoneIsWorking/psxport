@@ -5,6 +5,7 @@
 #include "frame_composer.h"
 #include "frame_record.h"
 #include "frame_state.h"
+#include "ownership_verdict.h"
 #include "present_ledger.h"
 #include "record_geometry.h"
 #include "state_producer.h"
@@ -84,6 +85,10 @@ private:
   // The last three records that drew: a double-buffered display shows the one before the newest, whose
   // in-between blends from the one before that. Records that drew nothing are not pictures.
   static constexpr std::size_t kRecordHistory = 3;
+  // A longer gap between two draw entries is a pause or a load, not a logic frame.
+  static constexpr std::uint32_t kMaxIntervalFields = 8;
+  // Intervals of shorter frames before the latency drops to them.
+  static constexpr int kLatencySettle = 8;
   // A sealed record and the producer states its packets were drawn from, in storage kept across frames.
   struct RecordSlot {
     present::FrameRecord record;
@@ -114,14 +119,29 @@ private:
   // The record path at 60 fps: a frame of n fields is n presents, the shown record at t = k / n from the one
   // shown before.
   void presentRecords(Core &core, const present::StateProducers *producers, int guestFields);
-  // N's present; with `shown`, the shown record composed at t = 1.
-  void
-  presentCurrent(Core &core, const present::StateProducers *producers, FieldCadence cadence, const SealedRecord *shown);
+  // N's present; with `shown` and `compose`, the shown record composed at `t` from `from` (at t = 1 alone), else as
+  // the guest drew it.
+  void presentCurrent(Core &core,
+                      const present::StateProducers *producers,
+                      FieldCadence cadence,
+                      const SealedRecord *shown,
+                      bool compose,
+                      const SealedRecord *from = nullptr,
+                      float t = 1.0f,
+                      int interval = 0);
+  // Raises the latency to `wanted` at once; lowers it only after kLatencySettle calm intervals.
+  void settleLatency(int wanted);
+  // Fields from `record`'s draw entry to now; 0 when it has none.
+  static int fieldsSinceDrawEntry(const Core &core, const present::FrameRecord &record);
+  // The fields between `from`'s and `to`'s draw entries; `fallback` when either is unknown or out of range.
+  static int intervalFields(const present::FrameRecord &from, const present::FrameRecord &to, int fallback);
   // fps60dump: every present, real or in-between, from PSXPORT_FPS60_DUMP_FROM up to a cap.
   void dumpPresent(Core &core, bool interpolated);
 
   uint64_t fence_ = 0;
   int dumpSequence_ = 0;
+  int latency_ = 1;
+  int calmIntervals_ = 0;
   // The history, the current record and the one being sealed.
   std::array<RecordSlot, kRecordHistory + 2> slots_;
   const present::FrameRecord *current_ = &slots_.front().record;
@@ -138,6 +158,7 @@ private:
   // The record whose picture the last present showed.
   std::optional<std::uint64_t> shownSequence_;
   present::FrameComposer composer_;
+  present::OwnershipVerdict verdict_;
   const present::FrameRecord *composed_ = nullptr;
   bool composedAdvances_ = false;
   PresentStability stability_;

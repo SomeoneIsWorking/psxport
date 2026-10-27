@@ -131,7 +131,7 @@ void FramePresenter::commitSealed(Core &core, const RecordSlot &sealed, int gues
   } else {
     shownSequence_.reset();
     const bool composes = savedState && producers != nullptr;
-    presentCurrent(core, producers, {guestFields, 1}, composes ? shownRecord(displayedBuffer(core)) : nullptr);
+    presentCurrent(core, producers, {guestFields, 1}, composes ? shownRecord(displayedBuffer(core)) : nullptr, true);
   }
 }
 
@@ -257,27 +257,72 @@ void FramePresenter::presentRecords(Core &core, const present::StateProducers *p
       ++stability_.backwards;
     }
   }
+  present::OwnerJournal &journal = core.game->ownerJournal;
+  journal.observeScreen(core);
   // A logic frame held for one field is one present: the next field already shows the next frame.
   if (guestFields < 2) {
-    presentCurrent(core, producers, {guestFields, 1}, shown);
+    presentCurrent(core, producers, {guestFields, 1}, shown, true);
     return;
   }
-  if (shown == nullptr || from == nullptr || !continuesTo(from->record->sequence(), shown->record->sequence())) {
+  const present::HeldCause chain = shown == nullptr  ? present::HeldCause::StaleShown
+                                   : from == nullptr ? present::HeldCause::NoPrevious
+                                   : !continuesTo(from->record->sequence(), shown->record->sequence())
+                                       ? present::HeldCause::ChainBreak
+                                       : present::HeldCause::None;
+  if (chain != present::HeldCause::None) {
     ++stability_.withoutInBetween;
-    presentCurrent(core, producers, {guestFields, 1}, shown);
+    journal.record(core, {.reason = present::OwnerReason::IntervalHeld, .cause = chain}, true);
+    presentCurrent(core, producers, {guestFields, 1}, shown, false);
     return;
   }
   ++stability_.inBetweens;
   const bool cut = cutBetween(from->record->sequence(), shown->record->sequence());
   const present::FrameRecord &base = *shown->record;
+  // The interval S'→S is drawn one way at every t: composed whole, or S held as the guest drew it.
+  bool held = false;
+  if (cut) {
+    journal.record(core, {.reason = present::OwnerReason::IntervalHeld, .cause = present::HeldCause::Cut}, false);
+  } else {
+    held = !verdict_.judge(*from->record, base, core.owners);
+    for (const present::OwnerFinding &finding : verdict_.findings()) {
+      journal.record(core, finding, held);
+    }
+  }
+  // Present j shows the guest moment a constant latency L before its own field: t = (j + d + n - L) / n, n the fields
+  // between S' and S's draw entries and d those from S's draw entry to this commit. L is the largest d + g - 1 seen
+  // lately, so alternating cadences stay evenly spaced and a steady cadence still ends on S.
+  const int fields = intervalFields(*from->record, base, guestFields);
+  const int lead = fieldsSinceDrawEntry(core, base);
+  settleLatency(lead + guestFields - 1);
+  const auto tAt = [&](int present) {
+    return std::clamp(static_cast<float>(present + lead + fields - latency_) / static_cast<float>(fields), 0.0f, 1.0f);
+  };
   // One present per field, so each vblank of a display at the field rate shows the frame a field further on.
   const FieldCadence cadence{guestFields, guestFields};
-  for (int field = 1; field < guestFields; ++field) {
-    const float t = present::inBetweenAt(field, guestFields);
+  const auto composeAt = [&](int present) -> const present::FrameRecord * {
+    if (held || producers == nullptr) {
+      return nullptr;
+    }
+    const float t = tAt(present);
     const present::FrameRecord *composedFrame =
-        producers != nullptr
-            ? composeGuarded(core, composer_, base, cut ? nullptr : from->state, *shown->state, t, *producers)
-            : nullptr;
+        composeGuarded(core, composer_, base, cut ? nullptr : from->state, *shown->state, t, *producers);
+    if (composedFrame == nullptr && composer_.refusal().refused()) {
+      const present::FrameComposer::Refusal &refusal = composer_.refusal();
+      journal.record(core,
+                     {.reason = refusal.baked ? present::OwnerReason::Baked : present::OwnerReason::IntervalHeld,
+                      .cause = refusal.cause,
+                      .producer = refusal.producer},
+                     true);
+      held = true;
+    }
+    return composedFrame;
+  };
+  // A refusal at a later t holds the earlier ones too, so those are tried before any present is shown.
+  for (int present = guestFields - 1; present > 0; --present) {
+    composeAt(present);
+  }
+  for (int present = 0; present + 1 < guestFields; ++present) {
+    const present::FrameRecord *composedFrame = composeAt(present);
     const bool composed = composedFrame != nullptr;
     composed_ = composed ? composedFrame : &base;
     composedAdvances_ = false;
@@ -289,11 +334,41 @@ void FramePresenter::presentRecords(Core &core, const present::StateProducers *p
              {.fence = fence_,
               .shown = base.sequence(),
               .from = from->record->sequence(),
-              .t = t,
+              .t = tAt(present),
+              .interval = fields,
               .composed = composed,
               .cut = cut});
   }
-  presentCurrent(core, producers, cadence, shown);
+  presentCurrent(core, producers, cadence, shown, !held, cut ? nullptr : from, tAt(guestFields - 1), fields);
+}
+
+void FramePresenter::settleLatency(int wanted) {
+  wanted = std::max(1, wanted);
+  if (wanted >= latency_) {
+    latency_ = wanted;
+    calmIntervals_ = 0;
+  } else if (++calmIntervals_ >= kLatencySettle) {
+    latency_ = wanted;
+    calmIntervals_ = 0;
+  }
+}
+
+int FramePresenter::fieldsSinceDrawEntry(const Core &core, const present::FrameRecord &record) {
+  const std::optional<std::uint32_t> entry = record.drawEntryField();
+  const auto now = static_cast<std::uint32_t>(core.game->timing.displayField());
+  if (!entry || now < *entry || now - *entry > kMaxIntervalFields) {
+    return 0;
+  }
+  return static_cast<int>(now - *entry);
+}
+
+int FramePresenter::intervalFields(const present::FrameRecord &from, const present::FrameRecord &to, int fallback) {
+  const std::optional<std::uint32_t> begin = from.drawEntryField();
+  const std::optional<std::uint32_t> end = to.drawEntryField();
+  if (!begin || !end || *end <= *begin || *end - *begin > kMaxIntervalFields) {
+    return fallback;
+  }
+  return static_cast<int>(*end - *begin);
 }
 
 // A present is build, then a show scheduled for its deadline: only the show waits, so it lands on time whatever
@@ -301,12 +376,17 @@ void FramePresenter::presentRecords(Core &core, const present::StateProducers *p
 void FramePresenter::presentCurrent(Core &core,
                                     const present::StateProducers *producers,
                                     FieldCadence cadence,
-                                    const SealedRecord *shown) {
+                                    const SealedRecord *shown,
+                                    bool compose,
+                                    const SealedRecord *from,
+                                    float t,
+                                    int interval) {
+  const present::FrameState *earlier = from != nullptr && t < 1.0f ? from->state : nullptr;
   const present::FrameRecord *composedFrame =
-      shown != nullptr && producers != nullptr
-          ? composeGuarded(core, composer_, *shown->record, nullptr, *shown->state, 1.0f, *producers)
+      compose && shown != nullptr && producers != nullptr
+          ? composeGuarded(core, composer_, *shown->record, earlier, *shown->state, earlier ? t : 1.0f, *producers)
           : nullptr;
-  if (composedFrame != nullptr) {
+  if (composedFrame != nullptr && earlier == nullptr) {
     ledger_.reconcile(*shown->record, *composedFrame, fence_, psx::config::gate_presentation());
   }
   composed_ = composedFrame;
@@ -320,6 +400,9 @@ void FramePresenter::presentCurrent(Core &core,
            cadence,
            {.fence = fence_,
             .shown = shown != nullptr ? std::optional(shown->record->sequence()) : std::nullopt,
+            .from = earlier != nullptr ? std::optional(from->record->sequence()) : std::nullopt,
+            .t = earlier != nullptr ? t : 1.0f,
+            .interval = interval,
             .composed = composed});
 }
 

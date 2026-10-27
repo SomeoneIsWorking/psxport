@@ -26,6 +26,7 @@ struct PresentNote {
   std::optional<std::uint64_t> shown; // the record whose picture it shows; none for the displayed VRAM as it stands
   std::optional<std::uint64_t> from;  // an in-between's earlier record
   float t = 1.0f;
+  int interval = 0; // fields between the draw entries of `from` and `shown`
   int fields = 0;
   int parts = 1;
   bool composed = false;

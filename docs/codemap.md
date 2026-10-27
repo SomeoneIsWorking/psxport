@@ -36,6 +36,7 @@ Dependency direction: title repo → `runtime/psx/game/` (the title interface) �
 - `runtime/cpu/override_differential*`, `machine_snapshot.*`, `side_effect_journal.*` — override differential: original vs native shadow run, O32 contract, CPU/RAM snapshot, device side-effect journal and replay
 - `runtime/cpu/function_reach.*` — reached guest functions per code image report
 - `runtime/cpu/store_observe.*` — store-instruction PC observer
+- `runtime/cpu/guest_writer_latch.h` — guest writer latch / shadow call stack: innermost guest function, block-entry PC, dispatched entry of a store
 - `runtime/cpu/host_turn.*` — host turn clock: one display field owed per field period of guest time, PW_HOST
 - `cmake/lightrec_dependency.cmake` — pinned Lightrec revision and worktree
 - `runtime/psx/hle/hle.*`, `hle_heap.cpp`, `hle_interrupt.cpp`, `kernel_syscall.cpp`, `syscall_exception.*` — BIOS / kernel HLE: A0/B0/C0 tables, events, heap, interrupt chain, syscall exception entry and return
@@ -67,6 +68,9 @@ Dependency direction: title repo → `runtime/psx/game/` (the title interface) �
 - `runtime/psx/present/display_presenter.*`, `present_plan.h`, `present_ledger.*`, `video_plan.h`, `pixel_size.h` — present: guest display to screen, letterbox, fade, 24bpp, internal resolution scale, present ledger
 - `runtime/psx/present/render_mode.h`, `render_substrate.*` — render path (Record, Device), display-pass guard, per-Core host render state
 - `runtime/psx/present/frame_composer.*`, `frame_record.*`, `frame_state.*`, `state_producer.*`, `state_bytes.h`, `emission_scope.*`, `emit_memory.*`, `blend.h` — 60 fps interpolation / in-betweens: frame record, producer keys and object state, state producers and their composition, emission scope (and a packet's own key reopened for an in-place rewrite, `amend`), guest or host emit memory and the scratch a title keeps for it (`Kept`), lerp blends, sub-pixel vertex places stored with their words (`storeVertex`/`loadVertex`)
+- `runtime/psx/present/owner_ledger.*` — owner ledger: one owner handle per RAM word, scope instances, unowned writers, port owners (block DMA, MMIO GP0, LoadImage), overwrite pairs
+- `runtime/psx/present/ownership_verdict.*` — interval verdict at seal: unowned draw groups by writer, picture hash, moving / port / overwrote findings
+- `runtime/psx/present/owner_journal.*` — owner journal: unowned writers, ports, baked, overwrote, refused replays and held intervals as rows with screen and warp, `owners` verb, JSONL
 - `runtime/psx/present/gp0_command.h`, `gp0_primitive_decode.*` — GP0 command and primitive decode: opcodes, libgpu polygon, line and poly-line segments, packet tags and sizes, draw mode E1
 - `runtime/psx/present/vram_rect.h`, `vram_pixel.h` — VRAM size, points and rects, 555 pixel and 5-to-8 expand, texpage and CLUT words, CLUT entry count, texel sampler
 - `runtime/psx/present/packet_chains.*` — packet tag chains and bucket tables walked as primitives
@@ -95,6 +99,7 @@ Dependency direction: title repo → `runtime/psx/game/` (the title interface) �
 - `runtime/ui/` — RmlUi overlay menu: library (one Rml::Initialise per device), document, tabs, rows, readouts, toggles, wrapped stepping, Debug and About tabs generated from the title debug menu (`title_debug_rows`), SDL_GPU render interface, assets
 - `assets/rml/` — overlay menu markup, styles, fonts
 - `bios/`, `scripts/build_openbios.py`, `patches/openbios/` — fast-boot OpenBIOS image
+- `testprog/`, `tools/testprog/`, `cmake/testprog.cmake` — framework test program: freestanding mipsel guest EXE built with clang, its host title `psxtest_port`, planted owner-journal rows
 - `tools/port/` — tooling every title runs: consumer build, launcher, launch environment, capture checks
 - `tools/oracle/` — CPU oracle / reference emulator: Mednafen snapshot and trace, full-console libretro host, state and picture comparison
 - `tools/decomp_pipeline.py`, `tools/decomp/` — Ghidra headless decompilation, callers, refs

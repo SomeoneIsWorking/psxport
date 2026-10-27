@@ -139,6 +139,15 @@ public:
   // `warp <area> [entry]`, from the verb's parameters.
   static std::string usage(const DebugVerb &verb);
 
+  // The screen the machine shows: a key that changes when the screen does, read every frame.
+  std::uint64_t screenKey(Core &core) const {
+    return screenKey_ ? screenKey_(core) : 0u;
+  }
+  // The control-channel line that reaches the screen `key` names ("warp 11"); empty when no route does.
+  std::string screenRoute(Core &core, std::uint64_t key) const {
+    return screenRoute_ ? screenRoute_(core, key) : std::string{};
+  }
+
 protected:
   // Later verbs and readouts go under this heading.
   void section(std::string_view heading);
@@ -148,6 +157,8 @@ protected:
   void soundTest();
   // A credit or prior-art line under the framework's own About lines.
   void aboutLine(std::string_view line);
+  // How the owner journal names a screen: a cheap key, and the verb line a key's screen is reached by.
+  void screen(std::function<std::uint64_t(Core &)> key, std::function<std::string(Core &, std::uint64_t)> route);
 
 private:
   Section &current();
@@ -156,6 +167,8 @@ private:
   std::vector<DebugReadout> readouts_;
   std::vector<Section> sections_;
   std::vector<std::string_view> about_;
+  std::function<std::uint64_t(Core &)> screenKey_;
+  std::function<std::string(Core &, std::uint64_t)> screenRoute_;
 };
 
 } // namespace psx::game

@@ -184,15 +184,15 @@ asks whether two packets belong to the same object compares `RecordKey::identity
 The composer builds the frame at `t` from S's record:
 
 - **Unproduced entries** (no binding, or bound to a producer without a render) are kept as S drew
-  them, at every `t`. A missing producer shows up without interpolation, never wrong.
+  them, at every `t`, only in an interval the verdict found still (below); otherwise the interval is held.
 - **Produced entries** (bound to `(P, obj)` of a producer with a render) are removed; `P.render` of
   that object at `t` is emitted instead.
 - **Identity.** An object renders interpolated when S' and S both saved state under the same
-  `(P, obj)`; saved only in S, it renders at `t = 1`; saved only in S', it is not drawn (it is not in
-  the frame). A producer whose skipped draw is itself a state (a fade at zero) names it with
+  `(P, obj)`; saved only in S, the interval is held (`Unpaired`); saved only in S', it is not drawn (it is
+  not in the frame). A producer whose skipped draw is itself a state (a fade at zero) names it with
   `StateProducer::rests`: the object saved only in S then moves from that state, and one saved only in S'
   moves toward it, placed by slot. An object S' drew with no single state (ambiguous) did not skip its
-  draw, so it renders at `t = 1` rather than from rest. Identity is the producer, the object's guest address and the title's generation for that
+  draw, so the interval is held rather than drawn from rest. Identity is the producer, the object's guest address and the title's generation for that
   address (Crash Bash's `ComponentIncarnation`), never draw order, position or nearest match.
 - **Cut.** A title declares a cut from the guest's own state (camera cut, scene change, teleport);
   across a cut every object renders at `t = 1`. No distance threshold.
@@ -209,9 +209,9 @@ The composer builds the frame at `t` from S's record:
   entry there, so guest draw-mode changes between them stay where the guest put them), or, in a slot it
   did not use in S, at the slot's head, where the last `AddPrim` into it lands; in a bucket S left empty, where the
   table's walk order puts it. A render naming a table S never walked leaves that object as S drew it.
-  An in-between (`from` set, `t < 1`) whose record holds any primitive no producer owns, or any object
-  whose render cannot be placed, is not composed: S is shown whole, never a mix of two moments.
-  The `compose` debug channel names why: the unkeyed packet's address, or the baked or unrendered object.
+  An in-between (`from` set, `t < 1`) with any object whose render cannot be placed is not composed: the
+  interval is held, never a mix of two moments. The `compose` debug channel names the baked, unrendered or
+  unpaired object.
 - **Composition.** `StateProducer::composition(states)` says what the object's entries become at `t`:
   `Render` (replaced by `render`, the default), `Recorded` (kept as the guest drew them, which is the
   object at `t`) or `Refused` (the object cannot be drawn at `t`; an in-between is then S whole). A
@@ -263,16 +263,26 @@ The composer builds the frame at `t` from S's record:
 - **Exactness.** At `t = 1`, 4:3, depth testing off, a render must reproduce the entries it replaces;
   the title's oracle compare covers the frame (at 1x; above it, placed vertices keep their offset).
 
-`EmissionScope` binds each packet to `(P, obj)` at store time and the OT walk stamps the key on its
+`EmissionScope` binds each packet to `(P, obj)` at store time through the owner ledger and the OT walk stamps the key on its
 entries, so the composer knows what a producer replaces. `element` and `part` are not pairing keys;
 there are no per-vertex keys. An in-between with nothing produced is the shown record as drawn.
 
-- **Binding.** `RecordKey` is `(P, obj, element, part)`. The dispatcher opens `(P, object register, 0)`;
-  `instance(object)` opens another object under the same producer. Every store through `Core::mem_w*` to
-  a main-RAM word, native or guest, binds that word to the innermost open scope's key, or unbinds it when
-  no scope is open. The OT walk looks up the binding of each node's first command word (header + 4), so a
-  reused slot is rebound by its new writer while a link written into the header later leaves the key
-  alone. Bindings survive the record seal; a savestate load clears them.
+- **Owner ledger.** `OwnerLedger` (`core.owners`) holds one `u32` handle per main-RAM word. A handle names
+  a scope instance (`RecordKey` `(P, obj, element, part)`, opened by the dispatcher as `(P, object register,
+  0)` or by `instance(object)`) or an unowned writer: the innermost guest function (`GuestWriterLatch`, the
+  shadow call stack the block-entry hook keeps), its block-entry PC, the dispatched entry and the image
+  generation. Every store through `Core::mem_w*` binds the word to the open scope, or to its writer when none
+  is open. A writer storing over a word a scope opened since the last draw list wrote keeps that pair
+  (`overwrote`), so an amended owned packet is reported, while pool reuse across frames is not. Port owners
+  name draws that reach GP0 without a RAM packet: block DMA, MMIO GP0 and LoadImage. The OT walk stamps each
+  node's first command word's handle (header + 4) on its entries. A savestate load clears the ledger.
+- **Verdict.** At seal, before any present of S'→S, `OwnershipVerdict` groups S's and S''s unkeyed
+  primitives by writer (kind, function or block PC, dispatched entry), OT table and amended flag, and hashes
+  each group's picture relative to the draw offset (so a double-buffered still draw matches). A group that
+  moved, appeared or vanished makes a finding (`UnownedMoving`, `Port`, `Overwrote`) and holds the interval.
+- **One mode per interval.** The interval is composed whole at every present or held at every present,
+  including `t = 1`: the presenter composes every later present first, and a refusal at any of them holds
+  all. A held present shows S as the guest drew it.
 
 - **Shown record.** A present shows the latest held drawing record with a primitive whose draw area is
   the displayed buffer (`drawAreaSpansBuffer`, the canvas rule): the newest drawing record on a
@@ -282,12 +292,16 @@ there are no per-vertex keys. An in-between with nothing produced is the shown r
   device's (`FramePresenter::shownRecord`). Records that drew nothing are not held, so their writes are
   kept as rects with their sequence until they are older than the oldest held drawing record
   (`holdUndrawnWrites`). The presenter remembers which record each present showed.
-- **Cadence.** With the title's 60 fps on, a logic frame of n >= 2 fields gets n presents one field apart, at
-  `t = k / n` for k = 1..n (`FramePresenter::presentRecords`), so each vblank of a display at the field rate
-  shows the frame a field further on; a one-field frame, or any frame with it off, gets one at `t = 1`. The
-  `presentseq` debug channel logs each present as it is shown: host time, record shown (-1 for the
-  displayed VRAM as it stands, with no record composed), from, `t`, fields, and the deadline it was scheduled
-  for (`due`). With no record drawing the displayed buffer, S' unknown, or a
+- **Cadence.** With the title's 60 fps on, a logic frame the guest holds for g >= 2 fields gets g presents one
+  field apart (`FramePresenter::presentRecords`), so each vblank of a display at the field rate shows the guest a
+  field further on; a one-field frame, or any frame with it off, gets one at `t = 1`. Present j shows the guest
+  moment a constant latency L before its own field: `t = (j + d + n - L) / n`, where n is the fields between
+  S''s and S's draw entries and d those from S's draw entry to this commit, both on the display-field clock
+  (`Timing::displayField`, emulated hsyncs over lines per field). L rises at once to the largest `d + g - 1`
+  and falls only after eight calm intervals, so a 2/3 alternation lands on thirds and halves evenly spaced
+  and a steady cadence still ends on S. The `presentseq` debug channel logs each present as it is shown:
+  host time, record shown (-1 for the displayed VRAM as it stands, with no record composed), from, `t`, n,
+  fields, and the deadline it was scheduled for (`due`). With no record drawing the displayed buffer, S' unknown, or a
   record after S' missing or incomplete, the present is `t = 1`.
 - **Base state.** The composed frame is drawn onto VRAM as it was before S: the image when S = N, the
   rasterizer's kept pre-state when S is the last applied record with entries. Each plane keeps one
@@ -517,6 +531,19 @@ run logs its report (the keyed, unkeyed, without-render and duplicated totals, t
 A keyed primitive counts under its key's producer. An unkeyed one counts under the first frame of the
 storing call chain that is a registered producer, else the span's emitter; with none it is counted as
 no-source, span-miss or span-no-fn.
+
+## Owner journal
+
+`OwnerJournal` (`game.ownerJournal`) turns each interval's findings and refusals into rows, one per reason,
+writer or producer and screen: `UnownedMoving`, `Port`, `Baked`, `Overwrote`, `ReplayRefused` and
+`IntervalHeld` with its cause (`Cut`, `StaleShown`, `NoPrevious`, `ChainBreak`, `NoState`, `ProducerRefused`,
+`Unplaceable`, `Unpaired`). A row carries the guest function, block PC, dispatched entry, image and
+generation, the OT span, a sample packet address and GP0 command, intervals seen and lost, primitives, the
+screen's title-owned key and warp route (`TitleDebugMenu::screen`) and the `decomp_pipeline.py` command for
+the writer. A new row logs one `owners` line; the `owners [n]` control verb lists them, most intervals lost
+first; each screen change and run end writes the rows as JSONL under `PSXPORT_OWNERS_DIR`, which a bug
+report attaches. The framework test program (`docs/testprog.md`) plants one draw per reason and checks
+that the journal lists exactly those.
 
 ## Bug report capture
 

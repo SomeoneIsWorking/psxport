@@ -110,6 +110,11 @@ struct DrawPrimitive {
   std::uint32_t sourceAddress = 0; // guest address of the packet's first word, 0 when not from RAM
   std::optional<RecordKey> key;
   std::optional<OtSlot> slot; // the bucket the OT walk was in when it reached the packet
+  // OwnerLedger handles: who owns the packet's first command word (or the port it came through), and an owner of
+  // the other kind (scope against writer) that stored one of its later words.
+  std::uint32_t owner = 0;
+  std::uint32_t mixedOwner = 0;
+  std::uint8_t command = 0; // the packet's GP0 command byte
 
   bool operator==(const DrawPrimitive &) const = default;
 };
@@ -151,6 +156,7 @@ struct VramUpload {
   std::uint32_t pixelOffset = 0;
   std::uint32_t sourceAddress = 0;
   std::optional<RecordKey> key; // set when the pixels bake a keyed primitive (texture feedback)
+  std::uint32_t owner = 0;      // OwnerLedger handle of the upload's source or port
 
   bool operator==(const VramUpload &) const = default;
 };
@@ -207,6 +213,17 @@ public:
     return entries_.empty();
   }
 
+  // The display field the record's first draw reached the GPU in: the logic frame's draw entry, which spaces
+  // its picture from the one before.
+  std::optional<std::uint32_t> drawEntryField() const {
+    return drawEntryField_;
+  }
+  void markDrawEntry(std::uint32_t field) {
+    if (!drawEntryField_) {
+      drawEntryField_ = field;
+    }
+  }
+
   // The row parity (of VRAM y) the record's last drawing entry leaves undrawn, set when the device
   // rasterizes one field per frame (480-line interlace, E1 bit 10 clear); the other parity is the field
   // just drawn. Empty when it draws every row or draws nothing.
@@ -236,6 +253,7 @@ private:
   std::vector<std::uint16_t> clutPool_;
   std::vector<std::uint16_t> uploadPixels_;
   std::vector<SlotStart> slotStarts_;
+  std::optional<std::uint32_t> drawEntryField_;
 };
 
 } // namespace psx::present

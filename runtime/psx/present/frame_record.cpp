@@ -31,6 +31,7 @@ void FrameRecord::reset(std::uint64_t sequence, bool complete) {
   clutPool_.clear();
   uploadPixels_.clear();
   slotStarts_.clear();
+  drawEntryField_.reset();
 }
 
 void FrameRecord::append(const RecordEntry &entry) {

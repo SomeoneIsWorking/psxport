@@ -53,6 +53,7 @@ psx::cpu::FallbackPolicy lightrec_fallback_policy();
 // PSXPORT_OVERRIDE_DIFF (+ _FIRST, _EVERY, _DEAD_STACK, _REPORT): the override differential; empty selectors disarm.
 psx::cpu::OverrideDifferentialConfig override_differential_config();
 std::string function_reach_report_path(); // PSXPORT_REACH_REPORT: empty disarms
+std::string owners_dir();                 // PSXPORT_OWNERS_DIR: owner journal JSONL directory, empty disarms
 
 // PSXPORT_RENDER_PATH: record | device; an unknown value warns and gives `fallback`.
 present::RenderPath render_path(present::RenderPath fallback = present::RenderPath::Record);

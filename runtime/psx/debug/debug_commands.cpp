@@ -284,6 +284,25 @@ void guestLedger(const Call &call) {
   }
 }
 
+void replyLines(const ReplySink &reply, std::string_view text) {
+  while (!text.empty()) {
+    const std::size_t end = text.find('\n');
+    reply(text.substr(0, end));
+    text = end == std::string_view::npos ? std::string_view{} : text.substr(end + 1);
+  }
+}
+
+// The owner journal's rows, most intervals lost first; `write` also writes the JSONL now.
+void owners(const Call &call) {
+  const psx::present::OwnerJournal &journal = call.core.game->ownerJournal;
+  if (call.args.word(1) == "write") {
+    journal.flush(call.core);
+  }
+  constexpr std::size_t kDefaultRows = 20;
+  const std::size_t limit = call.args.word(1) == "write" ? kDefaultRows : call.args.number(1).value_or(kDefaultRows);
+  replyLines(call.reply, journal.describe(limit));
+}
+
 void census(const Call &call) {
   call.core.rsub.census.report("census");
   call.reply(g_producer_census_armed ? "census reported to the log" : "the census is off; PSXPORT_PRODUCERS=1 arms it");
@@ -617,6 +636,7 @@ inline constexpr std::array kVerbs{
     Verb{"cvars", "cvars", "every knob with its value and layer, then the environment audit", &cvars},
     Verb{"cvar", "cvar <name> [value]", "set a knob for this run; bare clears it", &cvar},
     Verb{"guest", "guest", "the executor's counters now", &guestLedger},
+    Verb{"owners", "owners [n|write]", "the owner journal: draws with no owner, held intervals", &owners},
     Verb{"census", "census", "the producer census so far, to the log", &census},
     Verb{"renderpath", "renderpath [record|device]", "switch the live render path; bare prints it", &renderPath},
     Verb{"setires", "setires <0..4>", "live internal resolution (0 = auto)", &setInternalResolution},
@@ -646,14 +666,6 @@ inline constexpr std::array kVerbs{
     Verb{"bugreport", "bugreport <summary>", "take a bug report over the next two frames", &bugReport},
     Verb{"menu", "menu [on|off|dump|tab N|nav K]", "drive the overlay menu", &menu},
 };
-
-void replyLines(const ReplySink &reply, std::string_view text) {
-  while (!text.empty()) {
-    const std::size_t end = text.find('\n');
-    reply(text.substr(0, end));
-    text = end == std::string_view::npos ? std::string_view{} : text.substr(end + 1);
-  }
-}
 
 } // namespace
 

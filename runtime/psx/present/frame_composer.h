@@ -3,6 +3,7 @@
 
 #include "frame_record.h"
 #include "frame_state.h"
+#include "owner_journal.h"
 #include "state_producer.h"
 
 #include <cstddef>
@@ -22,15 +23,31 @@ public:
   // producer names the skip as a state (StateProducer::rests), moves from or toward that state. The n-th
   // primitive in a slot goes where the object's n-th entry in it was (after its last when there are fewer),
   // else at the slot's head, else where the table's walk order puts that slot. A CLUT `shown` never sampled
-  // is read from `vram`. An object whose render names a table `shown` never walked keeps its entries. Null
-  // when nothing is replaced, and for an in-between that would keep any primitive as `shown` drew it: the
-  // frame is `shown`. The record is valid until the next compose.
+  // is read from `vram`. An object whose render names a table `shown` never walked keeps its entries.
+  // Unowned entries are kept: the caller judged them still (OwnershipVerdict). Null when nothing is replaced
+  // (refusal() is None), and for an in-between it refuses (refusal() names why). The record is valid until the
+  // next compose.
   const FrameRecord *compose(const FrameRecord &shown,
                              const FrameState *from,
                              const FrameState &to,
                              float t,
                              const StateProducers &producers,
                              std::span<const std::uint16_t> vram);
+
+  // Why the last compose returned null for an in-between, and the producer involved; `baked` when its object's
+  // pixels were baked into an upload.
+  struct Refusal {
+    HeldCause cause = HeldCause::None;
+    std::uint32_t producer = 0;
+    bool baked = false;
+
+    bool refused() const {
+      return baked || cause != HeldCause::None;
+    }
+  };
+  const Refusal &refusal() const {
+    return refusal_;
+  }
 
 private:
   // A keyed primitive of `shown`: its object, its slot (kNoSlot when none) and its entry.
@@ -93,6 +110,7 @@ private:
   PrimitiveList sink_;
   FrameRecord output_;
   bool outputPooled_ = false;
+  Refusal refusal_;
 };
 
 } // namespace psx::present

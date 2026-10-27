@@ -25,6 +25,8 @@
 #include "gte.h"
 #include "guest_call_attribution.h"
 #include "guest_call_census.h"
+#include "guest_writer_latch.h"
+#include "owner_ledger.h"
 #include "ordering_table.h"
 #include <array>
 #include <lucent/log.h>
@@ -81,8 +83,12 @@ public:
   psx::gpu::GpuDevice &gpuDevice() {
     return *gpuDevice_;
   }
+  // The code a store runs in (block-entry PC, call target), for naming an unowned writer.
+  psx::cpu::GuestWriterLatch writerLatch;
+  // The owner of every main-RAM word: a producer scope instance or the writer that stored it.
+  psx::present::OwnerLedger owners{*this};
   // The open producer scopes and the keys their stored packets carry into the frame record.
-  psx::present::EmissionScope emission;
+  psx::present::EmissionScope emission{owners};
   // The ordering tables the title named; the walk tags each recorded primitive with its bucket.
   psx::gpu::OtTables otTables;
   // Producer object states saved this logic frame.

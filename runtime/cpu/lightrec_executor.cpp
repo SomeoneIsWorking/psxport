@@ -311,8 +311,9 @@ struct LightrecExecutor::Impl {
   }
 
   static lightrec_block_boundary_action
-  blockBoundary(lightrec_state *, std::uint32_t guestPc, std::uint32_t *, void *userData) {
+  blockBoundary(lightrec_state *lightrec, std::uint32_t guestPc, std::uint32_t *, void *userData) {
     auto &impl = *static_cast<Impl *>(userData);
+    impl.latchWriter(lightrec, guestPc);
     if (impl.reach) {
       impl.reach->observe(guestPc);
     }
@@ -334,6 +335,16 @@ struct LightrecExecutor::Impl {
     }
     boundary.pc = guestPc;
     return LIGHTREC_BLOCK_STOP;
+  }
+
+  // Every block entry passes here (linking is off), so a store is attributed to its block and enclosing call.
+  void latchWriter(lightrec_state *lightrec, std::uint32_t guestPc) {
+    const lightrec_registers *registers = lightrec_get_registers(lightrec);
+    const std::uint32_t ra = registers->gpr[31];
+    GuestWriterLatch &latch = core.writerLatch;
+    const std::uint32_t callWord =
+        latch.needsCallWord(ra) && mainRamOffset(ra - kJalReturnOffset) ? core.mem_r32(ra - kJalReturnOffset) : 0u;
+    latch.enterBlock(guestPc, ra, registers->gpr, callWord);
   }
 
   class BoundarySession {
