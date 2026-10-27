@@ -18,7 +18,7 @@ void Pad::pollHostInput() {
   if (mPlayerInputSuppressed) {
     return;
   }
-  // Injected taps last this Game's input turns, the pause loop's included, so a tap releases while paused.
+  // Control-channel taps last this Game's input turns, the pause loop's included, so a tap releases while paused.
   mHost.injection().afterInputTurn();
   if (mHost.takePauseRequest()) {
     game->dbg_server.togglePause();
@@ -40,6 +40,7 @@ void Pad::serviceFrame() {
   Core *c = &game->core;
   const bool shown = game->renderDevice.shown();
   pollHostInput();
+  mHostButtons = buttons;
 
   if (!mForcedRead) {
     mForcedRead = true;
@@ -75,6 +76,8 @@ void Pad::serviceFrame() {
     });
   }
   buttons = mSession.service(c->runtime.inputPhase(*c), buttons);
+  // Guest-pad taps count the frames the guest is served, so a paused or stepped run holds them.
+  mHost.injection().afterPadFrame();
   // Edges latch only once every source has resolved to the mask the guest receives.
   mButtonEdges.sample(buttons);
   game->padProbes.service(*game, mSession.frameIndex());

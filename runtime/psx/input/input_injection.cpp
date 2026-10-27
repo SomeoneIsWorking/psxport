@@ -13,10 +13,11 @@ namespace {
 // Touch events need a device id; SDL reserves 0 and the mouse-emulation ids.
 inline constexpr SDL_TouchID kInjectedTouch = 1;
 
-std::string pressText(InjectedPress press, int holdTurns) {
+std::string pressText(InjectedPress press, int hold, TapClock clock) {
   return press == InjectedPress::Down ? std::string("down")
-         : press == InjectedPress::Up ? std::string("up")
-                                      : lucent::format("tap for {} input turn(s)", holdTurns);
+         : press == InjectedPress::Up
+             ? std::string("up")
+             : lucent::format("tap for {} {}", hold, clock == TapClock::PadFrames ? "pad frame(s)" : "input turn(s)");
 }
 
 std::string scancodeNames() {
@@ -115,10 +116,11 @@ std::string InputInjection::key(WindowId windowId, std::string_view name, Inject
   }
   pushKey(windowId, scancode, press != InjectedPress::Up);
   if (press == InjectedPress::Tap) {
-    schedule(Device::Key, scancode, windowId, holdTurns);
+    schedule(Device::Key, scancode, windowId, holdTurns, TapClock::InputTurns);
   }
-  return lucent::format(
-      "key {} {}", SDL_GetScancodeName(static_cast<SDL_Scancode>(scancode)), pressText(press, holdTurns));
+  return lucent::format("key {} {}",
+                        SDL_GetScancodeName(static_cast<SDL_Scancode>(scancode)),
+                        pressText(press, holdTurns, TapClock::InputTurns));
 }
 
 std::string InputInjection::text(WindowId windowId, std::string_view utf8) {
@@ -155,9 +157,10 @@ std::string InputInjection::mouseButton(WindowId windowId, std::string_view name
   }
   pushMouseButton(windowId, button, press != InjectedPress::Up);
   if (press == InjectedPress::Tap) {
-    schedule(Device::MouseButton, button, windowId, holdTurns);
+    schedule(Device::MouseButton, button, windowId, holdTurns, TapClock::InputTurns);
   }
-  return lucent::format("mouse {} {} at {},{}", name, pressText(press, holdTurns), mouse_.x, mouse_.y);
+  return lucent::format(
+      "mouse {} {} at {},{}", name, pressText(press, holdTurns, TapClock::InputTurns), mouse_.x, mouse_.y);
 }
 
 std::string InputInjection::mouseWheel(WindowId windowId, WindowXY scroll) {
@@ -181,30 +184,30 @@ std::string InputInjection::gamepadButton(std::string_view name, InjectedPress p
     return lucent::format(
         "gamepad: \"{}\" is not a button; buttons: {}; or `gamepad axis <name> <value>`", name, gamepadButtonNames());
   }
-  return gamepadButton(static_cast<int>(button), press, holdTurns);
+  return gamepadButton(static_cast<int>(button), press, holdTurns, TapClock::InputTurns);
 }
 
-std::string InputInjection::gamepadButton(int button, InjectedPress press, int holdTurns) {
+std::string InputInjection::gamepadButton(int button, InjectedPress press, int hold, TapClock clock) {
   if (!setGamepadButton(button, press != InjectedPress::Up)) {
     return lucent::format("gamepad: no virtual pad: {}", SDL_GetError());
   }
   if (press == InjectedPress::Tap) {
-    schedule(Device::GamepadButton, button, WindowId{}, holdTurns);
+    schedule(Device::GamepadButton, button, WindowId{}, hold, clock);
   }
   return lucent::format("gamepad {} {}",
                         SDL_GetGamepadStringForButton(static_cast<SDL_GamepadButton>(button)),
-                        pressText(press, holdTurns));
+                        pressText(press, hold, clock));
 }
 
-std::string InputInjection::gamepadTrigger(int axis, InjectedPress press, int holdTurns) {
+std::string InputInjection::gamepadTrigger(int axis, InjectedPress press, int hold, TapClock clock) {
   if (!setGamepadTrigger(axis, press != InjectedPress::Up)) {
     return lucent::format("gamepad: no virtual pad: {}", SDL_GetError());
   }
   if (press == InjectedPress::Tap) {
-    schedule(Device::GamepadTrigger, axis, WindowId{}, holdTurns);
+    schedule(Device::GamepadTrigger, axis, WindowId{}, hold, clock);
   }
   return lucent::format(
-      "gamepad {} {}", SDL_GetGamepadStringForAxis(static_cast<SDL_GamepadAxis>(axis)), pressText(press, holdTurns));
+      "gamepad {} {}", SDL_GetGamepadStringForAxis(static_cast<SDL_GamepadAxis>(axis)), pressText(press, hold, clock));
 }
 
 std::string InputInjection::gamepadAxis(std::string_view name, int value) {
@@ -235,9 +238,9 @@ std::string InputInjection::touch(WindowId windowId, int finger, InjectedPress p
   }
   pushFinger(windowId, finger, wantsDown, *normalised);
   if (press == InjectedPress::Tap) {
-    schedule(Device::Finger, finger, windowId, holdTurns);
+    schedule(Device::Finger, finger, windowId, holdTurns, TapClock::InputTurns);
   }
-  return lucent::format("touch {} {} at {},{}", finger, pressText(press, holdTurns), at.x, at.y);
+  return lucent::format("touch {} {} at {},{}", finger, pressText(press, holdTurns, TapClock::InputTurns), at.x, at.y);
 }
 
 std::string InputInjection::touchMove(WindowId windowId, int finger, WindowXY at) {
@@ -256,8 +259,16 @@ std::string InputInjection::touchMove(WindowId windowId, int finger, WindowXY at
 }
 
 void InputInjection::afterInputTurn() {
+  releaseExpired(TapClock::InputTurns);
+}
+
+void InputInjection::afterPadFrame() {
+  releaseExpired(TapClock::PadFrames);
+}
+
+void InputInjection::releaseExpired(TapClock clock) {
   for (auto it = releases_.begin(); it != releases_.end();) {
-    if (--it->turnsLeft > 0) {
+    if (it->clock != clock || --it->ticksLeft > 0) {
       ++it;
       continue;
     }
@@ -399,9 +410,9 @@ bool InputInjection::ensureVirtualPad() {
   return true;
 }
 
-void InputInjection::schedule(Device device, int code, WindowId windowId, int holdTurns) {
+void InputInjection::schedule(Device device, int code, WindowId windowId, int hold, TapClock clock) {
   releases_.push_back(
-      {.device = device, .code = code, .windowId = windowId, .turnsLeft = holdTurns > 0 ? holdTurns : 1});
+      {.device = device, .code = code, .windowId = windowId, .clock = clock, .ticksLeft = hold > 0 ? hold : 1});
 }
 
 } // namespace psx::input

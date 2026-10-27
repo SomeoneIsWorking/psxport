@@ -168,12 +168,12 @@ void applyGamepad(SDL_Gamepad *gamepad, std::uint16_t &mask) {
 
 } // namespace
 
-std::string psx::input::HostInput::padButton(std::uint16_t bit, InjectedPress press, int holdTurns) {
+std::string psx::input::HostInput::padButton(std::uint16_t bit, InjectedPress press, int holdFrames) {
   for (const GamepadBinding &binding : kGamepadBindings) {
     if (binding.bit == bit) {
       return binding.button != SDL_GAMEPAD_BUTTON_INVALID
-                 ? mInjection.gamepadButton(binding.button, press, holdTurns)
-                 : mInjection.gamepadTrigger(binding.trigger, press, holdTurns);
+                 ? mInjection.gamepadButton(binding.button, press, holdFrames, TapClock::PadFrames)
+                 : mInjection.gamepadTrigger(binding.trigger, press, holdFrames, TapClock::PadFrames);
     }
   }
   return lucent::format("pad: 0x{:04X} is not one PSX button", bit);
@@ -191,21 +191,14 @@ bool psx::input::HostInput::noPadRequested() {
 // whoever drains the queue and this owner cannot depend on being that site. SDL_NumJoysticks is a
 // count, and only indices not already held are opened.
 void psx::input::HostInput::rescanControllers(bool shown) {
-  if (noPadRequested()) {
-    for (int slot = 0; slot < kMaxGamepads; slot++) {
-      if (mGamepads[slot]) {
-        SDL_CloseGamepad(mGamepads[slot]);
-        mGamepads[slot] = nullptr;
-        mGamepadInstance[slot] = -1;
-      }
-    }
-    return;
-  }
   if (!mGamepadSubsystem) {
     return;
   }
+  // A tool window and PSXPORT_PAD_NOPAD read only the virtual pad, the control channel's.
+  const bool physicalPads = shown && !noPadRequested();
   for (int slot = 0; slot < kMaxGamepads; slot++) {
-    if (mGamepads[slot] && !SDL_GamepadConnected(mGamepads[slot])) {
+    if (mGamepads[slot] && (!SDL_GamepadConnected(mGamepads[slot]) ||
+                            (!physicalPads && !SDL_IsJoystickVirtual(SDL_GetGamepadID(mGamepads[slot]))))) {
       SDL_CloseGamepad(mGamepads[slot]);
       mGamepads[slot] = nullptr;
       mGamepadInstance[slot] = -1;
@@ -219,7 +212,7 @@ void psx::input::HostInput::rescanControllers(bool shown) {
     for (int slot = 0; slot < kMaxGamepads; slot++) {
       held = held || mGamepadInstance[slot] == static_cast<int>(instance);
     }
-    if (held || (!shown && !SDL_IsJoystickVirtual(instance))) {
+    if (held || (!physicalPads && !SDL_IsJoystickVirtual(instance))) {
       continue;
     }
     for (int slot = 0; slot < kMaxGamepads; slot++) {
@@ -353,12 +346,12 @@ std::string psx::input::HostInput::padButton(std::uint16_t bit, InjectedPress, i
 
 #endif // PSXPORT_SDL
 
-std::string psx::input::HostInput::padButtons(std::uint16_t bits, InjectedPress press, int holdTurns) {
+std::string psx::input::HostInput::padButtons(std::uint16_t bits, InjectedPress press, int holdFrames) {
   std::string reply;
   for (std::uint16_t bit = 1; bit != 0; bit = static_cast<std::uint16_t>(bit << 1)) {
     if ((bits & bit) != 0) {
       reply += reply.empty() ? "" : "; ";
-      reply += padButton(bit, press, holdTurns);
+      reply += padButton(bit, press, holdFrames);
     }
   }
   return reply.empty() ? std::string("pad: no button named") : reply;

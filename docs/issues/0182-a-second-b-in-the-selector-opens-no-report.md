@@ -27,8 +27,17 @@ and B then Escape opens and closes the title's form twice (`p4-title-seq.png`, `
 The guest-pad verbs `tap`, `press`, `release` and `hold` wrote a second mask straight into `Pad` (`repl_hold`/`repl_tap`,
 merged into replays), beside the player's controller path. They now press PSX buttons on the control channel's virtual
 gamepad through `HostInput::padButtons`, which uses the same `kGamepadBindings` table `applyGamepad` reads controllers
-with (L2/R2 as trigger axes). `tap` holds for input turns, like `gamepad tap`. `Pad` lost its drive state, a replay no
+with (L2/R2 as trigger axes). `tap` holds for pad frames the guest is served (`InputInjection::afterPadFrame` from
+`Pad::serviceFrame`), as the old drive did, so a paused or stepped run holds it; `gamepad tap` and the other host
+verbs keep input turns, which a paused overlay needs. `Pad` lost its drive state, a replay no
 longer merges control input (it is the guest-level recording alone), and the SIO savestate section dropped the four
 drive fields (`kBusLayoutVersion` 5; older states are refused). `tools/oracle/compare_cores.py` checks the gamepad reply
 instead of a `held=` echo; the guest's pad words stay a compared RAM range. Title debug drivers that pressed through `Pad::driveTap` (Crash Bash
 `pause`/`arena`, Tomba! 2 autoskip) call `HostInput::padButtons` too; `Pad::replaying` says when a replay owns input.
+
+Review (2026-10-28): the first cut counted input turns for `tap`, which advance every 15 ms in `DbgServer::idleFrame`
+while paused, so a stepped `tap start 6` let go before the guest saw a frame. `TapClock::PadFrames` restores frame
+counting. `PSXPORT_PAD_NOPAD` closed the virtual pad with the physical ones, so verbs replied as if pressed while the
+guest got nothing; `rescanControllers` now drops only physical pads. While a pad replay owns input the verbs refuse
+instead of pressing a pad nobody reads. Mega Man X4's `x4-input-path` line logs `host(buttons=…)`
+(`Pad::hostButtons`) and `tools/live_play.py` reads that stage in place of the drive fields.

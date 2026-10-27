@@ -190,12 +190,24 @@ void watchHits(const Call &call) {
   call.reply(lucent::format("watch hits={}", call.core.storeWatch.hits()));
 }
 
-// About a human tap: a tenth of a second of input turns.
-inline constexpr int kDefaultHoldTurns = 6;
+// Pad frames a guest-pad `tap` holds when none are given.
+inline constexpr int kDefaultTapFrames = 4;
+
+// A pad replay replaces live input, so a press would reach the virtual gamepad and never the guest.
+bool refusedByReplay(const Call &call) {
+  if (!call.core.game->pad.replaying()) {
+    return false;
+  }
+  call.reply("pad: a pad replay owns the guest's input; nothing was pressed");
+  return true;
+}
 
 void press(const Call &call) {
   if (call.args.size() < 2) {
     call.reply("usage: press <button>");
+    return;
+  }
+  if (refusedByReplay(call)) {
     return;
   }
   call.reply(call.core.game->hostInput.padButtons(padButtonBit(call.args.word(1)), input::InjectedPress::Down, 0));
@@ -216,6 +228,9 @@ void hold(const Call &call) {
     call.reply("usage: hold <active-low-hex>");
     return;
   }
+  if (refusedByReplay(call)) {
+    return;
+  }
   const auto held = static_cast<std::uint16_t>(~*mask);
   const std::string down =
       held != 0 ? call.core.game->hostInput.padButtons(held, input::InjectedPress::Down, 0) : std::string();
@@ -226,13 +241,16 @@ void hold(const Call &call) {
 
 void tap(const Call &call) {
   if (call.args.size() < 2) {
-    call.reply("usage: tap <button> [turns]");
+    call.reply("usage: tap <button> [frames]");
     return;
   }
-  const std::uint32_t turns = call.args.number(2).value_or(0);
+  if (refusedByReplay(call)) {
+    return;
+  }
+  const std::uint32_t frames = call.args.number(2).value_or(0);
   call.reply(call.core.game->hostInput.padButtons(padButtonBit(call.args.word(1)),
                                                   input::InjectedPress::Tap,
-                                                  turns != 0 ? static_cast<int>(turns) : kDefaultHoldTurns));
+                                                  frames != 0 ? static_cast<int>(frames) : kDefaultTapFrames));
 }
 
 // Every frame's mask is kept from frame 0, so a session in progress can be cut into a replay on demand.
@@ -607,6 +625,9 @@ input::InputInjection &injection(const Call &call) {
   return call.core.game->hostInput.injection();
 }
 
+// About a human tap: a tenth of a second of input turns.
+inline constexpr int kDefaultHoldTurns = 6;
+
 // `down`, `up` or `tap` at word `index` (tap when absent) and the tap's hold in input turns after it.
 struct PressWords {
   std::optional<input::InjectedPress> press;
@@ -715,7 +736,7 @@ inline constexpr std::array kVerbs{
          &press},
     Verb{"release", "release <button>", "let go of a pad button on the virtual gamepad", &release},
     Verb{"hold", "hold <hex>", "the virtual gamepad's buttons as an active-low pad mask", &hold},
-    Verb{"tap", "tap <button> [turns]", "a pad button on the virtual gamepad for n input turns (default 6)", &tap},
+    Verb{"tap", "tap <button> [frames]", "a pad button on the virtual gamepad for n pad frames (default 4)", &tap},
     Verb{"padrec",
          "padrec [save <path> [frames]]",
          "frames captured / cut the live session into a replay",
