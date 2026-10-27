@@ -167,6 +167,10 @@ void PanelSessions::latchArrival(int panel) {
 }
 
 int PanelSessions::nextPanelNeedingWork() {
+  // The panel the player is on takes every slice until it shows a picture.
+  if (!panelSettled(selected_) && !panelReady(selected_)) {
+    return selected_;
+  }
   // Unsettled panels pre-roll in turn, one slice each, so the wait is the slowest boot, not the sum.
   for (int turn = 0; turn < count(); ++turn) {
     const int panel = (mBootCursor_ + turn) % count();
