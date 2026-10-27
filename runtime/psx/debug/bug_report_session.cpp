@@ -61,11 +61,6 @@ void BugReportSession::request() {
   }
 }
 
-void BugReportSession::requestScripted(std::string summary) {
-  mScriptedSummary = std::move(summary);
-  request();
-}
-
 void BugReportSession::frameSealed(Core &core) {
   if (mState != State::Capturing || mReference) {
     return;
@@ -101,7 +96,6 @@ void BugReportSession::atFieldBoundary(Core &core) {
     report(core);
     mState = State::Idle;
     mReference.reset();
-    mScriptedSummary.reset();
     return;
   }
 }
@@ -223,10 +217,6 @@ bool BugReportSession::holdForm(Core &core, bug_report::Draft &draft) {
     lucent::error("bugreport", "the overlay cannot show the report form; nothing saved");
     return false;
   }
-  if (mScriptedSummary) {
-    form->fill(bug_report::PlayerText{*mScriptedSummary, "Filed by the REPL `bugreport` command."});
-    form->requestSave();
-  }
   bool saved = false;
   for (;;) {
     const bug_report::Form::Outcome outcome = form->outcome();
@@ -242,9 +232,6 @@ bool BugReportSession::holdForm(Core &core, bug_report::Draft &draft) {
       }
       lucent::warn("bugreport", "save refused: {}", error);
       form->rejectSave(error);
-      if (mScriptedSummary) {
-        form->requestCancel(); // no player to correct it
-      }
     }
     game.dbg_server.idleFrame(&core);
   }

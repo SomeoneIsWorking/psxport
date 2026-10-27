@@ -561,17 +561,6 @@ void session(const Call &call) {
                                                      : "session return REFUSED: this product has no title selector");
 }
 
-// The B key without a keyboard: taken over the next two frames like a keypress.
-void bugReport(const Call &call) {
-  std::string summary(call.args.rest(1));
-  if (summary.empty()) {
-    call.reply("bugreport <summary>");
-    return;
-  }
-  call.core.game->bugReport.requestScripted(std::move(summary));
-  call.reply("bugreport: armed; it is taken over the next two frames");
-}
-
 // Every row of the overlay with its live value; the menu itself is driven by injected keys and mouse.
 void menu(const Call &call) {
   const RmlOverlay &overlay = call.core.game->rml_overlay;
@@ -594,13 +583,13 @@ input::InputInjection &injection(const Call &call) {
   return call.core.game->hostInput.injection();
 }
 
-// About a human tap: a tenth of a second of pad frames.
-inline constexpr int kDefaultHoldFrames = 6;
+// About a human tap: a tenth of a second of input turns.
+inline constexpr int kDefaultHoldTurns = 6;
 
-// `down`, `up` or `tap` at word `index` (tap when absent) and the tap's hold in pad frames after it.
+// `down`, `up` or `tap` at word `index` (tap when absent) and the tap's hold in input turns after it.
 struct PressWords {
   std::optional<input::InjectedPress> press;
-  int holdFrames = kDefaultHoldFrames;
+  int holdTurns = kDefaultHoldTurns;
 };
 
 PressWords pressWords(const Call &call, std::size_t index) {
@@ -610,7 +599,7 @@ PressWords pressWords(const Call &call, std::size_t index) {
                 : word == "down"              ? std::optional(input::InjectedPress::Down)
                 : word == "up"                ? std::optional(input::InjectedPress::Up)
                                               : std::nullopt;
-  words.holdFrames = call.args.integer(index + 1).value_or(kDefaultHoldFrames);
+  words.holdTurns = call.args.integer(index + 1).value_or(kDefaultHoldTurns);
   return words;
 }
 
@@ -620,7 +609,7 @@ void key(const Call &call) {
     call.reply("usage: key <name|scancode> [down|up|tap] [frames]");
     return;
   }
-  call.reply(injection(call).key(windowId(call), call.args.word(1), *words.press, words.holdFrames));
+  call.reply(injection(call).key(windowId(call), call.args.word(1), *words.press, words.holdTurns));
 }
 
 void text(const Call &call) {
@@ -649,7 +638,7 @@ void mouse(const Call &call) {
         "usage: mouse move <x> <y> | mouse <left|middle|right|x1|x2> [down|up|tap] [frames] | mouse wheel <dy> [dx]");
     return;
   }
-  call.reply(injection(call).mouseButton(windowId(call), what, *words.press, words.holdFrames));
+  call.reply(injection(call).mouseButton(windowId(call), what, *words.press, words.holdTurns));
 }
 
 void gamepad(const Call &call) {
@@ -664,25 +653,28 @@ void gamepad(const Call &call) {
     call.reply("usage: gamepad <button> [down|up|tap] [frames] | gamepad axis <name> <value>");
     return;
   }
-  call.reply(injection(call).gamepadButton(call.args.word(1), *words.press, words.holdFrames));
+  call.reply(injection(call).gamepadButton(call.args.word(1), *words.press, words.holdTurns));
 }
 
 void touch(const Call &call) {
   const std::optional<int> finger = call.args.integer(1);
   const std::string_view what = call.args.word(2);
-  const std::optional<input::InjectedPress> press = what == "down" || what == "move"
-                                                        ? std::optional(input::InjectedPress::Down)
+  const std::optional<float> x = call.args.decimal(3);
+  const std::optional<float> y = call.args.decimal(4);
+  const std::optional<input::InjectedPress> press = what == "down"  ? std::optional(input::InjectedPress::Down)
                                                     : what == "up"  ? std::optional(input::InjectedPress::Up)
                                                     : what == "tap" ? std::optional(input::InjectedPress::Tap)
                                                                     : std::nullopt;
-  const std::optional<float> x = call.args.decimal(3);
-  const std::optional<float> y = call.args.decimal(4);
-  if (!finger || !press || !x || !y) {
+  if (!finger || !(press || what == "move") || !x || !y) {
     call.reply("usage: touch <finger> <down|move|up|tap> <x> <y> [frames]");
     return;
   }
+  if (!press) {
+    call.reply(injection(call).touchMove(windowId(call), *finger, {.x = *x, .y = *y}));
+    return;
+  }
   call.reply(injection(call).touch(
-      windowId(call), *finger, *press, {.x = *x, .y = *y}, call.args.integer(5).value_or(kDefaultHoldFrames)));
+      windowId(call), *finger, *press, {.x = *x, .y = *y}, call.args.integer(5).value_or(kDefaultHoldTurns)));
 }
 
 inline constexpr std::array kVerbs{
@@ -735,11 +727,11 @@ inline constexpr std::array kVerbs{
     Verb{"otwhere", "otwhere <packet> <ot-base> [entries]", "a packet's bucket in the last ordering table", &otWhere},
     Verb{"state", "state save|load <path>", "the whole machine, refused on any mismatch", &state},
     Verb{"session", "session return", "end this session and show the title selector", &session},
-    Verb{"bugreport", "bugreport <summary>", "take a bug report over the next two frames", &bugReport},
     Verb{"menu", "menu", "every overlay row with its live value, to the log", &menu},
     Verb{"key",
          "key <name|scancode> [down|up|tap] [frames]",
-         "a keyboard key as SDL events (tap holds 6 pad frames)",
+         "a keyboard key as SDL events (tap holds 6 input turns); a name with a space by number (224 Left Ctrl); hold "
+         "a modifier down for a chord",
          &key},
     Verb{"text", "text <utf8>", "typed text as an SDL text-input event", &text},
     Verb{"mouse",

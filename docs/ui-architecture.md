@@ -109,7 +109,7 @@ absences.
 
 ## The bug report form
 
-B (or REPL `bugreport <summary>`, which fills and saves the form without a keyboard) opens the
+B opens the
 shared `bug_report::Form` over the held frame; `psx::debug::BugReportSession` owns when and what
 (see `docs/codemap.md`, "Bug report"). The form is a modal document in the menu context and is
 recorded in the overlay's window pass, never into the present image, so the report's own screenshot

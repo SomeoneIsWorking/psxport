@@ -183,12 +183,15 @@ worktree, and `psxport_configure_lightrec_dependency()` probes that worktree bef
 
 ### S024 — In-app bug report
 
-`psx::debug::BugReportSession` over `shared/bug-report`. Evidence (Tomba! 2, headless, 2026-10-05): REPL
-`bugreport` at pad frame 2400 after two Cross taps saved `screen.png` (native, 960x720), `psx.png` (the
+`psx::debug::BugReportSession` over `shared/bug-report`. Evidence (Tomba! 2, headless, 2026-10-05): the
+since-retired REPL `bugreport` at pad frame 2400 after two Cross taps saved `screen.png` (native, 960x720), `psx.png` (the
 GPU device render of the same ordering table), `repro.pad`, `memcard.mcr`, `report.json` and
 `README.md`; replaying that report's recording on a copy of its card and filing again at frame 2400
 produced byte-identical `screen.png`, `psx.png` and `repro.pad`. Gaps: the windowed B key and the
-form's drawing over the window are unrun by an agent (agents do not run windowed). Since 2026-10-27 the
+form's drawing over the window are unrun by an agent (agents do not run windowed). Since 2026-10-27 the form is
+filed only through injected input: hidden Spyro 1 from the selector, `key B`, `text injected chord check`,
+`key 224 down` (Left Ctrl), `key Return`, `key 224 up` saved `20261027-181213-injected-chord-check`
+(`psx-spyro/scratch/input-injection/fix.log`). Since 2026-10-27 the
 device render is taken at `FramePresenter::commit` for every title and `motion.png` (the last second of
 presents, 640x360 APNG, PSXPORT_BUG_REPORT_CLIP) is attached: hidden unpaced reports from Toy Story 2 (Level 4 title card after a
 Debug-tab warp), Tomba! 2 and Spyro the Dragon (level 11 after a Debug-tab warp) each hold `psx.png`

@@ -13,10 +13,10 @@ namespace {
 // Touch events need a device id; SDL reserves 0 and the mouse-emulation ids.
 inline constexpr SDL_TouchID kInjectedTouch = 1;
 
-std::string pressText(InjectedPress press, int holdFrames) {
+std::string pressText(InjectedPress press, int holdTurns) {
   return press == InjectedPress::Down ? std::string("down")
          : press == InjectedPress::Up ? std::string("up")
-                                      : lucent::format("tap for {} pad frame(s)", holdFrames);
+                                      : lucent::format("tap for {} input turn(s)", holdTurns);
 }
 
 std::string scancodeNames() {
@@ -53,6 +53,29 @@ std::string gamepadAxisNames() {
   return names;
 }
 
+SDL_Keymod modifierOf(SDL_Scancode scancode) {
+  switch (scancode) {
+  case SDL_SCANCODE_LCTRL:
+    return SDL_KMOD_LCTRL;
+  case SDL_SCANCODE_RCTRL:
+    return SDL_KMOD_RCTRL;
+  case SDL_SCANCODE_LSHIFT:
+    return SDL_KMOD_LSHIFT;
+  case SDL_SCANCODE_RSHIFT:
+    return SDL_KMOD_RSHIFT;
+  case SDL_SCANCODE_LALT:
+    return SDL_KMOD_LALT;
+  case SDL_SCANCODE_RALT:
+    return SDL_KMOD_RALT;
+  case SDL_SCANCODE_LGUI:
+    return SDL_KMOD_LGUI;
+  case SDL_SCANCODE_RGUI:
+    return SDL_KMOD_RGUI;
+  default:
+    return SDL_KMOD_NONE;
+  }
+}
+
 int mouseButtonOf(std::string_view name) {
   return name == "left"     ? SDL_BUTTON_LEFT
          : name == "middle" ? SDL_BUTTON_MIDDLE
@@ -84,7 +107,7 @@ InputInjection::~InputInjection() {
   }
 }
 
-std::string InputInjection::key(WindowId windowId, std::string_view name, InjectedPress press, int holdFrames) {
+std::string InputInjection::key(WindowId windowId, std::string_view name, InjectedPress press, int holdTurns) {
   const std::optional<std::uint32_t> number = config::parseUnsigned(name, 10);
   const int scancode = number ? static_cast<int>(*number) : SDL_GetScancodeFromName(std::string(name).c_str());
   if (scancode <= SDL_SCANCODE_UNKNOWN || scancode >= SDL_SCANCODE_COUNT) {
@@ -92,10 +115,10 @@ std::string InputInjection::key(WindowId windowId, std::string_view name, Inject
   }
   pushKey(windowId, scancode, press != InjectedPress::Up);
   if (press == InjectedPress::Tap) {
-    schedule(Device::Key, scancode, windowId, holdFrames);
+    schedule(Device::Key, scancode, windowId, holdTurns);
   }
   return lucent::format(
-      "key {} {}", SDL_GetScancodeName(static_cast<SDL_Scancode>(scancode)), pressText(press, holdFrames));
+      "key {} {}", SDL_GetScancodeName(static_cast<SDL_Scancode>(scancode)), pressText(press, holdTurns));
 }
 
 std::string InputInjection::text(WindowId windowId, std::string_view utf8) {
@@ -125,16 +148,16 @@ std::string InputInjection::mouseMove(WindowId windowId, WindowXY at) {
   return lucent::format("mouse at {},{}", at.x, at.y);
 }
 
-std::string InputInjection::mouseButton(WindowId windowId, std::string_view name, InjectedPress press, int holdFrames) {
+std::string InputInjection::mouseButton(WindowId windowId, std::string_view name, InjectedPress press, int holdTurns) {
   const int button = mouseButtonOf(name);
   if (button == 0) {
     return lucent::format("mouse: \"{}\" is not a button; buttons: left, middle, right, x1, x2", name);
   }
   pushMouseButton(windowId, button, press != InjectedPress::Up);
   if (press == InjectedPress::Tap) {
-    schedule(Device::MouseButton, button, windowId, holdFrames);
+    schedule(Device::MouseButton, button, windowId, holdTurns);
   }
-  return lucent::format("mouse {} {} at {},{}", name, pressText(press, holdFrames), mouse_.x, mouse_.y);
+  return lucent::format("mouse {} {} at {},{}", name, pressText(press, holdTurns), mouse_.x, mouse_.y);
 }
 
 std::string InputInjection::mouseWheel(WindowId windowId, WindowXY scroll) {
@@ -152,7 +175,7 @@ std::string InputInjection::mouseWheel(WindowId windowId, WindowXY scroll) {
   return lucent::format("mouse wheel {},{} at {},{}", scroll.x, scroll.y, mouse_.x, mouse_.y);
 }
 
-std::string InputInjection::gamepadButton(std::string_view name, InjectedPress press, int holdFrames) {
+std::string InputInjection::gamepadButton(std::string_view name, InjectedPress press, int holdTurns) {
   const SDL_GamepadButton button = SDL_GetGamepadButtonFromString(std::string(name).c_str());
   if (button == SDL_GAMEPAD_BUTTON_INVALID) {
     return lucent::format(
@@ -162,9 +185,9 @@ std::string InputInjection::gamepadButton(std::string_view name, InjectedPress p
     return lucent::format("gamepad: no virtual pad: {}", SDL_GetError());
   }
   if (press == InjectedPress::Tap) {
-    schedule(Device::GamepadButton, button, WindowId{}, holdFrames);
+    schedule(Device::GamepadButton, button, WindowId{}, holdTurns);
   }
-  return lucent::format("gamepad {} {}", SDL_GetGamepadStringForButton(button), pressText(press, holdFrames));
+  return lucent::format("gamepad {} {}", SDL_GetGamepadStringForButton(button), pressText(press, holdTurns));
 }
 
 std::string InputInjection::gamepadAxis(std::string_view name, int value) {
@@ -181,24 +204,43 @@ std::string InputInjection::gamepadAxis(std::string_view name, int value) {
   return lucent::format("gamepad axis {} = {}", SDL_GetGamepadStringForAxis(axis), value);
 }
 
-std::string InputInjection::touch(WindowId windowId, int finger, InjectedPress press, WindowXY at, int holdFrames) {
+std::string InputInjection::touch(WindowId windowId, int finger, InjectedPress press, WindowXY at, int holdTurns) {
   if (finger < 0 || finger >= kMaxFingers) {
     return lucent::format("touch: finger {} is outside 0..{}", finger, kMaxFingers - 1);
+  }
+  const bool wantsDown = press != InjectedPress::Up;
+  if (fingerDown_[finger] == wantsDown) {
+    return lucent::format("touch: finger {} is already {}", finger, wantsDown ? "down; `move` it" : "up");
   }
   const std::optional<WindowXY> normalised = normalise(windowId, at);
   if (!normalised) {
     return lucent::format("touch: the window has no size: {}", SDL_GetError());
   }
-  pushFinger(windowId, finger, press != InjectedPress::Up, *normalised);
+  pushFinger(windowId, finger, wantsDown, *normalised);
   if (press == InjectedPress::Tap) {
-    schedule(Device::Finger, finger, windowId, holdFrames);
+    schedule(Device::Finger, finger, windowId, holdTurns);
   }
-  return lucent::format("touch {} {} at {},{}", finger, pressText(press, holdFrames), at.x, at.y);
+  return lucent::format("touch {} {} at {},{}", finger, pressText(press, holdTurns), at.x, at.y);
 }
 
-void InputInjection::afterPadFrame() {
+std::string InputInjection::touchMove(WindowId windowId, int finger, WindowXY at) {
+  if (finger < 0 || finger >= kMaxFingers) {
+    return lucent::format("touch: finger {} is outside 0..{}", finger, kMaxFingers - 1);
+  }
+  if (!fingerDown_[finger]) {
+    return lucent::format("touch: finger {} is not down; `down` or `tap` it first", finger);
+  }
+  const std::optional<WindowXY> normalised = normalise(windowId, at);
+  if (!normalised) {
+    return lucent::format("touch: the window has no size: {}", SDL_GetError());
+  }
+  pushFinger(windowId, finger, true, *normalised);
+  return lucent::format("touch {} moved to {},{}", finger, at.x, at.y);
+}
+
+void InputInjection::afterInputTurn() {
   for (auto it = releases_.begin(); it != releases_.end();) {
-    if (--it->framesLeft > 0) {
+    if (--it->turnsLeft > 0) {
       ++it;
       continue;
     }
@@ -229,8 +271,12 @@ void InputInjection::pushKey(WindowId windowId, int scancode, bool down) {
   event.type = down ? SDL_EVENT_KEY_DOWN : SDL_EVENT_KEY_UP;
   event.key.windowID = sdlWindow(windowId);
   event.key.scancode = static_cast<SDL_Scancode>(scancode);
-  event.key.key = SDL_GetKeyFromScancode(event.key.scancode, SDL_KMOD_NONE, true);
-  event.key.mod = SDL_KMOD_NONE;
+  // SDL updates its modifier state when a key enters the queue, and RmlUi reads it from there.
+  if (const SDL_Keymod modifier = modifierOf(event.key.scancode); modifier != SDL_KMOD_NONE) {
+    SDL_SetModState(down ? (SDL_GetModState() | modifier) : (SDL_GetModState() & ~modifier));
+  }
+  event.key.mod = SDL_GetModState();
+  event.key.key = SDL_GetKeyFromScancode(event.key.scancode, event.key.mod, true);
   event.key.down = down;
   push(event);
 }
@@ -311,9 +357,9 @@ bool InputInjection::ensureVirtualPad() {
   return true;
 }
 
-void InputInjection::schedule(Device device, int code, WindowId windowId, int holdFrames) {
+void InputInjection::schedule(Device device, int code, WindowId windowId, int holdTurns) {
   releases_.push_back(
-      {.device = device, .code = code, .windowId = windowId, .framesLeft = holdFrames > 0 ? holdFrames : 1});
+      {.device = device, .code = code, .windowId = windowId, .turnsLeft = holdTurns > 0 ? holdTurns : 1});
 }
 
 } // namespace psx::input

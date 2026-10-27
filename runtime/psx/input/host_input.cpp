@@ -298,7 +298,6 @@ std::uint16_t psx::input::HostInput::poll(bool shown) {
       mPadDirsWarned = true;
     }
   }
-  lucent::debug("hostinput", "poll: mask=0x{:04x} keyboard={} shown={}", (unsigned)mask, gameOwnsKeyboard, shown);
   return mask;
 }
 
