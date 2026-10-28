@@ -46,8 +46,9 @@ tested; no framework-wide skip hook. A screen with no faithful terminal transiti
 recorded as an issue.
 
 Each title owns its frame loop: its frame driver runs the guest's per-frame update and draw and decides the
-cadence, replacing the guest's VSync waits rather than emulating them. A loop not yet owned falls back to the
-framework's VSync rule (`Timing::vsyncFields`) and is recorded as an issue until it is owned.
+cadence, replacing the guest's VSync waits rather than emulating them; a frame whose guest work overran its
+requested fields still ends on the field the guest clock reached (`Timing::vsyncFields`). A loop not yet owned
+answers each guest VSync with one field and is recorded as an issue until it is owned.
 
 ## Framework
 
