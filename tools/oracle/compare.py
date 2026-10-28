@@ -175,22 +175,6 @@ def step_until_counter_resets(core: CoreSession, address: int) -> int:
         previous = current
 
 
-def step_until_counter_consumed(core: CoreSession, address: int) -> int:
-    """Step a core whose step can end after its main loop already consumed the per-field counter at
-    `address` and the next fields refilled it, so the counter is never seen to fall at a step boundary.
-    Without the main loop a step only raises the counter; a step that leaves it no higher ran the loop.
-    Returns the number of steps taken."""
-    previous = u32(core, address)
-    stepped = 0
-    while True:
-        core.step(1)
-        stepped += 1
-        current = u32(core, address)
-        if current <= previous:
-            return stepped
-        previous = current
-
-
 def tap(button: str, period: int, width: int = 6) -> Pattern:
     """Hold `button` for the first `width` frames of every `period` frames."""
     return lambda frame, seen: frozenset({button}) if frame % period < width else frozenset()

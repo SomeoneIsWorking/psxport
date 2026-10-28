@@ -58,7 +58,8 @@ the per-core pad latency between a park point and the frame whose input read see
 The driver delivers the same pad to the same game frame's input read on both cores (`Driver`,
 `Playback`), drives the console first at each checkpoint so the product's settle frame reads the
 console's arrival pad, and treats the title's pad words as decisive so a delivery difference fails
-before anything downstream. Tomba! 2 (`psx-tomba/tools/oracle_title.py`) and Spyro 1
+before anything downstream, unless the title's park point already holds the next frame's input (its oracle notes say
+so). Tomba! 2 (`psx-tomba/tools/oracle_title.py`) and Spyro 1
 (`psx-spyro/tools/oracle_spyro1.py`) are the consumers.
 
 ## Audio comparison
@@ -71,7 +72,9 @@ keyed (ADSR phase not release), sounding (envelope nonzero), pitch, start addres
 controls and the reverb/FM/noise bits (for a voice silent on both cores only keyed and sounding are decisive: the
 rest is what its last note left, and a note played during a load the product removed leaves other values); per
 SPU the control register (less its transfer-mode bits), main,
-reverb, CD and external volumes, the reverb base and the 0x1C0 configuration block. Envelope level,
+reverb, CD and external volumes, the reverb base and the 0x1C0 configuration block (decisive only while either
+core's reverb output volume is nonzero: the console's BIOS shell leaves its own configuration behind, which a
+title that never turns reverb on keeps silently). Envelope level,
 decode address, loop address and sweep progress are informational: removed loads mean the two SPU clocks
 never line up sample for sample. Whether each core's last field put out any sound at all is decisive: on
 the console that is its whole libretro output, on the product the SPU mix with the title's own music
