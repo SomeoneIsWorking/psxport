@@ -59,13 +59,10 @@ compare timestamped sector delivery against the true oracle across code paths wi
 different instruction and stall mixes. Until that passes, diagnostics and claims must say
 "emulated CPU ticks" or "nominal threshold", never "cycle-accurate" or "physical 75/150 Hz".
 
-## Plan (decided 2026-10-28)
+## Deferred (2026-10-28)
 
-This is the next psxport timing work, ahead of further per-title pacing passes; Spyro 1 issue 0215 waits on it.
-1. Calibration spans from the console oracle (observer ordinal and timestamp): Spyro 1 level start (above), C-12
-   boot loader, Tomba 2 first scene load, Crash Bash boot (`0x8008E5BC`). Each records instructions and cycles.
-2. The cost owner is `Timing::advanceGuestInstructionTicks`: it charges a per-block cost fixed at translation
-   (opcode class, load/store region wait states, GTE and multiply/divide latency) instead of one tick per
-   instruction. Turn budgets and CD deadlines stay in guest ticks, so no caller changes units.
-3. Proven when every calibration span lands within the console's field and Spyro 1's `g_LevelTicks` equals the
-   console's at `playing`; then all 11 products build and get one 40 s paced run each.
+No player-visible defect traces to this gap. The only effect found is Spyro 1's `g_LevelTicks` one
+tick behind the console after a level load (psx-spyro issue 0215), which shifts level-tick-driven
+animation by one game frame and is not visible in play. CD reads are instant by design, so drive-rate
+accuracy is not a product goal. The cost model stays unbuilt; reopen this when a player-visible
+defect traces to it, using the Spyro 1 level-start span above as its first calibration case.
