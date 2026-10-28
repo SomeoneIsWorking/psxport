@@ -324,6 +324,11 @@ void renderPath(const Call &call) {
   call.reply(lucent::format("render path = {}", psx::present::renderPathName(call.core.rsub.mode.path())));
 }
 
+void latchGpuFault(const Call &call) {
+  call.core.game->renderDevice.latchFault("control channel", "latched through the control channel");
+  call.reply("the presentation device is latched off; the session ends at its next step");
+}
+
 void setInternalResolution(const Call &call) {
   const std::optional<std::uint32_t> scale = call.args.number(1);
   if (!scale) {
@@ -730,6 +735,10 @@ inline constexpr std::array kVerbs{
     Verb{"owners", "owners [n|write]", "the owner journal: draws with no owner, held intervals", &owners},
     Verb{"census", "census", "the producer census so far, to the log", &census},
     Verb{"renderpath", "renderpath [record|device]", "switch the live render path; bare prints it", &renderPath},
+    Verb{"gpufault",
+         "gpufault",
+         "latch the presentation device off as a failed submit does; the player's notice and exit follow",
+         &latchGpuFault},
     Verb{"setires", "setires <0..4>", "live internal resolution (0 = auto)", &setInternalResolution},
     Verb{"shot", "shot [path]", "the displayed picture: the record image, or the device's VRAM", &shot},
     Verb{"vkshot", "vkshot [path]", "the device's capture of the displayed picture", &deviceShot},

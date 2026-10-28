@@ -56,6 +56,7 @@ public:
     BudgetSpent,        // the process's run budget ran out
     Quit,               // a window close or a client `quit`
     Refused,            // the executable could not be loaded
+    GpuFault,           // the presentation device latched a fault; nothing can be drawn again
   };
 
   // A panel is a picker preview: it never counts against the run budget, takes no quit, pumps no

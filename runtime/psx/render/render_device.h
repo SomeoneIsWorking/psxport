@@ -10,6 +10,7 @@
 #include <cstdint>
 #include <memory>
 #include <span>
+#include <string>
 
 namespace psx::ui {
 class RmlUiLibrary;
@@ -117,6 +118,14 @@ public:
   }
 
   SDL_GPUCommandBuffer *acquire();
+  // The device faulted (latchFault): nothing it draws reaches the window again.
+  bool faulted() const {
+    return faulted_;
+  }
+  // Latches the device off for the rest of the process: work submitted after a fault never retires.
+  void latchFault(const char *where, const char *detail);
+  // The player's notice that the picture stopped, naming the fault; the process ends after it.
+  void reportFaultToPlayer() const;
   // Submit, latching the device off for the rest of the process on the first failure.
   bool submit(SDL_GPUCommandBuffer *cmd, const char *where);
   // Submit and wait with a wall-clock bound; false (and latched) on failure or timeout.
@@ -153,11 +162,13 @@ private:
   // Record the fault for the next process to report.
   void persistFault(const char *where, const char *detail);
   void reportRecordedFault();
-  void latchFault(const char *where, const char *detail);
+  // A submit failed or hung: latch, and record it for the next process.
+  void failDevice(const char *where, const char *detail);
   SDL_GPUSampler *makeSampler(SDL_GPUFilter filter);
 
   bool enabled_ = true;
   bool faulted_ = false;
+  std::string fault_; // where and detail of the latched fault
   const char *windowTitle_ = nullptr;
   PixelSize creationSize_;
   // PSXPORT_PRESENT_SINK named the drawable in pixels.

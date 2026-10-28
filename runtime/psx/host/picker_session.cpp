@@ -139,6 +139,9 @@ PickerSession::Result PickerSession::run() {
       std::chrono::duration_cast<PreRollBudget::Clock::duration>(std::chrono::duration<double, std::milli>(
           psx::frame::fieldIntervalMs(psx::frame::kHostScreenFieldRateMilliHz, 1, 1)));
   for (; !services_.budget.exhausted(); ++frame) {
+    if (services_.presentation.faulted()) {
+      return Result{Outcome::GpuFault, nullptr};
+    }
     if (services_.quit.take() || host_->dbg_server.takeQuitRequest()) {
       lucent::info("picker", "selector asked to quit after {} frame(s)", frame);
       return {};

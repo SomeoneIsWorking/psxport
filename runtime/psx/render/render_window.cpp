@@ -7,6 +7,8 @@
 
 #include <lucent/log.h>
 
+#include <algorithm>
+
 namespace psx::render {
 
 void RenderWindow::create(bool shown, const char *title, present::PixelSize size, bool exactPixels) {
@@ -30,6 +32,7 @@ void RenderWindow::create(bool shown, const char *title, present::PixelSize size
   SDL_SetNumberProperty(props, SDL_PROP_WINDOW_CREATE_WIDTH_NUMBER, size.width);
   SDL_SetNumberProperty(props, SDL_PROP_WINDOW_CREATE_HEIGHT_NUMBER, size.height);
   SDL_SetNumberProperty(props, SDL_PROP_WINDOW_CREATE_FLAGS_NUMBER, static_cast<Sint64>(flags));
+  shown_ = shown;
   window_ = SDL_CreateWindowWithProperties(props);
   SDL_DestroyProperties(props);
   GPUCHK(window_, "SDL_CreateWindow");
@@ -60,6 +63,15 @@ void RenderWindow::claim(SDL_GPUDevice *device) {
                presentModeName(got),
                presentModeBlocksCaller(got) ? " (blocking: every present stalls the guest thread until vblank)" : "");
   swapchainFormat_ = SDL_GetGPUSwapchainTextureFormat(device, window_);
+}
+
+void RenderWindow::showError(const char *title, const std::string &message) const {
+  std::string line = message;
+  std::replace(line.begin(), line.end(), '\n', ' ');
+  lucent::error("render", "{}: {}", title, line);
+  if (shown_ && !SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, title, message.c_str(), window_)) {
+    lucent::warn("render", "the error box could not open: {}", SDL_GetError());
+  }
 }
 
 void RenderWindow::releaseDevice(SDL_GPUDevice *device) {
