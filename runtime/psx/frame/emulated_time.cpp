@@ -1,5 +1,7 @@
 #include "emulated_time.h"
 
+#include <algorithm>
+
 namespace psx::frame {
 
 namespace {
@@ -35,14 +37,21 @@ bool EmulatedTime::advanceDisplayFields(uint32_t fields, uint32_t parts, uint32_
     return false;
   }
 
-  unsigned __int128 boundary = mDisplayBoundaryQ32 + duration;
-  if (boundary < mNowQ32) {
-    // The CPU passed the scheduled field while it was executing. This delivery is immediate; anchor
-    // the following field at the observed guest time instead of accumulating catch-up debt.
-    boundary = mNowQ32;
+  if (mIntervalPart == 0 || fields != mIntervalFields || parts != mIntervalParts) {
+    // The interval ends `fields` after the last boundary, or where the guest's work already ran to: no catch-up debt.
+    const unsigned __int128 whole = display_field_duration_q32(fields, 1, fieldRateMilliHz);
+    mIntervalStartQ32 = std::max(mDisplayBoundaryQ32 + whole, mNowQ32) - whole;
+    mIntervalFields = fields;
+    mIntervalParts = parts;
+    mIntervalPart = 0;
   }
-  mDisplayBoundaryQ32 = boundary;
-  mNowQ32 = boundary;
+  ++mIntervalPart;
+  // A part the guest's work already ran past is delivered at once, so the last part lands on the interval's end.
+  mDisplayBoundaryQ32 = mIntervalStartQ32 + display_field_duration_q32(fields * mIntervalPart, parts, fieldRateMilliHz);
+  mNowQ32 = std::max(mNowQ32, mDisplayBoundaryQ32);
+  if (mIntervalPart == parts) {
+    mIntervalPart = 0;
+  }
   return true;
 }
 

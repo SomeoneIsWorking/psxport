@@ -5,6 +5,8 @@
 #include "game.h"
 #include "gpu_device.h"
 
+#include <algorithm>
+
 namespace psx::frame {
 
 uint64_t Timing::readEmulatedCpuTicks(void *context) {
@@ -89,8 +91,8 @@ uint64_t Timing::emulatedCpuTicks() const {
   return mEmulatedTime.nowTicks();
 }
 
-uint32_t Timing::fieldsSinceDisplayBoundary() const {
-  return mEmulatedTime.fieldsSinceBoundary(fieldRateMilliHz(displayFieldRate()));
+uint32_t Timing::vsyncFields(uint32_t requested) const {
+  return std::max(requested, mEmulatedTime.fieldsSinceBoundary(fieldRateMilliHz(displayFieldRate())) + 1u);
 }
 
 // Root counter 2 on the emulated clock, wrapping at 16 bits; mode bit 9 is system clock / 8, and sync

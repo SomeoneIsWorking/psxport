@@ -289,6 +289,9 @@ there are no per-vertex keys. An in-between with nothing produced is the shown r
   including `t = 1`: the presenter composes every later present first, and a refusal at any of them holds
   all. A held present shows S as the guest drew it: a held in-between builds N's own present (no composed
   record), so the record is planned and rastered once per interval and the `t = 1` present finds it applied.
+  Where S is not N (a double-buffered title shows N-1 while N draws the other buffer), the displayed buffer's
+  rect of N's image is still S's picture: S is the latest record that draws that buffer, and an undrawn write
+  over it after S leaves no shown record.
   The last present is composed by its own composer (`endComposer_`) before the in-betweens and kept for its
   own present, so a 2-field interval composes twice.
 
@@ -423,10 +426,17 @@ aborts unless `FramePresenter::fence()` advanced by exactly one.
 `GameRuntime::presentDeadline` decides who advances simulated display time and returns the present's host
 deadline. The default, `FramePacer::subframeDeadline`, advances Timing, devices and the VBlank latch by the
 represented field count. A title with its own field scheduler advances `Timing::advanceDisplayFields` per
-delivered field and plans with `FramePacer::presentedFieldsDeadline`, which creates no field. A title that
-replaces a `VSync(n)` wait counts `max(n, Timing::fieldsSinceDisplayBoundary())`: the whole fields its guest
-work already ran past the last delivered field, which a console's VSync finds counted and does not wait for. In-betweens
-split the deadline of the same fields. Deadlines step at the guest's field rate (`field_rate.h`: NTSC 59.817 Hz, the console's 263 lines of 3413
+delivered field and plans with `FramePacer::presentedFieldsDeadline`, which creates no field. An interval of n fields
+ends n fields after the last delivered boundary, or at the guest's time when its work already ran past that
+(`EmulatedTime::advanceDisplayFields`); its parts are spaced back from that end, so the parts the guest already ran
+past arrive at once and the clock never ends past the interval. In-betweens split the deadline of the same fields.
+
+A frame driver that replaces a libetc `VSync(n)` counts `Timing::vsyncFields(n)`: VSync waits for field n-1 since its
+last return, then for the next VBlank (Crash Bash `0x800320EC`), so guest work that ran past field k spans
+max(n, k + 1) fields and the frame ends on the field grid. Crash Bash's DisplayFrame override takes it. Spyro's field
+owner needs no count: its host turn delivers each field as the guest clock crosses it. Toy Story 2's resident loop
+replaces the barrier `0x8003FA68`, not VSync, and still ticks a fixed quota (psx-toy-story-2 issue 0059). The other
+titles commit their requested fields, so a frame whose work overruns them ends at the guest's time, off the grid. Deadlines step at the guest's field rate (`field_rate.h`: NTSC 59.817 Hz, the console's 263 lines of 3413
 video clocks), so an NTSC title on a 60.00 Hz display shows one present twice about every 5.5 s; that is accepted. A field that overruns its deadline by more than
 an interval drops the debt in whole intervals (`pacePlan`), so later deadlines keep their place on the field grid.
 NOPACE suppresses host waiting only. Each `Game` owns its `FramePacer`

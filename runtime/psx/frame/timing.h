@@ -43,9 +43,9 @@ public:
   // The guest's display standard, from GP1(0x08).
   [[nodiscard]] DisplayFieldRate displayFieldRate() const;
   [[nodiscard]] uint64_t emulatedCpuTicks() const;
-  // Whole display fields the guest's own work has run past the last delivered field: what a VSync(n) that
-  // began this late finds already counted.
-  [[nodiscard]] uint32_t fieldsSinceDisplayBoundary() const;
+  // The fields a libetc VSync(n) called now spans from the last delivered field: it waits for field n-1, then for the
+  // next VBlank, so guest work that ran past field k makes it max(n, k + 1).
+  [[nodiscard]] uint32_t vsyncFields(uint32_t requested) const;
   // Guest ticks until the next scheduled device deadline (today the CD controller's drive or command
   // event); nullopt when nothing is armed, 0 when one is already due. A guest running code that touches
   // no device register never folds a deadline into the clock, so the executor ends its segment here: the
