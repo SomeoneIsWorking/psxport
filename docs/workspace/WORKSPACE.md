@@ -90,6 +90,9 @@ Products: `spyro_port`, `toystory2_port`, `crashbash_port`, `crash_port`, `ctr_p
   (`PSXPORT_NOPACE=1`, same ires and sink) at any load. Walk from boot once to find the earliest defect, then
   iterate on that screen through its warp; one real-time walk from boot closes the pass. A reviewer reads the
   diff and runs only what a claim needs. A psxport change gets the all-title real-time run once, at pass end.
+- Weak hardware is met by having no needlessly expensive operations, never by generating host load: measure a
+  present's cost in load-independent units (thread CPU time, `perf stat` instructions, GPU timestamps, allocations)
+  on a quiet host and remove work that is redundant, repeated or scales with ires/sink on the CPU.
 - Run captures stay small: dump only the presents a judgement needs, crop or downscale them for comparison,
   and before a pass ends delete its full-size dumps with `scratch_gc.py`, keeping logs, scripts and the reduced
   evidence the issue cites.
