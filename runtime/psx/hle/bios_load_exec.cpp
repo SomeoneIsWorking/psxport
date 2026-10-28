@@ -99,9 +99,7 @@ bool dispatchLoadExec(Core &core, const DiscFileReader &readFile) {
                core.r[psx::cpu::kSp]);
   // The BIOS does not return on success: the guest continues at the loaded entry within this turn.
   psx::cpu::requestExecutionExit(
-      core,
-      psx::cpu::ExecutionResult{
-          psx::cpu::ExecutionExitReason::GuestReturn, loaded.image.entry, 0, "LoadExec: " + std::string(filename)});
+      core, psx::cpu::ExecutionResult{psx::cpu::ExecutionExitReason::GuestReturn, loaded.image.entry, 0});
   return true;
 }
 

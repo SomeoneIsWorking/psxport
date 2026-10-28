@@ -680,7 +680,7 @@ ExecutionResult LightrecExecutor::executeWithBoundary(std::uint32_t guestAddress
     if (flags & LIGHTREC_EXIT_BLOCK_BOUNDARY) {
       switch (boundary.reason) {
       case LightrecExecutor::Impl::BoundaryReason::GuestReturn:
-        return {ExecutionExitReason::GuestReturn, boundary.pc, consumedCycles, "guest return"};
+        return {ExecutionExitReason::GuestReturn, boundary.pc, consumedCycles};
       case LightrecExecutor::Impl::BoundaryReason::HostDispatch: {
         if (hostDispatches >= budget.maxHostDispatches) {
           return {

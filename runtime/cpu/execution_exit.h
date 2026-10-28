@@ -36,7 +36,7 @@ struct ExecutionResult {
   ExecutionExitReason reason = ExecutionExitReason::Fault;
   std::uint32_t guestPc = 0;
   std::uint64_t cycles = 0;
-  std::string detail{};
+  std::string detail{}; // why a non-return exit stopped; a guest return carries none
 
   constexpr bool returned() const {
     return reason == ExecutionExitReason::GuestReturn;
