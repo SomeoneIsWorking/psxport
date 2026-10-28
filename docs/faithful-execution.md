@@ -28,8 +28,11 @@ callbacks and resource transitions.
 
 ### Resuming, which is the whole point of a bounded exit
 
-`ExecutionBudget::currentTurn` is one display field — `33'868'800/60 = 564,480` cycles — by
-construction, so exceeding it is routine rather than exceptional. While an
+`ExecutionBudget::currentTurn` is one display field of guest clock cycles — `33'868'800/59.817 = 566,206` at NTSC — by
+construction. A budget counts the guest clock's unit, one cycle per executed instruction (the unit
+`Timing` and every device deadline use); the Lightrec executor converts it to Lightrec's own
+`kLightrecCyclesPerInstruction` cycles at the `lightrec_execute` call, so no title multiplies by it. A
+call that needs more than one field is routine rather than exceptional. While an
 `ExecutionControl::Unsuspendable` lives (a `GuestRedraw`), every call gets the whole budget in place of a turn —
 per call, not what its caller has left, so a runaway nested N calls deep runs up to N budgets. The two entry points for continuing
 are `psx::cpu::resumeOriginal` and `psx::cpu::resumeGuestToReturn`
