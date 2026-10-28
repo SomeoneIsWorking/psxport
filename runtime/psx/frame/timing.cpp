@@ -89,6 +89,10 @@ uint64_t Timing::emulatedCpuTicks() const {
   return mEmulatedTime.nowTicks();
 }
 
+uint32_t Timing::fieldsSinceDisplayBoundary() const {
+  return mEmulatedTime.fieldsSinceBoundary(fieldRateMilliHz(displayFieldRate()));
+}
+
 // Root counter 2 on the emulated clock, wrapping at 16 bits; mode bit 9 is system clock / 8, and sync
 // modes 0 and 3 stop it. The target/wrap IRQ and the reached-target status bits are not modelled.
 uint16_t Timing::rootCounter2() const {
