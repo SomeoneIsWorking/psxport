@@ -367,21 +367,15 @@ with black margins and reseeded after a resync. Each record entry is planned onc
 - **Render-to-texture.** Textures, CLUTs and copy sources read the VRAM image, which stays exactly the
   device's. A draw into the display buffer that the guest later samples is read at its 4:3 extent,
   except through a read-back texture.
-- **Read-back texture.** A guest that reads a displayed picture back (GP0(C0), `StoreImage`), converts
-  it on the CPU and loads the result as a texture page leaves the margins out of it. Its title declares
-  the page with `GpuDevice::declareReadBack` (`present::ReadBackTexture`: the read rect, the page, the
-  texture mode and the channel weights that make an index) at a point where the read rect still holds
-  what was read. The planner closes its batch there and `RecordRasterizer` copies the canvas pixels of
-  the read, widened by M on a side where the read meets the buffer's edge, into one capture texture at
-  scale (`RecordCapture`). From the next record on (`RecordReadBack`), a textured primitive whose texels
-  lie in the page and map one to one onto its pixels (a sprite, or a polygon whose u and v advance one
-  per pixel, no texture window) samples the capture instead, at its own pixel moved by one offset, and
-  turns the captured pixel into a CLUT index with the declared weights (`record.frag` `readBackTexel`);
-  so the page shows the full-detail picture, and a rectangle of it reaching a buffer edge continues into
-  that margin. Any write into the page, a resync or a scale change ends it, and the page is read from
-  VRAM again. Without a canvas (4:3) nothing is captured and the page reads as the device holds it. An
-  in-between plan neither captures nor declares; it samples the capture the image chain holds. Spyro 1's
-  pause backdrop is the user (psx-spyro issue 0212).
+- **Read-back texture.** A guest that reads a displayed picture back (`StoreImage`), converts it on the
+  CPU and loads it as a texture page leaves the margins out. Its title declares the page with
+  `GpuDevice::declareReadBack` (`present::ReadBackTexture`: read rect, page, texture mode, index weights)
+  while the read rect still holds what was read. `RecordRasterizer` captures those canvas pixels at
+  scale, widened by M on a side that meets the buffer edge (`RecordCapture`). From the next record on, a
+  textured sprite or polygon mapping the page one texel per pixel samples the capture through the
+  weights (`RecordReadBack`, `record.frag` `readBackTexel`) and continues into a margin it reaches. A
+  write into the page, a resync or a scale change ends it; at 4:3 nothing is captured; an in-between
+  samples but never captures. User: Spyro 1's pause backdrop (psx-spyro issue 0212).
 
 The present shows the canvas at the display's per-column aspect, so 4:3 (M = 0) presents the VRAM
 image itself. Known differences: a canvas reaching past column 1023 does not wrap, and a third

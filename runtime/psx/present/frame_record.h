@@ -161,10 +161,7 @@ struct VramUpload {
   bool operator==(const VramUpload &) const = default;
 };
 
-// A host declaration, never sent to the device (GpuDevice::declareReadBack): the guest just read back `read` (VRAM
-// pixels of a display buffer) and fills `page` (VRAM halfwords, sampled at texture mode `texMode`) with its index
-// image, one texel per pixel from the page's first texel, each index (r * red + g * green + b * blue) >> shift of the
-// pixel's 5-bit channels.
+// Host-only (GpuDevice::declareReadBack): `page` holds read's pixels as indices (r*red + g*green + b*blue) >> shift.
 struct ReadBackTexture {
   int readX = 0;
   int readY = 0;

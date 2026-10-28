@@ -136,11 +136,7 @@ struct RecordBatch {
   std::array<RecordPlaneBatch, kRecordPlanes> planes;
 };
 
-// A read-back texture (present::ReadBackTexture) the planner samples from the rasterizer's capture in place of
-// its page. A textured primitive whose texels all lie in the page and map one to one onto its pixels (a sprite,
-// or a polygon whose u and v advance one per pixel, no texture window) reads the capture at its pixel moved by
-// one offset, so at scale it shows the captured picture's full detail, and a rectangle of it on a canvas
-// buffer's edge continues into that margin. Any write into the page ends it; the page is then read as VRAM.
+// A read-back texture page, sampled from the rasterizer's capture until something writes the page.
 struct RecordReadBack {
   RecordRect page;     // texels at `texMode`, VRAM rows
   RecordRect pageVram; // the same, VRAM halfwords
@@ -152,8 +148,7 @@ struct RecordReadBack {
   bool operator==(const RecordReadBack &) const = default;
 };
 
-// Canvas pixels the rasterizer copies into the read-back capture before batch `beforeBatch` runs: `rect`,
-// VRAM-space native pixels, of `plane`.
+// Canvas pixels (`rect`, native VRAM space) copied into the read-back capture before batch `beforeBatch`.
 struct RecordCapture {
   std::uint32_t beforeBatch = 0;
   int plane = 0;
@@ -169,8 +164,7 @@ struct RecordRasterPlan {
   std::span<const std::uint16_t> uploadPool;
   // The record's last read-back declaration that lands in a canvas, captured where it stands.
   std::optional<RecordCapture> capture;
-  // The read-back texture after the record: its own declaration from the next record on, else the one it was
-  // planned with unless the record wrote into its page.
+  // The read-back texture in force after this record.
   std::optional<RecordReadBack> readBack;
 };
 
@@ -185,16 +179,14 @@ public:
   // Every entry of a complete record, in order, into VRAM and into each canvas it reaches. A primitive
   // whose draw area spans exactly a canvas's buffer columns and covers its rows draws there with the
   // horizontal clip widened by the margin; any other write lands in a canvas only where it lands in the
-  // buffer, except a fill spanning the buffer's columns, which spans the canvas's. Primitives sample
-  // `readBack` where it serves them. `declares`: the plan advances the image, so its read-back declarations
-  // are captured and take effect; an in-between's are not.
+  // buffer, except a fill spanning the buffer's columns, which spans the canvas's. An in-between plans with
+  // `declares` false: it samples `readBack` but captures nothing.
   const RecordRasterPlan &plan(const present::FrameRecord &record,
                                int scale,
                                std::span<const RecordCanvas> canvases,
                                const std::optional<RecordReadBack> &readBack,
                                bool declares);
-  // The whole of `vram` written over the image; how a record that cannot be replayed is shown. It ends any
-  // read-back texture: the records it skips may have written the page.
+  // The whole of `vram` written over the image, for a record that cannot be replayed; ends any read-back texture.
   const RecordRasterPlan &planVramUpload(std::span<const std::uint16_t> vram, int scale);
 
 private:
