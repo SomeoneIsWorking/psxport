@@ -116,9 +116,7 @@ void RenderDevice::bringUp() {
     std::exit(2);
   }
   window_.create(shown(), windowTitle_ != nullptr ? windowTitle_ : "psxport (untitled game)", sinkSize(), namedSink_);
-  if (!faultPreflight()) {
-    std::exit(3);
-  }
+  reportRecordedFault();
   device_ = SDL_CreateGPUDevice(SDL_GPU_SHADERFORMAT_SPIRV, psx::config::gpu_validation(), nullptr);
   GPUCHK(device_, "SDL_CreateGPUDevice");
   const char *driver = SDL_GetGPUDeviceDriver(device_);

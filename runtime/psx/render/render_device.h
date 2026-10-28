@@ -150,9 +150,9 @@ public:
   void release(SDL_GPUGraphicsPipeline *&pipeline);
 
 private:
-  // Record the fault for the next process; refuse to start while one stands.
+  // Record the fault for the next process to report.
   void persistFault(const char *where, const char *detail);
-  bool faultPreflight();
+  void reportRecordedFault();
   void latchFault(const char *where, const char *detail);
   SDL_GPUSampler *makeSampler(SDL_GPUFilter filter);
 

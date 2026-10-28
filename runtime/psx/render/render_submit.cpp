@@ -1,7 +1,7 @@
 // render_submit.cpp — RenderDevice's submits and its GPU-fault latch.
 //
 // A failed submit or a fence that does not signal latches the device off: submitting into a card the kernel
-// is resetting turns one lost frame into a ring reset. The fault persists until the user clears it.
+// is resetting turns one lost frame into a ring reset. The marker records the last fault; it never blocks a launch.
 #include "render_device.h"
 
 #include "diagnostic_config.h"
@@ -9,6 +9,7 @@
 #include <lucent/log.h>
 #include <lucent/platform.h>
 
+#include <algorithm>
 #include <cstdio>
 #include <filesystem>
 #include <optional>
@@ -38,47 +39,36 @@ std::string faultMarkerPath() {
 void RenderDevice::persistFault(const char *where, const char *detail) {
   const std::string path = faultMarkerPath();
   if (path.empty()) {
-    lucent::warn("render", "cannot persist the GPU fault: the next process will start clean");
+    lucent::warn("render", "cannot record the GPU fault: no user data directory");
     return;
   }
   FILE *file = std::fopen(path.c_str(), "wb");
   if (file == nullptr) {
-    lucent::warn("render", "could not write the GPU-fault marker {}: the next process will not refuse to start", path);
+    lucent::warn("render", "could not write the GPU-fault marker {}", path);
     return;
   }
   std::fprintf(file, "psxport GPU fault\nwhere: %s\ndetail: %s\n", where, detail);
   std::fclose(file);
-  lucent::error(
-      "render", "GPU fault persisted to {}: every psxport process refuses the GPU until you rm {}", path, path);
+  lucent::error("render", "GPU fault recorded in {}", path);
 }
 
-bool RenderDevice::faultPreflight() {
+// A device lost in one process says nothing about the next one's context: the kernel resets the ring.
+void RenderDevice::reportRecordedFault() {
   const std::string path = faultMarkerPath();
   if (path.empty()) {
-    return true;
+    return;
   }
   FILE *file = std::fopen(path.c_str(), "rb");
   if (file == nullptr) {
-    return true;
+    return;
   }
   char body[512] = {};
   const std::size_t n = std::fread(body, 1, sizeof body - 1, file);
-  body[n] = 0;
   std::fclose(file);
-  if (psx::config::gpu_fault_override()) {
-    lucent::warn(
-        "render", "a GPU fault is on record at {} and PSXPORT_GPU_FAULT_OVERRIDE is set: starting anyway", path);
-    return true;
-  }
-  lucent::error("render",
-                "refusing to start the GPU: a previous run recorded a GPU fault.\n  marker : {}\n{}"
-                "  clear it (your call, your machine): rm {}\n"
-                "  or override for a single run:       PSXPORT_GPU_FAULT_OVERRIDE=1\n"
-                "  check the kernel first:             journalctl -k -b | grep -iE 'gpu reset|ring|drm'",
-                path,
-                body,
-                path);
-  return false;
+  std::string record(body, n);
+  std::replace(record.begin(), record.end(), '\n', ' ');
+  lucent::warn(
+      "render", "an earlier run recorded a GPU fault in {}: {}; the kernel log names the process it hit", path, record);
 }
 
 void RenderDevice::latchFault(const char *where, const char *detail) {

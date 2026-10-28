@@ -38,7 +38,6 @@ std::vector<std::uint32_t> gpu_shot_frames(); // PSXPORT_SHOT_AT: present indice
 long gpu_scene_dump_frame();                  // PSXPORT_SCENEDUMP (-1 off)
 
 bool gpu_validation();      // PSXPORT_GPU_DEBUG
-bool gpu_fault_override();  // PSXPORT_GPU_FAULT_OVERRIDE
 std::string present_sink(); // PSXPORT_PRESENT_SINK: "WxH", the window's drawable in pixels
 
 std::string movie_fps(); // PSXPORT_FMV_FPS: "0" uncaps
