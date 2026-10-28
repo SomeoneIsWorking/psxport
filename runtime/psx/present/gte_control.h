@@ -19,9 +19,9 @@ using GteControl = std::array<std::uint32_t, kGteControlRegisters>;
 GteControl readGteControl(const psx::cpu::Gte &gte);
 // Writes every control register but the flags.
 void writeGteControl(psx::cpu::Gte &gte, const GteControl &control);
-// A rotation matrix `t` of the way from `from` to `to`, element by element.
+// A rotation matrix `t` of the way from `from` to `to`: its turn along the shorter arc, its stretch blended.
 gte::RotationWords rotationBetween(const gte::RotationWords &from, const gte::RotationWords &to, float t);
-// The control registers `t` of the way from `from` to `to`: rotation elements and translation move, every
+// The control registers `t` of the way from `from` to `to`: rotation turns and translation moves, every
 // other register is `to`'s.
 GteControl blendGteControl(const GteControl &from, const GteControl &to, float t);
 
