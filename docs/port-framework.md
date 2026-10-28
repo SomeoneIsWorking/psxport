@@ -16,7 +16,14 @@ flags, cache invalidation, or execution-backend selection.
 
 Every block boundary the executor reaches is classified (guest code, host service, unclaimed) through
 `NativeDispatcher::classify`, whose verdict cache holds until an image, override or service revision changes; a
-title of short blocks pays that lookup every few guest instructions.
+title of short blocks pays that lookup every few guest instructions. With block linking off in Lightrec the callback runs at every
+block entry: in Tekken 3's fight (3000 frames unpaced after `warp 0 1`, `perf record -e instructions:u`) the boundary
+is about 25% of the process's instructions, `blockBoundary` 8.3%, `classify` 6.5%, the guest-writer latch 2.4%,
+`executeWithBoundary` 2.4%, the thread lookup `activeBoundary` 2.1% and the epoch compare in
+`HostDispatchVerdictCache::observe` 1.8%. Each entry recomputes what changes rarely: the out-of-line pad-work-area
+check, the image-catalog, override and platform-HLE revisions that make up the epoch, and the thread's boundary
+context. The epoch stays per block, since a device write can retire an image inside a segment; removing the
+per-block callback needs block linking in the Lightrec fork.
 
 ## Native body requirements
 
