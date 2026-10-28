@@ -177,7 +177,7 @@ class NativeReplSession:
         if destination.exists():
             destination.unlink()
         self._send(f"shot {destination}")
-        reply = self._expect("shot (")
+        reply = self._expect("shot -> ")
         if not destination.is_file():
             raise CoreError(f"native REPL reported a shot but {destination} was not written")
         marker = "guest_scan="

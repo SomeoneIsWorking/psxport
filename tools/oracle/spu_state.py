@@ -7,7 +7,8 @@ console reference cuts it out of `retro_serialize`. This module decodes the sect
 compares the two per voice and per register. A field is decisive when it is guest-visible state the
 two guests must agree on at the same game frame; sample-clock position (envelope level, decode
 address, sweep progress) is informational, because loading removal means the cores' SPU clocks never
-line up sample for sample, and so are the parameters of a voice silent on both cores.
+line up sample for sample, and so are the parameters of a voice silent on both cores and the reverb
+configuration while both cores' reverb output volume is zero.
 """
 
 from __future__ import annotations
@@ -23,6 +24,8 @@ ADSR_RELEASE = 3
 REVERB_REGISTERS = 0xE0  # regs.Regs index of 0x1F801DC0, the reverb configuration block
 SPUCNT_TRANSFER_MODE = 0x0030  # DMA/manual transfer mode bits change mid-upload; not mix state
 KEYED, SOUNDING = 0, 1  # positions of a voice's key and envelope fields in SpuState.voices
+REVERB_OUTPUT = ("reverb.volume.left", "reverb.volume.right")
+REVERB_CONFIGURATION = tuple(f"reverb.{0x1C0 + 2 * i:03X}" for i in range(0x20))
 
 
 def sections(state: bytes) -> dict[str, bytes]:
@@ -130,7 +133,7 @@ class SpuState:
             Field("extern.volume.right", extern_volume[1], True),
         ]
         reverb = _words(values["regs.Regs"], 2)[REVERB_REGISTERS:REVERB_REGISTERS + 0x20]
-        registers += [Field(f"reverb.{0x1C0 + 2 * i:03X}", word, True) for i, word in enumerate(reverb)]
+        registers += [Field(name, word, True) for name, word in zip(REVERB_CONFIGURATION, reverb)]
         registers += [Field("irq.address", get("IRQAddr"), False),
                       Field("main.volume.left.current", get(f"((spu_cur->GlobalSweep)[0]).Current"), False),
                       Field("main.volume.right.current", get(f"((spu_cur->GlobalSweep)[1]).Current"), False)]
@@ -138,6 +141,9 @@ class SpuState:
 
     def sounding(self) -> list[int]:
         return [n for n, fields in enumerate(self.voices) if fields[1].value]
+
+    def reverb_heard(self) -> bool:
+        return any(field.value for field in self.registers if field.name in REVERB_OUTPUT)
 
 
 @dataclass(frozen=True)
@@ -166,9 +172,13 @@ def compare(native: SpuState, console: SpuState,
                 decisive = a.decisive and (heard or index in (KEYED, SOUNDING))
                 rows.append({"where": f"voice {n}", "field": a.name, "decisive": decisive,
                              "native": a.value, "console": b.value})
+    # The reverb configuration is heard only through the reverb output volume; a console boot leaves the BIOS
+    # shell's configuration behind, which a title that never turns reverb on keeps silently.
+    reverb_heard = native.reverb_heard() or console.reverb_heard()
     for a, b in zip(native.registers, console.registers):
         if a.value != b.value:
-            rows.append({"where": "spu", "field": a.name, "decisive": a.decisive,
+            decisive = a.decisive and (reverb_heard or a.name not in REVERB_CONFIGURATION)
+            rows.append({"where": "spu", "field": a.name, "decisive": decisive,
                          "native": a.value, "console": b.value})
     if native_output is not None and console_output is not None:
         if bool(native_output.peak) != bool(console_output.peak):
