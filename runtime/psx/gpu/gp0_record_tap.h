@@ -56,9 +56,9 @@ public:
   void declareReadBack(const present::ReadBackTexture &texture) {
     record_.append(texture);
   }
-  // The walk reached `slot` of a table walked high to low when `descending`, or left every named
-  // table (nullopt).
-  void enterSlot(const std::optional<present::OtSlot> &slot, bool descending);
+  // The walk reached `slot` of a table walked high to low when `descending`, under `state`, or left
+  // every named table (nullopt).
+  void enterSlot(const std::optional<present::OtSlot> &slot, bool descending, const present::RecordDrawState &state);
   // A device step that consumed no GP0 word: GP1, GPUREAD, GPUSTAT.
   void onDeviceStep(const DeviceProbe &probe);
   // GP1(00): gpu.c GPU_SoftReset, which also invalidates the texture cache.

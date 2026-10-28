@@ -182,12 +182,13 @@ struct ReadBackTexture {
 
 using RecordEntry = std::variant<DrawPrimitive, VramFill, VramCopy, VramUpload, ReadBackTexture>;
 
-// The OT walk reached the head of `slot` when the record held `entry` entries. `descending` says the
-// walk visits the slot's table from high bucket indices to low.
+// The OT walk reached the head of `slot` when the record held `entry` entries, with the device under
+// `state`. `descending` says the walk visits the slot's table from high bucket indices to low.
 struct SlotStart {
   OtSlot slot;
   std::size_t entry = 0;
   bool descending = true;
+  RecordDrawState state;
 
   bool operator==(const SlotStart &) const = default;
 };
@@ -257,7 +258,7 @@ public:
   // Appends an upload with its pixels; sets upload.pixelOffset.
   void appendUpload(VramUpload upload, std::span<const std::uint16_t> pixels);
   void markIncomplete();
-  void beginSlot(OtSlot slot, bool descending);
+  void beginSlot(OtSlot slot, bool descending, const RecordDrawState &state);
   // Keeps the pools, which `entries` index as this record's did; drops the slot starts.
   void replaceEntries(std::span<const RecordEntry> entries);
   // Becomes `other` without its entries and slot starts, in this record's storage.

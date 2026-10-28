@@ -87,6 +87,8 @@ private:
   static CensusMark censusMark();
   void advanceTo(frame::CpuTicks now);
   DeviceProbe probe(CensusMark before) const;
+  // The draw environment a primitive submitted now is drawn under.
+  present::RecordDrawState drawState() const;
 
   std::unique_ptr<Scanout> mScanout;
   std::vector<uint8_t> mParked; // this device's state while another device is bound
