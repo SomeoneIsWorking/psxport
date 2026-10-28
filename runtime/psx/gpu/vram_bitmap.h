@@ -4,6 +4,8 @@
 #include "vram_rect.h"
 
 #include <algorithm>
+#include <array>
+#include <bit>
 #include <cstddef>
 #include <cstdint>
 #include <vector>
@@ -21,6 +23,10 @@ public:
   VramBitmap() : words_(static_cast<std::size_t>(kVramHeight) * kWordsPerRow, 0) {}
 
   void mark(int row, ColumnRun run) {
+    if (run.x1 <= run.x0) {
+      return;
+    }
+    markedRows_[static_cast<std::size_t>(row) / 64u] |= std::uint64_t{1} << (row % 64);
     forEachWord(words_, row, run, [](std::uint64_t &word, std::uint64_t mask) {
       word |= mask;
       return false;
@@ -33,16 +39,28 @@ public:
     });
   }
 
-  void fill(bool set) {
-    std::fill(words_.begin(), words_.end(), set ? ~std::uint64_t{0} : std::uint64_t{0});
+  // Every pixel set.
+  void fillAll() {
+    std::fill(words_.begin(), words_.end(), ~std::uint64_t{0});
+    markedRows_.fill(~std::uint64_t{0});
   }
 
-  void clearRow(int row) {
-    std::fill_n(words_.begin() + static_cast<std::ptrdiff_t>(row) * kWordsPerRow, kWordsPerRow, std::uint64_t{0});
+  // Every pixel clear; only rows marked since the last clear are written.
+  void clear() {
+    for (std::size_t group = 0; group < markedRows_.size(); ++group) {
+      for (std::uint64_t rows = markedRows_[group]; rows != 0; rows &= rows - 1u) {
+        clearRow(static_cast<int>(group * 64u) + std::countr_zero(rows));
+      }
+      markedRows_[group] = 0;
+    }
   }
 
 private:
   static constexpr int kWordsPerRow = kVramWidth / 64;
+
+  void clearRow(int row) {
+    std::fill_n(words_.begin() + static_cast<std::ptrdiff_t>(row) * kWordsPerRow, kWordsPerRow, std::uint64_t{0});
+  }
 
   // Bits [x0, x1) of one word, 0 <= x0 < x1 <= 64.
   static std::uint64_t wordMask(ColumnRun bits) {
@@ -66,6 +84,7 @@ private:
   }
 
   std::vector<std::uint64_t> words_;
+  std::array<std::uint64_t, kVramHeight / 64> markedRows_{}; // rows that may hold a set bit
 };
 
 } // namespace psx::gpu

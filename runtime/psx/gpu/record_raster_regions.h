@@ -104,9 +104,7 @@ public:
     if (empty_) {
       return;
     }
-    for (int y = bounds_.y0; y < bounds_.y1; y++) {
-      bits_.clearRow(y);
-    }
+    bits_.clear();
     empty_ = true;
   }
 
