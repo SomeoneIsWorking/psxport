@@ -150,6 +150,8 @@ private:
   SDL_Gamepad *mGamepads[kMaxGamepads] = {};
   int mGamepadInstance[kMaxGamepads] = {-1, -1, -1, -1}; // SDL_JoystickID per slot (-1 = empty)
   bool mGamepadSubsystem = false;                        // this owner's reference on SDL_INIT_GAMEPAD
+  bool mPadsChanged = true;                              // a gamepad was added or removed since the last scan
+  bool mPhysicalPadsScanned = false;                     // whether the last scan admitted physical pads
   int mNoPad = -1;                                       // PSXPORT_PAD_NOPAD cache (-1 = not read)
   bool mPrevPauseKey = false;                            // P / '.' debug-key edge detectors
   bool mPrevStepKey = false;

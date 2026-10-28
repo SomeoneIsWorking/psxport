@@ -72,6 +72,9 @@ void psx::input::HostInput::drainEvents() {
     if (event.type == SDL_EVENT_KEY_DOWN || event.type == SDL_EVENT_KEY_UP) {
       noteHostKey(static_cast<int>(event.key.scancode), event.type == SDL_EVENT_KEY_DOWN);
     }
+    if (event.type == SDL_EVENT_GAMEPAD_ADDED || event.type == SDL_EVENT_GAMEPAD_REMOVED) {
+      mPadsChanged = true;
+    }
     if (RmlOverlay *overlay = liveOverlay()) {
       overlay->event(&event);
     }
@@ -186,16 +189,19 @@ bool psx::input::HostInput::noPadRequested() {
   return mNoPad != 0;
 }
 
-// HOTSWAP: open any newly-connected controller and drop any that vanished, every poll. Deliberately a
-// rescan rather than a device-added/removed handler, because the controller events are delivered to
-// whoever drains the queue and this owner cannot depend on being that site. SDL_NumJoysticks is a
-// count, and only indices not already held are opened.
+// HOTSWAP: open any newly-connected controller and drop any that vanished, after a gamepad added or removed
+// event this owner drained, or when physical pads are admitted or refused. Only instances not already held are opened.
 void psx::input::HostInput::rescanControllers(bool shown) {
   if (!mGamepadSubsystem) {
     return;
   }
   // A tool window and PSXPORT_PAD_NOPAD read only the virtual pad, the control channel's.
   const bool physicalPads = shown && !noPadRequested();
+  if (!mPadsChanged && physicalPads == mPhysicalPadsScanned) {
+    return;
+  }
+  mPadsChanged = false;
+  mPhysicalPadsScanned = physicalPads;
   for (int slot = 0; slot < kMaxGamepads; slot++) {
     if (mGamepads[slot] && (!SDL_GamepadConnected(mGamepads[slot]) ||
                             (!physicalPads && !SDL_IsJoystickVirtual(SDL_GetGamepadID(mGamepads[slot]))))) {
