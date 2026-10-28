@@ -21,7 +21,19 @@ typedef short s16;
 #define SCENE_FRAMES 240
 #define NO_SCENE 0xFFFFFFFFu
 
-enum Scene { OwnedSquare, UnownedMoving, MmioPort, BlockDmaPort, ReusedSlot, AmendedSquare, SceneCount };
+// The scenes after AmendedSquare end the process with a record fault and run only when requested.
+enum Scene {
+  OwnedSquare,
+  UnownedMoving,
+  MmioPort,
+  BlockDmaPort,
+  ReusedSlot,
+  AmendedSquare,
+  CycledSceneCount,
+  LoopingOt = CycledSceneCount,
+  UnterminatedPolyLine,
+  SceneCount
+};
 
 // An owned object: what square_draw reads, and what the host producer saves.
 struct Square {
@@ -161,6 +173,26 @@ __attribute__((noinline)) void dma_bar_draw(void) {
   D2_CHCR = 0x01000201u;
 }
 
+// A full-screen semi-transparent TILE in a ring of buckets: bucket 3 links back to bucket 10, so the list never ends.
+__attribute__((noinline)) void looping_ot_draw(void) {
+  u32 *p = packet(3);
+  p[1] = 0x62404040u;
+  p[2] = xy(0, 0);
+  p[3] = xy(320, 240);
+  link(p, 3, 8);
+  ot[buffer][3] = (u32)&ot[buffer][10] & 0x00FFFFFFu;
+}
+
+// A flat poly-line whose packet ends before its 0x5xxx5xxx terminator.
+__attribute__((noinline)) void unterminated_line_draw(void) {
+  u32 *p = packet(4);
+  p[1] = 0x48FFFF00u;
+  p[2] = xy(40, 40);
+  p[3] = xy(280, 60);
+  p[4] = xy(160, 200);
+  link(p, 4, 5);
+}
+
 // Unowned code storing over the owned square's colour word before the list is submitted: the Overwrote case.
 __attribute__((noinline)) void amend_draw(void) {
   u32 *p = (u32 *)(0x80000000u | (ot[buffer][4] & 0x00FFFFFFu));
@@ -195,7 +227,7 @@ static void update(void) {
     requested_scene = NO_SCENE;
     scene_frames = 0;
   } else if (++scene_frames >= SCENE_FRAMES) {
-    scene = (scene + 1u) % SceneCount;
+    scene = (scene + 1u) % CycledSceneCount;
     scene_frames = 0;
   }
   // The owned square's scene alternates 2- and 3-field frames; the rest run at 2.
@@ -244,6 +276,12 @@ void cstart(void) {
     case AmendedSquare:
       square_draw(&squares[0]);
       amend_draw();
+      break;
+    case LoopingOt:
+      looping_ot_draw();
+      break;
+    case UnterminatedPolyLine:
+      unterminated_line_draw();
       break;
     default:
       break;

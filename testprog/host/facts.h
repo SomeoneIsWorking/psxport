@@ -13,7 +13,6 @@ inline constexpr std::uint32_t kFactsMagic = 0x54505350u;
 inline constexpr std::uint16_t kOrderingTable = 0;
 // The bucket square_draw links its packet into.
 inline constexpr std::uint32_t kSquareBucket = 4;
-inline constexpr std::uint32_t kSceneCount = 5;
 
 struct Facts {
   std::uint32_t vsync = 0;

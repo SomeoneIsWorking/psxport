@@ -93,6 +93,7 @@ set(PSXPORT_FRAMEWORK_SRC
   ${PSXPORT_ROOT}/runtime/psx/hle/kernel_syscall.cpp
   ${PSXPORT_ROOT}/runtime/cpu/host_turn.cpp
   ${PSXPORT_ROOT}/runtime/psx/gpu/ordering_table.cpp # the guest DrawOTag chain and the tables a walk attributes to
+  ${PSXPORT_ROOT}/runtime/psx/gpu/record_fault.cpp # guest data refused before it sizes GPU work
   ${PSXPORT_ROOT}/runtime/psx/debug/image_writer.cpp      # one checked RGB24 capture-file boundary, stills and clips
   ${PSXPORT_ROOT}/runtime/psx/debug/gpu_debug.cpp
   ${PSXPORT_ROOT}/runtime/psx/audio/spu_audio.cpp

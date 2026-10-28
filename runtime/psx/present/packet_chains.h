@@ -12,7 +12,8 @@
 
 namespace psx::present {
 
-// What a walk may visit; past it the chain is broken or cyclic and the walk aborts.
+// What a walk may visit; past it the chain is broken and the walk aborts. A revisited packet is a record fault
+// whatever the bound.
 struct PacketBound {
   std::uint32_t packetLimit = 0;
   // Bytes 0: packets may lie anywhere.
@@ -20,6 +21,10 @@ struct PacketBound {
 
   static constexpr PacketBound count(std::uint32_t packets) {
     return PacketBound{packets, {}};
+  }
+  // Any number of packets anywhere: only the chain's end or a cycle stops the walk.
+  static constexpr PacketBound anywhere() {
+    return PacketBound{0xFFFFFFFFu, {}};
   }
   // Every packet and its words inside `arena`, which holds at most one packet per word.
   static constexpr PacketBound within(GuestSpan arena) {

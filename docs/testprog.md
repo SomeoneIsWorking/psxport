@@ -26,10 +26,20 @@ by DMA6 and submitted by DMA2, and calls VSync once per field. Each scene runs 2
 | `reused-slot` | `square_draw` on a slot a new object takes every 12 frames | none in this stage |
 | `amended-square` | `square_draw`, then `amend_draw` stores the packet's colour word before submit | `Overwrote` for `amend_draw`, producer `square_draw` |
 
+Two more scenes run only when requested and never come round in the cycle. Each must end the process with a
+`[record-fault:error]` line before the frame it was drawn in presents:
+
+| scene | drawer | expected end |
+|---|---|---|
+| `looping-ot` | `looping_ot_draw`, a full-screen semi-transparent TILE in bucket 8 with bucket 3 linked back to bucket 10 | `draw-list-cycle`, refused by `OrderingTableCursor::advance` |
+| `unterminated-poly-line` | `unterminated_line_draw`, a flat poly-line packet of three vertices and no terminator | `poly-line-unterminated` at the packet, refused by `submitOrderingTable` |
+
+`planted <scene>` on the control channel requests a scene from the next frame (`planted looping-ot`).
+
 `backdrop_draw`, a still TILE every scene draws without an owner, must never make a row. Besides the rows
 above the journal holds, by design:
 
-- one `IntervalHeld/stale-shown` and one `IntervalHeld/no-previous` row on `scene owned-square` from the first
+- one `IntervalHeld/stale-shown` and one `IntervalHeld/no-previous` row on `planted owned-square` from the first
   presents after boot, before a drawing record and a shown predecessor exist;
 - at every scene change, one held interval for the drawer of the scene that ended (it vanished from S), on the
   row of that drawer's reason with the new scene as its screen, since S belongs to the new scene. A run that
@@ -46,7 +56,7 @@ incarnations (stage 4).
 `testprog/host/` is the title: `Runtime` binds VSync and the square's producer from the facts, `FrameDriver`
 runs fields until the frame counter moves and commits once with the guest's field count, `SquareProducer`
 renders the square at any t from its saved fields and the guest sine table, and `DebugMenu` names the scene
-as the journal's screen with `scene <name>` as its route.
+as the journal's screen with `planted <name>` as its route.
 
 ## Check
 

@@ -23,14 +23,25 @@ OtNode readNode(Core &core, std::uint32_t mainRamOffset) {
 OrderingTableCursor::OrderingTableCursor(Core &core, std::uint32_t rootGuestAddress)
     : core_(core), node_(readNode(core, mainRamOffsetOf(rootGuestAddress))) {
   nodesEntered_ = 1;
+  cycle_.enter(node_.ramOffset());
 }
 
 bool OrderingTableCursor::advance() {
-  if (node_.endsChain() || nodesEntered_ >= kOtNodeLimit) {
+  if (node_.endsChain()) {
     return false;
   }
-  node_ = readNode(core_, node_.nextRamOffset());
+  const OtNode from = node_;
+  node_ = readNode(core_, from.nextRamOffset());
   nodesEntered_++;
+  if (!cycle_.enter(node_.ramOffset())) {
+    raiseRecordFault(RecordFaultKind::DrawListCycle,
+                     node_.guestAddress(),
+                     "gpu/ordering_table.cpp:OrderingTableCursor::advance",
+                     lucent::format("node 0x{:08X} links back to it after {} nodes; {}",
+                                    from.guestAddress(),
+                                    nodesEntered_,
+                                    guestWriterOf(core_, from.guestAddress())));
+  }
   return true;
 }
 
@@ -158,6 +169,15 @@ void submitOrderingTable(Core &core, GpuDevice &device, std::uint32_t rootGuestA
         const std::uint32_t offset = node.gp0WordRamOffset(i);
         device.gp0(core.mem_r32(offset),
                    {.sourceAddress = guestAddressOf(offset), .packetKey = key, .owner = owner, .mixedOwner = mixed});
+      }
+      // The console would read the next packets' words as vertices until a terminator turned up.
+      if (device.polyLineOpen()) {
+        raiseRecordFault(RecordFaultKind::PolyLineUnterminated,
+                         node.guestAddress(),
+                         "gpu/ordering_table.cpp:submitOrderingTable",
+                         lucent::format("its {} words end with no 0x5xxx5xxx terminator; {}",
+                                        node.gp0WordCount(),
+                                        guestWriterOf(core, node.guestAddress() + kOtHeaderBytes)));
       }
     }
     if (const std::optional<present::OtSlot> empty = tables.emptyAfter(node.guestAddress())) {

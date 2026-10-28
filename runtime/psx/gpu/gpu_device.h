@@ -37,6 +37,8 @@ public:
   void gp0(uint32_t word, const Gp0Origin &origin = {});
   // The next GP0 words come from a new OT node.
   void beginPacket();
+  // The device is inside a poly-line, waiting for its terminator.
+  bool polyLineOpen();
   // Draw work enters the GPU in display field `field` (an OT walk, a block DMA, a GP0 port write).
   void noteDrawEntry(std::uint32_t field);
   // The guest filled a page from display pixels it read back; only the record sees this (record_raster_setup.h).
