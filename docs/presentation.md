@@ -74,7 +74,8 @@ Draw order is OT slot order (below). There are no bands, layers or painter range
 - **`device`**: presents the device's own VRAM display rect, 4:3, with no in-betweens. It is the reference
   picture for comparing a record present against.
 
-The device executes every command on both paths and holds the only guest-visible VRAM. Any other
+The device executes every command on both paths and holds the only guest-visible VRAM; its software raster
+is the largest CPU cost the port keeps, since the guest reads that VRAM. Any other
 name is refused with a warning and the Core stays on `record`.
 
 ## Record path
@@ -97,7 +98,8 @@ name is refused with a warning and the Core stays on `record`.
   stored places give it area where its words give none, such as a sliver a clip cut between two crossings
   that round to one word: above 1x it draws and writes the native pixels its quads reach (`addTriangle`); without
   it the pieces either side of the sliver leave a seam. A batch's snapshot refresh
-  covers every scaled pixel its quads can reach.
+  covers every scaled pixel its quads can reach. The 1x walk is CPU work every frame at any S; a line plans as one quad
+  per pixel.
 - **Scale.** S is the internal-resolution setting (`setires`, `mods.ires`). Vertices and the draw
   area scale; texels and CLUTs stay on the native grid; sprites, lines and fills cover
   S×S blocks; uploads replicate, copies run at full resolution. 24bpp display keeps the device picture.
@@ -277,7 +279,8 @@ there are no per-vertex keys. An in-between with nothing produced is the shown r
   is open. A writer storing over a word a scope opened since the last draw list wrote keeps that pair
   (`overwrote`), so an amended owned packet is reported, while pool reuse across frames is not. Port owners
   name draws that reach GP0 without a RAM packet: block DMA, MMIO GP0 and LoadImage. The OT walk stamps each
-  node's first command word's handle (header + 4) on its entries. A savestate load clears the ledger.
+  node's first command word's handle (header + 4) on its entries. A savestate load clears the ledger. Booking is
+  paid on every guest store.
 - **Verdict.** At seal, before any present of S'→S, `OwnershipVerdict` groups S's and S''s unkeyed
   primitives by writer (kind, function or block PC, dispatched entry), OT table and amended flag, and hashes
   each group's picture relative to the draw offset (so a double-buffered still draw matches). A group that
@@ -603,36 +606,6 @@ layer and records its time, and downloads the ring only when a report is written
 CPU work per present, and its size does not depend on the internal resolution. The saved setting
 `PSXPORT_BUG_REPORT_CLIP=0` turns it off on hardware that cannot spare the memory: no texture, no blit, and
 reports carry no `motion.png`.
-
-## Cost
-
-Steady state per fence from boot, unpaced, ires 0, fps60 1, sink 3840x2160, hidden window, Clang: the run to
-fence 2400 minus the run to 1200, over 1200. Instructions and task clock are `perf stat` user counts of the whole
-process; allocations count every `malloc`/`new` (guest thread in brackets) with an `LD_PRELOAD` counter. Instruction
-and allocation counts are load-independent; task clock is not. The window is whatever the boot reaches by then (Toy
-Story 2 and Tomba! 2 are still in their intro movies), and it moves between runs, so presents per fence vary.
-
-| title | presents/fence | Minstr/fence | Minstr/present | task ms/fence | allocs/fence (guest thread) |
-|---|---|---|---|---|---|
-| spyro | 0.52 | 126.8 | 244.6 | 9.72 | 73.0 (72.5) |
-| toystory2 | 1.13 | 19.9 | 17.6 | 3.50 | 29.1 (28.2) |
-| crashbash | 1.88 | 120.7 | 64.2 | 13.33 | 378.1 (376.6) |
-| crash | 1.83 | 79.1 | 43.1 | 5.68 | 227.2 (225.9) |
-| ctr | 1.07 | 37.4 | 34.9 | 2.79 | 84.5 (84.1) |
-| tomba2 | 1.99 | 23.9 | 12.0 | 3.67 | 56.8 (55.0) |
-| spiderman | 0.84 | 15.3 | 18.3 | 1.39 | 36.0 (35.5) |
-| vagrant | 1.08 | 59.1 | 54.8 | 4.79 | 29.3 (28.2) |
-| megamanx4 | 0.59 | 13.2 | 22.6 | 1.42 | 29.3 (23.2) |
-| tekken3 | 0.42 | 31.6 | 75.6 | 3.18 | 37.2 (36.9) |
-| c12 | 1.00 | 169.3 | 169.9 | 13.22 | 31.4 (32.3) |
-
-What remains is the design, named so it is not re-measured as a defect: Beetle's software raster of device VRAM
-(about a quarter of Crash 1), `RecordPlanner` coverage at 1x (12-25%; C-12's lines plan as one quad per pixel, about
-half of its instructions), the owner ledger booking every RAM store (`OwnerLedger::port` 2-6%, executable-write
-notification about 3%), the per-block boundary classification and verdict cache (about 30% of Tekken 3 and Vagrant
-Story, whose blocks average 4.5 instructions), SPU emulation (2-7%) and CHD hunk decoding on its worker threads
-(2-3%). The allocations left are listed in issue 0173. SDL3 GPU has no timestamp queries, so there is no GPU time per
-pass.
 
 ## Status
 

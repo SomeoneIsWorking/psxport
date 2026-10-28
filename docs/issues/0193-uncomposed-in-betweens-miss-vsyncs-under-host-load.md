@@ -48,6 +48,15 @@ The `v2-audio-c1` misses right after new `UnownedMoving` rows are not journal co
 long unpaced intervals are guest frames (fence 1548, 48 ms) and gameplay in-betweens of 10-13 ms at fences 1860-2185,
 which hold a whole guest frame each.
 
+## Paced runs by load (2026-10-28)
+40 s paced from boot, all titles, with the 1-minute load sampled each second (`scratch/cost-audit/review-fix/paced*`,
+`miss_by_load.txt` per title: intervals over 25 ms per 5 s window against the load then). Crash 1 missed 224 presents
+(4.7%) in the first run of the day, whose load was sampled only at its start (5.5) and end (20.6); it did not repeat
+(5 misses at load 10-22), so that run stays unexplained. Spyro missed 695 (17.5%) at load 18-24, the misses starting
+15 s in while load stayed flat, and 9 (0.2%) at load 5.5-7.7 on the same binary. Crash Bash missed 271 (6.0%) at
+load 21-37 and 108 (2.4%) at load 5-11, against 29 at load 6.4 earlier the same day; its misses do not follow load
+window by window. None of these is a quiet-host result.
+
 ## Not fixed
 - With more background load than the controlled six workers (other agents' builds and updates, load 5-21 on 16
   threads; old and new binaries interleaved, `ab2-*`, `ab3-*`) the new path still misses 50-175 presents against

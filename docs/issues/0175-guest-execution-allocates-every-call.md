@@ -27,3 +27,19 @@ debug channel is checked.
 `ExecutionResult::detail` a `std::string_view` over a static or registered name (or an enum), the census and journal
 keeping fixed or reused storage, and the HLE exception return a bounded executor exit rather than a C++ throw. `GpuPerf` formats its summary
 only when the channel is on.
+
+## Partial fix (2026-10-28)
+Counted per fence from boot on all eleven products (an `LD_PRELOAD` malloc counter, fences 1200-2400 differenced,
+stacks sampled; `scratch/cost-audit/`, reduced stacks in `stk-new/*/alloc_top.txt`).
+- `ExecutionResult::detail` is set only on an exit that is not a return: `completeHostLeaf`, `invokeNativeFunction`,
+  `dispatchGuestHostService`'s withheld and null-callback returns, the executor's guest-return boundary and `LoadExec`
+  return without one. No sampled stack reaches the dispatch paths.
+- Host side: `HostInput::rescanControllers` called `SDL_GetGamepads` on every poll; it rescans on a gamepad added or
+  removed event `drainEvents` saw, or a change of the physical-pad setting.
+
+Still open, in this issue's scope:
+- `hle::returnFromException` throws once per interrupt return that takes a custom exit; the fix is a typed executor
+  exit.
+- `SideEffectJournal::append`, `GuestCallCensus::recordCompleted` and `GpuPerf::presentSummary` were not re-examined.
+- Outside our code: radv inside `SDL_SubmitGPUCommandBuffer` and the swapchain acquire (about 60% of Crash 1's count)
+  and Lightrec compiling cold blocks, which falls to zero on a compiled screen.

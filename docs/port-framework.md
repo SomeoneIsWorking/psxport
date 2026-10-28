@@ -14,6 +14,10 @@ The framework owns CPU-state synchronization, bounded exits, nested-call attribu
 failure propagation. Callers do not open-code register marshalling, guest frames, override-disable
 flags, cache invalidation, or execution-backend selection.
 
+Every block boundary the executor reaches is classified (guest code, host service, unclaimed) through
+`NativeDispatcher::classify`, whose verdict cache holds until an image, override or service revision changes; a
+title of short blocks pays that lookup every few guest instructions.
+
 ## Native body requirements
 
 A native body is accepted only when reverse engineering names its behavior and independent evidence
