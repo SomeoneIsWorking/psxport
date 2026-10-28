@@ -41,6 +41,13 @@ audio thread and SPU mix run without sound on the desktop), 2400 frames paced at
 owner journal records a new `UnownedMoving` row, and fence 1548 (the 102 ms guest call). The load generator (`load.py`) is no
 longer an accepted method (workspace rules: cost is measured in load-independent units on a quiet host).
 
+## Owner journal lead (2026-10-28)
+The `v2-audio-c1` misses right after new `UnownedMoving` rows are not journal cost. Unpaced from boot (`PSXPORT_NOPACE`,
+`scratch/cost-audit/seq-base`, 2400 fences), every interval holding a new row is 3.6-6.8 ms (fences 3, 324, 434, 524,
+629, 1551, 1552), the run's typical interval; a new row costs a find over the screen's rows and one `owners` line. The
+long unpaced intervals are guest frames (fence 1548, 48 ms) and gameplay in-betweens of 10-13 ms at fences 1860-2185,
+which hold a whole guest frame each.
+
 ## Not fixed
 - With more background load than the controlled six workers (other agents' builds and updates, load 5-21 on 16
   threads; old and new binaries interleaved, `ab2-*`, `ab3-*`) the new path still misses 50-175 presents against
