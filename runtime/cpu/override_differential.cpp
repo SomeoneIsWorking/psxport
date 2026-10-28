@@ -186,7 +186,6 @@ ExecutionResult OverrideDifferential::shadow(DifferentialKeyStats &stats, Native
   }
   // Reported as the native it stands in for: its guest time was already charged by the nested run.
   original.cycles = 0;
-  original.detail = stats.name;
   if (live.unreplayable()) {
     record(stats, incomparable(*live.unreplayable()));
     return original;
@@ -211,7 +210,7 @@ ExecutionResult OverrideDifferential::shadow(DifferentialKeyStats &stats, Native
     const SideEffectJournal::Scope journal(core_, replay);
     // A runaway native is stopped by the journal bound; host frames only, so throwing here is safe.
     try {
-      native = invokeNativeFunction(core_, key.address, function, stats.name);
+      native = invokeNativeFunction(core_, key.address, function);
     } catch (const JournalBoundExceeded &) {
       stoppedAtBound = true;
     }

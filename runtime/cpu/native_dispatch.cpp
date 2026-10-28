@@ -228,7 +228,7 @@ std::uint32_t journaledSelector(const Core &core, const ResolvedHostDispatch &re
 } // namespace
 
 // How a host leaf the guest reached by jal finishes: its requested exit, else a return to r[31].
-static ExecutionResult completeHostLeaf(Core &core, NativeExecutionScope &execution, std::string_view name) {
+static ExecutionResult completeHostLeaf(Core &core, NativeExecutionScope &execution) {
   const std::optional<ExecutionResult> &pending = core.executionControl().pending();
   const bool unstated = pending.has_value() && pending->guestPc == 0u;
   if (auto requested = core.executionControl().consume(execution.continuation(), 0)) {
@@ -239,14 +239,13 @@ static ExecutionResult completeHostLeaf(Core &core, NativeExecutionScope &execut
     return *requested;
   }
   execution.completeReturn();
-  return {ExecutionExitReason::GuestReturn, core.pc, 0, std::string(name)};
+  return {ExecutionExitReason::GuestReturn, core.pc, 0};
 }
 
-ExecutionResult
-invokeNativeFunction(Core &core, std::uint32_t guestAddress, NativeFunction function, std::string_view name) {
+ExecutionResult invokeNativeFunction(Core &core, std::uint32_t guestAddress, NativeFunction function) {
   NativeExecutionScope execution(core, guestAddress);
   function(&core);
-  return completeHostLeaf(core, execution, name);
+  return completeHostLeaf(core, execution);
 }
 
 GuestHostDispatchKind NativeDispatcher::classify(std::uint32_t guestAddress) {
@@ -288,18 +287,18 @@ ExecutionResult dispatchGuestHostService(Core &core, std::uint32_t guestAddress)
     return {ExecutionExitReason::GuestReturn, core.pc, 0, "host service withheld from the override differential"};
   }
   if (resolved.platformFunction) {
-    return invokeNativeFunction(core, guestAddress, resolved.platformFunction, "platform-hle");
+    return invokeNativeFunction(core, guestAddress, resolved.platformFunction);
   }
   if (resolved.padWorkAreaAction) {
     NativeExecutionScope execution(core, guestAddress);
     core.game->hle.applyPadWorkAreaAction(*resolved.padWorkAreaAction);
-    return completeHostLeaf(core, execution, "BIOS pad work area");
+    return completeHostLeaf(core, execution);
   }
   if (resolved.biosTable) {
     NativeExecutionScope execution(core, guestAddress);
     const std::uint32_t function = core.r[9] & 0xffu;
     if (core.game->hle.dispatchBios(resolved.biosTable, function)) {
-      return completeHostLeaf(core, execution, "BIOS HLE");
+      return completeHostLeaf(core, execution);
     }
     lucent::error("native-dispatch", "unimplemented BIOS {}0:0x{:02X}", resolved.biosTable, function);
     return {ExecutionExitReason::Fault, guestAddress, 0, "unimplemented BIOS service"};
@@ -359,7 +358,7 @@ std::optional<ExecutionResult> NativeDispatcher::invoke(NativeKey key) {
       return shadowed;
     }
   }
-  return invokeNativeFunction(core_, key.address, entry->second.function, entry->second.name);
+  return invokeNativeFunction(core_, key.address, entry->second.function);
 }
 
 void dispatchGuestToReturn(Core &core, std::uint32_t guestAddress, ExecutionBudget budget, std::string_view owner) {
