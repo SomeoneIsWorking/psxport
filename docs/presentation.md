@@ -436,10 +436,10 @@ past arrive at once and the clock never ends past the interval. In-betweens spli
 
 A frame driver that replaces a libetc `VSync(n)` counts `Timing::vsyncFields(n)`: VSync waits for field n-1 since its
 last return, then for the next VBlank (Crash Bash `0x800320EC`), so guest work that ran past field k spans
-max(n, k + 1) fields and the frame ends on the field grid. Crash Bash's DisplayFrame override takes it. Spyro's field
-owner needs no count: its host turn delivers each field as the guest clock crosses it. Toy Story 2's resident loop
-replaces the barrier `0x8003FA68`, not VSync, and still ticks a fixed quota (psx-toy-story-2 issue 0059). The other
-titles commit their requested fields, so a frame whose work overruns them ends at the guest's time, off the grid. Deadlines step at the guest's field rate (`field_rate.h`: NTSC 59.817 Hz, the console's 263 lines of 3413
+max(n, k + 1) fields and the frame ends on the field grid. It is the fallback for a loop the title does not own yet;
+an owned loop (Crash Bash's DisplayFrame override, Toy Story 2's resident barrier `0x8003FA68`) commits the fields the
+guest requested, so a frame whose work overruns them ends at the guest's time, off the grid. Spyro's field owner
+needs no count: its host turn delivers each field as the guest clock crosses it. Deadlines step at the guest's field rate (`field_rate.h`: NTSC 59.817 Hz, the console's 263 lines of 3413
 video clocks), so an NTSC title on a 60.00 Hz display shows one present twice about every 5.5 s; that is accepted. A field that overruns its deadline by more than
 an interval drops the debt in whole intervals (`pacePlan`), so later deadlines keep their place on the field grid.
 NOPACE suppresses host waiting only. Each `Game` owns its `FramePacer`
