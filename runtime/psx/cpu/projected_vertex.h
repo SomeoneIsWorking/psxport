@@ -51,6 +51,11 @@ private:
   GtePlace place_{};
 };
 
+// A packet vertex word with no place of its own: it lies on the pixel it names.
+struct VertexWord {
+  std::uint32_t value = 0;
+};
+
 // The place of the vertex stored into a packet word; none for a word stored any other way.
 using WordPlace = std::optional<GtePlace>;
 
