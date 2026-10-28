@@ -76,6 +76,8 @@ void RenderDevice::latchFault(const char *where, const char *detail) {
     return;
   }
   faulted_ = true;
+  // Work submitted after a device loss never retires, so every later present would only pile up memory.
+  enabled_ = false;
   lucent::error("render",
                 "GPU fault at {}: {}; the renderer is latched off for the rest of this process and no later capture "
                 "is a picture of the game",
