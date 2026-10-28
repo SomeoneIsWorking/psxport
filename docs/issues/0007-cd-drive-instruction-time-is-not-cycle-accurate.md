@@ -5,7 +5,7 @@ status: open
 symptom: VSync-yielding titles can take hundreds of fields to reach a ReadN deadline; ordering is stable, but nominal 75/150-sector thresholds still do not prove physical drive-rate accuracy
 tags: cdrom,timing,r3000,accuracy
 created: 2026-08-21
-updated: 2026-08-22
+updated: 2026-10-28
 ---
 
 ## Resolved: yielded-field starvation
@@ -40,6 +40,15 @@ The 451,584 and 225,792 deadline thresholds come from 33,868,800 divided by the 
 sectors per second. Applying those physical-cycle thresholds to one-tick-per-instruction time is an
 ordering approximation. Cross-game runs prove that it removes the synchronous FIFO race; they do
 not prove exact wall-clock-equivalent drive rate.
+
+## Guest-visible effect beyond the CD (2026-10-28)
+
+The same gap moves guest-visible VBlank placement inside long draw-less work. Spyro 1's level start
+(psx-spyro issue 0215): from `LoadLevelScene`'s `g_LevelTicks` zero (`0x80013698`) to the first game-tick
+store (`0x80033A6C`) the console executes 364,988 instructions in about 724K cycles (Beetle PC observer
+timestamps), about 2 per instruction, and crosses one VBlank. The product runs that whole step in 387,818
+instructions from a field boundary, short of one 566,206-tick field, so `g_LevelTicks` stays one behind for
+the rest of the level. That span is a calibration case for the cost model below.
 
 ## Proper next step
 
