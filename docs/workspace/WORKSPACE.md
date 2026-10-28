@@ -45,6 +45,10 @@ Each skip is title-owned, one screen at a time, taken through that screen's own 
 tested; no framework-wide skip hook. A screen with no faithful terminal transition stays unskippable and is
 recorded as an issue.
 
+Each title owns its frame loop: its frame driver runs the guest's per-frame update and draw and decides the
+cadence, replacing the guest's VSync waits rather than emulating them. A loop not yet owned falls back to the
+framework's VSync rule (`Timing::vsyncFields`) and is recorded as an issue until it is owned.
+
 ## Framework
 
 There is no per-game framework pin. Each game's `external/psxport` is a plain relative symlink to the
