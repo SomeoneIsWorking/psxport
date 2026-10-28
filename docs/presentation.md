@@ -228,6 +228,10 @@ The composer builds the frame at `t` from S's record:
   guest time held. The title writes the in-between's inputs through `writeWord`, reads the packets the
   routine linked with `PacketChainWalker::tryEmitChain` before the redraw ends, and saves them as the
   object's state; a run that does not return, or reaches a device or a syscall, is refused.
+- **Transform.** A render that moves a GTE transform by t blends it with `blendGteControl` (`gte_control.*`): the
+  rotation turns along the shorter arc (polar decomposition, slerp) and its stretch moves element by element, so a
+  spinning part keeps its size between frames; translation moves by t. A singular matrix, or a mirror paired with a
+  rotation, has no turn between them and blends element by element.
 - **Environment.** A render sets texture page, texture mode and blend mode; draw area, offset,
   mask, texture window and interlace are those in effect where the primitive lands in S (the
   first recorded primitive at or after its position; at a bucket head, the device state the walk had
