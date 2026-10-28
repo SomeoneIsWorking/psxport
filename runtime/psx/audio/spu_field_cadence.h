@@ -2,7 +2,7 @@
 // SPU field cadence — converts the exact display-field rate to integer SPU work without drift.
 //
 // The PSX SPU consumes kNominalPsxCpuHz system clocks per second and emits one 44.1 kHz stereo frame for
-// every 768 clocks. NTSC delivers 60,000 fields per 1,001 seconds, so neither quantity is integral
+// every 768 clocks. A field is a rational fraction of a second (field_rate.h), so neither quantity is integral
 // per field. This owner carries the two division remainders across calls; rounding each call would
 // permanently lose 44.1 stereo frames per second.
 
@@ -21,7 +21,11 @@ public:
   static constexpr uint32_t kClockRateHz = psx::frame::kNominalPsxCpuHz;
   static constexpr uint32_t kSampleRateHz = 44100u;
   static constexpr uint32_t kClocksPerSample = 768u;
-  static constexpr uint32_t kMaximumStandardSamplesPerField = kSampleRateHz / 50u;
+  // The slower standard's field, rounded up.
+  static constexpr uint32_t kMaximumStandardSamplesPerField =
+      static_cast<uint32_t>((uint64_t{kSampleRateHz} * psx::frame::DISPLAY_FIELD_RATE_PAL.frequencyDenominator +
+                             psx::frame::DISPLAY_FIELD_RATE_PAL.frequencyNumerator - 1u) /
+                            psx::frame::DISPLAY_FIELD_RATE_PAL.frequencyNumerator);
 
   SpuFieldAdvance advance(psx::frame::DisplayFieldRate rate) {
     if (rate != mRate) {

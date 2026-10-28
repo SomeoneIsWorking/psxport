@@ -412,8 +412,8 @@ aborts unless `FramePresenter::fence()` advanced by exactly one.
 deadline. The default, `FramePacer::subframeDeadline`, advances Timing, devices and the VBlank latch by the
 represented field count. A title with its own field scheduler advances `Timing::advanceDisplayFields` per
 delivered field and plans with `FramePacer::presentedFieldsDeadline`, which creates no field. In-betweens
-split the deadline of the same fields. Deadlines step at the guest's field rate, so an NTSC title on a 60.00 Hz
-display shows one present twice about every 16.7 s; that is accepted. A field that overruns its deadline by more than
+split the deadline of the same fields. Deadlines step at the guest's field rate (`field_rate.h`: NTSC 59.817 Hz, the console's 263 lines of 3413
+video clocks), so an NTSC title on a 60.00 Hz display shows one present twice about every 5.5 s; that is accepted. A field that overruns its deadline by more than
 an interval drops the debt in whole intervals (`pacePlan`), so later deadlines keep their place on the field grid.
 NOPACE suppresses host waiting only. Each `Game` owns its `FramePacer`
 and deadline; `paceSubframeFields`, `waitPresentedFields` and `hostScreenPace` plan and then sleep.
