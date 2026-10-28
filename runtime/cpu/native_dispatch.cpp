@@ -284,7 +284,7 @@ ExecutionResult dispatchGuestHostService(Core &core, std::uint32_t guestAddress)
           journaledKind(resolved), guestAddress, journaledSelector(core, resolved))) {
     // A shadow-path service the live path did not perform here is withheld from the devices.
     core.pc = core.r[31];
-    return {ExecutionExitReason::GuestReturn, core.pc, 0, "host service withheld from the override differential"};
+    return {ExecutionExitReason::GuestReturn, core.pc, 0};
   }
   if (resolved.platformFunction) {
     return invokeNativeFunction(core, guestAddress, resolved.platformFunction);
@@ -311,7 +311,7 @@ ExecutionResult dispatchGuestHostService(Core &core, std::uint32_t guestAddress)
     return {ExecutionExitReason::Fault, guestAddress, 0, "native override disappeared during dispatch"};
   }
   core.pc = core.r[31];
-  return {ExecutionExitReason::GuestReturn, core.pc, 0, "null callback"};
+  return {ExecutionExitReason::GuestReturn, core.pc, 0};
 }
 
 ExecutionResult dispatchGuest(Core &core, std::uint32_t guestAddress, ExecutionBudget budget, std::string_view origin) {
