@@ -287,8 +287,10 @@ there are no per-vertex keys. An in-between with nothing produced is the shown r
   collected again.
 - **One mode per interval.** The interval is composed whole at every present or held at every present,
   including `t = 1`: the presenter composes every later present first, and a refusal at any of them holds
-  all. A held present shows S as the guest drew it. The last present is composed by its own composer
-  (`endComposer_`) before the in-betweens and kept for its own present, so a 2-field interval composes twice.
+  all. A held present shows S as the guest drew it: a held in-between builds N's own present (no composed
+  record), so the record is planned and rastered once per interval and the `t = 1` present finds it applied.
+  The last present is composed by its own composer (`endComposer_`) before the in-betweens and kept for its
+  own present, so a 2-field interval composes twice.
 
 - **Shown record.** A present shows the latest held drawing record with a primitive whose draw area is
   the displayed buffer (`drawAreaSpansBuffer`, the canvas rule): the newest drawing record on a
@@ -421,7 +423,9 @@ aborts unless `FramePresenter::fence()` advanced by exactly one.
 `GameRuntime::presentDeadline` decides who advances simulated display time and returns the present's host
 deadline. The default, `FramePacer::subframeDeadline`, advances Timing, devices and the VBlank latch by the
 represented field count. A title with its own field scheduler advances `Timing::advanceDisplayFields` per
-delivered field and plans with `FramePacer::presentedFieldsDeadline`, which creates no field. In-betweens
+delivered field and plans with `FramePacer::presentedFieldsDeadline`, which creates no field. A title that
+replaces a `VSync(n)` wait counts `max(n, Timing::fieldsSinceDisplayBoundary())`: the whole fields its guest
+work already ran past the last delivered field, which a console's VSync finds counted and does not wait for. In-betweens
 split the deadline of the same fields. Deadlines step at the guest's field rate (`field_rate.h`: NTSC 59.817 Hz, the console's 263 lines of 3413
 video clocks), so an NTSC title on a 60.00 Hz display shows one present twice about every 5.5 s; that is accepted. A field that overruns its deadline by more than
 an interval drops the debt in whole intervals (`pacePlan`), so later deadlines keep their place on the field grid.
