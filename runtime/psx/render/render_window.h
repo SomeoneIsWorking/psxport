@@ -6,6 +6,8 @@
 #include <SDL3/SDL.h>
 #include <SDL3/SDL_gpu.h>
 
+#include <string>
+
 namespace psx::render {
 
 // The window's creation size in display units, unless PSXPORT_PRESENT_SINK names one in pixels.
@@ -26,6 +28,8 @@ public:
   // Teardown: leave the device, then destroy once the device is gone.
   void releaseDevice(SDL_GPUDevice *device);
   void destroy();
+  // Tells the player `message` in a modal error box over a shown window; a tool's unmapped window only logs it.
+  void showError(const char *title, const std::string &message) const;
 
   SDL_Window *window() const {
     return window_;
@@ -46,6 +50,7 @@ private:
   static bool SDLCALL watchDisplay(void *self, SDL_Event *event);
 
   SDL_Window *window_ = nullptr;
+  bool shown_ = false;
   double refreshPeriodMs_ = 0.0;
   SDL_GPUTextureFormat swapchainFormat_ = SDL_GPU_TEXTUREFORMAT_INVALID;
 };

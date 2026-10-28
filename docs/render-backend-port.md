@@ -12,10 +12,15 @@ product does not carry a second windowing or graphics stack.
   `render_readback.cpp` readback.
 - A device-lost or fence-timeout fault latches the renderer off for the rest of that process (`enabled()` turns
   false, so no later present acquires or submits; work submitted to a lost device never retires) and is written
-  to `gpu_fault` in the user data directory (`~/.config/psxport/` on Linux). The window keeps its last picture
-  while the guest, audio and input run on. Every later process logs the record as a warning until the file is
+  to `gpu_fault` in the user data directory (`~/.config/psxport/` on Linux). The session ends at its next step
+  (`TitleSession::End::GpuFault`, or the picker's `Outcome::GpuFault`), `ProductHost::endOnGpuFault` tells the
+  player through `RenderWindow::showError` (an error box over a shown window, a log line for a tool's unmapped one)
+  and the process exits with status 3. The control channel's `gpufault` latches the device the same way without a
+  device failure and writes no marker. Every later process logs the record as a warning until the file is
   deleted, and starts normally: the kernel resets the ring, a lost device is reported to innocent contexts
   too, and the marker cannot tell which process hung the GPU (`journalctl -k` names it).
+- Guest draw data a console never finishes (a cyclic draw list, a packet ending inside a poly-line, a record past
+  its bounds) ends the process in the record path before anything of it is submitted (`gpu/record_fault.*`).
 - `runtime/psx/shaders_gpu/` owns first-party GLSL sources. `tools/gen_gpu_shaders.py` compiles and
   embeds them in a consumer-owned build directory; no shader header is written to the source tree.
 - `docs/presentation.md` is the renderer's contract: what each render path presents and how.

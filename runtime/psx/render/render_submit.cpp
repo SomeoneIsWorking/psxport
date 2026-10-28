@@ -76,6 +76,7 @@ void RenderDevice::latchFault(const char *where, const char *detail) {
     return;
   }
   faulted_ = true;
+  fault_ = lucent::format("{}: {}", where, detail);
   // Work submitted after a device loss never retires, so every later present would only pile up memory.
   disable();
   lucent::error("render",
@@ -83,7 +84,18 @@ void RenderDevice::latchFault(const char *where, const char *detail) {
                 "is a picture of the game",
                 where,
                 detail);
+}
+
+void RenderDevice::failDevice(const char *where, const char *detail) {
+  latchFault(where, detail);
   persistFault(where, detail);
+}
+
+void RenderDevice::reportFaultToPlayer() const {
+  window_.showError(windowTitle_ != nullptr ? windowTitle_ : "psxport",
+                    lucent::format("The graphics device failed and the game cannot draw any more, so it will close.\n"
+                                   "GPU fault at {}",
+                                   fault_));
 }
 
 bool RenderDevice::submit(SDL_GPUCommandBuffer *cmd, const char *where) {
@@ -93,7 +105,7 @@ bool RenderDevice::submit(SDL_GPUCommandBuffer *cmd, const char *where) {
   if (SDL_SubmitGPUCommandBuffer(cmd)) {
     return true;
   }
-  latchFault(where, SDL_GetError());
+  failDevice(where, SDL_GetError());
   return false;
 }
 
@@ -104,14 +116,14 @@ bool RenderDevice::submitAndWait(SDL_GPUCommandBuffer *cmd, const char *where) {
   }
   SDL_GPUFence *fence = SDL_SubmitGPUCommandBufferAndAcquireFence(cmd);
   if (fence == nullptr) {
-    latchFault(where, SDL_GetError());
+    failDevice(where, SDL_GetError());
     return false;
   }
   const Uint64 start = SDL_GetTicks();
   while (!SDL_QueryGPUFence(device_, fence)) {
     if (SDL_GetTicks() - start >= kFenceBudgetMs) {
       SDL_ReleaseGPUFence(device_, fence);
-      latchFault(where, "fence did not signal within the wall-clock budget");
+      failDevice(where, "fence did not signal within the wall-clock budget");
       return false;
     }
     SDL_Delay(1);

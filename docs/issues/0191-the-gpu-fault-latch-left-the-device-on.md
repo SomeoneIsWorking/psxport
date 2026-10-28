@@ -14,9 +14,18 @@ true. Each later present acquired, recorded and submitted into the lost device, 
 cycled a fresh transfer buffer and command buffer every present. The latch now calls `RenderDevice::disable()`.
 
 ## What the player sees after a fault
-The window keeps the last picture it was shown and never changes again. The guest keeps running on its pacer, so
-audio and pad input go on, but nothing draws, including the ESC menu, and nothing tells the player the renderer
-stopped; closing the window ends the process. The log has the `GPU fault at ...` error and the marker below.
+Until 2026-10-28 the window kept its last picture, the guest ran on, nothing drew (the ESC menu included) and nothing
+told the player. Now the session ends at its next step (`TitleSession::End::GpuFault`; the picker's
+`Outcome::GpuFault`), `ProductHost::endOnGpuFault` shows an error box over the window, "The graphics device failed
+and the game cannot draw any more, so it will close." with `GPU fault at <where>: <detail>`
+(`RenderWindow::showError`; a tool's unmapped window logs it instead), and the process exits with status 3. The
+control channel's `gpufault` latches the device without a device failure (`RenderDevice::latchFault`; only a failed
+submit or fence writes the marker, `failDevice`).
+
+Shown (test program, hidden, unpaced, `gpufault` 2 s in; `scratch/player-bugs-8/gpufault.log`): `[render:error] GPU
+fault at control channel ...`, then `[render:error] psxport test program: The graphics device failed ... GPU fault at
+control channel: latched through the control channel`, the run-end report, exit status 3. The error box over a shown
+window is not shown by an agent run (no visible windows); its call is the SDL message box with the window as parent.
 
 ## Shown
 One forced loss (the X4 build without its 0043 fix, `scratch/player-bugs-6/ring/latch1`): after the fault at 19 s
