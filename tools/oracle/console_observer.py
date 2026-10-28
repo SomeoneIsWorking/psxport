@@ -32,6 +32,7 @@ class Status(ct.Structure):
         ("pending", ct.c_uint32), ("complete", ct.c_uint32)]
 
 
+# ordinal: instructions executed since configure (pc_observer.c counts each opcode at BEGIN_OPF, cpu.c).
 class Record(ct.Structure):
     _fields_ = [("ordinal", ct.c_uint64), ("field", ct.c_uint64)] + [
         (name, ct.c_uint32) for name in ("target", "kind", "pc", "next_pc", "instruction",
