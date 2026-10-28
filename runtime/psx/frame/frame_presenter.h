@@ -136,9 +136,16 @@ private:
                       const SealedRecord *from = nullptr,
                       float t = 1.0f,
                       int interval = 0);
-  // The latency for an interval of `fields` fields shown over `presents` presents, `lead` fields after S's draw
-  // entry at display field `entry`: unchanged when the interval allows, never showing a moment again or one before S'.
-  int intervalLatency(std::int64_t entry, int lead, int presents, int fields) const;
+  // An interval S'->S as the presents see it: `fields` fields between the draw entries shown over `presents`
+  // presents, `lead` fields after S's draw entry.
+  struct IntervalShape {
+    int lead = 0;
+    int presents = 0;
+    int fields = 0;
+  };
+  // The latency for `interval`, S's draw entry at display field `entry`: unchanged when the interval allows, never
+  // showing a moment again or one before S'.
+  int intervalLatency(std::int64_t entry, IntervalShape interval) const;
   // Fields from `record`'s draw entry to now; 0 when it has none.
   static int fieldsSinceDrawEntry(const Core &core, const present::FrameRecord &record);
   // The fields between `from`'s and `to`'s draw entries; `fallback` when either is unknown or out of range.

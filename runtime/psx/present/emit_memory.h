@@ -227,14 +227,14 @@ public:
   }
   // The vertex a body stored at `address`, on its word's pixel where no place was kept.
   [[nodiscard]] gte::ProjectedVertex loadVertex(std::uint32_t address) const {
-    return loadVertex(address, mem_r32(address));
+    return loadVertex(address, gte::ProjectedVertex::whole(mem_r32(address)));
   }
-  // The vertex `word` names at the place kept at `address`, whose word may be another encoding of it (an
-  // outcode); on its own pixel where no place was kept.
-  [[nodiscard]] gte::ProjectedVertex loadVertex(std::uint32_t address, std::uint32_t word) const {
+  // `onPixel`'s word at the place kept at `address`, whose word may be another encoding of it (an outcode);
+  // `onPixel` itself where no place was kept.
+  [[nodiscard]] gte::ProjectedVertex loadVertex(std::uint32_t address, gte::ProjectedVertex onPixel) const {
     gte::WordPlace place;
     readPlaces(address, std::span(&place, 1));
-    return place ? gte::ProjectedVertex(word, *place) : gte::ProjectedVertex::whole(word);
+    return place ? gte::ProjectedVertex(onPixel.word(), *place) : onPixel;
   }
 
 private:

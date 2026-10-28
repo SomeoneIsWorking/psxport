@@ -307,7 +307,8 @@ void FramePresenter::presentRecords(Core &core, const present::StateProducers *p
   // S' and S's draw entries and d those from S's draw entry to this commit.
   const int fields = intervalFields(*from->record, base, guestFields);
   // A cut or a held interval shows no motion, so the latency returns to its least there.
-  latency_ = held || cut ? lead + guestFields - 1 : intervalLatency(entry, lead, guestFields, fields);
+  latency_ = held || cut ? lead + guestFields - 1
+                         : intervalLatency(entry, {.lead = lead, .presents = guestFields, .fields = fields});
   const auto tAt = [&](int present) {
     return std::clamp(static_cast<float>(present + lead + fields - latency_) / static_cast<float>(fields), 0.0f, 1.0f);
   };
@@ -358,12 +359,12 @@ void FramePresenter::presentRecords(Core &core, const present::StateProducers *p
   shownMoment_ = held || cut ? entry : std::min(entry, entry + lead + guestFields - 1 - latency_);
 }
 
-int FramePresenter::intervalLatency(std::int64_t entry, int lead, int presents, int fields) const {
+int FramePresenter::intervalLatency(std::int64_t entry, IntervalShape interval) const {
   // The last present lands on S or before it; the first shows neither a moment already shown nor one before S'.
-  const int lowest = lead + presents - 1;
-  std::int64_t highest = lead + fields;
+  const int lowest = interval.lead + interval.presents - 1;
+  std::int64_t highest = interval.lead + interval.fields;
   if (shownMoment_) {
-    highest = std::min(highest, entry + lead - *shownMoment_ - 1);
+    highest = std::min(highest, entry + interval.lead - *shownMoment_ - 1);
   }
   return static_cast<int>(std::min<std::int64_t>(std::max(latency_, lowest), highest));
 }

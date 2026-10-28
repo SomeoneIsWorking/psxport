@@ -62,13 +62,13 @@ inline constexpr std::size_t kMaxDebugParams = 4;
 class DebugValues {
 public:
   bool has(std::size_t index) const {
-    return index < values_.size() && values_[index].has_value();
+    return at(index).has_value();
   }
   std::int64_t value(std::size_t index, std::int64_t absent = 0) const {
-    return has(index) ? *values_[index] : absent;
+    return at(index).value_or(absent);
   }
   std::uint32_t u32(std::size_t index, std::uint32_t absent = 0) const {
-    return has(index) ? static_cast<std::uint32_t>(*values_[index]) : absent;
+    return static_cast<std::uint32_t>(at(index).value_or(absent));
   }
   // The word as the line spelled it.
   std::string_view word(std::size_t index) const {
@@ -77,6 +77,10 @@ public:
 
 private:
   friend class TitleDebugMenu;
+  std::optional<std::int64_t> at(std::size_t index) const {
+    return index < values_.size() ? values_[index] : std::nullopt;
+  }
+
   std::array<std::optional<std::int64_t>, kMaxDebugParams> values_{};
   std::array<std::string_view, kMaxDebugParams> words_{};
 };

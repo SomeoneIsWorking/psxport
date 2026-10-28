@@ -34,7 +34,7 @@ public:
       decodedRa_ = ra;
       callWord_ = callWord;
     }
-    if (!callsTo(pc, ra, gpr)) {
+    if (!callsTo(GuestCallSite{pc, ra}, gpr)) {
       return;
     }
     if (depth_ != 0 && frames_[top()].entry == pc && frames_[top()].returnPc == ra) {
@@ -67,15 +67,15 @@ private:
   std::size_t top() const {
     return (depth_ - 1u) % kDepth;
   }
-  // The word at ra - 8 is a `jal pc`, or a `jalr` whose register still holds pc.
-  bool callsTo(std::uint32_t pc, std::uint32_t ra, const std::uint32_t *gpr) const {
+  // The word at the call's return address - 8 is a `jal` to its entry, or a `jalr` whose register still holds it.
+  bool callsTo(GuestCallSite call, const std::uint32_t *gpr) const {
     const std::uint32_t opcode = callWord_ >> 26;
     if (opcode == 3u) {
-      const std::uint32_t site = ra - kJalReturnOffset;
+      const std::uint32_t site = call.returnPc - kJalReturnOffset;
       const std::uint32_t target = (site & 0xF0000000u) | ((callWord_ & 0x03FFFFFFu) << 2);
-      return (target & 0x1FFFFFFFu) == (pc & 0x1FFFFFFFu);
+      return (target & 0x1FFFFFFFu) == (call.entry & 0x1FFFFFFFu);
     }
-    return opcode == 0u && (callWord_ & 0x3Fu) == 9u && gpr[(callWord_ >> 21) & 0x1Fu] == pc;
+    return opcode == 0u && (callWord_ & 0x3Fu) == 9u && gpr[(callWord_ >> 21) & 0x1Fu] == call.entry;
   }
 
   struct Frame {

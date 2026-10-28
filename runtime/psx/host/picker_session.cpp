@@ -44,23 +44,24 @@ PickerSession::PickerSession(PickerRuntime &runtime,
 
 PickerSession::~PickerSession() = default;
 
-void PickerSession::build() {
+void PickerSession::build(const PickerLayout &layout) {
   sources_.clear();
   for (int panel = 0; panel < panels_->count(); ++panel) {
     sources_.push_back({.picture = panels_->picture(panel), .logo = panels_->logo(panel)});
   }
-  host_->display.buildPanes(panes_.build(*layout_, sources_, panels_->selected(), services_.presentation));
+  host_->display.buildPanes(panes_.build(layout, sources_, panels_->selected(), services_.presentation));
   built_ = true;
 }
 
 // The settled selected panel's presents drive the selector; a pre-rolling one gets no host.
-void PickerSession::attachPaneHost() {
+// The layout lives in run(), which the hosted panel's presents happen inside.
+void PickerSession::attachPaneHost(const PickerLayout &layout) {
   for (int panel = 0; panel < panels_->count(); ++panel) {
     if (TitleSession *session = panels_->session(panel)) {
       if (panel == hostedPanel_ && panels_->panelSettled(hostedPanel_)) {
         session->setPaneHost({.built =
-                                  [this] {
-                                    build();
+                                  [this, &layout] {
+                                    build(layout);
                                   },
                               .show =
                                   [this] {
@@ -73,7 +74,7 @@ void PickerSession::attachPaneHost() {
   }
 }
 
-int PickerSession::serviceInput() {
+int PickerSession::serviceInput(PickerLayout &layout) {
   const int before = panels_->selected();
   // The host's pad is the only one that sees the player, so a tap moves one selection.
   if (panels_->count() > 0) {
@@ -104,14 +105,14 @@ int PickerSession::serviceInput() {
     }
   }
   if (panels_->selected() != before) {
-    layout_->setSelection(panels_->selected());
+    layout.setSelection(panels_->selected());
   }
   // The host follows the selected panel and is attached once that panel has settled.
   const bool settled = panels_->panelSettled(panels_->selected());
   if (hostedPanel_ != panels_->selected() || hostedSettled_ != settled) {
     hostedPanel_ = panels_->selected();
     hostedSettled_ = settled;
-    attachPaneHost();
+    attachPaneHost(layout);
   }
   return chosen;
 }
@@ -120,10 +121,10 @@ PickerSession::Result PickerSession::run() {
   host_ = std::make_unique<Game>(runtime_, services_.presentation, services_.input, services_.config);
   host_->productName = catalog_.productName();
   Core &core = host_->core;
-  layout_.emplace(content_.panelCount(),
-                  PickerLayout::Motion{.selectedShare = host_->mods.pickerSelectedShare,
-                                       .slantPerWidth = host_->mods.pickerSlantPerWidth,
-                                       .responsePerFrame = host_->mods.pickerWidthResponse});
+  PickerLayout layout(content_.panelCount(),
+                      PickerLayout::Motion{.selectedShare = host_->mods.pickerSelectedShare,
+                                           .slantPerWidth = host_->mods.pickerSlantPerWidth,
+                                           .responsePerFrame = host_->mods.pickerWidthResponse});
   host_->pad.useLiveInputOnly(); // a selector must not open or rotate the player's pad recording
   // No guest runs here, so the channel needs no store observer.
   host_->dbg_server.start();
@@ -153,13 +154,13 @@ PickerSession::Result PickerSession::run() {
     built_ = false;
 
     const psx::present::PixelSize sink = services_.presentation.sinkSize();
-    layout_->setSurface(sink.width, sink.height);
+    layout.setSurface(sink.width, sink.height);
 
-    const int chosen = serviceInput();
+    const int chosen = serviceInput(layout);
     // Each panel builds its own picture at the size it is shown at; the window is the host's.
     for (int panel = 0; panel < panels_->count(); ++panel) {
       if (TitleSession *session = panels_->session(panel)) {
-        session->presentToPane(layout_->imageSize(panel));
+        session->presentToPane(layout.imageSize(panel));
       }
     }
     if (chosen >= 0 && panels_->count() > 0) {
@@ -177,19 +178,19 @@ PickerSession::Result PickerSession::run() {
 
     // The width animation runs on the same frame, so a selection change is drawn from its first frame.
     const unsigned long long pacedFields = panels_->advance(preRoll);
-    layout_->advance();
+    layout.advance();
     lucent::debug("layout",
                   "panel widths {} {} {} of {}",
-                  layout_->panel(0).bounds.w,
-                  layout_->panel(1).bounds.w,
-                  layout_->panel(2).bounds.w,
+                  layout.panel(0).bounds.w,
+                  layout.panel(1).bounds.w,
+                  layout.panel(2).bounds.w,
                   sink.width);
     panels_->report();
 
     // A frame in which no panel presented still owes the window one: build, pace unless the panel's
     // step already did, show.
     if (!built_) {
-      build();
+      build(layout);
       if (pacedFields == 0) {
         host_->framePacer.hostScreenPace(core);
       }
