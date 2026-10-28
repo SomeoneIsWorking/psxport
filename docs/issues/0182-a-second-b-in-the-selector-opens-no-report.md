@@ -33,7 +33,9 @@ verbs keep input turns, which a paused overlay needs. `Pad` lost its drive state
 longer merges control input (it is the guest-level recording alone), and the SIO savestate section dropped the four
 drive fields (`kBusLayoutVersion` 5; older states are refused). `tools/oracle/compare_cores.py` checks the gamepad reply
 instead of a `held=` echo; the guest's pad words stay a compared RAM range. Title debug drivers that pressed through `Pad::driveTap` (Crash Bash
-`pause`/`arena`, Tomba! 2 autoskip) call `HostInput::padButtons` too; `Pad::replaying` says when a replay owns input.
+`pause`/`arena`, Tomba! 2 autoskip) and the verbs press through `Pad::injectButtons`, the one press entry
+(`HostInput::padButtons` is private to it). It refuses a press while a replay owns input or while another Game holds the
+player's input: a Tomba! 2 picker panel's autoskip taps confirmed the picker (psx-tomba issue 0044).
 
 Review (2026-10-28): the first cut counted input turns for `tap`, which advance every 15 ms in `DbgServer::idleFrame`
 while paused, so a stepped `tap start 6` let go before the guest saw a frame. `TapClock::PadFrames` restores frame

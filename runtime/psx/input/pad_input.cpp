@@ -36,6 +36,19 @@ void Pad::setPlayerInputSuppressed(bool suppressed) {
   mHost.setOverlayLive(&game->rml_overlay, !suppressed);
 }
 
+std::string Pad::injectButtons(std::uint16_t bits, psx::input::InjectedPress press, int holdFrames) {
+  if (press != psx::input::InjectedPress::Up) {
+    if (replaying()) {
+      return "pad: a pad replay owns the guest's input; nothing was pressed";
+    }
+    // The host queue is shared, so a press here would reach the Game that holds the player's input.
+    if (mPlayerInputSuppressed) {
+      return "pad: this Game does not hold the player's input; nothing was pressed";
+    }
+  }
+  return mHost.padButtons(bits, press, holdFrames);
+}
+
 void Pad::serviceFrame() {
   Core *c = &game->core;
   const bool shown = game->renderDevice.shown();
