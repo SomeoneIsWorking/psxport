@@ -183,6 +183,35 @@ constexpr Vlc kAcCodes[] = {
     {16, 0x0001f, 27, 1}, // 0000000000011111
 };
 
+struct AcEntry {
+  uint8_t len = 0; // 0: no code
+  uint8_t run = 0;
+  uint8_t level = 0;
+};
+
+// Codes of up to 8 bits never open with six zeros and longer ones always do, so a 16-bit window resolves
+// through its top 8 bits or, after six zeros, its low 10.
+struct AcTables {
+  std::array<AcEntry, 256> shortCodes{};
+  std::array<AcEntry, 1024> longCodes{};
+};
+
+constexpr AcTables buildAcTables() {
+  AcTables tables;
+  for (const Vlc &vlc : kAcCodes) {
+    const bool isShort = vlc.len <= 8;
+    const int spare = (isShort ? 8 : 16) - vlc.len;
+    const uint32_t first = static_cast<uint32_t>(vlc.code) << spare;
+    for (uint32_t suffix = 0; suffix < (1u << spare); ++suffix) {
+      AcEntry &entry = isShort ? tables.shortCodes[first | suffix] : tables.longCodes[first | suffix];
+      entry = {vlc.len, vlc.run, vlc.level};
+    }
+  }
+  return tables;
+}
+
+constexpr AcTables kAcTables = buildAcTables();
+
 struct AcCode {
   enum class Kind : std::uint8_t { EndOfBlock, Pair, Bad };
   Kind kind = Kind::Bad;
@@ -205,17 +234,14 @@ AcCode decodeAc(BitReader &b) {
     }
     return {.kind = AcCode::Kind::Pair, .run = r, .level = l};
   }
-  for (int n = 1; n <= 16; n++) {
-    const uint32_t v = b.peek(n);
-    for (const Vlc &vlc : kAcCodes) {
-      if (vlc.len == n && vlc.code == v) {
-        b.skip(n);
-        const int level = vlc.level;
-        return {.kind = AcCode::Kind::Pair, .run = vlc.run, .level = b.get(1) != 0 ? -level : level};
-      }
-    }
+  const uint32_t window = b.peek(16);
+  const AcEntry &code = (window >> 10) != 0 ? kAcTables.shortCodes[window >> 8] : kAcTables.longCodes[window & 0x3FFu];
+  if (code.len == 0) {
+    return {};
   }
-  return {};
+  b.skip(code.len);
+  const int level = code.level;
+  return {.kind = AcCode::Kind::Pair, .run = code.run, .level = b.get(1) != 0 ? -level : level};
 }
 
 // The MPEG-1 intra matrix DecDCTReset uploads, in raster order.
