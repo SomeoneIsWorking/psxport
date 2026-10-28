@@ -101,6 +101,12 @@ CallStep ResumableGuestCall::advance(const std::optional<NativeKey> &original, s
                    cycles_,
                    result.reason);
   }
+  lucent::debug("guest-call",
+                "{} suspended after turn {} at pc=0x{:08X} ra=0x{:08X}",
+                owner_,
+                turns_,
+                result.guestPc,
+                core.r[31]);
   resumePc_ = result.guestPc;
   suspended_ = static_cast<const R3000 &>(core);
   return CallStep{CallOutcome::Suspended, result.guestPc, turns_, cycles_, 0u, {}, result.reason};
