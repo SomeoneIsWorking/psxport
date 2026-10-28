@@ -8,8 +8,14 @@
 
 namespace psx::testprog {
 
-inline constexpr std::array<std::string_view, 6> kSceneNames{
-    "owned-square", "unowned-moving", "mmio-port", "block-dma-port", "reused-slot", "amended-square"};
+inline constexpr std::array<std::string_view, 8> kSceneNames{"owned-square",
+                                                             "unowned-moving",
+                                                             "mmio-port",
+                                                             "block-dma-port",
+                                                             "reused-slot",
+                                                             "amended-square",
+                                                             "looping-ot",
+                                                             "unterminated-poly-line"};
 
 class DebugMenu final : public psx::game::TitleDebugMenu {
 public:

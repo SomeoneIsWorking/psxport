@@ -17,11 +17,11 @@ DebugMenu::DebugMenu() {
         return std::uint64_t{core.mem_r32(session(core).facts.scene)};
       },
       [](Core &, std::uint64_t key) {
-        return key < kSceneNames.size() ? lucent::format("scene {}", kSceneNames[key]) : std::string();
+        return key < kSceneNames.size() ? lucent::format("planted {}", kSceneNames[key]) : std::string();
       });
   section("Scenes");
   verb({
-      .name = "scene",
+      .name = "planted",
       .summary = "Show one planted scene",
       .params = {DebugParam::word("scene", DebugNames::of(std::span<const std::string_view>(kSceneNames)))},
       .run =

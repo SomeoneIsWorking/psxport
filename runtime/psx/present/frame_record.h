@@ -194,7 +194,7 @@ struct SlotStart {
 
 class FrameRecord {
 public:
-  // Records beyond these are dropped and the record is marked incomplete.
+  // More than a console draws in any frame: reaching either is a fatal record fault (record_fault.h).
   static constexpr std::size_t kMaxEntries = 262144;
   static constexpr std::size_t kMaxPoolHalfwords = std::size_t{8} * 1024u * 1024u;
 
@@ -252,7 +252,7 @@ public:
   // The most recent entry, or null.
   RecordEntry *last();
   void dropLast();
-  // Returns the pool offset of `entries`, or kNoClut when the pool is full.
+  // Returns the pool offset of `entries`; kNoClut once the record is incomplete.
   std::uint32_t appendClut(std::span<const std::uint16_t> entries);
   // Appends an upload with its pixels; sets upload.pixelOffset.
   void appendUpload(VramUpload upload, std::span<const std::uint16_t> pixels);

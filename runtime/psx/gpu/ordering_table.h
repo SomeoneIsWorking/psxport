@@ -4,6 +4,7 @@
 
 #include "frame_record.h"
 #include "guest_memory_map.h"
+#include "record_fault.h"
 
 #include <cstdint>
 #include <optional>
@@ -22,8 +23,6 @@ inline constexpr std::uint32_t kOtChainEndZero = 0;
 // A node address: word-aligned within the 2 MB main-RAM window.
 inline constexpr std::uint32_t kMainRamOffsetMask = 0x1FFFFCu;
 inline constexpr std::uint32_t kOtHeaderBytes = 4;
-// More nodes than any packet pool holds: the chain is cyclic or malformed.
-inline constexpr int kOtNodeLimit = 0x10000;
 
 constexpr std::uint32_t guestAddressOf(std::uint32_t mainRamOffset) {
   return kKseg0Base | (mainRamOffset & kMainRamOffsetMask);
@@ -77,7 +76,7 @@ private:
   std::uint32_t header_ = 0;
 };
 
-// One DrawOTag walked through guest RAM; stops at the chain's end or at kOtNodeLimit nodes.
+// One DrawOTag walked through guest RAM to the chain's end; a revisited node is a fatal record fault.
 class OrderingTableCursor {
 public:
   explicit OrderingTableCursor(Core &core, std::uint32_t rootGuestAddress);
@@ -88,13 +87,14 @@ public:
   int nodesEntered() const {
     return nodesEntered_;
   }
-  // False at the end of the chain and at the cap.
+  // False at the end of the chain.
   bool advance();
 
 private:
   Core &core_;
   OtNode node_;
   int nodesEntered_ = 0;
+  LinkCycleCheck cycle_;
 };
 
 // The order a table's buckets are walked in: a reverse-cleared table (ClearOTagR) from its last

@@ -58,6 +58,7 @@ Dependency direction: title repo → `runtime/psx/game/` (the title interface) �
 - `runtime/psx/frame/frame_time_histogram.*` — frame time percentiles
 - `runtime/psx/gpu/gpu_device.*`, `gpu_display_mode.h`, `gpu_ports.*` — GPU device (Beetle gpu.c): VRAM, GP0 / GP1, display area and mode, DMA2 blocks and ordering-table walk
 - `runtime/psx/gpu/ordering_table.*` — ordering table / OT / DrawOTag node decode and walk
+- `runtime/psx/gpu/record_fault.*` — record fault: guest draw data refused before it sizes GPU work (draw-list cycle, unterminated poly-line, record bounds), linked-walk cycle check
 - `runtime/psx/gpu/gp0_record_tap.*`, `texture_feedback.*` — GP0 work recorded per logic frame, texture cache feedback / stale VRAM reads
 - `runtime/psx/gpu/record_geometry.*`, `record_raster_*`, `vram_bitmap.h` — record raster plan: entry write rects, gpu.c coverage per primitive at internal resolution, canvas margins, read-back textures, written-region bitmaps
 - `runtime/psx/render/record_rasterizer.*`, `record_present.cpp` — record raster on the GPU: ops into VRAM image and canvases, read-back capture, Record-path present, recordcheck, record shot

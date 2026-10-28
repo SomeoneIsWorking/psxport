@@ -2,6 +2,7 @@
 
 #include "guest_memory_map.h"
 #include "ordering_table.h"
+#include "record_fault.h"
 
 #include <lucent/log.h>
 
@@ -12,8 +13,20 @@ namespace psx::present {
 
 std::optional<std::uint32_t>
 PacketChainWalker::walk(std::uint32_t link, OtSlot slot, DrawModeTracker &drawMode, PrimitiveSink &sink) {
+  gpu::LinkCycleCheck cycle;
   for (gpu::OtNode tag(0, gpu::OtHeaderWord{link}); !tag.endsChain();) {
     const std::uint32_t packet = gpu::guestAddressOf(tag.nextRamOffset());
+    if (!cycle.enter(gpu::mainRamOffsetOf(packet))) {
+      gpu::raiseRecordFault(
+          gpu::RecordFaultKind::DrawListCycle,
+          packet,
+          "present/packet_chains.cpp:PacketChainWalker::walk",
+          lucent::format("the chain from link 0x{:08X} into slot {}:{} returns to it after {} packets",
+                         link,
+                         slot.table,
+                         slot.index,
+                         walked_));
+    }
     tag = gpu::OtNode(gpu::mainRamOffsetOf(packet), gpu::OtHeaderWord{memory_.mem_r32(packet)});
     const std::uint32_t count = tag.gp0WordCount();
     const std::uint32_t arenaOffset = packet - kseg0Address(bound_.arena.address);
