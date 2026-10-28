@@ -43,9 +43,19 @@ public:
   // The guest's display standard, from GP1(0x08).
   [[nodiscard]] DisplayFieldRate displayFieldRate() const;
   [[nodiscard]] uint64_t emulatedCpuTicks() const;
+  // The guest clock at the last delivered field edge.
+  [[nodiscard]] uint64_t displayBoundaryTicks() const;
   // The fields a libetc VSync(n) called now spans from the last delivered field: it waits for field n-1, then for the
   // next VBlank, so guest work that ran past field k makes it max(n, k + 1).
   [[nodiscard]] uint32_t vsyncFields(uint32_t requested) const;
+  // Guest ticks left in the field the clock is in: a guest turn ends at the next VBlank.
+  [[nodiscard]] uint64_t ticksToNextField() const;
+  // A guest VSync(n) a frame driver replaces: n counts from the previous wait's return, so the fields earlier steps
+  // already delivered since then come off it.
+  void noteVSyncWait(uint32_t requested);
+  // The fields a frame driver step delivers: the noted wait's, or, for a turn that ended without one, every field edge
+  // its clock crossed (at least one); the clock keeps the part field it ran into.
+  [[nodiscard]] uint32_t takeStepFields();
   // Guest ticks until the next scheduled device deadline (today the CD controller's drive or command
   // event); nullopt when nothing is armed, 0 when one is already due. A guest running code that touches
   // no device register never folds a deadline into the clock, so the executor ends its segment here: the
@@ -73,6 +83,9 @@ public:
 
 private:
   EmulatedTime mEmulatedTime;
+  // 0 while no replaced wait is pending; vsyncFields is never 0.
+  uint32_t mVSyncWaitFields = 0;
+  uint32_t mFieldsSinceVSyncWait = 0;
   // fps60 delivers two half-field pacing calls per field; only a completed whole field raises VBlank.
   unsigned __int128 mDisplayFieldPhaseNumerator = 0;
   unsigned __int128 mDisplayFieldPhaseDenominator = 1;

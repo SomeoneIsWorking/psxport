@@ -6,6 +6,7 @@
 #include "gpu_device.h"
 
 #include <algorithm>
+#include <utility>
 
 namespace psx::frame {
 
@@ -91,8 +92,30 @@ uint64_t Timing::emulatedCpuTicks() const {
   return mEmulatedTime.nowTicks();
 }
 
+uint64_t Timing::displayBoundaryTicks() const {
+  return mEmulatedTime.boundaryTicks();
+}
+
 uint32_t Timing::vsyncFields(uint32_t requested) const {
   return std::max(requested, mEmulatedTime.fieldsSinceBoundary(fieldRateMilliHz(displayFieldRate())) + 1u);
+}
+
+uint64_t Timing::ticksToNextField() const {
+  return mEmulatedTime.ticksToNextField(fieldRateMilliHz(displayFieldRate()));
+}
+
+void Timing::noteVSyncWait(uint32_t requested) {
+  mVSyncWaitFields = vsyncFields(requested > mFieldsSinceVSyncWait ? requested - mFieldsSinceVSyncWait : 0u);
+}
+
+uint32_t Timing::takeStepFields() {
+  if (mVSyncWaitFields != 0) {
+    mFieldsSinceVSyncWait = 0;
+    return std::exchange(mVSyncWaitFields, 0u);
+  }
+  const uint32_t fields = std::max(1u, mEmulatedTime.fieldsSinceBoundary(fieldRateMilliHz(displayFieldRate())));
+  mFieldsSinceVSyncWait = std::min(mFieldsSinceVSyncWait, UINT32_MAX - fields) + fields;
+  return fields;
 }
 
 // Root counter 2 on the emulated clock, wrapping at 16 bits; mode bit 9 is system clock / 8, and sync

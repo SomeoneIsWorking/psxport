@@ -22,6 +22,13 @@ ExecutionBudget ExecutionBudget::currentTurn(const Core &core) {
   return fromCycles(psx::frame::displayFieldCpuTicks(1, 1, psx::frame::fieldRateMilliHz(rate)));
 }
 
+ExecutionBudget ExecutionBudget::untilFieldEdge(const Core &core) {
+  if (core.executionControl().unsuspendable() || core.game == nullptr) {
+    return currentTurn(core);
+  }
+  return fromCycles(core.game->timing.ticksToNextField());
+}
+
 const char *executionExitName(ExecutionExitReason reason) {
   switch (reason) {
   case ExecutionExitReason::GuestReturn:

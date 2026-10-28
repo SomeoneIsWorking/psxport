@@ -30,6 +30,9 @@ struct ExecutionBudget {
     return {value, value};
   }
   static ExecutionBudget currentTurn(const Core &core);
+  // A frame driver's guest turn: the cycles left until the next field edge, so work the field already ran (a VBlank
+  // handler, a CD callback) shortens it and the turn ends on the field grid.
+  static ExecutionBudget untilFieldEdge(const Core &core);
 };
 
 struct ExecutionResult {
