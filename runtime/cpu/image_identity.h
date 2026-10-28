@@ -1,5 +1,6 @@
 #pragma once
 
+#include "dispatch_epoch.h"
 #include "guest_address_range.h"
 
 #include <cstdint>
@@ -38,6 +39,8 @@ struct NativeKey {
 
 class ImageCatalog {
 public:
+  explicit ImageCatalog(DispatchEpoch &dispatchEpoch) : dispatchEpoch_(dispatchEpoch) {}
+
   ImageIdentity activate(std::string_view name, GuestAddressRange range, std::uint64_t contentIdentity);
   bool deactivate(ImageIdentity identity);
   // Remove written physical bytes from one authenticated generation without changing the identity
@@ -62,6 +65,12 @@ private:
     bool active = false;
   };
 
+  void changed() {
+    ++revision_;
+    dispatchEpoch_.advance();
+  }
+
+  DispatchEpoch &dispatchEpoch_;
   std::vector<Entry> entries_;
   std::uint64_t nextId_ = 1;
   std::uint64_t nextGeneration_ = 1;

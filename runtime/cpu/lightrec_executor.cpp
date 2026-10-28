@@ -24,7 +24,6 @@
 #include <limits>
 #include <mutex>
 #include <optional>
-#include <thread>
 
 namespace psx::cpu {
 namespace {
@@ -210,39 +209,22 @@ struct LightrecExecutor::Impl {
     std::uint64_t admittedFallbackBlocks = 0;
     std::uint32_t fallbackRefusalPc = 0;
     lightrec_fallback_reason fallbackRefusalReason = LIGHTREC_FALLBACK_NONE;
-    std::thread::id thread{};
-    bool active = false;
   };
 
-  // Host threads inside the executor at once: the main thread and the fibers parked inside it.
-  static constexpr std::size_t kBoundarySlots = 8;
-
-  BoundaryContext *boundaryOf(std::thread::id thread) {
-    for (BoundaryContext &slot : boundaries) {
-      if (slot.thread == thread) {
-        return &slot;
-      }
-    }
-    return nullptr;
-  }
-
-  // The boundary this host thread entered; a cooperative task thread holds its own while it is parked.
-  BoundaryContext &activeBoundary() {
-    const std::thread::id thread = std::this_thread::get_id();
-    if (cachedBoundary == nullptr || cachedBoundary->thread != thread) {
-      cachedBoundary = boundaryOf(thread);
-    }
-    if (cachedBoundary == nullptr || !cachedBoundary->active) {
-      lucent::error("executor", "Lightrec callback reached without a boundary on its host thread");
+  // The boundary of the executeWithBoundary call whose lightrec_execute is running. Lightrec's callbacks run only
+  // inside lightrec_execute and never re-enter it, and fibers switch only in host services between segments.
+  BoundaryContext &runningBoundary() const {
+    if (running == nullptr) {
+      lucent::error("executor", "Lightrec callback reached outside lightrec_execute");
       std::abort();
     }
-    return *cachedBoundary;
+    return *running;
   }
 
   static lightrec_fallback_action
   fallbackAdmission(lightrec_state *, const lightrec_fallback_event *event, void *userData) {
     auto &impl = *static_cast<Impl *>(userData);
-    auto &boundary = impl.activeBoundary();
+    auto &boundary = impl.runningBoundary();
     // A cross-block load-delay hazard interprets at most three instructions, so the block limit does not apply.
     if (event->reason == LIGHTREC_FALLBACK_LOAD_DELAY_HAZARD) {
       return LIGHTREC_FALLBACK_ALLOW;
@@ -319,7 +301,7 @@ struct LightrecExecutor::Impl {
     if (impl.reach) {
       impl.reach->observe(guestPc);
     }
-    auto &boundary = impl.activeBoundary();
+    auto &boundary = impl.runningBoundary();
     if (boundary.returnAddress && guestPc == *boundary.returnAddress) {
       boundary.reason = BoundaryReason::GuestReturn;
     } else if (boundary.skipPendingBoundaryOnce) {
@@ -348,46 +330,6 @@ struct LightrecExecutor::Impl {
         latch.needsCallWord(ra) && mainRamOffset(ra - kJalReturnOffset) ? core.mem_r32(ra - kJalReturnOffset) : 0u;
     latch.enterBlock(guestPc, ra, registers->gpr, callWord);
   }
-
-  class BoundarySession {
-  public:
-    BoundarySession(Impl &impl,
-                    std::optional<std::uint32_t> returnAddress,
-                    bool dispatchHostServices,
-                    FallbackPolicy fallbackPolicy)
-        : boundary_(claim(impl, std::this_thread::get_id())), previous_(boundary_) {
-      boundary_ = {.returnAddress = returnAddress,
-                   .dispatchHostServices = dispatchHostServices,
-                   .fallbackPolicy = fallbackPolicy,
-                   .thread = previous_.thread,
-                   .active = true};
-    }
-
-    ~BoundarySession() {
-      boundary_ = previous_.active ? previous_ : BoundaryContext{};
-    }
-
-    BoundarySession(const BoundarySession &) = delete;
-    BoundarySession &operator=(const BoundarySession &) = delete;
-
-  private:
-    static BoundaryContext &claim(Impl &impl, std::thread::id thread) {
-      BoundaryContext *slot = impl.boundaryOf(thread);
-      if (slot == nullptr) {
-        slot = impl.boundaryOf(std::thread::id{});
-        if (slot == nullptr) {
-          lucent::error("executor", "more than {} host threads entered the executor at once", kBoundarySlots);
-          std::abort();
-        }
-        slot->thread = thread;
-      }
-      impl.cachedBoundary = slot;
-      return *slot;
-    }
-
-    BoundaryContext &boundary_;
-    BoundaryContext previous_;
-  };
 
   inline static std::mutex lifecycleMutex_;
 
@@ -504,8 +446,7 @@ struct LightrecExecutor::Impl {
         stats.refused_fallback_blocks_by_reason[LIGHTREC_FALLBACK_UNSAFE_FETCH];
   }
 
-  ExecutionResult fallbackThresholdFault(std::uint64_t cycles) {
-    const auto &boundary = activeBoundary();
+  ExecutionResult fallbackThresholdFault(const BoundaryContext &boundary, std::uint64_t cycles) {
     ++counters.faults;
     logLedger(counters, "threshold-exceeded", lucent::Level::Error);
     return {ExecutionExitReason::Fault,
@@ -525,9 +466,7 @@ struct LightrecExecutor::Impl {
   lightrec_state *state = nullptr;
   bool initializationAttempted = false;
   FallbackPolicyProvider fallbackPolicyProvider = nullptr;
-  // One boundary per host thread; strict fiber ping-pong means no two threads touch this at once.
-  std::array<BoundaryContext, kBoundarySlots> boundaries{};
-  BoundaryContext *cachedBoundary = nullptr;
+  BoundaryContext *running = nullptr;
   ExecutorCounters counters;
   SegmentClockLedger segmentClock;
   StoreObserverCallback storeCallback = nullptr;
@@ -586,8 +525,8 @@ ExecutionResult LightrecExecutor::executeWithBoundary(std::uint32_t guestAddress
                            fallbackPolicy.configuredMaxBlocks)};
   }
 
-  Impl::BoundarySession session(impl, returnAddress, dispatchHostServices, fallbackPolicy);
-  Impl::BoundaryContext &boundary = impl.activeBoundary();
+  Impl::BoundaryContext boundary{
+      .returnAddress = returnAddress, .dispatchHostServices = dispatchHostServices, .fallbackPolicy = fallbackPolicy};
   // Translated frames are on the stack from here; the journal must not raise its bound fault through them.
   const SideEffectJournal::TranslatedExecutionScope translated(impl.core);
   std::uint64_t consumedCycles = 0;
@@ -616,7 +555,9 @@ ExecutionResult LightrecExecutor::executeWithBoundary(std::uint32_t guestAddress
     }
     // lightrec_execute overwrites nextPc with the exit pc; the start names the block behind a wild target.
     const std::uint32_t blockStart = nextPc;
+    impl.running = &boundary;
     nextPc = lightrec_execute(impl.state, nextPc, targetCycle(segmentCycleBudget));
+    impl.running = nullptr;
     impl.copyLightrecToCore(nextPc);
     const lightrec_execution_stats after = *lightrec_get_execution_stats(impl.state);
     const std::uint64_t segmentInstructions = executedInstructionCount(after) - executedInstructionCount(before);
@@ -634,7 +575,7 @@ ExecutionResult LightrecExecutor::executeWithBoundary(std::uint32_t guestAddress
 
     const std::uint32_t flags = lightrec_exit_flags(impl.state);
     if (flags & LIGHTREC_EXIT_FALLBACK_REFUSED) {
-      return impl.fallbackThresholdFault(consumedCycles);
+      return impl.fallbackThresholdFault(boundary, consumedCycles);
     }
     if (flags & LIGHTREC_EXIT_OBSERVER_UNSUPPORTED) {
       ++impl.counters.faults;

@@ -26,7 +26,7 @@ bool PlatformHle::insert(std::uint32_t address, psx::cpu::NativeFunction functio
         return false;
       }
       mFn[index] = function;
-      ++mRevision;
+      game->core.dispatchEpoch.advance();
       return true;
     }
   }
@@ -39,7 +39,7 @@ bool PlatformHle::insert(std::uint32_t address, psx::cpu::NativeFunction functio
   ++mN;
   mLo = std::min(mLo, address);
   mHi = std::max(mHi, address);
-  ++mRevision;
+  game->core.dispatchEpoch.advance();
   return true;
 }
 

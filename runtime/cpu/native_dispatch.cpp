@@ -29,7 +29,7 @@ private:
   NativeDispatcher &dispatcher_;
 };
 
-NativeDispatcher::NativeDispatcher(Core &core) : core_(core) {}
+NativeDispatcher::NativeDispatcher(Core &core) : core_(core), epoch_(core.dispatchEpoch) {}
 
 NativeDispatcher::~NativeDispatcher() = default;
 
@@ -61,7 +61,7 @@ bool NativeDispatcher::install(NativeRegistration registration) {
                   entry->second.name);
     return false;
   }
-  ++revision_;
+  epoch_.advance();
   if (registration.producer) {
     ++producerAddresses_[registration.key.address];
     ++producerRevision_;
@@ -84,7 +84,7 @@ bool NativeDispatcher::remove(NativeKey key) {
     ++producerRevision_;
   }
   entries_.erase(entry);
-  ++revision_;
+  epoch_.advance();
   const std::uint32_t pc = physical(key.address);
   core_.lightrecExecutor().invalidate({pc, pc + 4u});
   return true;
@@ -94,14 +94,15 @@ bool NativeDispatcher::suppressed(NativeKey key) const {
   return std::find(suppressions_.begin(), suppressions_.end(), key) != suppressions_.end();
 }
 
+// A suppression changes only the verdict at its own key's address.
 void NativeDispatcher::pushSuppression(NativeKey key) {
   suppressions_.push_back(key);
-  ++revision_;
+  verdicts_.forget(key.address);
 }
 
 void NativeDispatcher::popSuppression() {
+  verdicts_.forget(suppressions_.back().address);
   suppressions_.pop_back();
-  ++revision_;
 }
 
 bool NativeDispatcher::isInstalled(NativeKey key) const {
@@ -248,20 +249,10 @@ ExecutionResult invokeNativeFunction(Core &core, std::uint32_t guestAddress, Nat
   return completeHostLeaf(core, execution);
 }
 
-GuestHostDispatchKind NativeDispatcher::classify(std::uint32_t guestAddress) {
-  // The pad work-area entries answer from live guest memory, so they are never cached.
-  if (Hle::isPadWorkAreaEntry(guestAddress)) {
-    return resolveHostDispatch(core_, guestAddress).kind;
-  }
-  verdicts_.observe({.images = core_.imageCatalog().revision(),
-                     .overrides = revision_,
-                     .services = core_.game ? core_.game->platform_hle.revision() : 0u,
-                     .game = core_.game});
-  if (const auto cached = verdicts_.find(guestAddress)) {
-    return *cached;
-  }
+GuestHostDispatchKind NativeDispatcher::classifyUncached(std::uint32_t guestAddress) {
   const GuestHostDispatchKind kind = resolveHostDispatch(core_, guestAddress).kind;
-  verdicts_.store(guestAddress, kind);
+  // The pad work-area entries answer from live guest memory.
+  verdicts_.store(guestAddress, epoch_.value(), {.kind = kind, .live = Hle::isPadWorkAreaEntry(guestAddress)});
   return kind;
 }
 

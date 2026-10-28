@@ -21,7 +21,7 @@ Core::Core(psx::game::GameRuntime &runtime) : runtime(runtime), gpuDevice_(std::
   std::memset(ram, 0, sizeof(ram));
   std::memset(scratch, 0, sizeof(scratch));
   executionControl_ = std::make_unique<psx::cpu::ExecutionControl>();
-  imageCatalog_ = std::make_unique<psx::cpu::ImageCatalog>();
+  imageCatalog_ = std::make_unique<psx::cpu::ImageCatalog>(dispatchEpoch);
   lightrecExecutor_ = std::make_unique<psx::cpu::LightrecExecutor>(*this, psx::config::lightrec_fallback_policy);
   nativeDispatcher_ = std::make_unique<psx::cpu::NativeDispatcher>(*this);
   // Armed for every runtime, so no product route can miss the gate.
@@ -59,10 +59,6 @@ const psx::cpu::ImageCatalog &Core::imageCatalog() const {
 
 psx::cpu::LightrecExecutor &Core::lightrecExecutor() {
   return *lightrecExecutor_;
-}
-
-psx::cpu::NativeDispatcher &Core::nativeDispatcher() {
-  return *nativeDispatcher_;
 }
 
 // The CD and SIO edges are folded in on every I_STAT access, so neither waits for a later look.

@@ -1,6 +1,6 @@
 # 0194: steady-state CPU work the player never sees
 
-Status: fixed (2026-10-28) for the two costs below; the rest is design, listed under Left. Owner:
+Status: fixed (2026-10-28) for the costs below (VramBitmap, FMV AC decode, block-boundary dispatch); the rest is design, listed under Left. Owner:
 `runtime/psx/gpu/vram_bitmap.h` `VramBitmap`, `runtime/psx/movie/fmv_decode.cpp`.
 
 ## Observed
@@ -40,17 +40,35 @@ Review: the AC table equals the old linear search for all 65536 16-bit windows (
 0 mismatches), and `clear` equals the per-row clear because `mark` is the bitmap's only writer. The byte-identical
 frame and audio comparisons made during the pass kept no hashes and their dumps were swept, so they are not evidence.
 
+## Block boundary dispatch (2026-10-28)
+Cause: `NativeDispatcher::classify` rebuilt its epoch from `Core::imageCatalog()`, `ImageCatalog::revision()`, its
+own revision and the platform-HLE revision on every block entry, called the out-of-line pad-work-area check before
+the cache, and the executor found the boundary context by thread id. Suppressions (`callOriginal`) moved the epoch and
+flushed every verdict.
+Fix: one `DispatchEpoch` on Core that its input owners advance; the verdict slot stores its epoch and a `live` flag;
+the classify fast path is inline; a suppression drops its own address's slot; the boundary context is the pointer set
+around `lightrec_execute`.
+Proof (`scratch/dispatch-cost/`, `run.py`, `digest.py`; hidden, unpaced, ires 0, fps60 1, sink 3840x2160; Clang;
+`perf stat -e instructions:u` of the whole process; Minstr per fence = run to N2 minus run to N1, over N2 - N1):
+
+| screen | before | after |
+|---|---|---|
+| Tekken 3 fight, `warp 0 1` at present 300, fences 2500 to 4500 | 80.33, 80.34 (two runs) | 77.90 (-3.0%) |
+| Vagrant Story save point 0 free roam (New Game route, `warp 0` at 14000), fences 16000 to 18000 | 26.09 | 25.01 (-4.1%) |
+
+Behaviour unchanged: the field digests (emulated ticks and main-RAM hash per field) of a boot run are identical
+before and after, Tekken 3 3000 fields and Vagrant Story 6000 fields, and so are the present-shot hashes at fences
+500/1000/2000/3000 and 1000/2000/4000/6000; the fight's present at 2500 and 4500 and the free roam's at 16000 and
+18000 hash the same before and after.
+
 ## Left (design, recorded in the owners' docs where one exists)
 - Beetle's software raster of device VRAM (`presentation.md` Render paths): about 24% of Crash 1.
 - The `RecordPlanner` 1x walk (`presentation.md` Raster): 12-25%; C-12's lines plan as one quad per pixel, about
   half its instructions.
 - The owner ledger booking every guest store (`presentation.md` Owner ledger): 2-6%, plus about 3% for
   executable-write notification.
-- Block boundary classification and its verdict cache (`port-framework.md` Dispatch, with the per-function
-  split): about 25% of Tekken 3's fight instructions (2026-10-28, `perf record` after `warp 0 1`); Vagrant Story,
-  whose blocks also average about 4.5 instructions, not re-profiled. Next at the owner: the verdict slot records that
-  an address answers from live memory, so the pad-work-area check runs once per epoch per address, and
-  `NativeDispatcher` holds its `ImageCatalog&` with the revision reads inline.
+- Block boundary classification: the planned step is done (2026-10-28, below); what is left is the callback itself,
+  about 22% of Tekken 3's fight, whose removal needs block linking in the Lightrec fork (`port-framework.md` Dispatch).
 - SPU emulation 2-7% and CHD hunk decoding on its worker threads 2-3%; neither has a subsystem doc.
 - Allocations: issue 0175 (guest execution) and psx-crash-bash 0046 (its producers).
 - SDL3 GPU has no timestamp queries, so there is no GPU time per pass.
