@@ -36,8 +36,12 @@ bool Timing::advanceDisplayFields(FieldCadence cadence, uint32_t fieldRateMilliH
   // Re-anchored before the field's callbacks run, or one would request the field it is inside.
   game->core.hostTurn.onDisplayField(game->core);
   game->sio.service();
-  // A latch, not a count, as the hardware bit is; a guest that leaves VBlank masked sees nothing.
-  if (consumeCompletedDisplayFields(cadence) != 0) {
+  const uint32_t completed = consumeCompletedDisplayFields(cadence);
+  for (uint32_t field = 0; field < completed; ++field) {
+    // The guest waits in VSync between turns and takes each field's VBlank before the next is latched.
+    if (game->core.irqPendingEnabled(IRQ_BIT_VBLANK)) {
+      game->hle.irqPoll(&game->core);
+    }
     game->core.raiseInterrupt(IRQ_BIT_VBLANK);
   }
   serviceCdc();
@@ -161,6 +165,12 @@ uint64_t Timing::hSyncTotal() const {
   return mEmulatedTime.hSyncCount(fieldRateMilliHz(rate), displayLinesPerField(rate == DISPLAY_FIELD_RATE_PAL));
 }
 
+uint64_t Timing::hSyncsSinceDisplayBoundary() const {
+  const DisplayFieldRate rate = displayFieldRate();
+  return mEmulatedTime.hSyncsSinceBoundary(fieldRateMilliHz(rate),
+                                           displayLinesPerField(rate == DISPLAY_FIELD_RATE_PAL));
+}
+
 uint16_t Timing::hSyncCounter() const {
   return static_cast<uint16_t>(hSyncTotal() - rootCounter1Offset);
 }
@@ -186,13 +196,17 @@ uint64_t Timing::displayField() const {
 Timing::ClockSnapshot Timing::clockSnapshot() const {
   return {mEmulatedTime.q32(),
           static_cast<uint64_t>(mDisplayFieldPhaseNumerator),
-          static_cast<uint64_t>(mDisplayFieldPhaseDenominator)};
+          static_cast<uint64_t>(mDisplayFieldPhaseDenominator),
+          mVSyncWaitFields,
+          mFieldsSinceVSyncWait};
 }
 
 void Timing::restoreClockSnapshot(const ClockSnapshot &clock) {
   mEmulatedTime.restore(clock.time);
   mDisplayFieldPhaseNumerator = clock.displayPhaseNumerator;
   mDisplayFieldPhaseDenominator = clock.displayPhaseDenominator;
+  mVSyncWaitFields = clock.vsyncWaitFields;
+  mFieldsSinceVSyncWait = clock.fieldsSinceVSyncWait;
 }
 
 } // namespace psx::frame
