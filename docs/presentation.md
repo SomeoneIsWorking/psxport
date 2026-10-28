@@ -430,18 +430,22 @@ aborts unless `FramePresenter::fence()` advanced by exactly one.
 deadline. The default, `FramePacer::subframeDeadline`, advances Timing, devices and the VBlank latch by the
 represented field count. A title with its own field scheduler advances `Timing::advanceDisplayFields` per
 delivered field and plans with `FramePacer::presentedFieldsDeadline`, which creates no field. An interval of n fields
-ends n fields after the last delivered boundary, or at the guest's time when its work already ran past that
-(`EmulatedTime::advanceDisplayFields`); its parts are spaced back from that end, so the parts the guest already ran
-past arrive at once and the clock never ends past the interval. In-betweens split the deadline of the same fields.
+ends n fields after the last delivered boundary, moved on by the whole fields the guest's work already ran past
+(`EmulatedTime::advanceDisplayFields`), so every boundary lies on the field grid and the clock keeps the part field it
+ran into; its parts are spaced back from that end, so the parts the guest already ran past arrive at once. A frame
+driver's guest turn (`ExecutionBudget::untilFieldEdge`) runs to the next field edge, so a turn without a wait ends on
+or just past that edge. In-betweens split the deadline of the same fields.
 
 A frame driver that replaces a libetc `VSync(n)` counts `Timing::vsyncFields(n)`: VSync waits for field n-1 since its
 last return, then for the next VBlank (Crash Bash `0x800320EC`), so guest work that ran past field k spans
 max(n, k + 1) fields and the frame ends on the field grid. An owned loop takes n from the guest's cadence and still
-counts this way: the extension is the guest clock, not a wait. Committing n alone does not shorten the hold, since the
-interval ends at the guest's time, and leaves the VBlank callbacks and SPU advances behind that clock, every later
-field off the grid (psx-crash-bash issue 0045). Crash Bash's DisplayFrame override takes it. Toy Story 2's resident
+counts this way: the extension is the guest clock, not a wait. Committing n alone leaves the VBlank callbacks and SPU
+advances behind that clock (psx-crash-bash issue 0045). Crash Bash's DisplayFrame override takes it. A driver whose
+turn ends at the stock VSync (`StockVSync` notes the wait, `Timing::noteVSyncWait`) commits
+`Timing::takeStepFields()`: the wait's fields less those earlier no-wait steps already delivered since its last return,
+or, for a turn that ran out without a wait, the field edges it crossed (C-12, Vagrant Story). Toy Story 2's resident
 loop commits its fixed count (psx-toy-story-2 issue 0059); the titles whose loop is not owned answer each guest VSync
-with one field (each title's frame-loop issue), so their overrunning frames end at the guest's time, off the grid. Spyro's field owner
+with one field (each title's frame-loop issue). Spyro's field owner
 needs no count: its host turn delivers each field as the guest clock crosses it. Deadlines step at the guest's field rate (`field_rate.h`: NTSC 59.817 Hz, the console's 263 lines of 3413
 video clocks), so an NTSC title on a 60.00 Hz display shows one present twice about every 5.5 s; that is accepted. A field that overruns its deadline by more than
 an interval drops the debt in whole intervals (`pacePlan`), so later deadlines keep their place on the field grid.

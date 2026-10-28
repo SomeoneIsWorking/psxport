@@ -29,8 +29,11 @@ callbacks and resource transitions.
 ### Resuming, which is the whole point of a bounded exit
 
 `ExecutionBudget::currentTurn` is one display field of guest clock cycles — `33'868'800/59.817 = 566,206` at NTSC — by
-construction. A budget counts the guest clock's unit, one cycle per executed instruction (the unit
-`Timing` and every device deadline use); the Lightrec executor converts it to Lightrec's own
+construction. A frame driver's own turn takes `ExecutionBudget::untilFieldEdge`, the cycles left until the next field
+edge (`Timing::ticksToNextField`), so work the field already ran (a VBlank handler, a CD callback) shortens it; guest
+work nested at executor boundaries is not charged to the turn, and the clock keeps that overshoot into the next field
+(`EmulatedTime::advanceDisplayFields`). A budget counts the guest clock's unit,
+one cycle per executed instruction (the unit `Timing` and every device deadline use); the Lightrec executor converts it to Lightrec's own
 `kLightrecCyclesPerInstruction` cycles at the `lightrec_execute` call, so no title multiplies by it. A
 call that needs more than one field is routine rather than exceptional. While an
 `ExecutionControl::Unsuspendable` lives (a `GuestRedraw`), every call gets the whole budget in place of a turn —

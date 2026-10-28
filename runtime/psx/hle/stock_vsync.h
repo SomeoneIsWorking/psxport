@@ -8,8 +8,8 @@ class Game;
 
 namespace psx::hle {
 
-// A nonnegative VSync ends the guest turn at a field boundary. A negative query returns the libetc
-// field counter at `queryCounter`; a title without one refuses the query by name.
+// A nonnegative VSync notes the wait's fields (Timing::noteVSyncWait) and ends the guest turn at a field boundary.
+// A negative query returns the libetc field counter at `queryCounter`; a title without one refuses the query by name.
 class StockVSync {
 public:
   // `entry` is VSync's guest address; `queryCounter` the libetc field counter, 0 when the title has none.

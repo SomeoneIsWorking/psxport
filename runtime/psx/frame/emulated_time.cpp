@@ -38,9 +38,12 @@ bool EmulatedTime::advanceDisplayFields(uint32_t fields, uint32_t parts, uint32_
   }
 
   if (mIntervalPart == 0 || fields != mIntervalFields || parts != mIntervalParts) {
-    // The interval ends `fields` after the last boundary, or where the guest's work already ran to: no catch-up debt.
+    // The interval ends `fields` after the last boundary, moved on by the whole fields the guest's work already ran
+    // past: no catch-up debt, and boundaries stay on the field grid while the clock keeps its part-field lead.
     const unsigned __int128 whole = display_field_duration_q32(fields, 1, fieldRateMilliHz);
-    mIntervalStartQ32 = std::max(mDisplayBoundaryQ32 + whole, mNowQ32) - whole;
+    const unsigned __int128 field = display_field_duration_q32(1, 1, fieldRateMilliHz);
+    const unsigned __int128 end = mDisplayBoundaryQ32 + whole;
+    mIntervalStartQ32 = mDisplayBoundaryQ32 + (mNowQ32 > end ? (mNowQ32 - end) / field * field : 0);
     mIntervalFields = fields;
     mIntervalParts = parts;
     mIntervalPart = 0;
@@ -59,6 +62,10 @@ uint64_t EmulatedTime::nowTicks() const {
   return static_cast<uint64_t>(mNowQ32 >> kFractionBits);
 }
 
+uint64_t EmulatedTime::boundaryTicks() const {
+  return static_cast<uint64_t>(mDisplayBoundaryQ32 >> kFractionBits);
+}
+
 uint32_t EmulatedTime::fieldsSinceBoundary(uint32_t fieldRateMilliHz) const {
   const unsigned __int128 duration = display_field_duration_q32(1, 1, fieldRateMilliHz);
   if (duration == 0 || mNowQ32 <= mDisplayBoundaryQ32) {
@@ -66,6 +73,16 @@ uint32_t EmulatedTime::fieldsSinceBoundary(uint32_t fieldRateMilliHz) const {
   }
   const unsigned __int128 fields = (mNowQ32 - mDisplayBoundaryQ32) / duration;
   return fields > UINT32_MAX ? UINT32_MAX : static_cast<uint32_t>(fields);
+}
+
+uint64_t EmulatedTime::ticksToNextField(uint32_t fieldRateMilliHz) const {
+  const unsigned __int128 duration = display_field_duration_q32(1, 1, fieldRateMilliHz);
+  if (duration == 0) {
+    return 0;
+  }
+  const unsigned __int128 elapsed = mNowQ32 > mDisplayBoundaryQ32 ? mNowQ32 - mDisplayBoundaryQ32 : 0;
+  const unsigned __int128 remaining = (elapsed / duration + 1) * duration - elapsed;
+  return static_cast<uint64_t>((remaining + (static_cast<unsigned __int128>(1) << kFractionBits) - 1) >> kFractionBits);
 }
 
 uint64_t EmulatedTime::hSyncCount(uint32_t fieldRateMilliHz, uint32_t linesPerField) const {

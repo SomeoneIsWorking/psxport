@@ -25,7 +25,8 @@ void StockVSync::serve(Core &core) const {
     core.r[psx::cpu::kV0] = core.mem_r32(queryCounter_);
     return;
   }
-  // libetc returns the HBlanks since the last VBlank; the boundary completes a whole field.
+  core.game->timing.noteVSyncWait(core.r[psx::cpu::kA0]);
+  // libetc returns the HBlanks since the last VBlank; the boundary completes the wait.
   core.r[psx::cpu::kV0] = psx::frame::displayLinesPerField(core.gpuDevice().displayArea().pal);
   psx::cpu::requestExecutionExit(core, psx::cpu::ExecutionExitReason::FrameBoundary);
 }

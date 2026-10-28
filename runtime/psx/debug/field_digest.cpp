@@ -25,9 +25,10 @@ void FieldDigest::recordField(const Game &game) {
     return;
   }
   lucent::info("fielddigest",
-               "field={} ticks={} ram={:016x} i_stat={:x} i_mask={:x} pad={:04x}",
+               "field={} ticks={} boundary={} ram={:016x} i_stat={:x} i_mask={:x} pad={:04x}",
                field,
                game.timing.emulatedCpuTicks(),
+               game.timing.displayBoundaryTicks(),
                hashWords(std::span<const std::uint8_t>(game.core.ram, sizeof game.core.ram)),
                game.hle.i_stat,
                game.hle.i_mask,

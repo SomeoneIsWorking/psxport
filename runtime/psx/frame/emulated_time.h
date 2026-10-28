@@ -27,8 +27,12 @@ public:
   // One of `parts` deliveries of a `fields`-field interval; the interval's parts arrive back to back.
   bool advanceDisplayFields(uint32_t fields, uint32_t parts, uint32_t fieldRateMilliHz);
   [[nodiscard]] uint64_t nowTicks() const;
+  // The last delivered display field edge.
+  [[nodiscard]] uint64_t boundaryTicks() const;
   // Whole fields of guest time since the last delivered display boundary.
   [[nodiscard]] uint32_t fieldsSinceBoundary(uint32_t fieldRateMilliHz) const;
+  // Whole ticks from now to the next field edge after the last delivered boundary; never 0.
+  [[nodiscard]] uint64_t ticksToNextField(uint32_t fieldRateMilliHz) const;
   [[nodiscard]] uint64_t hSyncCount(uint32_t fieldRateMilliHz, uint32_t linesPerField) const;
 
   [[nodiscard]] EmulatedTimeQ32 q32() const {
@@ -42,8 +46,8 @@ public:
 
 private:
   // Q32 CPU ticks preserve the fractional NTSC field duration without a floating-point or host-time
-  // dependency. The display boundary is a phase anchor: instructions can consume a field interval,
-  // and a display wait advances TO the boundary rather than adding a second interval on top.
+  // dependency. The display boundary is a phase anchor on the field grid: instructions can consume a field
+  // interval, and a display wait advances TO the boundary rather than adding a second interval on top.
   unsigned __int128 mNowQ32 = 0;
   unsigned __int128 mDisplayBoundaryQ32 = 0;
   // The interval being delivered: where its first part starts and how many of its parts have landed.
