@@ -88,7 +88,7 @@ name is refused with a warning and the Core stays on `record`.
 - **Raster.** The image is VRAM at scale S (RG8 1555). A record applies only on top of the record
   before it (`sequence == applied + 1`, complete, device not ahead); otherwise the device VRAM is
   uploaded. Sequence 0 is the presenter's empty record; the device's records start at 1. Coverage and interpolant bases are computed on the CPU exactly as `gpu.c` does at S;
-  `record.frag` evaluates texel, modulation, blend and mask per pixel. It does not dither: the host picture keeps full colour precision while the device dithers as the guest asks, so `recordcheck` counts a dithered draw's pixels as mismatched by design. Each op reads a
+  `record.frag` evaluates texel, modulation, blend and mask per pixel. It does not dither: the host picture keeps full colour precision while the device dithers as the guest asks, so `recordcheck` counts a dithered draw's pixels as mismatched by design. The console shows 5 bits per channel (low three bits zero), so the host picture reads on average 3-4 levels per channel brighter than the console's (psx-spyro 0213: 71/143/56 against 68/139/53; dropping the product's low three bits removes 2.4-3.9). Each op reads a
   snapshot of the image; an op whose reads overlap pixels `gpu.c` wrote at 1x earlier in its batch
   starts a new batch, so at 1x reads see VRAM as the device did. Which ops exist and where batches
   split come from the 1x walk at every S: the `record_plan` line's ops and batches for one frame are
