@@ -106,7 +106,7 @@ CallStep ResumableGuestCall::advance(const std::optional<NativeKey> &original, s
                 owner_,
                 turns_,
                 result.guestPc,
-                core.r[31]);
+                core.r[kRa]);
   resumePc_ = result.guestPc;
   suspended_ = static_cast<const R3000 &>(core);
   return CallStep{CallOutcome::Suspended, result.guestPc, turns_, cycles_, 0u, {}, result.reason};
