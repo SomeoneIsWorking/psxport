@@ -421,14 +421,17 @@ of these is not:
 
 `FrameLoopShell::prepareProduct(Game&)` validates the title's `Game::frameDriver`, installs the fatal
 VSync trap as the last native binding at that address and requires the measured VSync fact. A
-nonnegative `VSync(n)` returns one field's HBlanks (263 NTSC, 314 PAL) in `$v0`. `step` runs one
+waiting `VSync(n)` (n = 0 or n > 1) returns one field's HBlanks (263 NTSC, 314 PAL) in `$v0`; `VSync(1)` does not wait
+and returns the HBlanks since the last delivered field edge (`Timing::hSyncsSinceDisplayBoundary`, C-12 `0x800A1758`). `step` runs one
 `stepFrame(Core&, frame)`; the driver calls `Game::presentation.commit(core, guestFields)` exactly once
 per frame, `guestFields` being the measured guest display fields it covered (no default). The shell
 aborts unless `FramePresenter::fence()` advanced by exactly one.
 
 `GameRuntime::presentDeadline` decides who advances simulated display time and returns the present's host
 deadline. The default, `FramePacer::subframeDeadline`, advances Timing, devices and the VBlank latch by the
-represented field count. A title with its own field scheduler advances `Timing::advanceDisplayFields` per
+represented field count. Every completed field raises VBlank; a VBlank the guest has not yet taken when the next field
+completes is delivered first (`Hle::irqPoll`), because between turns the guest is waiting in VSync and takes each
+field's interrupt, so an n-field step runs the guest VBlank handler n times. A title with its own field scheduler advances `Timing::advanceDisplayFields` per
 delivered field and plans with `FramePacer::presentedFieldsDeadline`, which creates no field. An interval of n fields
 ends n fields after the last delivered boundary, moved on by the whole fields the guest's work already ran past
 (`EmulatedTime::advanceDisplayFields`), so every boundary lies on the field grid and the clock keeps the part field it
@@ -439,8 +442,8 @@ or just past that edge. In-betweens split the deadline of the same fields.
 A frame driver that replaces a libetc `VSync(n)` counts `Timing::vsyncFields(n)`: VSync waits for field n-1 since its
 last return, then for the next VBlank (Crash Bash `0x800320EC`), so guest work that ran past field k spans
 max(n, k + 1) fields and the frame ends on the field grid. An owned loop takes n from the guest's cadence and still
-counts this way: the extension is the guest clock, not a wait. Committing n alone leaves the VBlank callbacks and SPU
-advances behind that clock (psx-crash-bash issue 0045). Crash Bash's DisplayFrame override takes it. A driver whose
+counts this way: the extension is the guest clock, not a wait. Committing n alone leaves the SPU advances behind that
+clock (psx-crash-bash issue 0045); the VBlanks follow the fields Timing delivers. Crash Bash's DisplayFrame override takes it. A driver whose
 turn ends at the stock VSync (`StockVSync` notes the wait, `Timing::noteVSyncWait`) commits
 `Timing::takeStepFields()`: the wait's fields less those earlier no-wait steps already delivered since its last return,
 or, for a turn that ran out without a wait, the field edges it crossed (C-12, Vagrant Story). Toy Story 2's resident
