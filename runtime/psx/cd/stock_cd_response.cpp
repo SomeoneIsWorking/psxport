@@ -40,12 +40,19 @@ bool beginStockCommand(Core &core, StockCdCommand sent) {
   Cd::StockResponse &retained = core.game->cd.stockResponse;
   retained.clear();
   const bool toc = sent.command == 0x13 || sent.command == 0x14;
-  if (toc || sent.command == 0x11) {
+  if (toc || sent.command == 0x10 || sent.command == 0x11) {
     Response response{};
-    const bool answered = toc ? toc_response(core, sent, response) : core.game->cdc.getlocP(response.data());
+    CdController &drive = core.game->cdc;
+    const bool answered = toc                    ? toc_response(core, sent, response)
+                          : sent.command == 0x10 ? drive.getlocL(response.data())
+                                                 : drive.getlocP(response.data());
     if (!answered) {
       zeroStockResult(core, sent.result);
-      lucent::error("cd", "stock command 0x{:02X} refused: the disc TOC, track or layout is unavailable", sent.command);
+      lucent::error("cd",
+                    "stock command 0x{:02X} refused: {}",
+                    sent.command,
+                    sent.command == 0x10 ? "no sector header is latched"
+                                         : "the disc TOC, track or layout is unavailable");
       return false;
     }
     retained.set(response);
