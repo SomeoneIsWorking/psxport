@@ -43,6 +43,7 @@ void Game::wireRuntimeMembers() {
   // PSXPORT_PRODUCERS is armed per Game, before any guest store.
   g_producer_census_armed = psx::config::producer_census();
   core.game = this;
+  core.dispatchEpoch.advance(); // verdicts now read this Game's service tables
   timing.game = this;
   hostInput.attachOverlay(&rml_overlay);
   pad.game = this;

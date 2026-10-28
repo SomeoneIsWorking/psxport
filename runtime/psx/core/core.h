@@ -19,6 +19,7 @@
 #ifdef __cplusplus
 
 #include "cpu_divide.h"
+#include "dispatch_epoch.h"
 #include "emission_scope.h"
 #include "frame_pacer.h"
 #include "frame_state.h"
@@ -26,8 +27,8 @@
 #include "guest_call_attribution.h"
 #include "guest_call_census.h"
 #include "guest_writer_latch.h"
-#include "owner_ledger.h"
 #include "ordering_table.h"
+#include "owner_ledger.h"
 #include <array>
 #include <lucent/log.h>
 #include <memory>
@@ -85,6 +86,8 @@ public:
   }
   // The code a store runs in (block-entry PC, call target), for naming an unowned writer.
   psx::cpu::GuestWriterLatch writerLatch;
+  // Advanced by every input of a host-dispatch verdict (dispatch_epoch.h).
+  psx::cpu::DispatchEpoch dispatchEpoch;
   // The owner of every main-RAM word: a producer scope instance or the writer that stored it.
   psx::present::OwnerLedger owners{*this};
   // The open producer scopes and the keys their stored packets carry into the frame record.
@@ -127,7 +130,9 @@ public:
   psx::cpu::ImageCatalog &imageCatalog();
   const psx::cpu::ImageCatalog &imageCatalog() const;
   psx::cpu::LightrecExecutor &lightrecExecutor();
-  psx::cpu::NativeDispatcher &nativeDispatcher();
+  psx::cpu::NativeDispatcher &nativeDispatcher() {
+    return *nativeDispatcher_;
+  }
   psx::cpu::GuestCallCensus &guestCallCensus() {
     return guestCallCensus_;
   }

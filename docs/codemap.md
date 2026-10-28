@@ -31,7 +31,7 @@ Dependency direction: title repo → `runtime/psx/game/` (the title interface) �
 - `runtime/cpu/image_identity.*` — code image catalog: authenticated resident and module identity, generation, covered ranges
 - `runtime/cpu/native_dispatch.*`, `native_function.h`, `guest_call*.*` — native overrides / HLE by guest address, producer registration, original calls, native-to-guest call, jal call sites, call attribution
 - `runtime/cpu/resumable_guest_call.*`, `guest_call_census.*` — guest call across host turns / fields: return latch, turn cap, refusal, save-state form of a suspended call, run census
-- `runtime/cpu/host_dispatch_cache.*`, `guest_host_dispatch_kind.h` — what a guest address is (guest code, host service, unclaimed), dispatch epoch and verdict cache
+- `runtime/cpu/host_dispatch_cache.h`, `dispatch_epoch.h`, `guest_host_dispatch_kind.h` — what a guest address is (guest code, host service, unclaimed): the verdict cache and the epoch its input owners advance
 - `runtime/cpu/invalidation.*`, `executable_write_source.h` — self-modifying code / executable writes invalidating translated blocks and dispatch verdicts
 - `runtime/cpu/override_differential*`, `machine_snapshot.*`, `side_effect_journal.*` — override differential: original vs native shadow run, O32 contract, CPU/RAM snapshot, device side-effect journal and replay
 - `runtime/cpu/function_reach.*` — reached guest functions per code image report

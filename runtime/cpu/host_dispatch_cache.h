@@ -9,54 +9,47 @@
 
 namespace psx::cpu {
 
-// Every input a dispatch verdict is derived from that changes only at a known point. A verdict stays
-// valid exactly while every one of these is unchanged; the owner of each input advances its counter
-// where it mutates (ImageCatalog::revision, NativeDispatcher::revision, PlatformHle::revision), so
-// the cache never has to re-derive an address to learn that it is stale.
-struct DispatchEpoch {
-  std::uint64_t images = 0;    // which code images are resident, and which bytes each owns
-  std::uint64_t overrides = 0; // which title overrides are installed, and which are suppressed now
-  std::uint64_t services = 0;  // which platform HLE leaves are registered
-  const void *game = nullptr;  // the Game whose service table the verdicts were read from
-
-  friend bool operator==(const DispatchEpoch &lhs, const DispatchEpoch &rhs) {
-    return lhs.images == rhs.images && lhs.overrides == rhs.overrides && lhs.services == rhs.services &&
-           lhs.game == rhs.game;
-  }
+struct DispatchVerdict {
+  GuestHostDispatchKind kind = GuestHostDispatchKind::ExecuteGuest;
+  // The answer also reads live guest memory, so the owner re-derives it at every crossing (NativeDispatcher::classify).
+  bool live = false;
 };
 
-// The answer to "what is this guest address" for every block boundary the executor crosses.
-//
-// Verdicts are a function of the epoch, so one direct-mapped table answers every block boundary.
-//
-// A direct-mapped table of verdicts, flushed as a whole when the epoch moves. It stores only verdicts
-// that are a function of the epoch; an address whose answer also depends on live guest memory is never
-// stored (the owner decides, see NativeDispatcher::classify). Single-threaded, like the dispatcher.
+// The answer to "what is this guest address" for every block boundary the executor crosses: a direct-mapped table
+// of verdicts, each valid only under the DispatchEpoch it was stored with. Single-threaded, like the dispatcher.
 class HostDispatchVerdictCache {
 public:
-  HostDispatchVerdictCache();
+  HostDispatchVerdictCache() : slots_(kSlotCount) {}
 
-  // Declare the epoch the caller is about to read and store verdicts under. A different epoch from the
-  // last one discards every stored verdict.
-  void observe(const DispatchEpoch &epoch);
-
-  std::optional<GuestHostDispatchKind> find(std::uint32_t guestAddress);
-  void store(std::uint32_t guestAddress, GuestHostDispatchKind kind);
+  std::optional<DispatchVerdict> find(std::uint32_t guestAddress, std::uint64_t epoch) const {
+    const Slot &slot = slots_[slotIndex(guestAddress)];
+    if (slot.epoch != epoch || slot.address != guestAddress) {
+      return std::nullopt;
+    }
+    return slot.verdict;
+  }
+  void store(std::uint32_t guestAddress, std::uint64_t epoch, DispatchVerdict verdict) {
+    slots_[slotIndex(guestAddress)] = {epoch, guestAddress, verdict};
+  }
+  // Drops one address's verdict, for an input change that can move no other address's answer.
+  void forget(std::uint32_t guestAddress) {
+    slots_[slotIndex(guestAddress)].epoch = 0;
+  }
 
 private:
   struct Slot {
+    std::uint64_t epoch = 0; // never a live epoch, so a fresh slot is empty
     std::uint32_t address = 0;
-    std::uint32_t generation = 0; // 0 is never a live generation, so a fresh slot is empty
-    GuestHostDispatchKind kind = GuestHostDispatchKind::ExecuteGuest;
+    DispatchVerdict verdict;
   };
 
   static constexpr std::size_t kSlotCount = 1u << 14;
 
-  Slot &slotFor(std::uint32_t guestAddress);
+  static std::size_t slotIndex(std::uint32_t guestAddress) {
+    return (guestAddress >> 2u) & (kSlotCount - 1u);
+  }
 
   std::vector<Slot> slots_;
-  DispatchEpoch epoch_;
-  std::uint32_t generation_ = 1;
 };
 
 } // namespace psx::cpu

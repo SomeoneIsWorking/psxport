@@ -1,5 +1,6 @@
 #pragma once
 
+#include "dispatch_epoch.h"
 #include "emission_scope.h"
 #include "execution_exit.h"
 #include "guest_call_site.h"
@@ -46,12 +47,13 @@ public:
   // Route every call of the overrides `differential` selects through it (override_differential.h).
   // Owned for the dispatcher's lifetime; its destructor writes the final report.
   void attachDifferential(std::unique_ptr<OverrideDifferential> differential);
-  // What `guestAddress` is when execution reaches it, cached until an input of the answer changes;
-  // an answer that reads live guest memory is never cached.
-  GuestHostDispatchKind classify(std::uint32_t guestAddress);
-  // Advances on every install, removal, and change of the suppression stack.
-  std::uint64_t revision() const {
-    return revision_;
+  // What `guestAddress` is when execution reaches it, cached until the dispatch epoch moves; an answer that reads
+  // live guest memory is re-derived at every crossing.
+  GuestHostDispatchKind classify(std::uint32_t guestAddress) {
+    if (const auto verdict = verdicts_.find(guestAddress, epoch_.value()); verdict && !verdict->live) {
+      return verdict->kind;
+    }
+    return classifyUncached(guestAddress);
   }
   // Whether an installed override at `guestAddress` (in any image) is a producer.
   bool isProducer(std::uint32_t guestAddress) const;
@@ -73,15 +75,16 @@ private:
     std::optional<present::Producer> producer;
   };
 
+  GuestHostDispatchKind classifyUncached(std::uint32_t guestAddress);
   bool suppressed(NativeKey key) const;
   void pushSuppression(NativeKey key);
   void popSuppression();
   friend class SuppressionScope;
 
   Core &core_;
+  DispatchEpoch &epoch_;
   std::unordered_map<NativeKey, Entry, NativeKeyHash> entries_;
   std::vector<NativeKey> suppressions_;
-  std::uint64_t revision_ = 0;
   std::unordered_map<std::uint32_t, int> producerAddresses_; // guest address -> installed producer keys
   std::uint64_t producerRevision_ = 0;
   HostDispatchVerdictCache verdicts_;

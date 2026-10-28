@@ -41,12 +41,6 @@ public:
   // Returns nullptr for a miss.
   psx::cpu::NativeFunction lookup(uint32_t addr) const;
 
-  // Advances whenever a registration is added or replaced, so a cache of lookup answers can tell that
-  // it is stale without repeating the lookup.
-  [[nodiscard]] uint64_t revision() const {
-    return mRevision;
-  }
-
 private:
   bool insert(uint32_t addr, psx::cpu::NativeFunction fn);
 
@@ -59,5 +53,4 @@ private:
   uint32_t mHi = 0;
   const psx::hle::StockVSync *mVSync = nullptr;
   const psx::hle::StockLibgpu *mLibgpu = nullptr;
-  uint64_t mRevision = 0;
 };
