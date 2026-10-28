@@ -25,8 +25,8 @@ bool rectsOverlap(const RecordRect &a, const RecordRect &b);
 // The VRAM rect a primitive can write: its vertices or sprite extent inside the draw area.
 RecordRect drawBounds(const present::DrawPrimitive &primitive);
 
-// A flat untextured rectangle: its whole-pixel edges and how far past each a placed quad's edge lies.
-struct FlatRectangle {
+// An axis-aligned rectangle: its whole-pixel edges and how far past each a placed quad's edge lies.
+struct AxisRectangle {
   RecordRect rect;
   float subX0 = 0.0f;
   float subY0 = 0.0f;
@@ -34,10 +34,11 @@ struct FlatRectangle {
   float subY1 = 0.0f;
 };
 
-// A sprite, or a quad with axis-aligned edges; none otherwise.
-std::optional<FlatRectangle> flatRectangle(const present::DrawPrimitive &primitive);
+// A sprite, a quad with axis-aligned edges, or a horizontal or vertical line at whole pixels; none otherwise.
+std::optional<AxisRectangle> axisRectangle(const present::DrawPrimitive &primitive);
 
-// A primitive's draw bounds, a fill, or a copy or upload target; none for a copy onto its own source.
+// A primitive's draw bounds, a fill, or a copy or upload target; none for a copy onto its own source or a
+// read-back declaration.
 std::optional<RecordRect> entryWrittenRect(const present::RecordEntry &entry);
 bool entryWritesRect(const present::RecordEntry &entry, const RecordRect &rect);
 

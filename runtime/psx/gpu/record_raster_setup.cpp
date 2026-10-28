@@ -357,6 +357,18 @@ std::optional<TriangleWalk> walkTriangle(const TriVertex input[3], int s) {
   return walk;
 }
 
+bool containsRect(const RecordRect &outer, const RecordRect &inner) {
+  return outer.x0 <= inner.x0 && inner.x1 <= outer.x1 && outer.y0 <= inner.y0 && inner.y1 <= outer.y1;
+}
+
+// How a primitive reads the read-back capture: the captured pixel it shows minus its own pixel, VRAM-space.
+struct ReadBackShift {
+  int x = 0;
+  int y = 0;
+  RecordRect captured;
+  std::uint32_t weights = 0;
+};
+
 void storeWords(RecordOp &op, int index, std::uint64_t value) {
   op[static_cast<std::size_t>(index)] = static_cast<std::uint32_t>(value);
   op[static_cast<std::size_t>(index) + 1] = static_cast<std::uint32_t>(value >> 32);
@@ -369,8 +381,15 @@ public:
   void begin(int scale,
              std::span<const std::uint16_t> clutPool,
              std::span<const std::uint16_t> uploadPool,
-             std::span<const RecordCanvas> canvases) {
+             std::span<const RecordCanvas> canvases,
+             const std::optional<RecordReadBack> &readBack,
+             bool declares) {
     plan_.scale = scale;
+    plan_.capture.reset();
+    readBack_ = readBack;
+    declared_.reset();
+    declares_ = declares;
+    sampling_.reset();
     plan_.ops.clear();
     for (std::vector<RecordQuad> &quads : plan_.quads) {
       quads.clear();
@@ -388,10 +407,12 @@ public:
   void addFill(const present::VramFill &fill);
   void addCopy(const present::VramCopy &copy);
   void addUpload(const present::VramUpload &upload);
+  void addReadBack(const present::ReadBackTexture &texture);
 
   // `sequence` is the planned record's, 0 for a VRAM upload.
   const RecordRasterPlan &finish(std::uint64_t sequence) {
     closeBatch();
+    plan_.readBack = declared_ ? declared_ : readBack_;
     std::size_t quads = 0;
     for (const std::vector<RecordQuad> &plane : plan_.quads) {
       quads += plane.size();
@@ -428,8 +449,11 @@ private:
       const TriVertex scaled[3], const TriVertex native[3], const DrawPrimitive &primitive, bool offU, bool offV);
   void addSprite(const DrawPrimitive &primitive);
   void addLine(const DrawPrimitive &primitive);
-  // A flat rectangle spanning a buffer's columns spans its canvas's, as a fill does.
+  // A flat rectangle reaching both edges of a buffer's columns spans its canvas's, as a fill does; a read-back
+  // rectangle continues past each buffer edge it reaches.
   void addCanvasMargins(const DrawPrimitive &primitive);
+  // How `primitive` samples readBack_, when it does (RecordReadBack).
+  std::optional<ReadBackShift> readBackShift(const DrawPrimitive &primitive) const;
 
   PlaneClips planeClips(const RecordDrawState &state) const;
   void target(int plane);
@@ -460,7 +484,11 @@ private:
   std::vector<PlaneRect> opWrites_;
   std::vector<RecordRect> opReads_;
   bool reaches_ = false;
-  int lines_ = 0; // line primitives planned
+  int lines_ = 0;                          // line primitives planned
+  std::optional<RecordReadBack> readBack_; // what primitives sample
+  std::optional<RecordReadBack> declared_; // this record's declaration, from the next record on
+  bool declares_ = false;
+  std::optional<ReadBackShift> sampling_; // the primitive being planned's
 };
 
 PlaneClips RecordPlanner::Builder::planeClips(const RecordDrawState &state) const {
@@ -523,7 +551,70 @@ RecordOp RecordPlanner::Builder::primitiveOp(const DrawPrimitive &primitive, Rec
   op[kOpWindowYAnd] = ~(twh << 3);
   op[kOpWindowYAdd] = ((twy & twh) << 3) + static_cast<std::uint32_t>(state.texPageY);
   op[kOpClut] = primitive.clutOffset == present::kNoClut ? 0u : primitive.clutOffset;
+  if (sampling_) {
+    op[kOpFlags] |= kOpReadBack;
+    op[kOpReadBackX] = static_cast<std::uint32_t>(sampling_->x - sampling_->captured.x0);
+    op[kOpReadBackY] = static_cast<std::uint32_t>(sampling_->y - sampling_->captured.y0);
+    op[kOpReadBackWeights] = sampling_->weights;
+  }
   return op;
+}
+
+std::optional<ReadBackShift> RecordPlanner::Builder::readBackShift(const DrawPrimitive &primitive) const {
+  if (!readBack_ || !primitive.textured) {
+    return std::nullopt;
+  }
+  const RecordReadBack &readBack = *readBack_;
+  const RecordDrawState &state = primitive.state;
+  if (state.texMode != readBack.texMode || state.windowMaskX != 0 || state.windowMaskY != 0) {
+    return std::nullopt;
+  }
+  // The pixels drawn, and one offset from each to the texel it shows.
+  const present::RecordVertex &first = primitive.vertices[0];
+  const int du = first.u - first.x;
+  const int dv = first.v - first.y;
+  RecordRect pixels{first.x, first.y, first.x, first.y};
+  if (primitive.kind == PrimitiveKind::Sprite) {
+    if (primitive.flipX || primitive.flipY) {
+      return std::nullopt;
+    }
+    pixels.x1 = first.x + primitive.width;
+    pixels.y1 = first.y + primitive.height;
+  } else if (primitive.kind == PrimitiveKind::Polygon) {
+    for (int i = 0; i < primitive.vertexCount; i++) {
+      const present::RecordVertex &vertex = primitive.vertices[static_cast<std::size_t>(i)];
+      if (vertex.subX != 0.0f || vertex.subY != 0.0f || vertex.u - vertex.x != du || vertex.v - vertex.y != dv) {
+        return std::nullopt;
+      }
+      pixels = {std::min(pixels.x0, vertex.x),
+                std::min(pixels.y0, vertex.y),
+                std::max(pixels.x1, vertex.x),
+                std::max(pixels.y1, vertex.y)};
+    }
+  } else {
+    return std::nullopt;
+  }
+  // Covered pixels stop short of the right and bottom vertices; their texels must not wrap at 256.
+  const int u0 = pixels.x0 + du;
+  const int v0 = pixels.y0 + dv;
+  const int u1 = pixels.x1 + du;
+  const int v1 = pixels.y1 + dv;
+  if (u0 < 0 || v0 < 0 || u1 > 256 || v1 > 256 || u1 <= u0 || v1 <= v0) {
+    return std::nullopt;
+  }
+  const int uAdd = state.texPageX << (2 - state.texMode);
+  if (!containsRect(readBack.page, {u0 + uAdd, v0 + state.texPageY, u1 + uAdd, v1 + state.texPageY})) {
+    return std::nullopt;
+  }
+  const ReadBackShift shift{.x = uAdd + du - readBack.page.x0 + readBack.read.x0,
+                            .y = state.texPageY + dv - readBack.page.y0 + readBack.read.y0,
+                            .captured = readBack.captured,
+                            .weights = readBack.weights};
+  if (!containsRect(readBack.captured,
+                    {pixels.x0 + shift.x, pixels.y0 + shift.y, pixels.x1 + shift.x, pixels.y1 + shift.y})) {
+    return std::nullopt;
+  }
+  return shift;
 }
 
 void RecordPlanner::Builder::textureReads(const RecordDrawState &state, const TexelRange &u, const TexelRange &v) {
@@ -624,6 +715,9 @@ void RecordPlanner::Builder::commit(const RecordOp &op, bool readsDestination) {
   }
   for (const PlaneRect &write : opWrites_) {
     written_[static_cast<std::size_t>(write.plane)].mark(write.rect);
+    if (readBack_ && write.plane == 0 && rectsOverlap(write.rect, readBack_->pageVram)) {
+      readBack_.reset();
+    }
   }
   opQuads_.clear();
   opWrites_.clear();
@@ -647,6 +741,7 @@ void RecordPlanner::Builder::closeBatch() {
 }
 
 void RecordPlanner::Builder::addPrimitive(const DrawPrimitive &primitive) {
+  sampling_ = readBackShift(primitive);
   switch (primitive.kind) {
   case PrimitiveKind::Polygon:
     addPolygon(primitive);
@@ -659,6 +754,7 @@ void RecordPlanner::Builder::addPrimitive(const DrawPrimitive &primitive) {
     break;
   }
   addCanvasMargins(primitive);
+  sampling_.reset();
 }
 
 void RecordPlanner::Builder::addPolygon(const DrawPrimitive &primitive) {
@@ -764,7 +860,9 @@ void RecordPlanner::Builder::addTriangle(
   target(0);
 
   RecordOp op = primitiveOp(primitive, RecordOpKind::Triangle);
-  for (std::size_t c = 0; c < 5; c++) {
+  // A read-back op keeps its read-back words in the u and v slots.
+  const std::size_t stored = sampling_ ? 3 : 5;
+  for (std::size_t c = 0; c < stored; c++) {
     op[kOpBase + c] = setup.base[c];
     op[kOpDx + c] = setup.dx[c];
     op[kOpDy + c] = setup.dy[c];
@@ -778,7 +876,7 @@ void RecordPlanner::Builder::addTriangle(
     storeWords(op, words + kPartLeftStep, part.step[0]);
     storeWords(op, words + kPartRightStep, part.step[1]);
   }
-  if (primitive.textured) {
+  if (primitive.textured && !sampling_) {
     // Every covered pixel lies within a pixel of the vertices' hull, where the interpolant is linear.
     TexelRange ranges[2];
     for (int c = 3; c < 5; c++) {
@@ -870,7 +968,7 @@ void RecordPlanner::Builder::addSprite(const DrawPrimitive &primitive) {
   op[kOpSourceY] = v;
   op[kOpShiftX] = static_cast<std::uint32_t>(shiftX);
   op[kOpShiftY] = static_cast<std::uint32_t>(shiftY);
-  if (primitive.textured) {
+  if (primitive.textured && !sampling_) {
     textureReads(primitive.state, uRange, vRange);
   }
   commit(op, primitive.semiTransparent || primitive.state.maskCheck);
@@ -958,8 +1056,11 @@ void RecordPlanner::Builder::addLine(const DrawPrimitive &primitive) {
 }
 
 void RecordPlanner::Builder::addCanvasMargins(const DrawPrimitive &primitive) {
-  const std::optional<FlatRectangle> flat = flatRectangle(primitive);
-  if (!flat || flat->subX0 != 0.0f || flat->subX1 != 0.0f) {
+  const std::optional<AxisRectangle> flat = axisRectangle(primitive);
+  // Its colour does not depend on where in it a pixel lies, or its picture is the captured one, which the
+  // margin holds too.
+  const bool placeFree = !primitive.gouraud && (!primitive.textured || sampling_);
+  if (!flat || !placeFree || flat->subX0 != 0.0f || flat->subX1 != 0.0f) {
     return;
   }
   const RecordRect &rect = flat->rect;
@@ -973,19 +1074,31 @@ void RecordPlanner::Builder::addCanvasMargins(const DrawPrimitive &primitive) {
     // The margins share the rectangle's rows at this scale, a placed edge's fraction included.
     const int y0 = std::max(scaledCoordinate(rect.y0, flat->subY0, s), clip.y0 * s);
     const int y1 = std::min(scaledCoordinate(rect.y1, flat->subY1, s), (clip.y1 + 1) * s);
-    if (rect.x0 != canvas.buffer.x0 || rect.x1 != canvas.buffer.x1 || y0 >= y1) {
+    const bool reachesLeft = rect.x0 <= canvas.buffer.x0;
+    const bool reachesRight = rect.x1 >= canvas.buffer.x1;
+    const bool spans = reachesLeft && reachesRight;
+    const bool leftEdge = sampling_ ? reachesLeft : spans;
+    const bool rightEdge = sampling_ ? reachesRight : spans;
+    if ((!leftEdge && !rightEdge) || y0 >= y1) {
       continue;
     }
     const int rowFirst = y0 / s;
     const int rowEnd = (y1 + s - 1) / s;
     target(planeClip.plane);
-    const int left = std::max(canvas.originX(), clip.x0);
-    const int right = std::min(canvas.buffer.x1 + canvas.margin, clip.x1 + 1);
-    if (left < canvas.buffer.x0) {
-      emit({left, rowFirst, canvas.buffer.x0, rowEnd}, {left * s, y0, canvas.buffer.x0 * s, y1});
+    int left = std::max(canvas.originX(), clip.x0);
+    int right = std::min(canvas.buffer.x1 + canvas.margin, clip.x1 + 1);
+    if (sampling_) {
+      left = std::max(left, sampling_->captured.x0 - sampling_->x);
+      right = std::min(right, sampling_->captured.x1 - sampling_->x);
     }
-    if (right > canvas.buffer.x1) {
-      emit({canvas.buffer.x1, rowFirst, right, rowEnd}, {canvas.buffer.x1 * s, y0, right * s, y1});
+    // The primitive draws its own columns; the margin continues from its edge.
+    const int leftEnd = std::min(canvas.buffer.x0, rect.x0);
+    const int rightStart = std::max(canvas.buffer.x1, rect.x1);
+    if (leftEdge && left < leftEnd) {
+      emit({left, rowFirst, leftEnd, rowEnd}, {left * s, y0, leftEnd * s, y1});
+    }
+    if (rightEdge && right > rightStart) {
+      emit({rightStart, rowFirst, right, rowEnd}, {rightStart * s, y0, right * s, y1});
     }
   }
   target(0);
@@ -1063,6 +1176,40 @@ void RecordPlanner::Builder::addUpload(const present::VramUpload &upload) {
   commit(op, upload.maskCheck);
 }
 
+void RecordPlanner::Builder::addReadBack(const present::ReadBackTexture &texture) {
+  if (!declares_ || texture.texMode < 0 || texture.texMode > 2) {
+    return;
+  }
+  const RecordRect read{
+      texture.readX, texture.readY, texture.readX + texture.readWidth, texture.readY + texture.readHeight};
+  for (std::size_t i = 0; i < canvases_.size(); i++) {
+    const RecordCanvas &canvas = canvases_[i];
+    if (read.x1 <= read.x0 || read.y1 <= read.y0 || !containsRect(canvas.buffer, read)) {
+      continue;
+    }
+    RecordRect captured = read;
+    captured.x0 -= read.x0 == canvas.buffer.x0 ? canvas.margin : 0;
+    captured.x1 += read.x1 == canvas.buffer.x1 ? canvas.margin : 0;
+    // The capture sees every op before it and replaces the one the rest of the record would sample.
+    closeBatch();
+    readBack_.reset();
+    plan_.capture = RecordCapture{static_cast<std::uint32_t>(plan_.batches.size()), 1 + static_cast<int>(i), captured};
+    const int shift = 2 - texture.texMode;
+    const RecordRect pageVram{
+        texture.pageX, texture.pageY, texture.pageX + texture.pageWidth, texture.pageY + texture.pageHeight};
+    declared_ = RecordReadBack{.page = {pageVram.x0 << shift, pageVram.y0, pageVram.x1 << shift, pageVram.y1},
+                               .pageVram = pageVram,
+                               .texMode = texture.texMode,
+                               .read = read,
+                               .captured = captured,
+                               .weights = static_cast<std::uint32_t>(texture.red) |
+                                          (static_cast<std::uint32_t>(texture.green) << 8) |
+                                          (static_cast<std::uint32_t>(texture.blue) << 16) |
+                                          (static_cast<std::uint32_t>(texture.shift) << 24)};
+    return;
+  }
+}
+
 bool drawAreaSpansBuffer(const present::RecordDrawState &state, const RecordRect &buffer) {
   const Clip area = nativeClip(state);
   return buffer.x0 < buffer.x1 && buffer.y0 < buffer.y1 && area.x0 == buffer.x0 && area.x1 == buffer.x1 - 1 &&
@@ -1077,9 +1224,12 @@ RecordPlanner::RecordPlanner() : builder_(std::make_unique<Builder>()) {}
 
 RecordPlanner::~RecordPlanner() = default;
 
-const RecordRasterPlan &
-RecordPlanner::plan(const FrameRecord &record, int scale, std::span<const RecordCanvas> canvases) {
-  builder_->begin(std::max(scale, 1), record.clutPool(), record.uploadPixels(), canvases);
+const RecordRasterPlan &RecordPlanner::plan(const FrameRecord &record,
+                                            int scale,
+                                            std::span<const RecordCanvas> canvases,
+                                            const std::optional<RecordReadBack> &readBack,
+                                            bool declares) {
+  builder_->begin(std::max(scale, 1), record.clutPool(), record.uploadPixels(), canvases, readBack, declares);
   for (const present::RecordEntry &entry : record.entries()) {
     if (const auto *primitive = std::get_if<DrawPrimitive>(&entry)) {
       builder_->addPrimitive(*primitive);
@@ -1089,13 +1239,15 @@ RecordPlanner::plan(const FrameRecord &record, int scale, std::span<const Record
       builder_->addCopy(*copy);
     } else if (const auto *upload = std::get_if<present::VramUpload>(&entry)) {
       builder_->addUpload(*upload);
+    } else if (const auto *texture = std::get_if<present::ReadBackTexture>(&entry)) {
+      builder_->addReadBack(*texture);
     }
   }
   return builder_->finish(record.sequence());
 }
 
 const RecordRasterPlan &RecordPlanner::planVramUpload(std::span<const std::uint16_t> vram, int scale) {
-  builder_->begin(std::max(scale, 1), {}, vram, {});
+  builder_->begin(std::max(scale, 1), {}, vram, {}, std::nullopt, false);
   present::VramUpload upload;
   upload.width = kVramWidth;
   upload.height = kVramHeight;

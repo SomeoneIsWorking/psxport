@@ -44,13 +44,22 @@ RecordRect drawBounds(const present::DrawPrimitive &primitive) {
   return rect;
 }
 
-std::optional<FlatRectangle> flatRectangle(const present::DrawPrimitive &primitive) {
+std::optional<AxisRectangle> axisRectangle(const present::DrawPrimitive &primitive) {
   const present::RecordVertex &origin = primitive.vertices[0];
-  if (primitive.textured || primitive.gouraud) {
-    return std::nullopt;
-  }
   if (primitive.kind == present::PrimitiveKind::Sprite) {
-    return FlatRectangle{.rect = {origin.x, origin.y, origin.x + primitive.width, origin.y + primitive.height}};
+    return AxisRectangle{.rect = {origin.x, origin.y, origin.x + primitive.width, origin.y + primitive.height}};
+  }
+  if (primitive.kind == present::PrimitiveKind::Line) {
+    // gpu.c plots both end points; a horizontal or vertical line covers the pixels between them.
+    const present::RecordVertex &end = primitive.vertices[1];
+    const bool whole = origin.subX == 0.0f && origin.subY == 0.0f && end.subX == 0.0f && end.subY == 0.0f;
+    if (!whole || (origin.x != end.x && origin.y != end.y)) {
+      return std::nullopt;
+    }
+    return AxisRectangle{.rect = {std::min(origin.x, end.x),
+                                  std::min(origin.y, end.y),
+                                  std::max(origin.x, end.x) + 1,
+                                  std::max(origin.y, end.y) + 1}};
   }
   if (primitive.kind != present::PrimitiveKind::Polygon || primitive.vertexCount != 4) {
     return std::nullopt;
@@ -83,7 +92,7 @@ std::optional<FlatRectangle> flatRectangle(const present::DrawPrimitive &primiti
   if (corners != 0xFu) {
     return std::nullopt;
   }
-  return FlatRectangle{.rect = {left->x, top->y, right->x, bottom->y},
+  return AxisRectangle{.rect = {left->x, top->y, right->x, bottom->y},
                        .subX0 = left->subX,
                        .subY0 = top->subY,
                        .subX1 = right->subX,
@@ -104,8 +113,11 @@ std::optional<RecordRect> entryWrittenRect(const present::RecordEntry &entry) {
     }
     return clampedVramRect({copy->dstX, copy->dstY, copy->width, copy->height});
   }
-  const auto &upload = std::get<present::VramUpload>(entry);
-  return clampedVramRect({upload.x, upload.y, upload.width, upload.height});
+  const auto *upload = std::get_if<present::VramUpload>(&entry);
+  if (upload == nullptr) {
+    return std::nullopt;
+  }
+  return clampedVramRect({upload->x, upload->y, upload->width, upload->height});
 }
 
 bool entryWritesRect(const present::RecordEntry &entry, const RecordRect &rect) {

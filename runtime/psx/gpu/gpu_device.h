@@ -39,6 +39,11 @@ public:
   void beginPacket();
   // Draw work enters the GPU in display field `field` (an OT walk, a block DMA, a GP0 port write).
   void noteDrawEntry(std::uint32_t field);
+  // A title's declaration that the guest fills a texture page from display pixels it just read back; the record
+  // samples the presented picture there in its place (record_raster_setup.h). The device is untouched.
+  void declareReadBack(const present::ReadBackTexture &texture) {
+    mTap.declareReadBack(texture);
+  }
   // The OT walk reached a named bucket, or left the named tables (nullopt).
   void enterSlot(const std::optional<present::OtSlot> &slot, bool descending);
   // The device's scanline clock runs from `now`.
