@@ -24,6 +24,7 @@ struct EmulatedTimeQ32 {
 class EmulatedTime {
 public:
   void advanceInstructions(uint32_t ticks);
+  // One of `parts` deliveries of a `fields`-field interval; the interval's parts arrive back to back.
   bool advanceDisplayFields(uint32_t fields, uint32_t parts, uint32_t fieldRateMilliHz);
   [[nodiscard]] uint64_t nowTicks() const;
   // Whole fields of guest time since the last delivered display boundary.
@@ -36,6 +37,7 @@ public:
   void restore(EmulatedTimeQ32 state) {
     mNowQ32 = static_cast<unsigned __int128>(state.now);
     mDisplayBoundaryQ32 = static_cast<unsigned __int128>(state.displayBoundary);
+    mIntervalPart = 0;
   }
 
 private:
@@ -44,5 +46,10 @@ private:
   // and a display wait advances TO the boundary rather than adding a second interval on top.
   unsigned __int128 mNowQ32 = 0;
   unsigned __int128 mDisplayBoundaryQ32 = 0;
+  // The interval being delivered: where its first part starts and how many of its parts have landed.
+  unsigned __int128 mIntervalStartQ32 = 0;
+  uint32_t mIntervalFields = 0;
+  uint32_t mIntervalParts = 0;
+  uint32_t mIntervalPart = 0;
 };
 } // namespace psx::frame
