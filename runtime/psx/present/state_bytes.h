@@ -45,10 +45,15 @@ public:
     return value;
   }
   template <class T> std::vector<T> getAll(std::size_t count) {
-    static_assert(std::is_trivially_copyable_v<T>);
-    std::vector<T> values(count);
-    take(values.data(), count * sizeof(T));
+    std::vector<T> values;
+    getAll(count, values);
     return values;
+  }
+  // Into `out`, which keeps its capacity.
+  template <class T> void getAll(std::size_t count, std::vector<T> &out) {
+    static_assert(std::is_trivially_copyable_v<T>);
+    out.resize(count);
+    take(out.data(), count * sizeof(T));
   }
 
 private:
