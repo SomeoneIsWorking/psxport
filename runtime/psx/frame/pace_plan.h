@@ -16,7 +16,7 @@ struct PaceInputs {
   int quota = 0;
   // Sub-frames per call: 1 paces a whole logic frame, 2 half of one (fps60). < 1 is clamped to 1.
   int parts = 1;
-  // 59940 for NTSC, 50000 for PAL; zero is reported as rateUnset and never paced against.
+  // psx::frame::fieldRateMilliHz of the display standard; zero is reported as rateUnset and never paced against.
   unsigned fieldRateMilliHz = 0;
   // Monotonic now, and the deadline carried from the previous paced call (unseeded: start at now).
   double nowMs = 0.0;

@@ -83,7 +83,7 @@ Products: `spyro_port`, `toystory2_port`, `crashbash_port`, `crash_port`, `ctr_p
 - Every judgement run plays the way the player does: `ires=0` (auto, 8x on this sink), `fps60=1`,
   `PSXPORT_PRESENT_SINK=3840x2160`. Judder is motion that jumps: a draw that moves only on real presents, steps
   by whole native pixels, lands off the halfway point of its neighbours, snaps or goes backwards. An occasional
-  repeated present (the 59.94 Hz pacing on a 60.00 Hz display, a load hold) is not judder. The unmapped window
+  repeated present (the 59.82 Hz NTSC field pacing on a 60.00 Hz display, a load hold) is not judder. The unmapped window
   never scans out, so simulate the player's 60.00 Hz display from the `presentseq` times (each vblank shows the
   newest present before it) and judge the motion across the shown sequence.
 - Only pacing needs real time on a quiet host. Composition, identity and halfway motion are judged unpaced

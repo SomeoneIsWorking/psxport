@@ -1,6 +1,7 @@
 #pragma once
-// The display field rate as an exact rational, with milli-hertz for integer APIs. NTSC is
-// 60000/1001 Hz; the standard is GP1(0x08) bit 3, decoded into DisplayArea::pal.
+// The display field rate as an exact rational, with milli-hertz for integer APIs: the GPU video clock over the
+// video clocks of one non-interlaced field (NTSC 59.817 Hz, PAL 49.747 Hz, not the broadcast 59.94/50).
+// The standard is GP1(0x08) bit 3, decoded into DisplayArea::pal.
 #include <cstdint>
 
 namespace psx::frame {
@@ -12,8 +13,18 @@ struct DisplayFieldRate {
   constexpr bool operator==(const DisplayFieldRate &) const = default;
 };
 
-inline constexpr DisplayFieldRate DISPLAY_FIELD_RATE_NTSC{60000u, 1001u};
-inline constexpr DisplayFieldRate DISPLAY_FIELD_RATE_PAL{50u, 1u};
+// Nominal non-interlaced lines per field; field parity is not modelled.
+inline constexpr unsigned DISPLAY_LINES_NTSC = 263u;
+inline constexpr unsigned DISPLAY_LINES_PAL = 314u;
+
+inline constexpr uint32_t kVideoClockNtscHz = 53'693'175u;
+inline constexpr uint32_t kVideoClockPalHz = 53'203'425u;
+inline constexpr uint32_t kVideoClocksPerLineNtsc = 3413u;
+inline constexpr uint32_t kVideoClocksPerLinePal = 3406u;
+
+inline constexpr DisplayFieldRate DISPLAY_FIELD_RATE_NTSC{kVideoClockNtscHz,
+                                                          DISPLAY_LINES_NTSC * kVideoClocksPerLineNtsc};
+inline constexpr DisplayFieldRate DISPLAY_FIELD_RATE_PAL{kVideoClockPalHz, DISPLAY_LINES_PAL * kVideoClocksPerLinePal};
 
 constexpr unsigned fieldRateMilliHz(DisplayFieldRate rate) {
   return static_cast<unsigned>((static_cast<uint64_t>(rate.frequencyNumerator) * 1000u) / rate.frequencyDenominator);
@@ -22,10 +33,6 @@ constexpr unsigned fieldRateMilliHz(DisplayFieldRate rate) {
 inline constexpr unsigned FIELD_RATE_NTSC_MILLIHZ = fieldRateMilliHz(DISPLAY_FIELD_RATE_NTSC);
 // Host screens (the picker) have no guest display mode and pace at the NTSC rate.
 inline constexpr unsigned kHostScreenFieldRateMilliHz = FIELD_RATE_NTSC_MILLIHZ;
-
-// Nominal non-interlaced lines per field; field parity is not modelled.
-inline constexpr unsigned DISPLAY_LINES_NTSC = 263u;
-inline constexpr unsigned DISPLAY_LINES_PAL = 314u;
 
 inline constexpr DisplayFieldRate displayFieldRate(bool pal) {
   return pal ? DISPLAY_FIELD_RATE_PAL : DISPLAY_FIELD_RATE_NTSC;
