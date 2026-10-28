@@ -46,7 +46,8 @@ not prove exact wall-clock-equivalent drive rate.
 The same gap moves guest-visible VBlank placement inside long draw-less work. Spyro 1's level start
 (psx-spyro issue 0215): from `LoadLevelScene`'s `g_LevelTicks` zero (`0x80013698`) to the first game-tick
 store (`0x80033A6C`) the console executes 364,988 instructions in about 724K cycles (Beetle PC observer
-timestamps), about 2 per instruction, and crosses one VBlank. The product runs that whole step in 387,818
+timestamps; the observer's ordinal counts executed opcodes on the interpreter, `pc_observer.c`), about 2 per
+instruction, and crosses one VBlank. The product runs that whole step in 387,818
 instructions from a field boundary, short of one 566,206-tick field, so `g_LevelTicks` stays one behind for
 the rest of the level. That span is a calibration case for the cost model below.
 
@@ -57,3 +58,14 @@ stall costs. A differential instrument must
 compare timestamped sector delivery against the true oracle across code paths with materially
 different instruction and stall mixes. Until that passes, diagnostics and claims must say
 "emulated CPU ticks" or "nominal threshold", never "cycle-accurate" or "physical 75/150 Hz".
+
+## Plan (decided 2026-10-28)
+
+This is the next psxport timing work, ahead of further per-title pacing passes; Spyro 1 issue 0215 waits on it.
+1. Calibration spans from the console oracle (observer ordinal and timestamp): Spyro 1 level start (above), C-12
+   boot loader, Tomba 2 first scene load, Crash Bash boot (`0x8008E5BC`). Each records instructions and cycles.
+2. The cost owner is `Timing::advanceGuestInstructionTicks`: it charges a per-block cost fixed at translation
+   (opcode class, load/store region wait states, GTE and multiply/divide latency) instead of one tick per
+   instruction. Turn budgets and CD deadlines stay in guest ticks, so no caller changes units.
+3. Proven when every calibration span lands within the console's field and Spyro 1's `g_LevelTicks` equals the
+   console's at `playing`; then all 11 products build and get one 40 s paced run each.
