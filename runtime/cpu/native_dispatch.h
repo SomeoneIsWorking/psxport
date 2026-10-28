@@ -104,8 +104,7 @@ void installNativeOverride(Core &core,
 // Removes the override the active image identity resolves at `guestAddress`; refuses an unowned address.
 bool removeNativeOverride(Core &core, std::uint32_t guestAddress);
 ExecutionResult dispatchGuestHostService(Core &core, std::uint32_t guestAddress);
-ExecutionResult
-invokeNativeFunction(Core &core, std::uint32_t guestAddress, NativeFunction function, std::string_view name);
+ExecutionResult invokeNativeFunction(Core &core, std::uint32_t guestAddress, NativeFunction function);
 // `origin` names the caller in the refusal when `guestAddress` is not executable.
 ExecutionResult dispatchGuest(Core &core, std::uint32_t guestAddress, ExecutionBudget budget, std::string_view origin);
 ExecutionResult dispatchGuestUntilExit(Core &core, std::uint32_t guestAddress, ExecutionBudget budget);
