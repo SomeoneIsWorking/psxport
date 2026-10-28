@@ -6,6 +6,7 @@
 #include "host_input.h"
 #include "pad_record_replay.h"
 #include <cstdint>
+#include <string>
 #include <vector>
 
 class Core;
@@ -66,6 +67,10 @@ public:
   // The host owns the player's input; the guest, the recording and a replay all see nothing pressed,
   // the P / '.' / B debug keys do nothing here and this Game's overlay takes no host events.
   void setPlayerInputSuppressed(bool suppressed);
+
+  // The one way to press PSX buttons (kButton bits, active high) on the virtual gamepad. A press is refused, with the
+  // reason as the reply, while a pad replay feeds the guest or another Game holds the player's input.
+  std::string injectButtons(std::uint16_t bits, psx::input::InjectedPress press, int holdFrames);
 
 private:
   psx::input::HostInput &mHost;

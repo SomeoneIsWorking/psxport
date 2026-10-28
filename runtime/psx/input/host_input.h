@@ -22,6 +22,7 @@
 #include <vector>
 
 class RmlOverlay;
+class Pad;
 struct SDL_Gamepad; // opaque; only held as pointers (SDL build only)
 
 namespace psx::input {
@@ -91,10 +92,6 @@ public:
   InputInjection &injection() {
     return mInjection;
   }
-  // PSX buttons (kButton bits, active high) on the virtual gamepad, through the binding the controllers are read with;
-  // a tap holds for `holdFrames` pad frames the guest samples.
-  std::string padButtons(std::uint16_t bits, InjectedPress press, int holdFrames);
-
   // Take the P (pause / resume) edge a poll detected, and the '.' (freeze, advance one frame) edge.
   // Latched until taken, so one press is one action whichever Game's poll saw it. Taking is separate from asking
   // because the ACTION is not this owner's: the debug channel owns pause and step state (DbgServer::togglePause /
@@ -117,6 +114,10 @@ public:
   }
 
 private:
+  friend class ::Pad;
+  // PSX buttons (kButton bits, active high) on the virtual gamepad, through the binding the controllers are read with;
+  // a tap holds for `holdFrames` pad frames the guest samples. Reached only through Pad::injectButtons.
+  std::string padButtons(std::uint16_t bits, InjectedPress press, int holdFrames);
   std::string padButton(std::uint16_t bit, InjectedPress press, int holdFrames);
 #ifdef PSXPORT_SDL
   bool keyDown(int scancode) const;
