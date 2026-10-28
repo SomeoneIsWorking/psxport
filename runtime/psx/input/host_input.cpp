@@ -189,7 +189,7 @@ bool psx::input::HostInput::noPadRequested() {
   return mNoPad != 0;
 }
 
-// HOTSWAP: open any newly-connected controller and drop any that vanished, after a gamepad added or removed
+// Hot-swap: open any newly-connected controller and drop any that vanished, after a gamepad added or removed
 // event this owner drained, or when physical pads are admitted or refused. Only instances not already held are opened.
 void psx::input::HostInput::rescanControllers(bool shown) {
   if (!mGamepadSubsystem) {
