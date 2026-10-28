@@ -50,6 +50,15 @@ uint64_t EmulatedTime::nowTicks() const {
   return static_cast<uint64_t>(mNowQ32 >> kFractionBits);
 }
 
+uint32_t EmulatedTime::fieldsSinceBoundary(uint32_t fieldRateMilliHz) const {
+  const unsigned __int128 duration = display_field_duration_q32(1, 1, fieldRateMilliHz);
+  if (duration == 0 || mNowQ32 <= mDisplayBoundaryQ32) {
+    return 0;
+  }
+  const unsigned __int128 fields = (mNowQ32 - mDisplayBoundaryQ32) / duration;
+  return fields > UINT32_MAX ? UINT32_MAX : static_cast<uint32_t>(fields);
+}
+
 uint64_t EmulatedTime::hSyncCount(uint32_t fieldRateMilliHz, uint32_t linesPerField) const {
   if (fieldRateMilliHz == 0 || linesPerField == 0) {
     return 0;

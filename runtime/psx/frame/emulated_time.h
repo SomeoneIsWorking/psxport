@@ -26,6 +26,8 @@ public:
   void advanceInstructions(uint32_t ticks);
   bool advanceDisplayFields(uint32_t fields, uint32_t parts, uint32_t fieldRateMilliHz);
   [[nodiscard]] uint64_t nowTicks() const;
+  // Whole fields of guest time since the last delivered display boundary.
+  [[nodiscard]] uint32_t fieldsSinceBoundary(uint32_t fieldRateMilliHz) const;
   [[nodiscard]] uint64_t hSyncCount(uint32_t fieldRateMilliHz, uint32_t linesPerField) const;
 
   [[nodiscard]] EmulatedTimeQ32 q32() const {
