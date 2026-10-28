@@ -26,13 +26,13 @@ by DMA6 and submitted by DMA2, and calls VSync once per field. Each scene runs 2
 | `reused-slot` | `square_draw` on a slot a new object takes every 12 frames | none in this stage |
 | `amended-square` | `square_draw`, then `amend_draw` stores the packet's colour word before submit | `Overwrote` for `amend_draw`, producer `square_draw` |
 
-Two more scenes run only when requested and never come round in the cycle. Each must end the process with a
-`[record-fault:error]` line before the frame it was drawn in presents:
+One more scene runs only when requested and never comes round in the cycle. It must end the session with a
+`[render:error] draw-list cycle` line, the player's text and exit status 3, and the frame it was drawn in never
+presents:
 
 | scene | drawer | expected end |
 |---|---|---|
-| `looping-ot` | `looping_ot_draw`, a full-screen semi-transparent TILE in bucket 8 with bucket 3 linked back to bucket 10 | `draw-list-cycle`, refused by `OrderingTableCursor::advance` |
-| `unterminated-poly-line` | `unterminated_line_draw`, a flat poly-line packet of three vertices and no terminator | `poly-line-unterminated` at the packet, refused by `submitOrderingTable` |
+| `looping-ot` | `looping_ot_draw`, a full-screen semi-transparent TILE in bucket 8 with bucket 3 linked back to bucket 10 | draw-list cycle, refused by `OrderingTableCursor::advance` |
 
 `planted <scene>` on the control channel requests a scene from the next frame (`planted looping-ot`).
 

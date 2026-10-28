@@ -110,8 +110,8 @@ int ProductHost::runSelector() {
     const PickerContent content(titles, panelSlugs);
     PickerSession picker(pickerRuntime, catalog_, content, state.services);
     const PickerSession::Result choice = picker.run();
-    if (choice.outcome == PickerSession::Outcome::GpuFault) {
-      return endOnGpuFault();
+    if (choice.outcome == PickerSession::Outcome::DrawFault) {
+      return endOnDrawFault();
     }
     if (choice.outcome != PickerSession::Outcome::Chosen || choice.session == nullptr) {
       return 0;
@@ -123,8 +123,8 @@ int ProductHost::runSelector() {
                  choice.session->title().identity->displayName,
                  choice.session->title().identity->serial);
     const TitleSession::End end = runToEnd(*choice.session);
-    if (end == TitleSession::End::GpuFault) {
-      return endOnGpuFault();
+    if (end == TitleSession::End::DrawFault) {
+      return endOnDrawFault();
     }
     if (end == TitleSession::End::Refused) {
       return 2; // a boot refusal is not something the selector can retry
@@ -204,16 +204,16 @@ int ProductHost::runExecutable(const std::filesystem::path &executable) {
   switch (runToEnd(session)) {
   case TitleSession::End::Refused:
     return 2;
-  case TitleSession::End::GpuFault:
-    return endOnGpuFault();
+  case TitleSession::End::DrawFault:
+    return endOnDrawFault();
   default:
     return 0;
   }
 }
 
-int ProductHost::endOnGpuFault() {
+int ProductHost::endOnDrawFault() {
   process().presentation.reportFaultToPlayer();
-  return kGpuFaultExit;
+  return kDrawFaultExit;
 }
 
 } // namespace psx::host

@@ -156,7 +156,7 @@ bool TitleSession::boot() {
 
 bool TitleSession::endRequested(Game &game) {
   if (services_.presentation.faulted()) {
-    end_ = End::GpuFault;
+    end_ = End::DrawFault;
     return true;
   }
   if (game.session.returnRequested()) {

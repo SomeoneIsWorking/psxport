@@ -13,14 +13,16 @@ product does not carry a second windowing or graphics stack.
 - A device-lost or fence-timeout fault latches the renderer off for the rest of that process (`enabled()` turns
   false, so no later present acquires or submits; work submitted to a lost device never retires) and is written
   to `gpu_fault` in the user data directory (`~/.config/psxport/` on Linux). The session ends at its next step
-  (`TitleSession::End::GpuFault`, or the picker's `Outcome::GpuFault`), `ProductHost::endOnGpuFault` tells the
+  (`TitleSession::End::DrawFault`, or the picker's `Outcome::DrawFault`), `ProductHost::endOnDrawFault` tells the
   player through `RenderWindow::showError` (an error box over a shown window, a log line for a tool's unmapped one)
-  and the process exits with status 3. The control channel's `gpufault` latches the device the same way without a
+  and the process exits with status 3. The latch names its cause (`FaultCause`), which picks the player's text. The control channel's `gpufault` latches the device the same way without a
   device failure and writes no marker. Every later process logs the record as a warning until the file is
   deleted, and starts normally: the kernel resets the ring, a lost device is reported to innocent contexts
   too, and the marker cannot tell which process hung the GPU (`journalctl -k` names it).
-- Guest draw data a console never finishes (a cyclic draw list, a packet ending inside a poly-line, a record past
-  its bounds) ends the process in the record path before anything of it is submitted (`gpu/record_fault.*`).
+- A guest draw list that revisits a node, which a console's walk never leaves, latches the same fault with cause
+  `DrawListCycle` the moment a walk sees the revisit (`gpu/draw_list_cycle.*`): the walk stops there, nothing of
+  that frame is submitted, and the session ends the same way with the player told the game's draw list never
+  ends.
 - `runtime/psx/shaders_gpu/` owns first-party GLSL sources. `tools/gen_gpu_shaders.py` compiles and
   embeds them in a consumer-owned build directory; no shader header is written to the source tree.
 - `docs/presentation.md` is the renderer's contract: what each render path presents and how.

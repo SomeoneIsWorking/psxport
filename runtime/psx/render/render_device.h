@@ -11,6 +11,7 @@
 #include <memory>
 #include <span>
 #include <string>
+#include <string_view>
 
 namespace psx::ui {
 class RmlUiLibrary;
@@ -45,6 +46,12 @@ private:
   SDL_GPUDevice *device_ = nullptr;
   SDL_GPUTransferBuffer *buffer_ = nullptr;
   const std::uint8_t *bytes_ = nullptr;
+};
+
+// Why drawing stopped for the rest of the process.
+enum class FaultCause : std::uint8_t {
+  Device,        // a submit failed or hung
+  DrawListCycle, // the guest's draw list never ends; a console's walk hangs on it
 };
 
 class RenderDevice {
@@ -123,7 +130,7 @@ public:
     return faulted_;
   }
   // Latches the device off for the rest of the process: work submitted after a fault never retires.
-  void latchFault(const char *where, const char *detail);
+  void latchFault(FaultCause cause, std::string_view where, std::string_view detail);
   // The player's notice that the picture stopped, naming the fault; the process ends after it.
   void reportFaultToPlayer() const;
   // Submit, latching the device off for the rest of the process on the first failure.
@@ -168,6 +175,7 @@ private:
 
   bool enabled_ = true;
   bool faulted_ = false;
+  FaultCause cause_ = FaultCause::Device;
   std::string fault_; // where and detail of the latched fault
   const char *windowTitle_ = nullptr;
   PixelSize creationSize_;

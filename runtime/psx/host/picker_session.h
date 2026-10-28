@@ -22,7 +22,7 @@ struct SessionServices;
 // The title selector: a product screen of live panels, presented by the host Game like a game frame.
 class PickerSession {
 public:
-  enum class Outcome : std::uint8_t { Chosen, Ended, GpuFault };
+  enum class Outcome : std::uint8_t { Chosen, Ended, DrawFault };
   struct Result {
     Outcome outcome = Outcome::Ended;
     std::unique_ptr<TitleSession> session; // the chosen title's session, set when Chosen

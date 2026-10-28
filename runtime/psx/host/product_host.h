@@ -62,9 +62,9 @@ private:
   // explicit executable argument.
   // Returns how the session ended, or Refused when it could not boot.
   TitleSession::End runToEnd(TitleSession &session);
-  // The player is told the device failed; the exit status says so.
-  int endOnGpuFault();
-  static constexpr int kGpuFaultExit = 3;
+  // The player is told why drawing stopped; the exit status says so.
+  int endOnDrawFault();
+  static constexpr int kDrawFaultExit = 3;
 
   const TitleCatalog &catalog_;
   const psx::config::Config config_;
