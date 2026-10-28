@@ -265,11 +265,6 @@ void GpuDevice::beginPacket() {
   mTap.beginPacket();
 }
 
-bool GpuDevice::polyLineOpen() {
-  bind();
-  return GPU.InCmd == INCMD_PLINE;
-}
-
 void GpuDevice::noteDrawEntry(std::uint32_t field) {
   mTap.noteDrawEntry(field);
 }

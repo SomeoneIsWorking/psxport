@@ -1,8 +1,8 @@
 #include "packet_chains.h"
 
+#include "draw_list_cycle.h"
 #include "guest_memory_map.h"
 #include "ordering_table.h"
-#include "record_fault.h"
 
 #include <lucent/log.h>
 
@@ -17,8 +17,8 @@ PacketChainWalker::walk(std::uint32_t link, OtSlot slot, DrawModeTracker &drawMo
   for (gpu::OtNode tag(0, gpu::OtHeaderWord{link}); !tag.endsChain();) {
     const std::uint32_t packet = gpu::guestAddressOf(tag.nextRamOffset());
     if (!cycle.enter(gpu::mainRamOffsetOf(packet))) {
-      gpu::raiseRecordFault(
-          gpu::RecordFaultKind::DrawListCycle,
+      gpu::refuseDrawListCycle(
+          memory_.core(),
           packet,
           "present/packet_chains.cpp:PacketChainWalker::walk",
           lucent::format("the chain from link 0x{:08X} into slot {}:{} returns to it after {} packets",
@@ -26,6 +26,7 @@ PacketChainWalker::walk(std::uint32_t link, OtSlot slot, DrawModeTracker &drawMo
                          slot.table,
                          slot.index,
                          walked_));
+      return std::nullopt;
     }
     tag = gpu::OtNode(gpu::mainRamOffsetOf(packet), gpu::OtHeaderWord{memory_.mem_r32(packet)});
     const std::uint32_t count = tag.gp0WordCount();

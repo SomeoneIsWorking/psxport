@@ -1,27 +1,11 @@
 // frame_record.cpp — FrameRecord storage.
 #include "frame_record.h"
 
-#include "record_fault.h"
-
 #include <lucent/log.h>
 
 #include <utility>
 
 namespace psx::present {
-namespace {
-
-// The guest packet an entry came from; 0 for a fill, copy or host declaration, which keep none.
-std::uint32_t sourceOf(const RecordEntry &entry) {
-  if (const auto *primitive = std::get_if<DrawPrimitive>(&entry)) {
-    return primitive->sourceAddress;
-  }
-  if (const auto *upload = std::get_if<VramUpload>(&entry)) {
-    return upload->sourceAddress;
-  }
-  return 0;
-}
-
-} // namespace
 
 std::span<const std::uint16_t> FrameRecord::clut(const DrawPrimitive &primitive) const {
   if (primitive.clutOffset == kNoClut) {
@@ -57,13 +41,9 @@ void FrameRecord::append(const RecordEntry &entry) {
     return;
   }
   if (entries_.size() >= kMaxEntries) {
-    gpu::raiseRecordFault(gpu::RecordFaultKind::RecordEntries,
-                          sourceOf(entry),
-                          "present/frame_record.cpp:FrameRecord::append",
-                          lucent::format("record {} holds {} entries, past any frame a console draws (entry kind {})",
-                                         sequence_,
-                                         entries_.size(),
-                                         entry.index()));
+    lucent::warn("record", "record {} reached {} entries; it is marked incomplete", sequence_, kMaxEntries);
+    markIncomplete();
+    return;
   }
   entries_.push_back(entry);
 }
@@ -98,10 +78,10 @@ std::uint32_t FrameRecord::appendClut(std::span<const std::uint16_t> entries) {
     return kNoClut;
   }
   if (clutPool_.size() + entries.size() > kMaxPoolHalfwords) {
-    gpu::raiseRecordFault(gpu::RecordFaultKind::RecordPool,
-                          0,
-                          "present/frame_record.cpp:FrameRecord::appendClut",
-                          lucent::format("record {} CLUT pool at {} halfwords", sequence_, clutPool_.size()));
+    lucent::warn(
+        "record", "record {} CLUT pool reached {} halfwords; it is marked incomplete", sequence_, kMaxPoolHalfwords);
+    markIncomplete();
+    return kNoClut;
   }
   const auto offset = static_cast<std::uint32_t>(clutPool_.size());
   clutPool_.insert(clutPool_.end(), entries.begin(), entries.end());
@@ -113,14 +93,10 @@ void FrameRecord::appendUpload(VramUpload upload, std::span<const std::uint16_t>
     return;
   }
   if (uploadPixels_.size() + pixels.size() > kMaxPoolHalfwords) {
-    gpu::raiseRecordFault(gpu::RecordFaultKind::RecordPool,
-                          upload.sourceAddress,
-                          "present/frame_record.cpp:FrameRecord::appendUpload",
-                          lucent::format("record {} upload pool at {} halfwords, {}x{} more",
-                                         sequence_,
-                                         uploadPixels_.size(),
-                                         upload.width,
-                                         upload.height));
+    lucent::warn(
+        "record", "record {} upload pool reached {} halfwords; it is marked incomplete", sequence_, kMaxPoolHalfwords);
+    markIncomplete();
+    return;
   }
   upload.pixelOffset = static_cast<std::uint32_t>(uploadPixels_.size());
   uploadPixels_.insert(uploadPixels_.end(), pixels.begin(), pixels.end());

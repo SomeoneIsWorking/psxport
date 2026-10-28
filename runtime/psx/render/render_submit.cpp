@@ -71,31 +71,53 @@ void RenderDevice::reportRecordedFault() {
       "render", "an earlier run recorded a GPU fault in {}: {}; the kernel log names the process it hit", path, record);
 }
 
-void RenderDevice::latchFault(const char *where, const char *detail) {
+namespace {
+
+const char *causeName(FaultCause cause) {
+  switch (cause) {
+  case FaultCause::Device:
+    return "GPU fault";
+  case FaultCause::DrawListCycle:
+    return "draw-list cycle";
+  }
+  return "?";
+}
+
+const char *playerNotice(FaultCause cause) {
+  switch (cause) {
+  case FaultCause::Device:
+    return "The graphics device failed and the game cannot draw any more, so it will close.";
+  case FaultCause::DrawListCycle:
+    return "The game asked to draw a list that never ends, which hangs a PlayStation, so it will close.";
+  }
+  return "?";
+}
+
+} // namespace
+
+void RenderDevice::latchFault(FaultCause cause, std::string_view where, std::string_view detail) {
   if (faulted_) {
     return;
   }
   faulted_ = true;
-  fault_ = lucent::format("{}: {}", where, detail);
+  cause_ = cause;
+  fault_ = lucent::format("{} at {}: {}", causeName(cause), where, detail);
   // Work submitted after a device loss never retires, so every later present would only pile up memory.
   disable();
   lucent::error("render",
-                "GPU fault at {}: {}; the renderer is latched off for the rest of this process and no later capture "
-                "is a picture of the game",
-                where,
-                detail);
+                "{}; the renderer is latched off for the rest of this process and no later capture is a picture of "
+                "the game",
+                fault_);
 }
 
 void RenderDevice::failDevice(const char *where, const char *detail) {
-  latchFault(where, detail);
+  latchFault(FaultCause::Device, where, detail);
   persistFault(where, detail);
 }
 
 void RenderDevice::reportFaultToPlayer() const {
   window_.showError(windowTitle_ != nullptr ? windowTitle_ : "psxport",
-                    lucent::format("The graphics device failed and the game cannot draw any more, so it will close.\n"
-                                   "GPU fault at {}",
-                                   fault_));
+                    lucent::format("{}\n{}", playerNotice(cause_), fault_));
 }
 
 bool RenderDevice::submit(SDL_GPUCommandBuffer *cmd, const char *where) {

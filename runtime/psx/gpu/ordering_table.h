@@ -2,9 +2,9 @@
 // named tables a walk attributes packets to.
 #pragma once
 
+#include "draw_list_cycle.h"
 #include "frame_record.h"
 #include "guest_memory_map.h"
-#include "record_fault.h"
 
 #include <cstdint>
 #include <optional>
@@ -76,7 +76,8 @@ private:
   std::uint32_t header_ = 0;
 };
 
-// One DrawOTag walked through guest RAM to the chain's end; a revisited node is a fatal record fault.
+// One DrawOTag walked through guest RAM to the chain's end, or to a revisited node, which it refuses
+// (refuseDrawListCycle).
 class OrderingTableCursor {
 public:
   explicit OrderingTableCursor(Core &core, std::uint32_t rootGuestAddress);
@@ -87,7 +88,7 @@ public:
   int nodesEntered() const {
     return nodesEntered_;
   }
-  // False at the end of the chain.
+  // False at the end of the chain and at a refused cycle.
   bool advance();
 
 private:

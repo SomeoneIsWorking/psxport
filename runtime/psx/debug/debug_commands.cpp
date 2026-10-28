@@ -325,7 +325,8 @@ void renderPath(const Call &call) {
 }
 
 void latchGpuFault(const Call &call) {
-  call.core.game->renderDevice.latchFault("control channel", "latched through the control channel");
+  call.core.game->renderDevice.latchFault(
+      psx::render::FaultCause::Device, "control channel", "latched through the control channel");
   call.reply("the presentation device is latched off; the session ends at its next step");
 }
 
