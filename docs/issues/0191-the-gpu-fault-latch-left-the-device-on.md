@@ -11,7 +11,12 @@ kernel OOM killer killed an unrelated qemu VM of the user's.
 ## Cause and fix
 `latchFault` set `faulted_`, which nothing read; `enabled()`, the gate every present and capture checks, stayed
 true. Each later present acquired, recorded and submitted into the lost device, whose work never retires, so SDL
-cycled a fresh transfer buffer and command buffer every present. The latch now clears `enabled_`.
+cycled a fresh transfer buffer and command buffer every present. The latch now calls `RenderDevice::disable()`.
+
+## What the player sees after a fault
+The window keeps the last picture it was shown and never changes again. The guest keeps running on its pacer, so
+audio and pad input go on, but nothing draws, including the ESC menu, and nothing tells the player the renderer
+stopped; closing the window ends the process. The log has the `GPU fault at ...` error and the marker below.
 
 ## Shown
 One forced loss (the X4 build without its 0043 fix, `scratch/player-bugs-6/ring/latch1`): after the fault at 19 s
