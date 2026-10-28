@@ -12,8 +12,9 @@ product does not carry a second windowing or graphics stack.
   `render_readback.cpp` readback.
 - A device-lost or fence-timeout fault latches the renderer off for the rest of that process (`enabled()` turns
   false, so no later present acquires or submits; work submitted to a lost device never retires) and is written
-  to `gpu_fault` in the user data directory (`~/.config/psxport/` on Linux). The next process logs the
-  record and starts normally: the kernel resets the ring, a lost device is reported to innocent contexts
+  to `gpu_fault` in the user data directory (`~/.config/psxport/` on Linux). The window keeps its last picture
+  while the guest, audio and input run on. Every later process logs the record as a warning until the file is
+  deleted, and starts normally: the kernel resets the ring, a lost device is reported to innocent contexts
   too, and the marker cannot tell which process hung the GPU (`journalctl -k` names it).
 - `runtime/psx/shaders_gpu/` owns first-party GLSL sources. `tools/gen_gpu_shaders.py` compiles and
   embeds them in a consumer-owned build directory; no shader header is written to the source tree.
