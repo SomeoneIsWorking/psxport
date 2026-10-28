@@ -336,7 +336,8 @@ void FramePresenter::presentRecords(Core &core, const present::StateProducers *p
     const float t = tAt(present);
     stability_.stalled += composed && t <= shownT ? 1u : 0u;
     shownT = t;
-    composed_ = composed ? composedFrame : &base;
+    // Uncomposed, the in-between is N's own present: S as the guest drew it, rastered once for the interval.
+    composed_ = composedFrame;
     composedAdvances_ = false;
     core.game->display.buildInBetween();
     composed_ = nullptr;
