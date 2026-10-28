@@ -10,9 +10,10 @@ product does not carry a second windowing or graphics stack.
   device, window claim, swapchain, samplers, pipelines and submits; `render_present.cpp` (`RenderState`) one
   Game's present to the sink; `record_rasterizer.*` the VRAM image, canvases and record passes;
   `render_readback.cpp` readback.
-- A device-lost or fence-timeout fault is written to `gpu_fault` in the user data directory
-  (`~/.config/psxport/` on Linux); every later process refuses the GPU until it is removed or
-  `PSXPORT_GPU_FAULT_OVERRIDE=1` is set.
+- A device-lost or fence-timeout fault latches the renderer off for the rest of that process and is written
+  to `gpu_fault` in the user data directory (`~/.config/psxport/` on Linux). The next process logs the
+  record and starts normally: the kernel resets the ring, a lost device is reported to innocent contexts
+  too, and the marker cannot tell which process hung the GPU (`journalctl -k` names it).
 - `runtime/psx/shaders_gpu/` owns first-party GLSL sources. `tools/gen_gpu_shaders.py` compiles and
   embeds them in a consumer-owned build directory; no shader header is written to the source tree.
 - `docs/presentation.md` is the renderer's contract: what each render path presents and how.

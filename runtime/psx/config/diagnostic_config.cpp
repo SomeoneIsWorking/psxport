@@ -22,7 +22,6 @@ Var<std::string> cv_gpu_dump_dir("PSXPORT_GPU_DUMP", "", kRunOnly);
 Var<std::string> cv_gpu_shot_frames("PSXPORT_SHOT_AT", "", kRunOnly);
 Var<long> cv_gpu_scene_dump_frame("PSXPORT_SCENEDUMP", -1, kRunOnly);
 Var<bool> cv_gpu_validation("PSXPORT_GPU_DEBUG", false, kRunOnly);
-Var<bool> cv_gpu_fault_override("PSXPORT_GPU_FAULT_OVERRIDE", false, kRunOnly);
 Var<std::string> cv_present_sink("PSXPORT_PRESENT_SINK", "", kRunOnly);
 Var<std::string> cv_movie_fps("PSXPORT_FMV_FPS", "", kRunOnly);
 Var<long> cv_movie_max_frames("PSXPORT_FMV_MAXFRAMES", 0, kRunOnly);
@@ -56,7 +55,6 @@ const Registration kRegistration{
     cv_gpu_shot_frames,
     cv_gpu_scene_dump_frame,
     cv_gpu_validation,
-    cv_gpu_fault_override,
     cv_present_sink,
     cv_movie_fps,
     cv_movie_max_frames,
@@ -160,10 +158,6 @@ long gpu_scene_dump_frame() {
 
 bool gpu_validation() {
   return cv_gpu_validation.get();
-}
-
-bool gpu_fault_override() {
-  return cv_gpu_fault_override.get();
 }
 
 std::string present_sink() {
