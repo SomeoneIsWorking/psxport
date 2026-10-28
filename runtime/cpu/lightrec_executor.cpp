@@ -24,6 +24,7 @@
 #include <limits>
 #include <mutex>
 #include <optional>
+#include <utility>
 
 namespace psx::cpu {
 namespace {
@@ -555,9 +556,9 @@ ExecutionResult LightrecExecutor::executeWithBoundary(std::uint32_t guestAddress
     }
     // lightrec_execute overwrites nextPc with the exit pc; the start names the block behind a wild target.
     const std::uint32_t blockStart = nextPc;
-    impl.running = &boundary;
+    Impl::BoundaryContext *const enclosing = std::exchange(impl.running, &boundary);
     nextPc = lightrec_execute(impl.state, nextPc, targetCycle(segmentCycleBudget));
-    impl.running = nullptr;
+    impl.running = enclosing;
     impl.copyLightrecToCore(nextPc);
     const lightrec_execution_stats after = *lightrec_get_execution_stats(impl.state);
     const std::uint64_t segmentInstructions = executedInstructionCount(after) - executedInstructionCount(before);
