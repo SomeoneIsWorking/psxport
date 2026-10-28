@@ -8,9 +8,10 @@ layout(location = 0) flat in uvec4 v_info;
 layout(location = 0) out vec4 o_col;
 layout(set = 2, binding = 0) uniform sampler2D u_target; // the target plane before this batch
 layout(set = 2, binding = 1) uniform sampler2D u_vram;   // the VRAM image before this batch
-layout(std430, set = 2, binding = 2) readonly buffer Ops { uint ops[]; };
-layout(std430, set = 2, binding = 3) readonly buffer Cluts { uint cluts[]; };
-layout(std430, set = 2, binding = 4) readonly buffer Pixels { uint pixels[]; };
+layout(set = 2, binding = 2) uniform sampler2D u_readBack; // the read-back capture (RecordReadBack)
+layout(std430, set = 2, binding = 3) readonly buffer Ops { uint ops[]; };
+layout(std430, set = 2, binding = 4) readonly buffer Cluts { uint cluts[]; };
+layout(std430, set = 2, binding = 5) readonly buffer Pixels { uint pixels[]; };
 layout(set = 3, binding = 0) uniform Params { ivec4 scaleOrigin; } params; // scale, origin x, origin y
 
 uint op;
@@ -43,6 +44,16 @@ uint texel(uint u, uint v, uint flags) {
         t = clutEntry(word(kOpClut) + ((t >> ((uext & 1u) * 8u)) & 0xFFu));
     }
     return t;
+}
+
+// The captured pixel at fragment p moved by the op's offset, its 5-bit channels weighed into a CLUT index.
+uint readBackTexel(ivec2 p) {
+    ivec2 at = p + ivec2(int(word(kOpReadBackX)), int(word(kOpReadBackY))) * S;
+    uint t = halfword(texelFetch(u_readBack, at, 0).rg);
+    uint w = word(kOpReadBackWeights);
+    uint index = ((t & 0x1Fu) * (w & 0xFFu) + ((t >> 5) & 0x1Fu) * ((w >> 8) & 0xFFu) +
+                  ((t >> 10) & 0x1Fu) * ((w >> 16) & 0xFFu)) >> (w >> 24);
+    return clutEntry(word(kOpClut) + (index & 0xFFu));
 }
 
 uint pack(int r, int g, int b) { return 0x8000u | uint(r >> 3) | (uint(g >> 3) << 5) | (uint(b >> 3) << 10); }
@@ -173,7 +184,7 @@ void main() {
             v = uint(int(word(kOpSourceY)) + (m.y - int(word(kOpOriginY))) * dv) & 0xFFu;
         }
         if (textured) {
-            fore = texel(u, v, flags);
+            fore = (flags & kOpReadBack) != 0u ? readBackTexel(p) : texel(u, v, flags);
             if (fore == 0u) {
                 discard;
             }

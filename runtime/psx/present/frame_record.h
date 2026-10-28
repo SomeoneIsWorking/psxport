@@ -161,7 +161,29 @@ struct VramUpload {
   bool operator==(const VramUpload &) const = default;
 };
 
-using RecordEntry = std::variant<DrawPrimitive, VramFill, VramCopy, VramUpload>;
+// A host declaration, never sent to the device (GpuDevice::declareReadBack): the guest just read back `read` (VRAM
+// pixels of a display buffer) and fills `page` (VRAM halfwords, sampled at texture mode `texMode`) with its index
+// image, one texel per pixel from the page's first texel, each index (r * red + g * green + b * blue) >> shift of the
+// pixel's 5-bit channels.
+struct ReadBackTexture {
+  int readX = 0;
+  int readY = 0;
+  int readWidth = 0;
+  int readHeight = 0;
+  int pageX = 0;
+  int pageY = 0;
+  int pageWidth = 0;
+  int pageHeight = 0;
+  int texMode = 0;
+  std::uint8_t red = 0;
+  std::uint8_t green = 0;
+  std::uint8_t blue = 0;
+  std::uint8_t shift = 0;
+
+  bool operator==(const ReadBackTexture &) const = default;
+};
+
+using RecordEntry = std::variant<DrawPrimitive, VramFill, VramCopy, VramUpload, ReadBackTexture>;
 
 // The OT walk reached the head of `slot` when the record held `entry` entries. `descending` says the
 // walk visits the slot's table from high bucket indices to low.

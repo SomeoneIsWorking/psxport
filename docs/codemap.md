@@ -59,8 +59,8 @@ Dependency direction: title repo → `runtime/psx/game/` (the title interface) �
 - `runtime/psx/gpu/gpu_device.*`, `gpu_display_mode.h`, `gpu_ports.*` — GPU device (Beetle gpu.c): VRAM, GP0 / GP1, display area and mode, DMA2 blocks and ordering-table walk
 - `runtime/psx/gpu/ordering_table.*` — ordering table / OT / DrawOTag node decode and walk
 - `runtime/psx/gpu/gp0_record_tap.*`, `texture_feedback.*` — GP0 work recorded per logic frame, texture cache feedback / stale VRAM reads
-- `runtime/psx/gpu/record_geometry.*`, `record_raster_*`, `vram_bitmap.h` — record raster plan: entry write rects, gpu.c coverage per primitive at internal resolution, canvas margins, written-region bitmaps
-- `runtime/psx/render/record_rasterizer.*`, `record_present.cpp` — record raster on the GPU: ops into VRAM image and canvases, Record-path present, recordcheck, record shot
+- `runtime/psx/gpu/record_geometry.*`, `record_raster_*`, `vram_bitmap.h` — record raster plan: entry write rects, gpu.c coverage per primitive at internal resolution, canvas margins, read-back textures, written-region bitmaps
+- `runtime/psx/render/record_rasterizer.*`, `record_present.cpp` — record raster on the GPU: ops into VRAM image and canvases, read-back capture, Record-path present, recordcheck, record shot
 - `runtime/psx/render/render_device.*`, `render_window.*`, `render_submit.cpp`, `render_shader.*`, `render_check.h`, `present_sink.h`, `present_mode.h` — SDL3 GPU device (RenderDevice): window shown or unmapped (PSXPORT_SHOW_WINDOW, hidden tool window), swapchain, present mode, samplers, pipelines, upload, download, submit
 - `runtime/psx/render/present_clip.*` — motion clip ring: the last second of window presents downscaled to 640x360 in a GPU texture array (PSXPORT_BUG_REPORT_CLIP), written as an APNG for the bug report
 - `runtime/psx/render/render_state.h`, `render_present.cpp`, `render_panes.cpp`, `render_pane.h`, `render_screen.cpp`, `render_readback.cpp`, `render_api.cpp`, `render.h` — per-Game present (RenderState): present image build and show, panes built into the present image, pane target, present and device shots, VRAM captures, video status

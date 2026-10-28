@@ -16,7 +16,7 @@ using gpu::RecordRect;
 
 constexpr SDL_GPUTextureFormat kVramFormat = SDL_GPU_TEXTUREFORMAT_R8G8_UNORM;
 constexpr ShaderCode kRecordVertex{spv_g_record_vert, spv_g_record_vert_len, {0, 1, 1}};
-constexpr ShaderCode kRecordFragment{spv_g_record_frag, spv_g_record_frag_len, {2, 1, 3}};
+constexpr ShaderCode kRecordFragment{spv_g_record_frag, spv_g_record_frag_len, {3, 1, 3}};
 
 struct TargetUniform {
   float width = 0;
@@ -84,6 +84,10 @@ void RecordRasterizer::releaseImage() {
   presented_ = {};
   woven_ = {};
   device_.release(field_);
+  device_.release(capture_);
+  captureWidth_ = 0;
+  captureHeight_ = 0;
+  readBack_.reset();
 }
 
 void RecordRasterizer::ensureImage(int scale) {
@@ -241,12 +245,15 @@ void RecordRasterizer::advance(SDL_GPUCommandBuffer *cmd,
       const Plane &target = plane(index);
       copyTexture(cmd, target.image, {0, 0, target.width, target.height}, target.before, 0, 0);
     }
-    execute(cmd, planner_.plan(record, scale_, canvasShapes()), false);
+    const gpu::RecordRasterPlan &plan = planner_.plan(record, scale_, canvasShapes(), readBack_, true);
+    execute(cmd, plan, false);
+    readBack_ = plan.readBack;
     beforeOf_ = applied_;
     beforeHeld_ = true;
     return;
   }
   execute(cmd, planner_.planVramUpload(vram, scale_), false);
+  readBack_.reset();
   for (Canvas &canvas : canvases_) {
     seedCanvas(cmd, canvas);
   }
@@ -277,7 +284,7 @@ bool RecordRasterizer::drawInBetween(SDL_GPUCommandBuffer *cmd,
       copyTexture(cmd, target.before, whole, target.snapshot, 0, 0);
     }
   }
-  execute(cmd, planner_.plan(record, scale_, canvasShapes()), true);
+  execute(cmd, planner_.plan(record, scale_, canvasShapes(), readBack_, false), true);
   for (int index = 0; index <= static_cast<int>(canvases_.size()); index++) {
     const Plane &target = plane(index);
     copyTexture(cmd, target.image, {0, 0, target.width, target.height}, target.snapshot, 0, 0);
@@ -355,8 +362,34 @@ void RecordRasterizer::ensureTransfer(SDL_GPUTransferBuffer *&transfer,
   transfer = device_.makeTransferBuffer(usage, size);
 }
 
+void RecordRasterizer::capture(SDL_GPUCommandBuffer *cmd, const gpu::RecordCapture &capture) {
+  const gpu::RecordRect &rect = capture.rect;
+  const int width = rect.x1 - rect.x0;
+  const int height = rect.y1 - rect.y0;
+  if (capture_ == nullptr || captureWidth_ != width || captureHeight_ != height) {
+    device_.release(capture_);
+    capture_ = device_.makeTexture({width * scale_, height * scale_}, kVramFormat, SDL_GPU_TEXTUREUSAGE_SAMPLER);
+    captureWidth_ = width;
+    captureHeight_ = height;
+  }
+  const Plane &source = plane(capture.plane);
+  copyTexture(cmd,
+              source.image,
+              {rect.x0 - source.originX, rect.y0 - source.originY, rect.x1 - source.originX, rect.y1 - source.originY},
+              capture_,
+              0,
+              0);
+}
+
 void RecordRasterizer::execute(SDL_GPUCommandBuffer *cmd, const gpu::RecordRasterPlan &plan, bool inBetween) {
+  // Only a plan that advances the image declares, so a capture never sees an in-between.
+  const auto captureBefore = [&](std::size_t batch) {
+    if (plan.capture && plan.capture->beforeBatch == batch) {
+      capture(cmd, *plan.capture);
+    }
+  };
   if (plan.batches.empty()) {
+    captureBefore(0);
     return;
   }
   std::array<std::uint32_t, gpu::kRecordPlanes> firstQuad{};
@@ -406,7 +439,9 @@ void RecordRasterizer::execute(SDL_GPUCommandBuffer *cmd, const gpu::RecordRaste
 
   const int s = plan.scale;
   const int planes = 1 + static_cast<int>(canvases_.size());
-  for (const gpu::RecordBatch &batch : plan.batches) {
+  for (std::size_t b = 0; b < plan.batches.size(); b++) {
+    const gpu::RecordBatch &batch = plan.batches[b];
+    captureBefore(b);
     for (int p = 0; p < planes; p++) {
       const gpu::RecordPlaneBatch &range = batch.planes[static_cast<std::size_t>(p)];
       if (range.endQuad == range.firstQuad) {
@@ -425,8 +460,11 @@ void RecordRasterizer::execute(SDL_GPUCommandBuffer *cmd, const gpu::RecordRaste
       SDL_BindGPUGraphicsPipeline(pass, pipeline_);
       SDL_BindGPUVertexStorageBuffers(pass, 0, &quads_.buffer, 1);
       SDL_GPUSampler *nearest = device_.nearestSampler();
-      const SDL_GPUTextureSamplerBinding snapshots[2] = {{target.snapshot, nearest}, {vram_.snapshot, nearest}};
-      SDL_BindGPUFragmentSamplers(pass, 0, snapshots, 2);
+      // With no capture the binding is never sampled: only a held read-back plans read-back ops.
+      SDL_GPUTexture *readBack = capture_ != nullptr ? capture_ : vram_.snapshot;
+      const SDL_GPUTextureSamplerBinding snapshots[3] = {
+          {target.snapshot, nearest}, {vram_.snapshot, nearest}, {readBack, nearest}};
+      SDL_BindGPUFragmentSamplers(pass, 0, snapshots, 3);
       SDL_GPUBuffer *fragmentBuffers[3] = {ops_.buffer, cluts_.buffer, pixels_.buffer};
       SDL_BindGPUFragmentStorageBuffers(pass, 0, fragmentBuffers, 3);
       SDL_DrawGPUPrimitives(pass,
@@ -448,6 +486,7 @@ void RecordRasterizer::execute(SDL_GPUCommandBuffer *cmd, const gpu::RecordRaste
                   range.dirty.y0);
     }
   }
+  captureBefore(plan.batches.size());
 }
 
 MappedTransfer RecordRasterizer::download(const RecordPicture &picture) {

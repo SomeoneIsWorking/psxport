@@ -14,6 +14,7 @@
 #include <array>
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <span>
 #include <vector>
 
@@ -44,6 +45,10 @@ enum RecordOpField : std::uint8_t {
   kOpSourceY = 25, // copy source; sprite v0; upload height
   kOpPool = 26,    // upload pixel pool halfword offset
   kOpParts = 22,   // triangle: its two RecordPartField blocks, upper then lower
+  // kOpReadBack: the capture pixel a fragment samples minus the fragment, native pixels (the u and v slots).
+  kOpReadBackX = 10,
+  kOpReadBackY = 11,
+  kOpReadBackWeights = 15, // red | green << 8 | blue << 16 | shift << 24
 };
 
 // A triangle part's words from kOpParts + part * kPartWords. Edges are gpu.c's 32.32 x at interpolant row
@@ -71,6 +76,7 @@ enum RecordOpFlag : std::uint32_t {
   kOpSkipParity = 1u << 21,
   kOpFlipX = 1u << 22,
   kOpFlipY = 1u << 23,
+  kOpReadBack = 1u << 24, // texels from the read-back capture, not VRAM
 };
 
 // One rectangle of a plane's pixels belonging to an op, scaled, half open. Op origins are in VRAM space,
@@ -130,6 +136,30 @@ struct RecordBatch {
   std::array<RecordPlaneBatch, kRecordPlanes> planes;
 };
 
+// A read-back texture (present::ReadBackTexture) the planner samples from the rasterizer's capture in place of
+// its page. A textured primitive whose texels all lie in the page and map one to one onto its pixels (a sprite,
+// or a polygon whose u and v advance one per pixel, no texture window) reads the capture at its pixel moved by
+// one offset, so at scale it shows the captured picture's full detail, and a rectangle of it on a canvas
+// buffer's edge continues into that margin. Any write into the page ends it; the page is then read as VRAM.
+struct RecordReadBack {
+  RecordRect page;     // texels at `texMode`, VRAM rows
+  RecordRect pageVram; // the same, VRAM halfwords
+  int texMode = 0;
+  RecordRect read;     // VRAM-space native pixels; the page's first texel is read's first pixel
+  RecordRect captured; // what the capture holds: `read`, widened by the margin on a side where it meets its canvas edge
+  std::uint32_t weights = 0; // kOpReadBackWeights
+
+  bool operator==(const RecordReadBack &) const = default;
+};
+
+// Canvas pixels the rasterizer copies into the read-back capture before batch `beforeBatch` runs: `rect`,
+// VRAM-space native pixels, of `plane`.
+struct RecordCapture {
+  std::uint32_t beforeBatch = 0;
+  int plane = 0;
+  RecordRect rect;
+};
+
 struct RecordRasterPlan {
   int scale = 1;
   std::vector<RecordOp> ops;
@@ -137,6 +167,11 @@ struct RecordRasterPlan {
   std::vector<RecordBatch> batches;
   std::span<const std::uint16_t> clutPool;
   std::span<const std::uint16_t> uploadPool;
+  // The record's last read-back declaration that lands in a canvas, captured where it stands.
+  std::optional<RecordCapture> capture;
+  // The read-back texture after the record: its own declaration from the next record on, else the one it was
+  // planned with unless the record wrote into its page.
+  std::optional<RecordReadBack> readBack;
 };
 
 // Plans records into reused buffers; a plan stays valid until the next call.
@@ -150,9 +185,16 @@ public:
   // Every entry of a complete record, in order, into VRAM and into each canvas it reaches. A primitive
   // whose draw area spans exactly a canvas's buffer columns and covers its rows draws there with the
   // horizontal clip widened by the margin; any other write lands in a canvas only where it lands in the
-  // buffer, except a fill spanning the buffer's columns, which spans the canvas's.
-  const RecordRasterPlan &plan(const present::FrameRecord &record, int scale, std::span<const RecordCanvas> canvases);
-  // The whole of `vram` written over the image; how a record that cannot be replayed is shown.
+  // buffer, except a fill spanning the buffer's columns, which spans the canvas's. Primitives sample
+  // `readBack` where it serves them. `declares`: the plan advances the image, so its read-back declarations
+  // are captured and take effect; an in-between's are not.
+  const RecordRasterPlan &plan(const present::FrameRecord &record,
+                               int scale,
+                               std::span<const RecordCanvas> canvases,
+                               const std::optional<RecordReadBack> &readBack,
+                               bool declares);
+  // The whole of `vram` written over the image; how a record that cannot be replayed is shown. It ends any
+  // read-back texture: the records it skips may have written the page.
   const RecordRasterPlan &planVramUpload(std::span<const std::uint16_t> vram, int scale);
 
 private:

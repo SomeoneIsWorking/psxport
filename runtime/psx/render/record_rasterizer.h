@@ -9,6 +9,7 @@
 
 #include <array>
 #include <cstdint>
+#include <optional>
 #include <span>
 #include <vector>
 
@@ -29,7 +30,8 @@ struct RecordView {
 // The image is VRAM at an integer scale, RG8 holding 1555 halfwords. Each record applies on top of
 // the one before it; when that chain breaks, the device's VRAM is uploaded instead. With a margin,
 // each displayed buffer also has a wide canvas (RecordCanvas) that the record draws into beside VRAM;
-// the VRAM image stays exactly the device's, and textures and copies read only it.
+// the VRAM image stays exactly the device's, and textures and copies read only it, except a declared
+// read-back page, which is read from the canvas pixels captured for it (gpu::RecordReadBack).
 class RecordRasterizer {
 public:
   explicit RecordRasterizer(RenderDevice &device);
@@ -130,6 +132,8 @@ private:
   // Replaces the presented picture by the field `record` drew, when it draws one field per frame.
   void selectField(SDL_GPUCommandBuffer *cmd, const present::FrameRecord &record);
   void execute(SDL_GPUCommandBuffer *cmd, const gpu::RecordRasterPlan &plan, bool inBetween);
+  // Copies the capture's canvas pixels into capture_, sized to them.
+  void capture(SDL_GPUCommandBuffer *cmd, const gpu::RecordCapture &capture);
   void copyTexture(SDL_GPUCommandBuffer *cmd,
                    SDL_GPUTexture *from,
                    const gpu::RecordRect &source,
@@ -157,6 +161,11 @@ private:
   int fieldWidth_ = 0; // native pixels, at scale_
   int fieldHeight_ = 0;
   int scale_ = 0;
+  // The read-back texture records sample (gpu::RecordReadBack) and the canvas pixels captured for it.
+  std::optional<gpu::RecordReadBack> readBack_;
+  SDL_GPUTexture *capture_ = nullptr;
+  int captureWidth_ = 0; // native pixels, at scale_
+  int captureHeight_ = 0;
 
   Buffer quads_;
   Buffer ops_;

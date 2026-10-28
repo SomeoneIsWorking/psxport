@@ -52,6 +52,10 @@ public:
   void noteDrawEntry(std::uint32_t field) {
     record_.markDrawEntry(field);
   }
+  // Places a host read-back declaration at this point of the record.
+  void declareReadBack(const present::ReadBackTexture &texture) {
+    record_.append(texture);
+  }
   // The walk reached `slot` of a table walked high to low when `descending`, or left every named
   // table (nullopt).
   void enterSlot(const std::optional<present::OtSlot> &slot, bool descending);
