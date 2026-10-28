@@ -34,6 +34,7 @@ public:
   // Whole ticks from now to the next field edge after the last delivered boundary; never 0.
   [[nodiscard]] uint64_t ticksToNextField(uint32_t fieldRateMilliHz) const;
   [[nodiscard]] uint64_t hSyncCount(uint32_t fieldRateMilliHz, uint32_t linesPerField) const;
+  [[nodiscard]] uint64_t hSyncsSinceBoundary(uint32_t fieldRateMilliHz, uint32_t linesPerField) const;
 
   [[nodiscard]] EmulatedTimeQ32 q32() const {
     return {static_cast<uint64_t>(mNowQ32), static_cast<uint64_t>(mDisplayBoundaryQ32)};
@@ -45,6 +46,7 @@ public:
   }
 
 private:
+  static uint64_t hSyncCountAt(unsigned __int128 timeQ32, uint32_t fieldRateMilliHz, uint32_t linesPerField);
   // Q32 CPU ticks preserve the fractional NTSC field duration without a floating-point or host-time
   // dependency. The display boundary is a phase anchor on the field grid: instructions can consume a field
   // interval, and a display wait advances TO the boundary rather than adding a second interval on top.

@@ -8,7 +8,8 @@ class Game;
 
 namespace psx::hle {
 
-// A nonnegative VSync notes the wait's fields (Timing::noteVSyncWait) and ends the guest turn at a field boundary.
+// VSync(0) and VSync(n > 1) note the wait's fields (Timing::noteVSyncWait) and end the guest turn at a field boundary;
+// VSync(1) returns the HBlanks since the last wait without waiting.
 // A negative query returns the libetc field counter at `queryCounter`; a title without one refuses the query by name.
 class StockVSync {
 public:

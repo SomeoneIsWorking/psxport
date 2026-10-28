@@ -85,13 +85,22 @@ uint64_t EmulatedTime::ticksToNextField(uint32_t fieldRateMilliHz) const {
   return static_cast<uint64_t>((remaining + (static_cast<unsigned __int128>(1) << kFractionBits) - 1) >> kFractionBits);
 }
 
-uint64_t EmulatedTime::hSyncCount(uint32_t fieldRateMilliHz, uint32_t linesPerField) const {
+uint64_t EmulatedTime::hSyncCountAt(unsigned __int128 timeQ32, uint32_t fieldRateMilliHz, uint32_t linesPerField) {
   if (fieldRateMilliHz == 0 || linesPerField == 0) {
     return 0;
   }
-  const unsigned __int128 scaled = mNowQ32 * fieldRateMilliHz * linesPerField;
+  const unsigned __int128 scaled = timeQ32 * fieldRateMilliHz * linesPerField;
   const unsigned __int128 denominator = (static_cast<unsigned __int128>(kNominalPsxCpuHz) * 1000u) << kFractionBits;
   return static_cast<uint64_t>(scaled / denominator);
+}
+
+uint64_t EmulatedTime::hSyncCount(uint32_t fieldRateMilliHz, uint32_t linesPerField) const {
+  return hSyncCountAt(mNowQ32, fieldRateMilliHz, linesPerField);
+}
+
+uint64_t EmulatedTime::hSyncsSinceBoundary(uint32_t fieldRateMilliHz, uint32_t linesPerField) const {
+  return hSyncCount(fieldRateMilliHz, linesPerField) -
+         hSyncCountAt(mDisplayBoundaryQ32, fieldRateMilliHz, linesPerField);
 }
 
 } // namespace psx::frame
