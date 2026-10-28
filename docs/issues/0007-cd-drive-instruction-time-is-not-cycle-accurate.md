@@ -2,7 +2,7 @@
 id: 7
 title: CD drive instruction-time is deterministic but not cycle-accurate
 status: open
-symptom: VSync-yielding titles can take hundreds of fields to reach a ReadN deadline; ordering is stable, but nominal 75/150-sector thresholds still do not prove physical drive-rate accuracy
+symptom: emulated CPU time charges one tick per guest instruction, about half an R3000's cycles; CD deadlines and VBlank placement inside long draw-less work are ordered but not cycle-accurate
 tags: cdrom,timing,r3000,accuracy
 created: 2026-08-21
 updated: 2026-10-28
@@ -49,20 +49,22 @@ store (`0x80033A6C`) the console executes 364,988 instructions in about 724K cyc
 timestamps; the observer's ordinal counts executed opcodes on the interpreter, `pc_observer.c`), about 2 per
 instruction, and crosses one VBlank. The product runs that whole step in 387,818
 instructions from a field boundary, short of one 566,206-tick field, so `g_LevelTicks` stays one behind for
-the rest of the level. That span is a calibration case for the cost model below.
-
-## Proper next step
-
-Extend the authoritative emulated CPU timing owner with measured opcode, memory and coprocessor
-stall costs. A differential instrument must
-compare timestamped sector delivery against the true oracle across code paths with materially
-different instruction and stall mixes. Until that passes, diagnostics and claims must say
-"emulated CPU ticks" or "nominal threshold", never "cycle-accurate" or "physical 75/150 Hz".
+the rest of the level. That span is the first calibration case if the cost model is built (see Deferred).
 
 ## Deferred (2026-10-28)
 
 No player-visible defect traces to this gap. The only effect found is Spyro 1's `g_LevelTicks` one
 tick behind the console after a level load (psx-spyro issue 0215), which shifts level-tick-driven
-animation by one game frame and is not visible in play. CD reads are instant by design, so drive-rate
-accuracy is not a product goal. The cost model stays unbuilt; reopen this when a player-visible
-defect traces to it, using the Spyro 1 level-start span above as its first calibration case.
+animation by one game frame. That it cannot be seen in play is reasoned, not shown: no run compared it.
+CD reads are instant by design, so drive-rate accuracy is not a product goal.
+
+The units question is answered for now by instructions: the in-segment device clock
+(`runtime/cpu/segment_clock.h`) divides Lightrec's cycle counter by the flat
+`kLightrecCyclesPerInstruction = 2`, Lightrec's own per-op charge, so mid-segment commits stay in
+one-tick-per-instruction time. That factor stays while this is deferred.
+
+Reopen when a player-visible defect traces to the clock. The fix then is a cost model in the one
+`EmulatedTime` owner (opcode, memory wait-state and GTE stall costs), checked against the console
+oracle's cycle timestamps across code paths with different instruction and stall mixes, starting
+from the Spyro 1 level-start span above. Until then, diagnostics and claims say "emulated CPU ticks"
+or "nominal threshold", never "cycle-accurate" or "physical 75/150 Hz".
