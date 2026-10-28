@@ -119,11 +119,11 @@ void FrameRecord::markIncomplete() {
   slotStarts_.shrink_to_fit();
 }
 
-void FrameRecord::beginSlot(OtSlot slot, bool descending) {
+void FrameRecord::beginSlot(OtSlot slot, bool descending, const RecordDrawState &state) {
   if (!complete_) {
     return;
   }
-  slotStarts_.push_back({slot, entries_.size(), descending});
+  slotStarts_.push_back({slot, entries_.size(), descending, state});
 }
 
 void FrameRecord::replaceEntries(std::span<const RecordEntry> entries) {

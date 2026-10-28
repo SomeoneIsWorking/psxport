@@ -8,6 +8,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <optional>
 #include <span>
 #include <utility>
 #include <vector>
@@ -89,8 +90,13 @@ private:
   std::span<std::byte> resting(std::size_t bytes);
   // Indexes `shown`; false when an in-between must refuse it.
   bool index(const FrameRecord &shown, const FrameState &to, const StateProducers &producers, bool inBetween);
-  // Where the walk puts `slot` when the object had no entry in it; false when `shown` never walked its table.
-  bool slotPosition(const FrameRecord &shown, OtSlot slot, std::size_t &position) const;
+  // Where the walk puts `slot` when the object had no entry in it, and the draw state there.
+  struct SlotLanding {
+    std::size_t position = 0;
+    const RecordDrawState *environment = nullptr;
+  };
+  // Nothing when `shown` never walked the slot's table.
+  std::optional<SlotLanding> slotLanding(const FrameRecord &shown, OtSlot slot) const;
   std::uint32_t *clutOffset(std::uint32_t key);
   // The output, holding `shown`'s pools.
   FrameRecord &output(const FrameRecord &shown);

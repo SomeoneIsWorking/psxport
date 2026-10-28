@@ -149,13 +149,15 @@ void Gp0RecordTap::beginPacket() {
   lastKey_.reset();
 }
 
-void Gp0RecordTap::enterSlot(const std::optional<present::OtSlot> &slot, bool descending) {
+void Gp0RecordTap::enterSlot(const std::optional<present::OtSlot> &slot,
+                             bool descending,
+                             const present::RecordDrawState &state) {
   if (slot == slot_) {
     return;
   }
   slot_ = slot;
   if (slot) {
-    record_.beginSlot(*slot, descending);
+    record_.beginSlot(*slot, descending, state);
   }
 }
 

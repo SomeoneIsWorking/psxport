@@ -170,13 +170,13 @@ bool FrameComposer::index(const FrameRecord &shown,
   return true;
 }
 
-bool FrameComposer::slotPosition(const FrameRecord &shown, OtSlot slot, std::size_t &position) const {
+std::optional<FrameComposer::SlotLanding> FrameComposer::slotLanding(const FrameRecord &shown, OtSlot slot) const {
   const std::span<const SlotStart> starts = shown.slotStarts();
   const auto head =
       std::lower_bound(heads_.begin(), heads_.end(), std::pair<std::uint64_t, std::size_t>{slotKey(slot), 0});
   if (head != heads_.end() && head->first == slotKey(slot)) {
-    position = starts[head->second].entry;
-    return true;
+    const SlotStart &start = starts[head->second];
+    return SlotLanding{start.entry, &start.state};
   }
   const auto first = std::partition_point(tableStarts_.begin(), tableStarts_.end(), [&](std::size_t i) {
     return starts[i].slot.table < slot.table;
@@ -185,20 +185,19 @@ bool FrameComposer::slotPosition(const FrameRecord &shown, OtSlot slot, std::siz
     return starts[i].slot.table == slot.table;
   });
   if (first == last) {
-    return false;
+    return std::nullopt;
   }
   for (auto at = first; at != last; ++at) {
     const SlotStart &start = starts[*at];
     if (start.descending ? start.slot.index < slot.index : start.slot.index > slot.index) {
-      position = start.entry;
-      return true;
+      return SlotLanding{start.entry, &start.state};
     }
   }
   const auto end = std::find_if(tableEnds_.begin(), tableEnds_.end(), [slot](const auto &tableEnd) {
     return tableEnd.first == slot.table;
   });
-  position = end != tableEnds_.end() ? end->second : starts[*(last - 1)].entry;
-  return true;
+  const std::size_t position = end != tableEnds_.end() ? end->second : starts[*(last - 1)].entry;
+  return SlotLanding{position, environments_[position]};
 }
 
 std::uint32_t *FrameComposer::clutOffset(std::uint32_t key) {
@@ -266,11 +265,16 @@ FrameComposer::Placement FrameComposer::place(const FrameRecord &shown,
       return a.slot < b.slot;
     });
     std::size_t position = 0;
+    const RecordDrawState *environment = nullptr;
     bool drawable = true;
     if (own.first != own.second) {
       const auto inSlot = static_cast<std::size_t>(own.second - own.first);
       position = own.first[static_cast<std::ptrdiff_t>(std::min(nth, inSlot - 1))].entry;
-    } else if (!slotPosition(shown, slot, position)) {
+      environment = environments_[position];
+    } else if (const std::optional<SlotLanding> landing = slotLanding(shown, slot)) {
+      position = landing->position;
+      environment = landing->environment;
+    } else {
       drawable = false;
     }
     if (drawable && samplesClut(primitive)) {
@@ -303,7 +307,7 @@ FrameComposer::Placement FrameComposer::place(const FrameRecord &shown,
       }
       return Placement::Kept;
     }
-    applyEnvironment(primitive, *environments_[position]);
+    applyEnvironment(primitive, *environment);
     primitive.key = RecordKey{id.producer, id.object, 0, 0};
     primitive.slot = slot;
     placed_.emplace_back(position, primitive);
