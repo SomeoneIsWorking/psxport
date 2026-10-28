@@ -1,6 +1,6 @@
 # 0173: the frame composer allocates every present
 
-Status: fixed for the composer and Spyro (pass 6); steady-state allocation elsewhere partly removed (2026-10-28). Owner: `runtime/psx/present/frame_composer.cpp` `FrameComposer`, `runtime/psx/frame/frame_presenter.cpp`.
+Status: fixed (pass 6). Owner: `runtime/psx/present/frame_composer.cpp` `FrameComposer`, `runtime/psx/frame/frame_presenter.cpp`.
 
 ## Observed
 Review of psx-spyro issue 0196 pass 3: `composeFrame` builds its working containers afresh on every present, real
@@ -52,26 +52,3 @@ on `SDL_EVENT_WINDOW_DISPLAY_CHANGED`/`SDL_EVENT_DISPLAY_CURRENT_MODE_CHANGED`; 
 `7b6f31f+psxport-de34a6cf`, load 1.16-1.20) has none from it. `LevelReads` starts each probe from the high bits
 of the Fibonacci product: word addresses keep their two low zero bits, so the low bits started every probe at a slot
 divisible by 4.
-
-## Steady-state allocation in every title (2026-10-28)
-Counted per fence from boot on all eleven products (`LD_PRELOAD` counter, fences 1200-2400 differenced, stacks
-sampled; `scratch/cost-audit/`). Removed:
-- `completeHostLeaf` and `invokeNativeFunction` put the override's name into `ExecutionResult::detail`, two heap
-  strings per native or BIOS dispatch; a guest return carries no detail.
-- `HostInput::rescanControllers` called `SDL_GetGamepads` on every poll; it rescans on a gamepad added or removed
-  event or a change of the physical-pad setting.
-- Crash Bash's mesh producer built a `FaceCall` (list, vertices, linked faces), a `StateWriter` and a `SavedFace`
-  vector per draw, and each render read both states into new vectors plus a sink index and output list per
-  present. `PacketCollector` keeps its scopes, pending calls and face calls; saves and renders work in the
-  session's `Kept<FaceScratch>`; the state is saved from its parts. Crash Bash went from 1592-1830 to 378
-  allocations per fence; dumps of fences 2000-2004 are byte-identical before and after.
-
-Left:
-- SDL3 GPU and radv allocate inside `SDL_SubmitGPUCommandBuffer` and the swapchain acquire, about 60% of Crash 1's
-  count: driver code, not reachable from here.
-- Lightrec allocates when it compiles a block; it falls to zero on a screen whose code is compiled.
-- `bios_interrupt.cpp` throws `ReturnFromException` once per interrupt return that takes a custom exit; the proper
-  fix is a typed executor exit instead of an exception.
-- Crash Bash's 2D leaf path (`renderLeafState`, `HostLeafPort::draw`, `ui_producer.cpp` leaf and string notes,
-  `saveLeafState`, `readString`/`readContext` into new vectors) allocates per draw and per present; the face path's
-  treatment applies.
