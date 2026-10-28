@@ -66,6 +66,8 @@ public:
   void hSyncCounterWrite(uint16_t value);
   uint64_t rootCounter1Offset = 0;
   [[nodiscard]] uint64_t hSyncTotal() const;
+  // HBlanks since the last delivered field edge, where a replaced VSync wait returns.
+  [[nodiscard]] uint64_t hSyncsSinceDisplayBoundary() const;
 
   // Advance the host field count once at the title's native frame boundary.
   void frameTick();
@@ -77,6 +79,9 @@ public:
     EmulatedTimeQ32 time;
     uint64_t displayPhaseNumerator = 0;
     uint64_t displayPhaseDenominator = 1;
+    // A replaced VSync wait noted at the end of one step is taken at the start of the next.
+    uint32_t vsyncWaitFields = 0;
+    uint32_t fieldsSinceVSyncWait = 0;
   };
   ClockSnapshot clockSnapshot() const;
   void restoreClockSnapshot(const ClockSnapshot &clock);

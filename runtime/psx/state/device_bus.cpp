@@ -22,7 +22,7 @@
 namespace psx::state {
 namespace {
 
-constexpr std::uint8_t kBusLayoutVersion = 6;
+constexpr std::uint8_t kBusLayoutVersion = 7;
 
 // psx::cd::CdController's queue, verbatim. `psx::cd::CdcIrqEnt` is a plain-C struct so it is written field by field
 // rather than memcpy'd: a memcpy would put the struct's padding in the file, and padding is not a contract.
@@ -159,6 +159,8 @@ void writeTimingSection(Game &game, psx::platform::BlobWriter &out) {
   out.u64(clock.time.displayBoundary);
   out.u64(clock.displayPhaseNumerator);
   out.u64(clock.displayPhaseDenominator);
+  out.u32(clock.vsyncWaitFields);
+  out.u32(clock.fieldsSinceVSyncWait);
 }
 
 bool readTimingSection(Game &game, psx::platform::BlobReader &in, std::string &error) {
@@ -179,6 +181,8 @@ bool readTimingSection(Game &game, psx::platform::BlobReader &in, std::string &e
   clock.time.displayBoundary = in.u64();
   clock.displayPhaseNumerator = in.u64();
   clock.displayPhaseDenominator = in.u64();
+  clock.vsyncWaitFields = in.u32();
+  clock.fieldsSinceVSyncWait = in.u32();
   if (!in.decoded("timing", error)) {
     return false;
   }
