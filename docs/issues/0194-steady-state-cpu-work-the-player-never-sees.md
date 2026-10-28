@@ -46,8 +46,11 @@ frame and audio comparisons made during the pass kept no hashes and their dumps 
   half its instructions.
 - The owner ledger booking every guest store (`presentation.md` Owner ledger): 2-6%, plus about 3% for
   executable-write notification.
-- Block boundary classification and its verdict cache (`port-framework.md` Dispatch): about 30% of Tekken 3 and
-  Vagrant Story, whose blocks average 4.5 instructions.
+- Block boundary classification and its verdict cache (`port-framework.md` Dispatch, with the per-function
+  split): about 25% of Tekken 3's fight instructions (2026-10-28, `perf record` after `warp 0 1`); Vagrant Story,
+  whose blocks also average about 4.5 instructions, not re-profiled. Next at the owner: the verdict slot records that
+  an address answers from live memory, so the pad-work-area check runs once per epoch per address, and
+  `NativeDispatcher` holds its `ImageCatalog&` with the revision reads inline.
 - SPU emulation 2-7% and CHD hunk decoding on its worker threads 2-3%; neither has a subsystem doc.
 - Allocations: issue 0175 (guest execution) and psx-crash-bash 0046 (its producers).
 - SDL3 GPU has no timestamp queries, so there is no GPU time per pass.
