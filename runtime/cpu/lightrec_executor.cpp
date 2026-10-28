@@ -31,8 +31,10 @@ namespace {
 
 static_assert(kMaxObservedStoreTargets == LIGHTREC_STORE_OBSERVER_TARGETS);
 
-std::uint32_t targetCycle(ExecutionBudget budget) {
-  return static_cast<std::uint32_t>(std::min<std::uint64_t>(budget.cycles, std::numeric_limits<std::uint32_t>::max()));
+// Budgets and deadlines are guest clock ticks, one per instruction; Lightrec counts its own cycles per instruction.
+std::uint32_t targetCycle(std::uint64_t ticks) {
+  constexpr std::uint64_t kMaxTicks = std::numeric_limits<std::uint32_t>::max() / kLightrecCyclesPerInstruction;
+  return static_cast<std::uint32_t>(std::min(ticks, kMaxTicks) * kLightrecCyclesPerInstruction);
 }
 
 // Only the hardware-register window reaches io_read/io_write, the one place a guest observes elapsed time.
@@ -614,11 +616,11 @@ ExecutionResult LightrecExecutor::executeWithBoundary(std::uint32_t guestAddress
     }
     // lightrec_execute overwrites nextPc with the exit pc; the start names the block behind a wild target.
     const std::uint32_t blockStart = nextPc;
-    nextPc = lightrec_execute(impl.state, nextPc, targetCycle(ExecutionBudget::fromCycles(segmentCycleBudget)));
-    const std::uint64_t segmentCycles = lightrec_current_cycle_count(impl.state);
-    consumedCycles += segmentCycles;
+    nextPc = lightrec_execute(impl.state, nextPc, targetCycle(segmentCycleBudget));
     impl.copyLightrecToCore(nextPc);
     const lightrec_execution_stats after = *lightrec_get_execution_stats(impl.state);
+    const std::uint64_t segmentInstructions = executedInstructionCount(after) - executedInstructionCount(before);
+    consumedCycles += segmentInstructions;
     impl.updateCounters(after);
     if (impl.storeReport.armed) {
       impl.storeReport.executedJitInstructions += after.executed_instructions - before.executed_instructions;
@@ -626,8 +628,7 @@ ExecutionResult LightrecExecutor::executeWithBoundary(std::uint32_t guestAddress
     }
     if (impl.core.game) {
       // The exact instruction count, less what device-access commits already charged.
-      accountExecutedInstructions(
-          impl.core, impl.segmentClock.uncommitted(executedInstructionCount(after) - executedInstructionCount(before)));
+      accountExecutedInstructions(impl.core, impl.segmentClock.uncommitted(segmentInstructions));
       impl.core.game->display.showIfDue();
     }
 

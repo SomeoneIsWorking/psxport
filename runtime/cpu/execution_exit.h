@@ -20,6 +20,7 @@ enum class ExecutionExitReason : std::uint8_t {
 };
 
 struct ExecutionBudget {
+  // Guest clock cycles, the unit of psx::frame::displayFieldCpuTicks.
   std::uint64_t cycles = 0;
   std::uint64_t maxHostDispatches = 0;
 
