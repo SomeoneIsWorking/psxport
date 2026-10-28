@@ -32,7 +32,7 @@ int texelShift(int texMode) {
 TextureFeedback::TextureFeedback() = default;
 
 void TextureFeedback::invalidate() {
-  written_.fill(false);
+  written_.clear();
 }
 
 void TextureFeedback::texturePage(const present::RecordDrawState &state, bool texDisable) {
@@ -47,7 +47,7 @@ void TextureFeedback::texturePage(const present::RecordDrawState &state, bool te
 }
 
 void TextureFeedback::invalidateAll() {
-  written_.fill(true);
+  written_.fillAll();
 }
 
 bool TextureFeedback::testWrapped(int row, ColumnRun run) const {
