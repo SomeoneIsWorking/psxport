@@ -7,7 +7,6 @@
 #include "title_catalog.h"
 
 #include <memory>
-#include <optional>
 #include <vector>
 
 class Core;
@@ -42,12 +41,12 @@ public:
 private:
   // Read the pad and the control channel for one frame and act on them. Returns the chosen panel,
   // or -1 to keep the selector up.
-  int serviceInput();
+  int serviceInput(PickerLayout &layout);
 
   // The selector's present: every panel's current picture built into the host's present image.
-  void build();
+  void build(const PickerLayout &layout);
   // Attach the host to the selected, settled panel and detach it from every other.
-  void attachPaneHost();
+  void attachPaneHost(const PickerLayout &layout);
 
   PickerRuntime &runtime_;
   const TitleCatalog &catalog_;
@@ -55,7 +54,6 @@ private:
   SessionServices &services_;
   // The Game that holds the control endpoint, reads the pad, draws the menu and presents the screen.
   std::unique_ptr<Game> host_;
-  std::optional<PickerLayout> layout_; // built in run() from the host Game's settings
   PickerPanes panes_;
   std::unique_ptr<PanelSessions> panels_;
   std::vector<PanelSource> sources_;
