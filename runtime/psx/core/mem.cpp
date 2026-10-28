@@ -16,6 +16,7 @@
 
 #include <lucent/log.h>
 
+#include <algorithm>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -519,13 +520,11 @@ void Core::io_write(uint32_t a, uint32_t v, uint32_t bytes) {
       const unsigned mode = psx::dma::syncMode(v);
       uint32_t endMadr = dma.of(DmaChannel::Cdrom).madr & 0x1FFFFC;
       bool chainRefused = false;
-      int n = mode == psx::dma::kLinkedList ? psx::dma::chainWords(*this, dma.of(DmaChannel::Cdrom).madr, &endMadr, &chainRefused)
-                                            : dma_block_words(dma.of(DmaChannel::Cdrom).bcr);
+      const int n = mode == psx::dma::kLinkedList
+                        ? psx::dma::chainWords(*this, dma.of(DmaChannel::Cdrom).madr, &endMadr, &chainRefused)
+                        : dma_block_words(dma.of(DmaChannel::Cdrom).bcr);
       if (mode != psx::dma::kLinkedList) {
         endMadr = (dma.of(DmaChannel::Cdrom).madr & 0x1FFFFC) + (unsigned)n * 4u;
-      }
-      if (n > 0x10000) {
-        n = 0x10000;
       }
       uint32_t da = dma.of(DmaChannel::Cdrom).madr & 0x1FFFFC;
       // CDC DMA reads zero past the FIFO and still completes; both counts are logged.
@@ -538,9 +537,9 @@ void Core::io_write(uint32_t a, uint32_t v, uint32_t bytes) {
           const int count = (int)(header >> 24);
           const uint32_t next = header & 0x00FFFFFFu;
           const int take = count < remaining ? count : remaining;
-          const int got = game->cdc.dmaRead(dmaBuffer_.data() + (n - remaining), take);
+          const int got = game->cdc.dmaRead(dmaBuffer_.data(), take);
           for (int i = 0; i < take; i++) {
-            mem_w32_unnotified(node + 4 + (unsigned)i * 4u, dmaBuffer_[n - remaining + i]);
+            mem_w32_unnotified(node + 4 + (unsigned)i * 4u, dmaBuffer_[i]);
           }
           psx::cpu::notifyExecutableWrite(
               *this, {node + 4, node + 4 + (unsigned)take * 4u}, psx::cpu::ExecutableWriteSource::Dma);
@@ -559,9 +558,19 @@ void Core::io_write(uint32_t a, uint32_t v, uint32_t bytes) {
           node = next & 0x1FFFFC;
         }
       } else {
-        const int fifo_words = game->cdc.dmaRead(dmaBuffer_.data(), n);
-        for (int i = 0; i < n; i++) {
-          mem_w32_unnotified(da + (unsigned)i * 4u, dmaBuffer_[i]);
+        const int chunk = static_cast<int>(dmaBuffer_.size());
+        int fifo_words = 0;
+        for (int done = 0; done < n; done += chunk) {
+          const int take = std::min(chunk, n - done);
+          // The FIFO holds one sector, well under a chunk; past the first chunk the controller reads zero.
+          if (done == 0) {
+            fifo_words = game->cdc.dmaRead(dmaBuffer_.data(), take);
+          } else {
+            std::fill_n(dmaBuffer_.begin(), take, 0u);
+          }
+          for (int i = 0; i < take; i++) {
+            mem_w32_unnotified(da + static_cast<uint32_t>(done + i) * 4u, dmaBuffer_[i]);
+          }
         }
         psx::cpu::notifyExecutableWrite(*this, {da, da + (unsigned)n * 4u}, psx::cpu::ExecutableWriteSource::Dma);
         psx::code_module::publishLanding(*this, {da, da + (unsigned)n * 4u});
@@ -598,15 +607,10 @@ void Core::io_write(uint32_t a, uint32_t v, uint32_t bytes) {
   if (p == 0x1F8010C8) { // DMA4 CHCR: SPU-RAM transfer
     dma.of(DmaChannel::Spu).chcr = v;
     if (v & 0x01000000u) {
-      int n = dma_block_words(dma.of(DmaChannel::Spu).bcr);
-      if (n > 0x10000) {
-        n = 0x10000;
-      }
+      const int n = dma_block_words(dma.of(DmaChannel::Spu).bcr);
+      const int chunk = static_cast<int>(dmaBuffer_.size());
       uint32_t da = dma.of(DmaChannel::Spu).madr & 0x1FFFFC;
       if (v & 1) { // RAM -> SPU
-        for (int i = 0; i < n; i++) {
-          dmaBuffer_[i] = mem_r32(da + i * 4);
-        }
         lucent::debug(spuDmaChannel_,
                       "RAM 0x{:08X} -> SPU 0x{:06X}  {} words ({} B)  pc={:08X}",
                       psx::kseg0Address(da),
@@ -629,13 +633,22 @@ void Core::io_write(uint32_t a, uint32_t v, uint32_t bytes) {
           }
           ln.flush(lucent::Level::Info, "spudma");
         }
-        psx::audio::spu::dmaWrite(dmaBuffer_.data(), n);
-      } else { // SPU -> RAM
-        int got = psx::audio::spu::dmaRead(dmaBuffer_.data(), n);
-        for (int i = 0; i < got; i++) {
-          mem_w32_unnotified(da + i * 4, dmaBuffer_[i]);
+        // A transfer larger than the staging buffer goes through it in pieces.
+        for (int done = 0; done < n; done += chunk) {
+          const int take = std::min(chunk, n - done);
+          for (int i = 0; i < take; i++) {
+            dmaBuffer_[i] = mem_r32(da + static_cast<uint32_t>(done + i) * 4u);
+          }
+          psx::audio::spu::dmaWrite(dmaBuffer_.data(), take);
         }
-        psx::cpu::notifyExecutableWrite(*this, {da, da + (unsigned)got * 4u}, psx::cpu::ExecutableWriteSource::Dma);
+      } else { // SPU -> RAM
+        for (int done = 0; done < n; done += chunk) {
+          const int got = psx::audio::spu::dmaRead(dmaBuffer_.data(), std::min(chunk, n - done));
+          for (int i = 0; i < got; i++) {
+            mem_w32_unnotified(da + static_cast<uint32_t>(done + i) * 4u, dmaBuffer_[i]);
+          }
+        }
+        psx::cpu::notifyExecutableWrite(*this, {da, da + (unsigned)n * 4u}, psx::cpu::ExecutableWriteSource::Dma);
       }
       dma.of(DmaChannel::Spu).chcr &= ~0x01000000u;
       if (dma_completed(dma, DmaChannel::Spu)) {
@@ -662,10 +675,7 @@ void Core::io_write(uint32_t a, uint32_t v, uint32_t bytes) {
                     dma.of(DmaChannel::MdecIn).madr,
                     dma.of(DmaChannel::MdecIn).bcr,
                     dma_block_words(dma.of(DmaChannel::MdecIn).bcr));
-      int n = dma_block_words(dma.of(DmaChannel::MdecIn).bcr);
-      if (n > 0x10000) {
-        n = 0x10000;
-      }
+      const int n = dma_block_words(dma.of(DmaChannel::MdecIn).bcr);
       dma.mdec0Addr = dma.of(DmaChannel::MdecIn).madr & 0xFFFFFCu;
       dma.mdec0Left = n;
       mdecStallReported_ = false;
@@ -696,10 +706,7 @@ void Core::io_write(uint32_t a, uint32_t v, uint32_t bytes) {
                     dma.of(DmaChannel::MdecOut).bcr,
                     dma_block_words(dma.of(DmaChannel::MdecOut).bcr),
                     (int)game->mdec.canRead());
-      int n = dma_block_words(dma.of(DmaChannel::MdecOut).bcr);
-      if (n > 0x10000) {
-        n = 0x10000;
-      }
+      const int n = dma_block_words(dma.of(DmaChannel::MdecOut).bcr);
       dma.mdec1Addr = dma.of(DmaChannel::MdecOut).madr & 0xFFFFFFu; // dma.c CurAddr form: advances 4/word, 0x1FFFFC at store
       dma.mdec1Left = n;
       mdecStallReported_ = false;
