@@ -21,7 +21,7 @@ struct DisplayArea {
   int width = 0;
   int height = 0;
   bool depth24 = false;
-  bool pal = false;    // GP1(08) video mode: 50 Hz fields
+  bool pal = false;     // GP1(08) video mode: 50 Hz fields
   bool enabled = false; // GP1(03) display enable: off scans out black
 };
 
@@ -39,8 +39,7 @@ public:
   void beginPacket();
   // Draw work enters the GPU in display field `field` (an OT walk, a block DMA, a GP0 port write).
   void noteDrawEntry(std::uint32_t field);
-  // A title's declaration that the guest fills a texture page from display pixels it just read back; the record
-  // samples the presented picture there in its place (record_raster_setup.h). The device is untouched.
+  // The guest filled a page from display pixels it read back; only the record sees this (record_raster_setup.h).
   void declareReadBack(const present::ReadBackTexture &texture) {
     mTap.declareReadBack(texture);
   }

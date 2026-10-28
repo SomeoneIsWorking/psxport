@@ -449,8 +449,7 @@ private:
       const TriVertex scaled[3], const TriVertex native[3], const DrawPrimitive &primitive, bool offU, bool offV);
   void addSprite(const DrawPrimitive &primitive);
   void addLine(const DrawPrimitive &primitive);
-  // A flat rectangle reaching both edges of a buffer's columns spans its canvas's, as a fill does; a read-back
-  // rectangle continues past each buffer edge it reaches.
+  // A flat rectangle spanning the buffer's columns fills the margins; a read-back one continues past either edge.
   void addCanvasMargins(const DrawPrimitive &primitive);
   // How `primitive` samples readBack_, when it does (RecordReadBack).
   std::optional<ReadBackShift> readBackShift(const DrawPrimitive &primitive) const;
@@ -1057,8 +1056,7 @@ void RecordPlanner::Builder::addLine(const DrawPrimitive &primitive) {
 
 void RecordPlanner::Builder::addCanvasMargins(const DrawPrimitive &primitive) {
   const std::optional<AxisRectangle> flat = axisRectangle(primitive);
-  // Its colour does not depend on where in it a pixel lies, or its picture is the captured one, which the
-  // margin holds too.
+  // A flat colour, or the captured picture, which the margin holds too.
   const bool placeFree = !primitive.gouraud && (!primitive.textured || sampling_);
   if (!flat || !placeFree || flat->subX0 != 0.0f || flat->subX1 != 0.0f) {
     return;
