@@ -22,7 +22,7 @@
 namespace psx::state {
 namespace {
 
-constexpr std::uint8_t kBusLayoutVersion = 5;
+constexpr std::uint8_t kBusLayoutVersion = 6;
 
 // psx::cd::CdController's queue, verbatim. `psx::cd::CdcIrqEnt` is a plain-C struct so it is written field by field
 // rather than memcpy'd: a memcpy would put the struct's padding in the file, and padding is not a contract.
@@ -67,6 +67,8 @@ void writeCdcSection(Game &game, psx::platform::BlobWriter &out) {
   out.u8(cdc.stat);
   out.u32(cdc.loc_lba);
   out.u32(cdc.command_lba);
+  out.array(cdc.sector_header, std::size(cdc.sector_header));
+  out.u8(cdc.sector_header_valid);
   out.u8(cdc.mode);
   out.u8(cdc.filter_file);
   out.u8(cdc.filter_chan);
@@ -103,6 +105,8 @@ bool readCdcSection(Game &game, psx::platform::BlobReader &in, std::string &erro
   cdc.stat = in.u8();
   cdc.loc_lba = in.u32();
   cdc.command_lba = in.u32();
+  in.array(cdc.sector_header, std::size(cdc.sector_header));
+  cdc.sector_header_valid = in.u8();
   cdc.mode = in.u8();
   cdc.filter_file = in.u8();
   cdc.filter_chan = in.u8();

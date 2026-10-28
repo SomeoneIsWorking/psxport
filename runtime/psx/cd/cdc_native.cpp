@@ -182,6 +182,8 @@ DriveSector CdController::routeDriveSector(uint32_t lba, uint8_t (&raw)[kRawSect
   if (!disc_read_raw_fn(disc, lba, raw, kRawSectorBytes)) {
     return DriveSector::ReadFailed;
   }
+  memcpy(sector_header, raw + kSectorHeaderOffset, kSectorHeaderBytes);
+  sector_header_valid = 1;
   const CdcSectorRoute route = sectorRoute(raw);
   if (route == CdcSectorRoute::Data) {
     return DriveSector::Data;
@@ -336,6 +338,7 @@ bool CdController::stopContinuousRead(ReadStop stop) {
 
 void CdController::startContinuousRead() {
   cancelDriveEvent();
+  sector_header_valid = 0; // the seek leaves the latched sector
   reading = 1;
   stat |= kCdlStatRead;
   first_sector_pending = 1;
@@ -538,6 +541,16 @@ uint64_t CdController::execCommand(uint8_t cmd) {
     setFilter(command_args[0], command_args[1]);
     raise(CdcResponse::Acknowledge, r1, 1);
     return 0;  // Setfilter
+  case 0x10: { // GetlocL
+    uint8_t header[kSectorHeaderBytes] = {};
+    if (!getlocL(header)) {
+      const uint8_t error[2] = {static_cast<uint8_t>(stat | 0x01), 0x80};
+      raise(CdcResponse::Error, error, 2);
+      return 0;
+    }
+    raise(CdcResponse::Acknowledge, header, kSectorHeaderBytes);
+    return 0;
+  }
   case 0x11: { // GetlocP: current Sub-Q track/index and relative/absolute position.
     uint8_t position[8] = {};
     if (!getlocP(position)) {
@@ -571,6 +584,7 @@ uint64_t CdController::execCommand(uint8_t cmd) {
     const bool was_stopped = !reading && (stat & kCdlStatStandby) == 0;
     stopContinuousRead(ReadStop::GuestCommand);
     stat = 0;
+    sector_header_valid = 0;
     raise(CdcResponse::Acknowledge, reading_status, 1);
     return was_stopped ? 5'000u : 33'868u;
   }
@@ -585,11 +599,16 @@ uint64_t CdController::execCommand(uint8_t cmd) {
   case 0x0C:
     raise(CdcResponse::Acknowledge, r1, 1);
     return 0; // Mute / Demute
+  // SeekL keeps the latched header (Beetle cdc.c Command_SeekL).
   case 0x15:
-  case 0x16: // SeekL / SeekP
+    raise(CdcResponse::Acknowledge, r1, 1);
+    return seekTime(command_lba);
+  case 0x16: // SeekP
+    sector_header_valid = 0;
     raise(CdcResponse::Acknowledge, r1, 1);
     return seekTime(command_lba);
   case 0x1E: // ReadTOC
+    sector_header_valid = 0;
     raise(CdcResponse::Acknowledge, r1, 1);
     return 30'000'000u + seekTime(0);
   case 0x07:
@@ -601,9 +620,12 @@ uint64_t CdController::execCommand(uint8_t cmd) {
     stat = kCdlStatStandby;
     raise(CdcResponse::Acknowledge, r1, 1);
     return 3'386'880u;
-  case 0x03:
+  case 0x03: // Play seeks to the audio track
+    sector_header_valid = 0;
+    raise(CdcResponse::Acknowledge, r1, 1);
+    return 0;
   case 0x17:
-  case 0x18: // MotorOn/SetFilter/Play/SetSession
+  case 0x18: // no retail command
     raise(CdcResponse::Acknowledge, r1, 1);
     return 0;
   case 0x19: { // Test (sub-function in param[0])
@@ -657,6 +679,14 @@ void CdController::completeCommand() {
   }
   const uint8_t response[1] = {stat};
   raise(CdcResponse::Complete, response, 1);
+}
+
+bool CdController::getlocL(uint8_t out[8]) const {
+  if (sector_header_valid == 0) {
+    return false;
+  }
+  memcpy(out, sector_header, kSectorHeaderBytes);
+  return true;
 }
 
 bool CdController::getlocP(uint8_t out[8]) const {

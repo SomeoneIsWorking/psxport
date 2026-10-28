@@ -12,6 +12,9 @@ inline constexpr int kSectorsPerSecond = 75;
 inline constexpr int kSecondsPerMinute = 60;
 inline constexpr std::uint32_t kRawSectorBytes = 2352u;
 inline constexpr std::uint32_t kDataSectorBytes = 2048u;
+// Past the sync pattern: the header (MSF, mode) then the Mode2 subheader, the eight bytes GetlocL returns.
+inline constexpr std::uint32_t kSectorHeaderOffset = 12u;
+inline constexpr std::uint32_t kSectorHeaderBytes = 8u;
 
 // The Mode2 subheader of a raw sector (sync 12, header 4, subheader 8).
 struct SectorSubheader {

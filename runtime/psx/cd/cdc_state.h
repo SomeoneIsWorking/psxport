@@ -59,6 +59,9 @@ public:
   bool nextDeadlineTicks(uint64_t *absoluteTicks) const;
   // The eight GetlocP bytes for the head's current sector; false when the disc layout is unavailable.
   bool getlocP(uint8_t out[8]) const;
+  // The eight GetlocL bytes: the header and subheader of the last sector the head read; false when none is latched.
+  // A read, SeekP, Play, Stop and ReadTOC drop the latch; Pause and SeekL keep it (Beetle cdc.c HeaderBufValid).
+  bool getlocL(uint8_t out[8]) const;
   // The current response type without consuming it; None when the queue is empty.
   CdcResponse currentIrqType() const;
   // Queue one INT1 data-ready with the current status, for a completion the native layer owes the guest. False,
@@ -95,6 +98,9 @@ public:
   uint8_t stat = 0;         // drive status byte (bit1 = motor on)
   uint32_t loc_lba = 0;     // current physical sector
   uint32_t command_lba = 0; // Setloc target, applied by ReadN/ReadS/Seek
+  // The GetlocL latch.
+  uint8_t sector_header[kSectorHeaderBytes] = {};
+  uint8_t sector_header_valid = 0;
   uint8_t mode = 0;
   uint8_t filter_file = 0;
   uint8_t filter_chan = 0;
