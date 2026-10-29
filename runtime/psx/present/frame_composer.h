@@ -53,7 +53,7 @@ public:
   }
 
 private:
-  // A keyed primitive of `shown`: its object, its slot (kNoSlot when none) and its entry.
+  // A keyed primitive or copy of `shown`: its object, its slot (kNoSlot when none) and its entry.
   struct Keyed {
     std::uint64_t object = 0;
     std::uint64_t slot = 0;
@@ -71,7 +71,7 @@ private:
   struct Insert {
     std::size_t position = 0;
     std::size_t order = 0;
-    DrawPrimitive primitive;
+    RecordEntry entry;
   };
 
   // What one object's render became: placed, kept as recorded, or a refusal of the in-between.
@@ -110,7 +110,7 @@ private:
   std::vector<const RecordDrawState *> environments_;
   std::vector<bool> removed_;
   std::vector<Insert> inserted_;
-  std::vector<std::pair<std::size_t, DrawPrimitive>> placed_;
+  std::vector<std::pair<std::size_t, RecordEntry>> placed_;
   std::vector<std::pair<std::uint64_t, std::size_t>> emitted_; // primitives the object emitted, by slot
   std::vector<RecordEntry> entries_;
   std::vector<std::byte> resting_;

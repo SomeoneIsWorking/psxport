@@ -63,15 +63,15 @@ void FrameStates::collect(const FrameRecord &record, FrameState &into) const {
   if (bySerial_.empty()) {
     return;
   }
-  // One note per keyed primitive, then one entry per object: ambiguous when its notes disagree.
+  // One note per keyed entry, then one entry per object: ambiguous when its notes disagree.
   for (const RecordEntry &entry : record.entries()) {
-    const auto *primitive = std::get_if<DrawPrimitive>(&entry);
-    if (primitive == nullptr || !primitive->key) {
+    const RecordKey *key = entryKey(entry);
+    if (key == nullptr) {
       continue;
     }
-    const Saved *saved = find(primitive->key->serial);
-    into.saved_.push_back({.key = FrameState::indexKey({primitive->key->producer, primitive->key->object}),
-                           .serial = primitive->key->serial,
+    const Saved *saved = find(key->serial);
+    into.saved_.push_back({.key = FrameState::indexKey({key->producer, key->object}),
+                           .serial = key->serial,
                            .offset = saved != nullptr ? saved->offset : 0,
                            .size = saved != nullptr ? saved->size : 0,
                            // Part of the object was drawn from a scope that saved nothing.

@@ -31,13 +31,17 @@ int wrap(int value, int range) {
     return value - q * range;
 }
 
-// gpu_common.h GetTexel.
-uint texel(uint u, uint v, uint flags) {
+// gpu_common.h GetTexel. `fu`/`fv` (1/256 texel) pick the target pixel inside the texel's scaled block, so a
+// block drawn or copied at scale shows its detail; an uploaded block is uniform and reads as at 1x.
+uint texel(uint u, uint v, uint fu, uint fv, uint flags) {
     uint tm = (flags >> kOpTexModeShift) & 3u;
     uint uext = (u & word(kOpWindowXAnd)) + word(kOpWindowXAdd);
-    int fx = int((uext >> (2u - tm)) & uint(kVramWidth - 1));
+    uint k = 2u - tm;
+    int fx = int((uext >> k) & uint(kVramWidth - 1));
     int fy = int(((v & word(kOpWindowYAnd)) + word(kOpWindowYAdd)) & uint(kVramHeight - 1));
-    uint t = fetch(ivec2(fx * S, fy * S));
+    int sx = int(((((uext & ((1u << k) - 1u)) << 8) | fu) * uint(S)) >> (8u + k));
+    int sy = int((fv * uint(S)) >> 8);
+    uint t = fetch(ivec2(fx * S + sx, fy * S + sy));
     if (tm == 0u) {
         t = clutEntry(word(kOpClut) + ((t >> ((uext & 3u) * 4u)) & 0xFu));
     } else if (tm == 1u) {
@@ -128,7 +132,10 @@ void main() {
     if (kind == kRecordOpKindCopy) {
         int rx = wrap(p.x - int(word(kOpOriginX)) * S, vramWidth);
         int ry = wrap(p.y - int(word(kOpOriginY)) * S, vramHeight);
-        ivec2 src = ivec2((int(word(kOpSourceX)) * S + rx) % vramWidth, (int(word(kOpSourceY)) * S + ry) % vramHeight);
+        // A placed copy reads its source shifted by the target pixels its place moved against its destination.
+        ivec2 shift = ivec2(int(word(kOpShiftX)), int(word(kOpShiftY)));
+        ivec2 src = ivec2(wrap(int(word(kOpSourceX)) * S + rx + shift.x, vramWidth),
+                          wrap(int(word(kOpSourceY)) * S + ry + shift.y, vramHeight));
         if (maskCheck && (dst & 0x8000u) != 0u) {
             discard;
         }
@@ -155,6 +162,8 @@ void main() {
     } else {
         uint u = 0u;
         uint v = 0u;
+        uint fu = 0u;
+        uint fv = 0u;
         if (kind == kRecordOpKindTriangle) {
             uint part = kOpParts + v_info.y * kPartWords;
             int yi = p.y - int(word(part + kPartRowShift));
@@ -167,13 +176,15 @@ void main() {
             uint xi = uint(p.x + (left - x0));
             uint value[5];
             for (uint c = 0u; c < 5u; c++) {
-                value[c] = (word(kOpBase + c) + word(kOpDx + c) * xi + word(kOpDy + c) * uint(yi)) >> 24;
+                value[c] = word(kOpBase + c) + word(kOpDx + c) * xi + word(kOpDy + c) * uint(yi);
             }
-            r = int(value[0]);
-            g = int(value[1]);
-            b = int(value[2]);
-            u = value[3];
-            v = value[4];
+            r = int(value[0] >> 24);
+            g = int(value[1] >> 24);
+            b = int(value[2] >> 24);
+            u = value[3] >> 24;
+            v = value[4] >> 24;
+            fu = (value[3] >> 16) & 0xFFu;
+            fv = (value[4] >> 16) & 0xFFu;
         } else {
             int du = (flags & kOpFlipX) != 0u ? -1 : 1;
             int dv = (flags & kOpFlipY) != 0u ? -1 : 1;
@@ -182,9 +193,14 @@ void main() {
             ivec2 m = (p - shift + kVramWidth * S) / S - kVramWidth;
             u = uint(int(word(kOpSourceX)) + (m.x - int(word(kOpOriginX))) * du) & 0xFFu;
             v = uint(int(word(kOpSourceY)) + (m.y - int(word(kOpOriginY))) * dv) & 0xFFu;
+            // A sprite's texel spans its native pixel: the target pixel inside it, mirrored when flipped.
+            ivec2 inside = p - shift - m * S;
+            inside = ivec2(du < 0 ? S - 1 - inside.x : inside.x, dv < 0 ? S - 1 - inside.y : inside.y);
+            fu = uint((inside.x * 256 + 128) / S);
+            fv = uint((inside.y * 256 + 128) / S);
         }
         if (textured) {
-            fore = (flags & kOpReadBack) != 0u ? readBackTexel(p) : texel(u, v, flags);
+            fore = (flags & kOpReadBack) != 0u ? readBackTexel(p) : texel(u, v, fu, fv, flags);
             if (fore == 0u) {
                 discard;
             }
