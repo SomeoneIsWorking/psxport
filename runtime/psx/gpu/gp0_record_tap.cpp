@@ -155,6 +155,9 @@ void Gp0RecordTap::enterSlot(const std::optional<present::OtSlot> &slot,
   if (slot == slot_) {
     return;
   }
+  if (slot_ && (!slot || slot->table != slot_->table)) {
+    record_.exitTable(slot_->table, state);
+  }
   slot_ = slot;
   if (slot) {
     record_.beginSlot(*slot, descending, state);

@@ -229,13 +229,14 @@ The composer builds the frame at `t` from S's record:
   routine linked with `PacketChainWalker::tryEmitChain` before the redraw ends, and saves them as the
   object's state; a run that does not return, or reaches a device or a syscall, is refused.
 - **Transform.** A render that moves a GTE transform by t blends it with `blendGteControl` (`gte_control.*`): the
-  rotation turns along the shorter arc (polar decomposition, slerp) and its stretch moves element by element, so a
+  rotation turns along the shorter arc (`lucent::rotation::between`: polar decomposition, slerp) and its stretch moves element by element, so a
   spinning part keeps its size between frames; translation moves by t. A singular matrix, or a mirror paired with a
   rotation, has no turn between them and blends element by element.
 - **Environment.** A render sets texture page, texture mode and blend mode; draw area, offset,
   mask, texture window and interlace are those in effect where the primitive lands in S (the
   first recorded primitive at or after its position; at a bucket head, the device state the walk had
-  on entering that bucket, kept in its `SlotStart`), and the CLUT from S's sample of the same CLUT
+  on entering that bucket, kept in its `SlotStart`; past the table's last bucket head, the device state the
+  walk had on leaving the table, kept in its `TableExit`), and the CLUT from S's sample of the same CLUT
   attribute (`clutWord`), or from the device VRAM when S never sampled it.
 - **In-place rewrite.** A title whose producer rewrites an already-written packet (a tint, a palette
   swap, a blend bit) must do it under the packet's own key: `EmissionScope::amend(keyFor(packet))` opens

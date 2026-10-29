@@ -107,7 +107,6 @@ private:
   std::vector<Covered> covered_;
   std::vector<std::pair<std::uint64_t, std::size_t>> heads_; // slot key, slot start index
   std::vector<std::size_t> tableStarts_;                     // slot start indices, by table, in walk order
-  std::vector<std::pair<std::uint16_t, std::size_t>> tableEnds_;
   std::vector<const RecordDrawState *> environments_;
   std::vector<bool> removed_;
   std::vector<Insert> inserted_;

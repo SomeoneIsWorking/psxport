@@ -33,6 +33,7 @@ void FrameRecord::reset(std::uint64_t sequence, bool complete) {
   clutPool_.clear();
   uploadPixels_.clear();
   slotStarts_.clear();
+  tableExits_.clear();
   drawEntryField_.reset();
 }
 
@@ -117,6 +118,8 @@ void FrameRecord::markIncomplete() {
   uploadPixels_.shrink_to_fit();
   slotStarts_.clear();
   slotStarts_.shrink_to_fit();
+  tableExits_.clear();
+  tableExits_.shrink_to_fit();
 }
 
 void FrameRecord::beginSlot(OtSlot slot, bool descending, const RecordDrawState &state) {
@@ -126,12 +129,20 @@ void FrameRecord::beginSlot(OtSlot slot, bool descending, const RecordDrawState 
   slotStarts_.push_back({slot, entries_.size(), descending, state});
 }
 
+void FrameRecord::exitTable(std::uint16_t table, const RecordDrawState &state) {
+  if (!complete_) {
+    return;
+  }
+  tableExits_.push_back({table, entries_.size(), state});
+}
+
 void FrameRecord::replaceEntries(std::span<const RecordEntry> entries) {
   if (!complete_) {
     return;
   }
   entries_.assign(entries.begin(), entries.end());
   slotStarts_.clear();
+  tableExits_.clear();
 }
 
 void FrameRecord::assignPools(const FrameRecord &other) {
@@ -141,6 +152,7 @@ void FrameRecord::assignPools(const FrameRecord &other) {
   clutPool_.assign(other.clutPool_.begin(), other.clutPool_.end());
   uploadPixels_.assign(other.uploadPixels_.begin(), other.uploadPixels_.end());
   slotStarts_.clear();
+  tableExits_.clear();
 }
 
 } // namespace psx::present

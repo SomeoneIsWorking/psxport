@@ -89,21 +89,10 @@ bool FrameComposer::index(const FrameRecord &shown,
   std::sort(baked_.begin(), baked_.end());
   clutOffsets_.clear();
   keyed_.clear();
-  tableEnds_.clear();
   for (std::size_t i = 0; i < entries.size(); i++) {
     const auto *primitive = std::get_if<DrawPrimitive>(&entries[i]);
     if (primitive == nullptr) {
       continue;
-    }
-    if (primitive->slot) {
-      const auto end = std::find_if(tableEnds_.begin(), tableEnds_.end(), [primitive](const auto &tableEnd) {
-        return tableEnd.first == primitive->slot->table;
-      });
-      if (end != tableEnds_.end()) {
-        end->second = i + 1;
-      } else {
-        tableEnds_.emplace_back(primitive->slot->table, i + 1);
-      }
     }
     if (samplesClut(*primitive) && primitive->clutOffset != kNoClut) {
       clutOffsets_.emplace_back(clutKey(*primitive), primitive->clutOffset);
@@ -193,11 +182,15 @@ std::optional<FrameComposer::SlotLanding> FrameComposer::slotLanding(const Frame
       return SlotLanding{start.entry, &start.state};
     }
   }
-  const auto end = std::find_if(tableEnds_.begin(), tableEnds_.end(), [slot](const auto &tableEnd) {
-    return tableEnd.first == slot.table;
+  // Past the table's last slot start: where the walk last left the table.
+  const std::span<const TableExit> exits = shown.tableExits();
+  const auto exit = std::find_if(exits.rbegin(), exits.rend(), [slot](const TableExit &e) {
+    return e.table == slot.table;
   });
-  const std::size_t position = end != tableEnds_.end() ? end->second : starts[*(last - 1)].entry;
-  return SlotLanding{position, environments_[position]};
+  if (exit == exits.rend()) {
+    return std::nullopt;
+  }
+  return SlotLanding{exit->entry, &exit->state};
 }
 
 std::uint32_t *FrameComposer::clutOffset(std::uint32_t key) {
