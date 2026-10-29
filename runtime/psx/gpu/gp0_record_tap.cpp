@@ -297,6 +297,9 @@ void Gp0RecordTap::executeCommand(const DeviceProbe &probe) {
     copy.height = target.height;
     copy.maskSet = probe.state.maskSet;
     copy.maskCheck = probe.state.maskCheck;
+    copy.key = nextPrimitiveKey();
+    copy.slot = slot_;
+    copy.owner = packetOwner_;
     feedback_.invalidate();
     record_.append(copy);
     words_.clear();

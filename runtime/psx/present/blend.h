@@ -27,6 +27,12 @@ inline std::uint32_t lerpTurn(std::uint32_t from, std::uint32_t to, unsigned bit
   return (from + static_cast<std::uint32_t>(lerpInt(0, step, t))) & mask;
 }
 
+// `t` of the way from `from` to `to` on a ring of `period`, the short way round, wrapped into [0, period).
+inline double lerpRing(double from, double to, double period, float t) {
+  const double at = std::fmod(from + std::remainder(to - from, period) * static_cast<double>(t), period);
+  return at < 0.0 ? at + period : at;
+}
+
 enum class Halfword : unsigned { Low = 0, High = 16 };
 
 // One halfword of two words, blended, as an unsigned halfword.

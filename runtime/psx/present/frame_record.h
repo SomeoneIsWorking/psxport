@@ -131,6 +131,19 @@ struct VramFill {
   bool operator==(const VramFill &) const = default;
 };
 
+// Where a rendered copy's fields lie past their whole pixels above native scale. Each scales toward zero, so
+// two copies that share an edge (one field +f, the other -f) meet on one scaled row.
+struct CopyPlace {
+  float srcX = 0.0f;
+  float srcY = 0.0f;
+  float dstX = 0.0f;
+  float dstY = 0.0f;
+  float width = 0.0f;
+  float height = 0.0f;
+
+  bool operator==(const CopyPlace &) const = default;
+};
+
 // GP0(80): coordinates wrap at the VRAM edges.
 struct VramCopy {
   int srcX = 0;
@@ -141,6 +154,11 @@ struct VramCopy {
   int height = 0;
   bool maskSet = false;
   bool maskCheck = false;
+  // Set only by a render; a placed copy that wraps or overlaps its source is drawn at its whole pixels.
+  CopyPlace place;
+  std::optional<RecordKey> key;
+  std::optional<OtSlot> slot;
+  std::uint32_t owner = 0; // OwnerLedger handle of the packet's command word
 
   bool operator==(const VramCopy &) const = default;
 };
@@ -181,6 +199,11 @@ struct ReadBackTexture {
 };
 
 using RecordEntry = std::variant<DrawPrimitive, VramFill, VramCopy, VramUpload, ReadBackTexture>;
+
+// The producer key of a primitive or a copy, the entries a render replaces; null for any other entry or none set.
+[[nodiscard]] const RecordKey *entryKey(const RecordEntry &entry);
+// The OT slot such an entry was walked in.
+[[nodiscard]] std::optional<OtSlot> entrySlot(const RecordEntry &entry);
 
 // The OT walk reached the head of `slot` when the record held `entry` entries, with the device under
 // `state`. `descending` says the walk visits the slot's table from high bucket indices to low.

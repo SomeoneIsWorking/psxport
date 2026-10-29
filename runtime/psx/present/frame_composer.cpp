@@ -90,30 +90,29 @@ bool FrameComposer::index(const FrameRecord &shown,
   clutOffsets_.clear();
   keyed_.clear();
   for (std::size_t i = 0; i < entries.size(); i++) {
-    const auto *primitive = std::get_if<DrawPrimitive>(&entries[i]);
-    if (primitive == nullptr) {
-      continue;
-    }
-    if (samplesClut(*primitive) && primitive->clutOffset != kNoClut) {
+    if (const auto *primitive = std::get_if<DrawPrimitive>(&entries[i]);
+        primitive != nullptr && samplesClut(*primitive) && primitive->clutOffset != kNoClut) {
       clutOffsets_.emplace_back(clutKey(*primitive), primitive->clutOffset);
     }
-    if (!primitive->key) {
+    const RecordKey *key = entryKey(entries[i]);
+    if (key == nullptr) {
       continue;
     }
-    const std::uint64_t object = objectKey({primitive->key->producer, primitive->key->object});
+    const std::uint64_t object = objectKey({key->producer, key->object});
     if (std::binary_search(baked_.begin(), baked_.end(), object)) {
       if (inBetween) {
         lucent::debug(composeChannel,
                       "record={} in-between shown whole: object {:#010x}/{:#010x} baked into an upload",
                       shown.sequence(),
-                      primitive->key->producer,
-                      primitive->key->object);
-        refusal_ = {HeldCause::None, primitive->key->producer, true, i};
+                      key->producer,
+                      key->object);
+        refusal_ = {HeldCause::None, key->producer, true, i};
         return false;
       }
       continue;
     }
-    keyed_.push_back({object, primitive->slot ? slotKey(*primitive->slot) : kNoSlot, i});
+    const std::optional<OtSlot> slot = entrySlot(entries[i]);
+    keyed_.push_back({object, slot ? slotKey(*slot) : kNoSlot, i});
   }
   // The first offset pooled for a CLUT, the lowest, is the one the composed frame samples.
   std::sort(clutOffsets_.begin(), clutOffsets_.end());
@@ -242,7 +241,7 @@ FrameComposer::Placement FrameComposer::place(const FrameRecord &shown,
   render.render(states, sink_);
   placed_.clear();
   emitted_.clear();
-  for (auto &[slot, primitive] : sink_.primitives) {
+  for (auto &[slot, emitted] : sink_.entries) {
     // The n-th primitive in a slot lands where the object's n-th entry there was, so the draw state
     // between them is the one the guest drew under; beyond its last entry, after it.
     const std::uint64_t key = slotKey(slot);
@@ -270,6 +269,31 @@ FrameComposer::Placement FrameComposer::place(const FrameRecord &shown,
     } else {
       drawable = false;
     }
+    auto *copy = std::get_if<VramCopy>(&emitted);
+    if (copy != nullptr && drawable) {
+      // A copy takes only the mask bits in effect where it lands, and samples no CLUT.
+      if (environment != nullptr) {
+        copy->maskSet = environment->maskSet;
+        copy->maskCheck = environment->maskCheck;
+      }
+      copy->key = RecordKey{id.producer, id.object, 0, 0};
+      copy->slot = slot;
+      placed_.emplace_back(position, *copy);
+      continue;
+    }
+    if (copy != nullptr) {
+      if (refuses) {
+        lucent::debug(composeChannel,
+                      "record={} in-between shown whole: object {:#010x}/{:#010x} has no place for a copy",
+                      shown.sequence(),
+                      id.producer,
+                      id.object);
+        refusal_ = {HeldCause::Unplaceable, id.producer, false, run.empty() ? SIZE_MAX : run.front().entry};
+        return Placement::Refused;
+      }
+      return Placement::Kept;
+    }
+    DrawPrimitive &primitive = std::get<DrawPrimitive>(emitted);
     if (drawable && samplesClut(primitive)) {
       std::uint32_t *offset = clutOffset(clutKey(primitive));
       if (offset == nullptr) {
@@ -396,8 +420,8 @@ const FrameRecord *FrameComposer::compose(const FrameRecord &shown,
     for (const Keyed &keyed : run) {
       removed_[keyed.entry] = true;
     }
-    for (auto &[position, primitive] : placed_) {
-      inserted_.push_back({position, inserted_.size(), primitive});
+    for (auto &[position, entry] : placed_) {
+      inserted_.push_back({position, inserted_.size(), entry});
     }
   }
   // An object the previous frame drew and this one skipped, where the skip is a state, moves toward it.
@@ -410,8 +434,8 @@ const FrameRecord *FrameComposer::compose(const FrameRecord &shown,
       const StateInterval states{.from = state, .to = resting_, .t = t};
       if (place(shown, id, *render, states, {}, vram, false) == Placement::Drawn) {
         replaced = true;
-        for (auto &[position, primitive] : placed_) {
-          inserted_.push_back({position, inserted_.size(), primitive});
+        for (auto &[position, entry] : placed_) {
+          inserted_.push_back({position, inserted_.size(), entry});
         }
       }
     });
@@ -427,7 +451,7 @@ const FrameRecord *FrameComposer::compose(const FrameRecord &shown,
   auto insert = inserted_.begin();
   for (std::size_t i = 0; i <= entries.size(); i++) {
     for (; insert != inserted_.end() && insert->position == i; ++insert) {
-      entries_.emplace_back(insert->primitive);
+      entries_.push_back(insert->entry);
     }
     if (i < entries.size() && !removed_[i]) {
       entries_.push_back(entries[i]);

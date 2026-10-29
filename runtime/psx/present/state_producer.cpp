@@ -8,12 +8,21 @@
 
 namespace psx::present {
 
+void PrimitiveSink::emitCopy(OtSlot /*slot*/, const VramCopy & /*copy*/) {
+  lucent::error("present", "a render emitted a VRAM copy into a sink that keeps only primitives");
+  std::abort();
+}
+
 void PrimitiveList::emit(OtSlot slot, const DrawPrimitive &primitive) {
-  primitives.emplace_back(slot, primitive);
+  entries.emplace_back(slot, primitive);
+}
+
+void PrimitiveList::emitCopy(OtSlot slot, const VramCopy &copy) {
+  entries.emplace_back(slot, copy);
 }
 
 void PrimitiveList::clear() {
-  primitives.clear();
+  entries.clear();
 }
 
 void StateProducerTable::install(std::uint32_t producer, std::unique_ptr<const StateProducer> render) {
