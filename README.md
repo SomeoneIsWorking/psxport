@@ -5,6 +5,16 @@ integration boundary, devices, HLE, rendering, audio, input, configuration, and 
 services. A consuming title owns game identity, native overrides, frame/task policy, enhancements,
 and the legally obtained game files.
 
+## What it does
+
+![Spyro the Dragon: the original 30 fps beside psxport's 60 fps interpolation](https://raw.githubusercontent.com/SomeoneIsWorking/psx-spyro/main/docs/media/spyro1-interpolation.webp)
+
+*60 fps interpolation: Spyro the Dragon's opening flyby at the original 30 fps (left) and interpolated (right).*
+
+![Spyro the Dragon: the original 4:3 picture beside 16:9 widescreen](https://raw.githubusercontent.com/SomeoneIsWorking/psx-spyro/main/docs/media/spyro1-widescreen.png)
+
+*Widescreen: the same Spyro the Dragon frame at the original 4:3 and at 16:9, where the margins show more of the level.*
+
 The product architecture has one CPU policy: host-native functions plus dynarec-translated R3000A
 code from the authenticated user image. A backend-owned interpreter fallback is automatic only for
 classified translation failures, counted, bounded by pre-execution admission, and never
