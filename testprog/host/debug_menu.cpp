@@ -31,6 +31,27 @@ DebugMenu::DebugMenu() {
             call.reply = lucent::format("ok: scene {} from the next frame", kSceneNames[scene]);
           },
   });
+  section("CPU");
+  verb({
+      .name = "divides",
+      .summary = "LO and HI of the guest's divide cases against the R3000A's",
+      .run =
+          [](const DebugCall &call) {
+            std::uint32_t at = session(call.core).facts.divideResults;
+            std::size_t wrong = 0;
+            std::string lines;
+            for (const DivideCase &expected : kDivideCases) {
+              const std::uint32_t lo = call.core.mem_r32(at);
+              const std::uint32_t hi = call.core.mem_r32(at + 4u);
+              at += 8u;
+              const bool right = lo == expected.lo && hi == expected.hi;
+              wrong += right ? 0u : 1u;
+              lines +=
+                  lucent::format("\n{}: lo=0x{:08X} hi=0x{:08X} {}", expected.name, lo, hi, right ? "ok" : "WRONG");
+            }
+            call.reply = lucent::format("{} of {} divides wrong{}", wrong, kDivideCases.size(), lines);
+          },
+  });
 }
 
 } // namespace psx::testprog
