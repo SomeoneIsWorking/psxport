@@ -26,6 +26,7 @@ struct Facts {
   std::uint32_t scene = 0;
   std::uint32_t requestedScene = 0;
   std::uint32_t buffer = 0;
+  std::uint32_t divideResults = 0; // LO, HI word pairs, one per kDivideCases entry
 
   // The table in `core`'s RAM; aborts when the loaded image is not the test program.
   static Facts read(Core &core);

@@ -31,6 +31,7 @@ Facts Facts::read(Core &core) {
   facts.scene = next();
   facts.requestedScene = next();
   facts.buffer = next();
+  facts.divideResults = next();
   return facts;
 }
 

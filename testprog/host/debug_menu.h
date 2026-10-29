@@ -4,12 +4,30 @@
 #include "title_debug_menu.h"
 
 #include <array>
+#include <cstdint>
 #include <string_view>
 
 namespace psx::testprog {
 
 inline constexpr std::array<std::string_view, 7> kSceneNames{
     "owned-square", "unowned-moving", "mmio-port", "block-dma-port", "reused-slot", "amended-square", "looping-ot"};
+
+struct DivideCase {
+  std::string_view name;
+  std::uint32_t lo;
+  std::uint32_t hi;
+};
+
+// The guest's divide_cases in order, with the R3000A's LO and HI for each.
+inline constexpr std::array<DivideCase, 7> kDivideCases{{
+    {"divu-guarded 0x2D6FFC/0", 0xFFFFFFFFu, 0x002D6FFCu},
+    {"div-guarded 5/0", 0xFFFFFFFFu, 5u},
+    {"div-guarded -5/0", 1u, 0xFFFFFFFBu},
+    {"div-guarded INT_MIN/-1", 0x80000000u, 0u},
+    {"div 7/-2", 0xFFFFFFFDu, 1u},
+    {"divu 7/0", 0xFFFFFFFFu, 7u},
+    {"div INT_MIN/-1", 0x80000000u, 0u},
+}};
 
 class DebugMenu final : public psx::game::TitleDebugMenu {
 public:

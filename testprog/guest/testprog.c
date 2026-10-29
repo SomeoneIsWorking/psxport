@@ -53,6 +53,8 @@ u32 scene_frames;
 u32 requested_scene = NO_SCENE;
 struct Square squares[2];
 u32 dma_tile[4];
+// LO and HI of each divide case, in testprog/host/debug_menu.h kDivideCases order.
+u32 divide_results[7][2];
 
 // Q12 sine of a 1/64 turn, the first quarter.
 const s16 sine_quarter[17] = {
@@ -82,8 +84,78 @@ __asm__(".section .text.0start,\"ax\",@progbits\n"
         "  .word scene\n"
         "  .word requested_scene\n"
         "  .word buffer\n"
+        "  .word divide_results\n"
         ".set reorder\n"
         ".text\n");
+
+// Divides with the compiler's guard sequences the recompiler strips, and bare: (a0 / a1) -> LO, HI at a2.
+void divide_guarded(s32 dividend, s32 divisor, u32 *out);
+void divide_guarded_unsigned(u32 dividend, u32 divisor, u32 *out);
+void divide_bare(s32 dividend, s32 divisor, u32 *out);
+void divide_bare_unsigned(u32 dividend, u32 divisor, u32 *out);
+__asm__(".text\n"
+        ".set noreorder\n"
+        ".set noat\n"
+        ".globl divide_guarded\n"
+        "divide_guarded:\n"
+        "  .word 0x0085001A\n" // div a0, a1
+        "  bnez $a1, 1f\n"
+        "  nop\n"
+        "  break 7\n"
+        "1:\n"
+        "  li $at, -1\n"
+        "  bne $a1, $at, 2f\n"
+        "  lui $at, 0x8000\n"
+        "  bne $a0, $at, 2f\n"
+        "  nop\n"
+        "  break 6\n"
+        "2:\n"
+        "  mflo $t0\n"
+        "  mfhi $t1\n"
+        "  sw $t0, 0($a2)\n"
+        "  jr $ra\n"
+        "  sw $t1, 4($a2)\n"
+        ".globl divide_guarded_unsigned\n"
+        "divide_guarded_unsigned:\n"
+        "  .word 0x0085001B\n" // divu a0, a1
+        "  bnez $a1, 3f\n"
+        "  nop\n"
+        "  break 7\n"
+        "3:\n"
+        "  mflo $t0\n"
+        "  mfhi $t1\n"
+        "  sw $t0, 0($a2)\n"
+        "  jr $ra\n"
+        "  sw $t1, 4($a2)\n"
+        ".globl divide_bare\n"
+        "divide_bare:\n"
+        "  .word 0x0085001A\n"
+        "  mflo $t0\n"
+        "  mfhi $t1\n"
+        "  sw $t0, 0($a2)\n"
+        "  jr $ra\n"
+        "  sw $t1, 4($a2)\n"
+        ".globl divide_bare_unsigned\n"
+        "divide_bare_unsigned:\n"
+        "  .word 0x0085001B\n"
+        "  mflo $t0\n"
+        "  mfhi $t1\n"
+        "  sw $t0, 0($a2)\n"
+        "  jr $ra\n"
+        "  sw $t1, 4($a2)\n"
+        ".set at\n"
+        ".set reorder\n");
+
+// A MIPS divide never traps: n / 0 gives LO = -1 or 1 by n's sign and HI = n; INT_MIN / -1 gives INT_MIN, 0.
+static void divide_cases(void) {
+  divide_guarded_unsigned(0x2D6FFCu, 0u, divide_results[0]);
+  divide_guarded(5, 0, divide_results[1]);
+  divide_guarded(-5, 0, divide_results[2]);
+  divide_guarded((s32)0x80000000u, -1, divide_results[3]);
+  divide_bare(7, -2, divide_results[4]);
+  divide_bare_unsigned(7u, 0u, divide_results[5]);
+  divide_bare((s32)0x80000000u, -1, divide_results[6]);
+}
 
 static s32 sine(u32 angle) {
   const u32 a = angle & 63u;
@@ -245,6 +317,7 @@ void cstart(void) {
   GP0 = 0xE1000400u;
   DPCR = 0x08000800u | DPCR;
   squares[1].color = 0xE0E000u;
+  divide_cases();
   for (;;) {
     ++frame_counter;
     buffer ^= 1u;
