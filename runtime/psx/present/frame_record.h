@@ -193,6 +193,15 @@ struct SlotStart {
   bool operator==(const SlotStart &) const = default;
 };
 
+// The OT walk left `table` when the record held `entry` entries, with the device under `state`.
+struct TableExit {
+  std::uint16_t table = 0;
+  std::size_t entry = 0;
+  RecordDrawState state;
+
+  bool operator==(const TableExit &) const = default;
+};
+
 class FrameRecord {
 public:
   // The record's storage; past either the record is marked incomplete and never replayed.
@@ -227,6 +236,10 @@ public:
   std::span<const SlotStart> slotStarts() const {
     return slotStarts_;
   }
+  // Table exits in walk order.
+  std::span<const TableExit> tableExits() const {
+    return tableExits_;
+  }
   std::span<const std::uint16_t> clut(const DrawPrimitive &primitive) const;
   std::span<const std::uint16_t> pixels(const VramUpload &upload) const;
   bool empty() const {
@@ -259,9 +272,10 @@ public:
   void appendUpload(VramUpload upload, std::span<const std::uint16_t> pixels);
   void markIncomplete();
   void beginSlot(OtSlot slot, bool descending, const RecordDrawState &state);
-  // Keeps the pools, which `entries` index as this record's did; drops the slot starts.
+  void exitTable(std::uint16_t table, const RecordDrawState &state);
+  // Keeps the pools, which `entries` index as this record's did; drops the slot starts and table exits.
   void replaceEntries(std::span<const RecordEntry> entries);
-  // Becomes `other` without its entries and slot starts, in this record's storage.
+  // Becomes `other` without its entries, slot starts and table exits, in this record's storage.
   void assignPools(const FrameRecord &other);
 
   bool operator==(const FrameRecord &) const = default;
@@ -273,6 +287,7 @@ private:
   std::vector<std::uint16_t> clutPool_;
   std::vector<std::uint16_t> uploadPixels_;
   std::vector<SlotStart> slotStarts_;
+  std::vector<TableExit> tableExits_;
   std::optional<std::uint32_t> drawEntryField_;
 };
 
