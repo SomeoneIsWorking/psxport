@@ -12,6 +12,12 @@
 # checkout usable at all, and a pinned worktree that is dirty is refused by the same comparison.
 include_guard(GLOBAL)
 
+# Fork: https://github.com/SomeoneIsWorking/lightrec.git, upstream https://github.com/pcercuei/lightrec.git,
+# upstream base 550f700c037e8713e4567227514424621cd39cd7. Forked for synchronous translation, per-block
+# callbacks, exact counters, range invalidation and fallback classification (docs/migration.md).
+# Deliberate deviation: the optimizer strips the compiler's divide guards (bnez/break 7, INT_MIN/-1
+# break 6), so a guarded divide by zero or INT_MIN/-1 yields the MIPS LO/HI where an R3000A takes the
+# break exception (docs/testprog.md, psx-crash issues 0033 and 0034).
 set(PSXPORT_LIGHTREC_REVISION "178bf86c12398a7b1d6e35afc9deee38101eedb8")
 set(PSXPORT_LIGHTREC_PIN_ROOT "scratch/pins" CACHE STRING
     "Path, relative to a Lightrec checkout, holding one detached worktree per pinned revision")

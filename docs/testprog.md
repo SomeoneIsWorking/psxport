@@ -39,10 +39,12 @@ presents:
 Before its first frame the guest runs seven divides and keeps each LO and HI: a DIVU and three DIVs behind the
 compiler's `bnez`/`break 7` (and, for DIV, `INT_MIN / -1` `break 6`) guards that Lightrec strips, and three bare
 ones. The cases are a zero divisor with a positive and a negative dividend, `INT_MIN / -1` and an ordinary signed
-divide. `divides` on the control channel compares them with the R3000A's results (`kDivideCases`,
-`testprog/host/debug_menu.h`): a zero divisor gives `LO = -1` (`+1` for a negative dividend) and `HI` = dividend,
-`INT_MIN / -1` gives `INT_MIN` and 0, and nothing traps. Lightrec `57fd2070` died on the first case with SIGFPE;
-`178bf86c` answers `0 of 7 divides wrong`.
+divide. `divides` on the control channel compares them with `kDivideCases` (`testprog/host/debug_menu.h`): a zero
+divisor gives `LO = -1` (`+1` for a negative dividend) and `HI` = dividend, `INT_MIN / -1` gives `INT_MIN` and 0.
+For the three bare cases these are the R3000A's results. The four guarded cases are not console
+behaviour: an R3000A takes their `break 7` / `break 6` into the exception handler. Their expected values pin the
+fork's deviation (`cmake/lightrec_dependency.cmake`): the guard is stripped, the MIPS result stands, and the host
+does not trap. Lightrec `57fd2070` died on the first case with SIGFPE; `178bf86c` answers `0 of 7 divides wrong`.
 
 `backdrop_draw`, a still TILE every scene draws without an owner, must never make a row. Besides the rows
 above the journal holds, by design:
