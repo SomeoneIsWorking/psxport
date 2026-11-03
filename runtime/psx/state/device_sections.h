@@ -17,6 +17,9 @@ bool readCpuSection(Core &core, psx::platform::BlobReader &in, std::string &erro
 // --- main RAM and the scratchpad (device_cpu.cpp); restoring either is an executable write.
 void writeRamSection(Core &core, psx::platform::BlobWriter &out);
 bool readRamSection(Core &core, psx::platform::BlobReader &in, std::string &error);
+// --- the active code images (device_cpu.cpp): the title's loaded overlays are only dispatchable under one.
+void writeImagesSection(Core &core, psx::platform::BlobWriter &out);
+bool readImagesSection(Core &core, psx::platform::BlobReader &in, std::string &error);
 void writeScratchpadSection(Core &core, psx::platform::BlobWriter &out);
 bool readScratchpadSection(Core &core, psx::platform::BlobReader &in, std::string &error);
 

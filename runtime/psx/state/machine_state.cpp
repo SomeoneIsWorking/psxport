@@ -75,6 +75,14 @@ constexpr SectionCodec kSections[] = {
                              psx::cpu::ExecutableWriteSource::Savestate);
        return true;
      }},
+    {section::kImages,
+     [](Game &g, BlobWriter &out, std::string &) {
+       writeImagesSection(g.core, out);
+       return true;
+     },
+     [](Game &g, BlobReader &in, std::string &error) {
+       return readImagesSection(g.core, in, error);
+     }},
     {section::kScratchpad,
      [](Game &g, BlobWriter &out, std::string &) {
        writeScratchpadSection(g.core, out);

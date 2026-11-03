@@ -32,4 +32,6 @@ struct GuestAddressRange {
     const uint32_t physical = address & 0x1FFFFFFFu;
     return valid() && physical >= begin && physical < end;
   }
+
+  friend constexpr bool operator==(GuestAddressRange, GuestAddressRange) = default;
 };

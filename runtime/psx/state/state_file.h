@@ -20,6 +20,7 @@ inline constexpr std::size_t kMaxSectionCount = 64;
 namespace section {
 inline constexpr std::string_view kCpu = "cpu";
 inline constexpr std::string_view kRam = "ram";
+inline constexpr std::string_view kImages = "images";
 inline constexpr std::string_view kScratchpad = "scratchpad";
 inline constexpr std::string_view kGte = "gte";
 inline constexpr std::string_view kGpu = "gpu";
@@ -34,8 +35,8 @@ inline constexpr std::string_view kCard = "card";
 inline constexpr std::string_view kCd = "cd";
 inline constexpr std::string_view kTitle = "title";
 // Every device section a machine image carries, in capture order; `title` is the one optional name.
-inline constexpr std::array<std::string_view, 14> kRequired{
-    kCpu, kRam, kScratchpad, kGte, kGpu, kBeetleSpu, kBeetleMdec, kCdc, kTiming, kDma, kHle, kSio, kCard, kCd};
+inline constexpr std::array<std::string_view, 15> kRequired{
+    kCpu, kRam, kImages, kScratchpad, kGte, kGpu, kBeetleSpu, kBeetleMdec, kCdc, kTiming, kDma, kHle, kSio, kCard, kCd};
 } // namespace section
 
 // A written image: the bytes plus the section directory read back out of them.
