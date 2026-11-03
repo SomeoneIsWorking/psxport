@@ -21,6 +21,9 @@ class DebugCommands {
 public:
   // True when the command word is a shared verb or the title's command; the reply went to `reply`.
   bool run(Core &core, const CommandArgs &args, const ReplySink &reply);
+  // False for a shared verb that acts on the window, host input or configuration; a title's own verb acts on its
+  // machine.
+  static bool reachesMachine(std::string_view name);
   // `transportVerbs`, every shared verb, then the title's commands, one line each.
   static void help(const Core &core, std::span<const VerbUsage> transportVerbs, const ReplySink &reply);
 

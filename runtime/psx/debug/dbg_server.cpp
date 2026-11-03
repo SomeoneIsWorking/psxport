@@ -4,7 +4,9 @@
 #include "core.h"
 #include "debug_commands.h"
 #include "game.h"
+#include "game_runtime.h"
 #include "gpu_device.h"
+#include "title_debug_menu.h"
 #include "watchdog.h"
 
 #include <unistd.h>
@@ -165,6 +167,15 @@ inline constexpr std::array<psx::debug::VerbUsage, 5> kServerVerbs{{
     {"quit | q | exit", "end the run"},
 }};
 
+bool namesOwnVerb(const Core &core, std::string_view name) {
+  for (const psx::game::DebugVerb &verb : core.runtime.debugMenu().verbs()) {
+    if (verb.name == name) {
+      return true;
+    }
+  }
+  return false;
+}
+
 } // namespace
 
 DbgServer::~DbgServer() {
@@ -217,8 +228,12 @@ void DbgServer::runCommand(Core &core, const char *line, std::string &reply) {
                         mPaused ? 1 : 0,
                         area.x,
                         area.y));
-  } else if (!core.game->debugCommands.run(core, args, sink)) {
-    sink(lucent::format("? {}  (try 'help')", line));
+  } else {
+    const bool machineVerb = !namesOwnVerb(core, cmd) && psx::debug::DebugCommands::reachesMachine(cmd);
+    Core &target = mMachine != nullptr && machineVerb ? *mMachine : core;
+    if (!target.game->debugCommands.run(target, args, sink)) {
+      sink(lucent::format("? {}  (try 'help')", line));
+    }
   }
 }
 

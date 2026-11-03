@@ -43,11 +43,18 @@ namespace {
 
 using Call = DebugCommands::Call;
 
+// What a verb acts on when a selector hosts a running panel.
+enum class Reach : std::uint8_t {
+  Machine, // the guest machine: memory, registers, its picture and devices
+  Host,    // the window, host input, the configuration and the log
+};
+
 struct Verb {
   std::string_view name;
   std::string_view usage;
   std::string_view summary;
   void (*run)(const Call &);
+  Reach reach = Reach::Machine;
 };
 
 void readBytes(const Call &call) {
@@ -721,29 +728,40 @@ inline constexpr std::array kVerbs{
     Verb{"press",
          "press <button>",
          "hold a pad button (up/down/left/right/x/o/t/sq/start/select/l1..r3) on the virtual gamepad",
-         &press},
-    Verb{"release", "release <button>", "let go of a pad button on the virtual gamepad", &release},
-    Verb{"hold", "hold <hex>", "the virtual gamepad's buttons as an active-low pad mask", &hold},
-    Verb{"tap", "tap <button> [frames]", "a pad button on the virtual gamepad for n pad frames (default 4)", &tap},
+         &press,
+         Reach::Host},
+    Verb{"release", "release <button>", "let go of a pad button on the virtual gamepad", &release, Reach::Host},
+    Verb{"hold", "hold <hex>", "the virtual gamepad's buttons as an active-low pad mask", &hold, Reach::Host},
+    Verb{"tap",
+         "tap <button> [frames]",
+         "a pad button on the virtual gamepad for n pad frames (default 4)",
+         &tap,
+         Reach::Host},
     Verb{"padrec",
          "padrec [save <path> [frames]]",
          "frames captured / cut the live session into a replay",
-         &padRecording},
-    Verb{"debug", "debug <channels>", "enable these log channels (replaces the set)", &debugChannels},
-    Verb{"cvars", "cvars", "every knob with its value and layer, then the environment audit", &cvars},
-    Verb{"cvar", "cvar <name> [value]", "set a knob for this run; bare clears it", &cvar},
+         &padRecording,
+         Reach::Host},
+    Verb{"debug", "debug <channels>", "enable these log channels (replaces the set)", &debugChannels, Reach::Host},
+    Verb{"cvars", "cvars", "every knob with its value and layer, then the environment audit", &cvars, Reach::Host},
+    Verb{"cvar", "cvar <name> [value]", "set a knob for this run; bare clears it", &cvar, Reach::Host},
     Verb{"guest", "guest", "the executor's counters now", &guestLedger},
     Verb{"owners", "owners [n|write]", "the owner journal: draws with no owner, held intervals", &owners},
     Verb{"census", "census", "the producer census so far, to the log", &census},
-    Verb{"renderpath", "renderpath [record|device]", "switch the live render path; bare prints it", &renderPath},
+    Verb{"renderpath",
+         "renderpath [record|device]",
+         "switch the live render path; bare prints it",
+         &renderPath,
+         Reach::Host},
     Verb{"gpufault",
          "gpufault",
          "latch the presentation device off as a failed submit does; the player's notice and exit follow",
-         &latchGpuFault},
-    Verb{"setires", "setires <0..4>", "live internal resolution (0 = auto)", &setInternalResolution},
+         &latchGpuFault,
+         Reach::Host},
+    Verb{"setires", "setires <0..4>", "live internal resolution (0 = auto)", &setInternalResolution, Reach::Host},
     Verb{"shot", "shot [path]", "the displayed picture: the record image, or the device's VRAM", &shot},
-    Verb{"vkshot", "vkshot [path]", "the device's capture of the displayed picture", &deviceShot},
-    Verb{"pshot", "pshot [path]", "the present image the player sees", &presentShot},
+    Verb{"vkshot", "vkshot [path]", "the device's capture of the displayed picture", &deviceShot, Reach::Host},
+    Verb{"pshot", "pshot [path]", "the present image the player sees", &presentShot, Reach::Host},
     Verb{
         "preseq", "preseq <N> [dir]", "dump the next N presented frames, interpolated ones included", &presentSequence},
     Verb{"vram", "vram <path> [x y w h]", "a VRAM region (default all of it)", &vramRegion},
@@ -764,29 +782,42 @@ inline constexpr std::array kVerbs{
          &otAttribution},
     Verb{"otwhere", "otwhere <packet> <ot-base> [entries]", "a packet's bucket in the last ordering table", &otWhere},
     Verb{"state", "state save|load <path>", "the whole machine, refused on any mismatch", &state},
-    Verb{"session", "session return", "end this session and show the title selector", &session},
-    Verb{"menu", "menu", "every overlay row with its live value, to the log", &menu},
+    Verb{"session", "session return", "end this session and show the title selector", &session, Reach::Host},
+    Verb{"menu", "menu", "every overlay row with its live value, to the log", &menu, Reach::Host},
     Verb{"key",
          "key <name|scancode> [down|up|tap] [frames]",
          "a keyboard key as SDL events (tap holds 6 input turns); a name with a space by number (224 Left Ctrl); hold "
          "a modifier down for a chord",
-         &key},
-    Verb{"text", "text <utf8>", "typed text as an SDL text-input event", &text},
+         &key,
+         Reach::Host},
+    Verb{"text", "text <utf8>", "typed text as an SDL text-input event", &text, Reach::Host},
     Verb{"mouse",
          "mouse move <x> <y> | <button> [down|up|tap] [frames] | wheel <dy> [dx]",
          "the mouse as SDL events, in window coordinates",
-         &mouse},
+         &mouse,
+         Reach::Host},
     Verb{"gamepad",
          "gamepad <button> [down|up|tap] [frames] | axis <name> <value>",
          "an SDL virtual gamepad, attached on first use",
-         &gamepad},
+         &gamepad,
+         Reach::Host},
     Verb{"touch",
          "touch <finger> <down|move|up|tap> <x> <y> [frames]",
          "a finger as SDL touch events, in window coordinates",
-         &touch},
+         &touch,
+         Reach::Host},
 };
 
 } // namespace
+
+bool DebugCommands::reachesMachine(std::string_view name) {
+  for (const Verb &verb : kVerbs) {
+    if (verb.name == name) {
+      return verb.reach == Reach::Machine;
+    }
+  }
+  return true;
+}
 
 bool DebugCommands::run(Core &core, const CommandArgs &args, const ReplySink &reply) {
   const std::string_view name = args.word(0);

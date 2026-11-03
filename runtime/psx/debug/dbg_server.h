@@ -27,6 +27,11 @@ public:
   void start();
   // Takes the endpoint after the claiming Game was destroyed; false while another Game holds it.
   bool claimEndpoint();
+  // Machine verbs this Game's own menu does not name run against `machine` (a selector's focused panel); null runs them
+  // here.
+  void routeMachineVerbsTo(Core *machine) {
+    mMachine = machine;
+  }
 
   // Before a frame: while a client has paused the game, idle until `play` or `step` arrives.
   void honourPause(Core *c);
@@ -55,6 +60,7 @@ public:
 private:
   void runCommand(Core &core, const char *line, std::string &reply);
 
+  Core *mMachine = nullptr;
   bool mPaused = false;
   int mStep = 0;
   // Written by the listener thread, read by the product loop.
