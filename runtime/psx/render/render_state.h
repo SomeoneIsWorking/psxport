@@ -102,6 +102,10 @@ private:
   void ensurePresentImage(PixelSize size);
   void ensureHostImage(PixelSize size);
   present::PresentInputs presentInputs(gpu::VramRect display, int nativeWidth);
+  // Whether the record picture presents the display rather than the device's VRAM.
+  bool recordPresents() const;
+  // This present's guest display plan, latched before anything sizes, announces or draws it.
+  void latchDisplay(gpu::VramRect display);
   void presentRecord(present::PresentInputs &inputs);
   void checkRecord(const present::FrameRecord &record, bool drewComposed, bool deviceAhead, int scale);
   bool recordShot(const char *path);

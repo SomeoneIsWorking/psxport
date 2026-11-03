@@ -241,7 +241,8 @@ The composer builds the frame at `t` from S's record:
   object's state; a run that does not return, or reaches a device or a syscall, is refused.
 - **Transform.** A render that moves a GTE transform by t blends it with `blendGteControl` (`gte_control.*`): the
   rotation turns along the shorter arc (`lucent::rotation::between`: polar decomposition, slerp) and its stretch moves element by element, so a
-  spinning part keeps its size between frames; translation moves by t. A singular matrix, or a mirror paired with a
+  spinning part keeps its size between frames; translation moves by t, rounded to the nearest integer with ties to
+  even (`blend.h:lerpInt`), so an odd step at t = 0.5 favours neither frame. A singular matrix, or a mirror paired with a
   rotation, has no turn between them and blends element by element.
 - **Environment.** A render sets texture page, texture mode and blend mode; draw area, offset,
   mask, texture window and interlace are those in effect where the primitive lands in S (the
@@ -422,7 +423,8 @@ producer anchors it. The margins show whatever the widened projection draws ther
 oracle-exact: every widening is gated on the configured aspect.
 
 On the record path `psx::present::latchRecordDisplay` turns the title's aspect into a margin M per side
-for the displayed rect. A title's guest projection plan there keeps the retail centre and draw width
+for the displayed rect. `RenderState::buildDisplay` latches it once per present, before the present is sized, announced
+or drawn, so every reader of `guestDisplay.plan()` sees this present's plan. A title's guest projection plan there keeps the retail centre and draw width
 (`projectionCenterX`, `guestDrawWidth`): the canvas, not a wider draw area, holds the margins, and the
 title widens only what it culls. `RecordRasterizer` keeps a canvas per displayed buffer (at most two, the
 least recently shown is dropped; a margin or width change retires both, a height difference between the two buffers does not): the buffer plus M columns each side, at scale, seeded from the image

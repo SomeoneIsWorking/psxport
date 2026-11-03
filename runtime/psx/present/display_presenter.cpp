@@ -61,8 +61,8 @@ gpu::VramRect DisplayPresenter::presentedRect(Core &core) {
 void DisplayPresenter::buildDisplay() {
   const gpu::VramRect rect = presentedRect(core_);
   core_.game->rml_overlay.newFrame();
-  psx::picture::announceOnChange(core_, rect.width);
   core_.game->render().buildDisplay(rect);
+  psx::picture::announceOnChange(core_, rect.width);
   core_.game->render().preseqCapture();
 }
 
