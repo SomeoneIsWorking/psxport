@@ -21,6 +21,7 @@ using psx::game::DebugParam;
 using psx::game::DebugVerb;
 
 constexpr std::string_view kRowPrefix = "debug:";
+constexpr std::string_view kWarpRow = "debug:warp";
 constexpr std::string_view kAbsentText = "-";
 
 // `debug:<verb>` or `debug:<verb>:<param>`.
@@ -114,9 +115,44 @@ private:
   std::size_t mVerb;
 };
 
+class WarpLevelBinding final : public RowBinding {
+public:
+  WarpLevelBinding(TitleDebugRows &rows, std::size_t level) : mRows(rows), mLevel(level) {}
+  bool text(std::string &out) const override {
+    out = mRows.warpText(mLevel);
+    return true;
+  }
+  void step(int dir) override {
+    mRows.warpStep(mLevel, dir);
+  }
+  bool steps_with_arrows() const override {
+    return true;
+  }
+
+private:
+  TitleDebugRows &mRows;
+  std::size_t mLevel;
+};
+
+class WarpGoBinding final : public RowBinding {
+public:
+  explicit WarpGoBinding(TitleDebugRows &rows) : mRows(rows) {}
+  bool text(std::string &out) const override {
+    out = mRows.warpAvailable() ? "\xe2\x86\x92" : "unavailable";
+    return true;
+  }
+  void step(int) override {
+    mRows.warpGo();
+  }
+
+private:
+  TitleDebugRows &mRows;
+};
+
 TitleDebugRows::TitleDebugRows(Game *game, std::function<void(const std::string &)> status)
     : mGame(game), mStatus(std::move(status)) {
   if (const psx::game::TitleDebugMenu *debug = menu()) {
+    mWarpAt.assign(debug->warpLevels().size(), 0);
     mSelections.resize(debug->verbs().size());
     for (std::size_t v = 0; v < mSelections.size(); ++v) {
       const DebugVerb &verb = debug->verbs()[v];
@@ -142,6 +178,15 @@ std::string TitleDebugRows::debugMarkup() const {
   }
   std::string rml;
   bool first = true;
+  if (!debug->warpLevels().empty()) {
+    rml += "<div class=\"section-heading\">Warp</div>";
+    for (std::size_t level = 0; level < debug->warpLevels().size(); ++level) {
+      rml += selectButton(
+          "adjust", std::string(kWarpRow) + ":" + std::to_string(level), debug->warpLevels()[level], warpText(level));
+    }
+    rml += selectButton("action", std::string(kWarpRow), "Go", "");
+    first = false;
+  }
   for (const psx::game::TitleDebugMenu::Section &section : debug->sections()) {
     std::string rows;
     for (const std::size_t r : section.readouts) {
@@ -192,8 +237,19 @@ std::string TitleDebugRows::aboutMarkup() const {
 }
 
 std::unique_ptr<RowBinding> TitleDebugRows::bind(std::string_view id) {
-  const std::optional<RowId> row = parseRowId(id);
   const psx::game::TitleDebugMenu *debug = menu();
+  if (debug != nullptr && id.substr(0, kWarpRow.size()) == kWarpRow) {
+    if (id.size() == kWarpRow.size()) {
+      return std::make_unique<WarpGoBinding>(*this);
+    }
+    const std::optional<std::size_t> level =
+        id[kWarpRow.size()] == ':' ? parseIndex(id.substr(kWarpRow.size() + 1)) : std::nullopt;
+    if (!level || *level >= mWarpAt.size()) {
+      return nullptr;
+    }
+    return std::make_unique<WarpLevelBinding>(*this, *level);
+  }
+  const std::optional<RowId> row = parseRowId(id);
   if (!row || debug == nullptr || row->verb >= debug->verbs().size()) {
     return nullptr;
   }
@@ -225,6 +281,8 @@ std::string TitleDebugRows::valueText(std::size_t verb, std::size_t param) const
   }
   case DebugParam::Kind::Word:
     return spec.names.name(mGame->core, static_cast<int>(value));
+  case DebugParam::Kind::Text:
+    return std::string(kAbsentText);
   }
   return std::string(kAbsentText);
 }
@@ -268,6 +326,8 @@ std::string TitleDebugRows::line(std::size_t verb) const {
     case DebugParam::Kind::Word:
       text += " " + param.names.name(mGame->core, static_cast<int>(value));
       break;
+    case DebugParam::Kind::Text:
+      return text;
     }
   }
   return text;
@@ -278,8 +338,51 @@ bool TitleDebugRows::available(std::size_t verb) const {
   return !spec.refusal || spec.refusal(mGame->core).empty();
 }
 
+std::span<const psx::game::WarpPlace> TitleDebugRows::warpChoices(std::size_t level) const {
+  std::span<const psx::game::WarpPlace> places = menu()->warpPlaces(mGame->core);
+  for (std::size_t above = 0; above < level; ++above) {
+    if (mWarpAt[above] >= places.size()) {
+      return {};
+    }
+    places = places[mWarpAt[above]].places;
+  }
+  return places;
+}
+
+std::string TitleDebugRows::warpText(std::size_t level) const {
+  const std::span<const psx::game::WarpPlace> places = warpChoices(level);
+  return mWarpAt[level] < places.size() ? places[mWarpAt[level]].name : std::string(kAbsentText);
+}
+
+void TitleDebugRows::warpStep(std::size_t level, int dir) {
+  const std::span<const psx::game::WarpPlace> places = warpChoices(level);
+  if (places.empty()) {
+    return;
+  }
+  mWarpAt[level] = static_cast<std::size_t>(
+      wrap<std::int64_t>(static_cast<std::int64_t>(mWarpAt[level]), dir, static_cast<std::int64_t>(places.size())));
+  for (std::size_t below = level + 1; below < mWarpAt.size(); ++below) {
+    mWarpAt[below] = 0;
+  }
+}
+
+bool TitleDebugRows::warpAvailable() const {
+  return !warpChoices(mWarpAt.size() - 1).empty() && menu()->warpRefusal(mGame->core).empty();
+}
+
+void TitleDebugRows::warpGo() {
+  std::string command = "warp ";
+  for (std::size_t level = 0; level < mWarpAt.size(); ++level) {
+    command += (level > 0 ? "/" : "") + std::to_string(mWarpAt[level]);
+  }
+  send(command);
+}
+
 void TitleDebugRows::run(std::size_t verb) {
-  const std::string command = line(verb);
+  send(line(verb));
+}
+
+void TitleDebugRows::send(const std::string &command) {
   std::string reply;
   if (!menu()->run(mGame->core, psx::debug::CommandArgs(command), reply)) {
     reply = "not a debug verb: " + command;

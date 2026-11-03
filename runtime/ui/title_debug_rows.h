@@ -1,6 +1,6 @@
-// psx::ui::TitleDebugRows — the Debug and About tabs built from the title's debug menu: a selection per verb
-// parameter, a run row per verb, and the About lines. Running a verb sends the line its selections spell
-// through the same verb table the control channel uses.
+// psx::ui::TitleDebugRows — the Debug and About tabs built from the title's debug menu: cascading warp pickers
+// and Go, a selection per verb parameter, a run row per verb, and the About lines. Running a verb sends the line
+// its selections spell through the same verb table the control channel uses.
 #ifndef PSXPORT_UI_TITLE_DEBUG_ROWS_H
 #define PSXPORT_UI_TITLE_DEBUG_ROWS_H
 
@@ -10,6 +10,7 @@
 #include <cstdint>
 #include <functional>
 #include <memory>
+#include <span>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -45,6 +46,8 @@ private:
 
   friend class DebugParamBinding;
   friend class DebugRunBinding;
+  friend class WarpLevelBinding;
+  friend class WarpGoBinding;
 
   const psx::game::TitleDebugMenu *menu() const;
   std::string valueText(std::size_t verb, std::size_t param) const;
@@ -53,10 +56,19 @@ private:
   std::string line(std::size_t verb) const;
   void run(std::size_t verb);
   bool available(std::size_t verb) const;
+  // The places the warp pickers above `level` select among; empty when the catalogue is not loaded.
+  std::span<const psx::game::WarpPlace> warpChoices(std::size_t level) const;
+  std::string warpText(std::size_t level) const;
+  // Steps one picker; the pickers below it go back to their first place.
+  void warpStep(std::size_t level, int dir);
+  bool warpAvailable() const;
+  void warpGo();
+  void send(const std::string &command);
 
   Game *mGame = nullptr;
   std::function<void(const std::string &)> mStatus;
   std::vector<VerbSelections> mSelections;
+  std::vector<std::size_t> mWarpAt;
 };
 
 } // namespace psx::ui

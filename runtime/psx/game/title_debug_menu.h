@@ -39,6 +39,7 @@ struct DebugParam {
     Hex,     // base 16 in [min, max]
     Named,   // an index into names, by number or by name
     Word,    // one of names, written as the word
+    Text,    // the rest of the line; the last parameter
   };
 
   std::string_view name;
@@ -52,6 +53,7 @@ struct DebugParam {
   static DebugParam hex(std::string_view name, std::int64_t min, std::int64_t max);
   static DebugParam named(std::string_view name, DebugNames names);
   static DebugParam word(std::string_view name, DebugNames names);
+  static DebugParam text(std::string_view name);
   // The same parameter, which a line may leave out; every parameter after it is optional too.
   DebugParam orAbsent() const;
 };
@@ -104,6 +106,24 @@ struct DebugVerb {
   bool inMenu = true;
 };
 
+// One place in a title's warp catalogue: a named group of places, or an arrival.
+struct WarpPlace {
+  std::string name;
+  std::vector<WarpPlace> places;
+  // An arrival's request through the title's frame-boundary warp; the reply answers the client.
+  std::function<std::string(Core &)> arrive;
+};
+
+// The places `warp <path>` reaches: a tree whose arrivals all sit at the depth `levels` names.
+struct WarpCatalogue {
+  // The picker labels from the root down ("world", "level", "arrival").
+  std::vector<std::string_view> levels;
+  // The tree, read from guest data; empty while that data is not resident.
+  std::function<std::vector<WarpPlace>(Core &)> places;
+  // Empty when an arrival may be armed now; otherwise why not, in the title's words.
+  std::function<std::string(Core &)> refusal;
+};
+
 struct DebugReadout {
   std::string_view label;
   std::function<std::string(Core &)> text;
@@ -147,8 +167,22 @@ public:
   std::span<const std::string_view> about() const {
     return about_;
   }
-  // `warp <area> [entry]`, from the verb's parameters.
+  // `warp <path>`, from the verb's parameters.
   static std::string usage(const DebugVerb &verb);
+
+  // The warp catalogue's picker labels; empty when the title has no warp.
+  std::span<const std::string_view> warpLevels() const {
+    return warp_.levels;
+  }
+  // The catalogue's tree, read once the guest data it names is resident; empty before.
+  std::span<const WarpPlace> warpPlaces(Core &core) const;
+  // Why an arrival may not be armed now; empty when it may.
+  std::string warpRefusal(Core &core) const {
+    return warp_.refusal ? warp_.refusal(core) : std::string();
+  }
+  // `warp <path>`: arms the arrival a path of names or indices ("Artisans/Stone Hill/start", "1/1/0") reaches;
+  // a path ending in `?` lists the places under it.
+  std::string warpTo(Core &core, std::string_view path) const;
 
   // The screen the machine shows: a key that changes when the screen does, read every frame.
   std::uint64_t screenKey(Core &core) const {
@@ -169,6 +203,8 @@ protected:
   void readout(std::string_view label, std::function<std::string(Core &)> text);
   // `music <track>` and `music-stop` over the title's TitleAudio, with a now-playing readout.
   void soundTest();
+  // The `warp <path>` verb over the title's catalogue, under its own heading.
+  void warp(WarpCatalogue catalogue);
   // A credit or prior-art line under the framework's own About lines.
   void aboutLine(std::string_view line);
   // How the owner journal names a screen: a cheap key, and the verb line a key's screen is reached by.
@@ -181,6 +217,9 @@ private:
   std::vector<DebugReadout> readouts_;
   std::vector<Section> sections_;
   std::vector<std::string_view> about_;
+  WarpCatalogue warp_;
+  // Built on first use: the names come from guest data, which is resident only past boot.
+  mutable std::vector<WarpPlace> warpPlaces_;
   std::function<std::uint64_t(Core &)> screenKey_;
   std::function<std::string(Core &, std::uint64_t)> screenRoute_;
 };
