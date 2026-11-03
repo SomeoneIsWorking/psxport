@@ -67,8 +67,7 @@ void RenderState::buildPanes(std::span<const Pane> panes) {
   clipPresent(cmd);
   device_.submit(cmd, "panes build");
   viewport_ = present::PaneRect{0, 0, size.width, size.height};
-  ++presentSerial_;
-  showPending_ = target_ == PresentTarget::Swapchain;
+  finishBuild(true);
   lucent::debug("pane", "{} of {} pane(s) drawn into {}x{}", drawn, panes.size(), size.width, size.height);
 }
 
