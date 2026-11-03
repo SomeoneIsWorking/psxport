@@ -33,6 +33,8 @@ void bindPerCoreDevices(Game &game, psx::frame::FrameLoopShell &shell) {
   shell.bindRunningCore(core);
   game.spu_audio.init();
   game.pad.init();
+  // The retail kernel boots with "bu" in its device table; libmcrd's directory wait needs it.
+  game.memcard.install();
   core.r[4] = 1;
   core.r[5] = 0;
 }
@@ -121,6 +123,7 @@ bool TitleSession::boot() {
   // The overrides before the preflight: a title's own registration may be what gives it a finite
   // frame owner.
   runtime.registerOverrides(game);
+  game.mods.offerNativeDepth(core.depthTest.marksAny());
   services_.frameLoop.prepareProduct(game);
   // Several sessions each start the channel; only the first owns the host port, which is how the
   // picker and a running title share one.
