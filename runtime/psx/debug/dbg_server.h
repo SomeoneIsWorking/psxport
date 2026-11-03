@@ -27,9 +27,10 @@ public:
   void start();
   // Takes the endpoint after the claiming Game was destroyed; false while another Game holds it.
   bool claimEndpoint();
-  // Machine verbs this Game's own menu does not name run against `machine` (a selector's focused panel); null runs them
-  // here.
-  void routeMachineVerbsTo(Core *machine) {
+  // From now on machine verbs this Game's own menu does not name go to a selector's focused panel: `machine`, or a
+  // refusal while that panel has not booted.
+  void routeMachineVerbsToPanel(Core *machine) {
+    mRoutesToPanel = true;
     mMachine = machine;
   }
 
@@ -60,6 +61,7 @@ public:
 private:
   void runCommand(Core &core, const char *line, std::string &reply);
 
+  bool mRoutesToPanel = false;
   Core *mMachine = nullptr;
   bool mPaused = false;
   int mStep = 0;

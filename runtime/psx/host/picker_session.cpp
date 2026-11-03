@@ -124,6 +124,7 @@ PickerSession::Result PickerSession::run() {
   host_->pad.useLiveInputOnly(); // a selector must not open or rotate the player's pad recording
   // No guest runs here, so the channel needs no store observer.
   host_->dbg_server.start();
+  host_->dbg_server.routeMachineVerbsToPanel(panels_->focusedMachine());
   // The overlay exists before the first build.
   if (services_.presentation.enabled()) {
     host_->render().bringUp();
@@ -190,7 +191,7 @@ PickerSession::Result PickerSession::run() {
     }
     services_.budget.step();
     // The channel's guest verbs (`rw`, `regs`, `shot`) read the panel the player is on.
-    host_->dbg_server.routeMachineVerbsTo(panels_->focusedMachine());
+    host_->dbg_server.routeMachineVerbsToPanel(panels_->focusedMachine());
     fieldTurn.endField(core, static_cast<std::uint32_t>(frame));
   }
   lucent::info("picker", "selector ended after {} frame(s) with no choice; {}", frame, panels_->summary());

@@ -230,7 +230,11 @@ void DbgServer::runCommand(Core &core, const char *line, std::string &reply) {
                         area.y));
   } else {
     const bool machineVerb = !namesOwnVerb(core, cmd) && psx::debug::DebugCommands::reachesMachine(cmd);
-    Core &target = mMachine != nullptr && machineVerb ? *mMachine : core;
+    if (machineVerb && mRoutesToPanel && mMachine == nullptr) {
+      sink(lucent::format("focused panel not booted; '{}' has no machine to read yet", cmd));
+      return;
+    }
+    Core &target = machineVerb && mRoutesToPanel ? *mMachine : core;
     if (!target.game->debugCommands.run(target, args, sink)) {
       sink(lucent::format("? {}  (try 'help')", line));
     }

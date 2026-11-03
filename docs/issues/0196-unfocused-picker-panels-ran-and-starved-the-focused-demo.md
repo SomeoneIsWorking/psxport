@@ -57,7 +57,9 @@ presents `fields=2/2` at t 0.5 and 1, 1210 `1/1`). Crash: `psx-crash/scratch/pic
   shared verb read its empty machine. Cause: `DbgServer::runCommand` ran every verb against the Core of the Game
   that claimed the endpoint. Fix: `DebugCommands::reachesMachine` classes each shared verb (machine, or window /
   host input / configuration), and the selector routes machine verbs and title verbs to the focused panel's
-  booted machine (`DbgServer::routeMachineVerbsTo`, set each selector frame from `PanelSessions::focusedMachine`).
+  booted machine (`DbgServer::routeMachineVerbsToPanel`, set each selector frame from `PanelSessions::focusedMachine`);
+  before that panel boots a machine verb is refused (`focused panel not booted`) instead of reading the selector's
+  empty machine.
   Shown in `psx-spyro/scratch/picker2b/run1`: `rw 800757D8` reads 0x0000000D (Spyro 1's title state) with Spyro 1
   focused, Spyro 2's word 0x30420006 with Spyro 2 focused, 0x0000000D again back on Spyro 1; `pshot` still
   shoots the composed selector (`run2/sheet.png`).
@@ -68,6 +70,8 @@ presents `fields=2/2` at t 0.5 and 1, 1210 `1/1`). Crash: `psx-crash/scratch/pic
   needs each title's archive and texture formats reverse-engineered for no visible difference after the first
   launch. Shown in `run2` (logo snapshotted 255x128 at 29 s, saved) then `run3/sheet.png`: the next process
   draws Spyro 1's logo over its black panel in the first selector frame, before the title has presented.
+- `SavedLogo` repeated `SavedDisc`'s user-data path and `.pending` rename; both now keep their file through
+  `TitleUserFile`, the one owner of a title user-data file and its whole-file replace.
 
 ## Open
 - Wall-clock pacing of the focused demo was not judged: host load stayed far above 4 for the whole pass.
