@@ -13,6 +13,7 @@
 #include "guest_address_range.h"
 #include "guest_packet_pool_windows.h"
 #include "input_phase.h"
+#include "drawn_logo.h"
 #include "logo_image.h"
 #include "pad_delivery.h"
 #include "psx_exe_image.h"
@@ -168,16 +169,18 @@ public:
   virtual const psx::present::GuestWidescreenProjection *guestWidescreenProjection() const {
     return nullptr;
   }
-  // The title's logo for its picker panel, read from its live machine.
-  virtual std::optional<psx::host::LogoImage> panelLogo(Core &core) const {
-    (void)core;
-    return std::nullopt;
-  }
   // The title's picture shows its own logo right now, so the picker draws none over it.
   virtual bool showsOwnLogo(Core &core) const {
     (void)core;
     return false;
   }
+  // The textures the title screen draws its logo from; none when the title supplies no logo.
+  virtual std::span<const psx::present::LogoTexture> logoTextures() const {
+    return {};
+  }
+  // The title's logo for its picker panel, read from its live machine: by default the last frame's draws from
+  // logoTextures while showsOwnLogo.
+  virtual std::optional<psx::host::LogoImage> panelLogo(Core &core) const;
 
   // The guest picture covers only the native width, so the present samples those columns alone.
   virtual bool guestPictureIsNativeWidth(const Game &game) const {

@@ -120,11 +120,33 @@ presents `fields=2/2` at t 0.5 and 1, 1210 `1/1`). Crash: `psx-crash/scratch/pic
 - The `focused panel not booted` refusal stays unexercised: the focused panel boots before the channel serves
   its first command.
 
+## Follow-up 5 (2026-11-04, picker4)
+- `GameRuntime::panelLogo` has one default (`game_runtime.cpp`): `drawnLogo` of the title's `logoTextures` while
+  `showsOwnLogo`. Spyro's own extraction (`extractPanelLogo`) is deleted; a title names its gate and textures only.
+- Crash 1/2/3 answer `showsOwnLogo` from the title object's GOOL state (psx-crash `game/gool/title_logo.cpp`,
+  issue 0036). They save no logo: the wordmark letters are untextured Gouraud models, so texture pages read only the
+  sign, backplate or clock.
+- Tomba! 1, Tomba! 2 and Spider-Man 2 draw their wordmark inside one opaque full-screen picture (Tomba! 1's MDEC
+  frame; Tomba! 2's 8bpp title sprite on pages (640,256)/(768,256), `psx-tomba/scratch/picker4/t2a/run.log`;
+  Enter Electro's PRESS START image, which the record shows with no primitives at all,
+  `psx-spider-man/scratch/picker4/ram1`). Spider-Man 1 shows no wordmark on any attract screen (`ram1/sheet_a.png`).
+  None of the four supplies a logo: a cut of an opaque picture carries its background at a hand-placed rectangle.
+- A host image on a pane (Tomba! 2's native movie and SCEA card) was letterboxed 4:3 inside its panel.
+  `RenderState::buildHostImage` now lays a pane out with `present::cover` (the 4:3 rectangle covering the panel,
+  cropped by the target scissor) and keeps `letterbox` for the window. Movie content spans panel rows 35..504 of 540
+  before (`psx-tomba/scratch/picker3/pw4/b2_tomba2.png`) and 0..539 after (`scratch/picker4/t2a/b11.png`).
+- Walks, hidden, unpaced, sink 3840x2160, ires 0, fps60 1, all 11 products rebuilt with Clang into `build/picker4`
+  (each repo's `scratch/picker4/w*/sheet.png`):
+  - Spyro: process 1 (`w1`) read all three logos (255x120, 255x94, 190x74); process 2 (`w2`) shows Spyro 2 and 3's
+    logos on their cold panels in its first frame, Spyro 1's demo with its logo, Spyro 3 focused, `pick spyro3`.
+  - Crash (`w1`): Crash 1's demo, Crash 3's title and demo, `pick crash3`; Tomba (`w1`): Tomba! 2's movie filling
+    its panel, `pick tomba2`; Spider-Man (`w1`): Spider-Man 1's demo, Enter Electro's DEMO, `pick spiderman2`.
+  - Every `panels:` line keeps the unfocused panel's step count fixed (Spyro 1 3133, Crash 1 4585, Tomba! 1 1264,
+    Spider-Man 1 7883) and cold panels at 0.
+
 ## Open
-- Crash 1/2/3, Tomba! 1/2 and Spider-Man 1/2 supply no logo yet and answer `showsOwnLogo` false. Crash has no
-  global menu word for Crash 1 or 3, and a gate on the menu-text pages read the wrong art because the wordmark is a
-  textured model, not the named pages (psx-crash 0036, third pass). Tomba! 1's logo is part of its movie frame.
-  Tomba! 2 and Spider-Man were not attempted. A title never focused on this machine has no logo until its title
-  screen shows once.
+- Crash's logo needs draws attributed to the GOOL object that emitted them (psx-crash 0036). Tomba! 1/2 and
+  Spider-Man 1/2 have no separable wordmark (Follow-up 5). A title never focused on this machine has no logo until
+  its title screen shows once.
 - Wall-clock pacing of the focused demo was not judged and no all-title real-time run was made: host load stayed
   between 35 and 57 for the whole pass.

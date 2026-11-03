@@ -104,6 +104,11 @@ void PanelSessions::takeLogo(int panel, TitleSession &session) {
   const bool drawnInsideGate = image && gateOpenBefore_[index];
   gateOpenBefore_[index] = image.has_value();
   if (drawnInsideGate) {
+    lucent::info("picker",
+                 "{}: its own logo read from its title screen, {}x{}",
+                 session.title().identity->displayName,
+                 image->width,
+                 image->height);
     logoRead_[index] = true;
     SavedLogo(*session.title().identity).save(*image);
     logos_[index] = std::make_unique<PanelLogo>(std::move(*image));
