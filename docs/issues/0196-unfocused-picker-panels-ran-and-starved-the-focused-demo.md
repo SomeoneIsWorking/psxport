@@ -85,14 +85,26 @@ presents `fields=2/2` at t 0.5 and 1, 1210 `1/1`). Crash: `psx-crash/scratch/pic
   starts Spyro the Dragon and `rw 800757D8` reads its machine (0x0D). `final2/sheet.png`: the next process draws
   all three saved logos in its first frame, Spyro 2 and 3 never focused (`steps=0 insns=0`).
 
+## Follow-up 3 (2026-11-03, picker3)
+- Spyro (`psx-spyro/scratch/picker3/w1`, `w2`): each logo is read on its title screen and saved; the next process
+  shows all three from its first frame with `steps=0`; unfocused counters stay fixed; `pick spyro1` enters the game
+  (`rw 800757D8` 0x0D). The `focused panel not booted` refusal is unreachable in a walk: the focused panel boots in
+  the selector frame before the channel serves its first command, so it guards only a failed boot.
+- Crash 3's attract hang is fixed (psx-crash 0035): the loader's VBlank-counter poll ends the host frame.
+- Enter Electro now shows its intro movie, title and DEMO (psx-spider-man 0039: the libapi DMA callback table and
+  the heap-1 overlay window); in the DEMO only the actors draw and the city is black, not traced.
+- Tomba! 1 is not stuck: its attract loop is the intro movie whose last segment is the PRESS START title, about
+  4 s, then the movie restarts (psx-tomba `titles/tomba1/docs/project-state.md` S004).
+- Crash, Tomba and Spider-Man pickers walked hidden (each repo's `scratch/picker3/pw/sheet.png` and `run.log`): cold
+  panels black with `steps=0`, every unfocused panel's step count unchanged in all 3335/3293/5105 `panels:` lines,
+  focused titles run their intros and demos, and `pick` starts the title full-window (Crash 1 to its title and
+  story intro, `psx-crash/scratch/picker3/pw2`).
+
 ## Open
-- Crash 1/2/3, Tomba! 1/2 and Spider-Man 1/2 supply no logo yet and answer `showsOwnLogo` false. Crash's title
-  scene id (C1 0x19, C2/C3 0x3C) also covers the publisher intros, so a scene gate read the wrong art
-  (psx-crash 0036); each needs its title menu's own state word. A title never focused on this machine has no logo
-  until its title screen shows once.
-- Crash 3 hangs in its level loader's VBlank-counter poll (psx-crash 0035, cause traced, fix named, not landed;
-  reproduced again in `psx-crash/scratch/picker2/cprobe`: Crash 3 reached its demo, then the channel timed out);
-  Enter Electro presents only black (psx-spider-man 0039, likely EE-04); Tomba! 1 showed only its opening movie
-  in 21812 steps (not traced).
+- Crash 1/2/3, Tomba! 1/2 and Spider-Man 1/2 supply no logo yet and answer `showsOwnLogo` false. Crash has no
+  global menu word for Crash 1 or 3, and a gate on the menu-text pages read the wrong art because the wordmark is a
+  textured model, not the named pages (psx-crash 0036, third pass). Tomba! 1's logo is part of its movie frame.
+  Tomba! 2 and Spider-Man were not attempted. A title never focused on this machine has no logo until its title
+  screen shows once.
 - Wall-clock pacing of the focused demo was not judged and no all-title real-time run was made: host load stayed
   between 35 and 57 for the whole pass.
