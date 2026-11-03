@@ -136,6 +136,15 @@ void drawTriangle(
   }
 }
 
+// Under one texel in fifty drawn is a fade or a part, not the wordmark; a saved empty panel would last.
+bool holdsArtwork(const Canvas &canvas) {
+  std::size_t visible = 0;
+  for (std::size_t at = 3; at < canvas.rgba.size(); at += 4) {
+    visible += canvas.rgba[at] != 0 ? 1 : 0;
+  }
+  return visible * 50 >= static_cast<std::size_t>(canvas.width) * canvas.height;
+}
+
 } // namespace
 
 std::optional<psx::host::LogoImage>
@@ -181,6 +190,9 @@ drawnLogo(const FrameRecord &record, std::span<const std::uint16_t> vram, std::s
     if (primitive->vertexCount == 4) {
       drawTriangle(canvas, source, corner[1], corner[2], corner[3]);
     }
+  }
+  if (!holdsArtwork(canvas)) {
+    return std::nullopt;
   }
   return psx::host::LogoImage{width, height, std::move(canvas.rgba)};
 }
