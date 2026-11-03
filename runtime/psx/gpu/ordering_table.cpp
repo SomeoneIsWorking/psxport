@@ -168,8 +168,14 @@ void submitOrderingTable(Core &core, GpuDevice &device, std::uint32_t rootGuestA
       device.beginPacket();
       for (unsigned i = 0; i < node.gp0WordCount(); i++) {
         const std::uint32_t offset = node.gp0WordRamOffset(i);
-        device.gp0(core.mem_r32(offset),
-                   {.sourceAddress = guestAddressOf(offset), .packetKey = key, .owner = owner, .mixedOwner = mixed});
+        const std::uint32_t word = core.mem_r32(offset);
+        const std::uint32_t address = guestAddressOf(offset);
+        device.gp0(word,
+                   {.sourceAddress = address,
+                    .packetKey = key,
+                    .owner = owner,
+                    .mixedOwner = mixed,
+                    .depth = core.vertexDepths.at(address, word)});
       }
     }
     if (const std::optional<present::OtSlot> empty = tables.emptyAfter(node.guestAddress())) {

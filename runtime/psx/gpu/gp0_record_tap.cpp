@@ -71,6 +71,7 @@ void Gp0RecordTap::onGp0(std::uint32_t word, const Gp0Origin &origin, const Devi
     consumePolyLineWord(word, probe);
     break;
   case Mode::QuadTail:
+    noteDepth(origin);
     words_.push_back(word);
     if (words_.size() == need_) {
       finishQuad(probe);
@@ -85,6 +86,7 @@ void Gp0RecordTap::onGp0(std::uint32_t word, const Gp0Origin &origin, const Devi
       packetCommand_ = static_cast<std::uint8_t>(word >> 24);
       need_ = firstDispatchWords(word);
     }
+    noteDepth(origin);
     words_.push_back(word);
     if (words_.size() == need_) {
       executeCommand(probe);
@@ -179,6 +181,16 @@ std::optional<present::RecordKey> Gp0RecordTap::nextPrimitiveKey() {
   }
   lastKey_ = key;
   return key;
+}
+
+void Gp0RecordTap::noteDepth(const Gp0Origin &origin) {
+  if (words_.size() < depths_.size()) {
+    depths_[words_.size()] = origin.depth;
+  }
+}
+
+float Gp0RecordTap::wordDepth(std::size_t index) const {
+  return index < depths_.size() ? depths_[index] : 0.0f;
 }
 
 void Gp0RecordTap::stampPacket(present::DrawPrimitive &primitive) {
@@ -350,7 +362,9 @@ void Gp0RecordTap::recordPolygon(const DeviceProbe &probe) {
   primitive.sourceAddress = packetSource_;
   std::size_t index = 0;
   for (int v = 0; v < 3; v++) {
+    const std::size_t position = polygonPositionWord(index, flags, v == 0);
     present::RecordVertex vertex = polygonVertex(words_, index, flags, primitive.vertices[0], v == 0);
+    vertex.depth = wordDepth(position);
     vertex.x += probe.state.offsetX;
     vertex.y += probe.state.offsetY;
     primitive.vertices[static_cast<std::size_t>(v)] = vertex;
@@ -371,7 +385,9 @@ void Gp0RecordTap::finishQuad(const DeviceProbe &probe) {
   auto *primitive = last != nullptr ? std::get_if<present::DrawPrimitive>(last) : nullptr;
   if (primitive != nullptr && primitive->kind == present::PrimitiveKind::Polygon && primitive->vertexCount == 3) {
     std::size_t index = 0;
+    const std::size_t position = polygonPositionWord(index, flags, false);
     present::RecordVertex vertex = polygonVertex(words_, index, flags, primitive->vertices[0], false);
+    vertex.depth = wordDepth(position);
     vertex.x += probe.state.offsetX;
     vertex.y += probe.state.offsetY;
     primitive->vertices[3] = vertex;

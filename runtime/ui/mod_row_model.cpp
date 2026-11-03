@@ -41,6 +41,13 @@ const ToggleRow kToggleRows[] = {
      kOnOff,
      2,
      0},
+    {"depth",
+     [](Mods &m) {
+       return &m.depth;
+     },
+     kOnOff,
+     2,
+     1},
 };
 
 const ToggleRow *find_toggle(std::string_view id) {

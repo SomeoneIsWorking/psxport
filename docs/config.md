@@ -60,7 +60,7 @@ framework read these launch switches only there; they are not CVars and the runt
 
 A set variable resolves exactly as a `BoolVar`'s environment layer does (`lucent::config::flag`). A setting the player changes
 at runtime is not config: 60 fps lives in `Mods::fps60` (`game.mods`), seeded from the settings file's
-`fps60=` line and overridden for the run by `Config::fps60`, which is never saved. The title selector's
+`fps60=` line and overridden for the run by `Config::fps60`, which is never saved. Native depth is `Mods::depth` (`depth=` line, `PSXPORT_DEPTH`, default on; `presentation.md` Depth). The title selector's
 layout is also a settings-file value in `Mods`: `picker_selected_share` (the selected panel's fraction of
 the width, default 0.6; the others split the rest evenly), `picker_slant` (seam slant as a fraction of
 the width, 0.1) and `picker_width_response` (fraction of the remaining width travel per frame, 0.25).

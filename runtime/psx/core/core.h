@@ -19,6 +19,7 @@
 #ifdef __cplusplus
 
 #include "cpu_divide.h"
+#include "depth_test.h"
 #include "dispatch_epoch.h"
 #include "emission_scope.h"
 #include "frame_pacer.h"
@@ -29,6 +30,7 @@
 #include "guest_writer_latch.h"
 #include "ordering_table.h"
 #include "owner_ledger.h"
+#include "vertex_depths.h"
 #include <array>
 #include <lucent/log.h>
 #include <memory>
@@ -94,6 +96,10 @@ public:
   psx::present::EmissionScope emission{owners};
   // The ordering tables the title named; the walk tags each recorded primitive with its bucket.
   psx::gpu::OtTables otTables;
+  // The view depth of projected vertices native draw sites stored into guest words.
+  psx::cpu::VertexDepths vertexDepths;
+  // The producers whose opaque polygons test depth against each other.
+  psx::present::DepthTest depthTest;
   // Producer object states saved this logic frame.
   psx::present::FrameStates frameStates;
 

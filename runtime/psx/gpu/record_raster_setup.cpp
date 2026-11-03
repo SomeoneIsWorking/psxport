@@ -7,6 +7,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstring>
 #include <cstdlib>
 #include <optional>
 #include <utility>
@@ -378,6 +379,34 @@ void storeWords(RecordOp &op, int index, std::uint64_t value) {
   op[static_cast<std::size_t>(index) + 1] = static_cast<std::uint32_t>(value >> 32);
 }
 
+// The triangle's 1/depth as a plane over native VRAM coordinates, from its first vertex: 1/z is linear on screen.
+void storeDepthPlane(RecordOp &op, const DrawPrimitive &primitive, int firstVertex) {
+  double x[3];
+  double y[3];
+  double w[3];
+  for (int i = 0; i < 3; i++) {
+    const present::RecordVertex &v = primitive.vertices[static_cast<std::size_t>(firstVertex + i)];
+    x[i] = v.x + static_cast<double>(v.subX);
+    y[i] = v.y + static_cast<double>(v.subY);
+    w[i] = 1.0 / static_cast<double>(v.depth);
+  }
+  const double det = (x[1] - x[0]) * (y[2] - y[0]) - (x[2] - x[0]) * (y[1] - y[0]);
+  double a = 0.0;
+  double b = 0.0;
+  // A triangle with no area on screen covers nothing its plane could order.
+  if (std::abs(det) > 1e-9) {
+    a = ((w[1] - w[0]) * (y[2] - y[0]) - (w[2] - w[0]) * (y[1] - y[0])) / det;
+    b = ((x[1] - x[0]) * (w[2] - w[0]) - (x[2] - x[0]) * (w[1] - w[0])) / det;
+  }
+  const float plane[kDepthWords] = {static_cast<float>(w[0]),
+                                    static_cast<float>(a),
+                                    static_cast<float>(b),
+                                    static_cast<float>(x[0]),
+                                    static_cast<float>(y[0])};
+  std::memcpy(&op[kOpDepth], plane, sizeof plane);
+  op[kOpFlags] |= kOpDepthTest;
+}
+
 } // namespace
 
 class RecordPlanner::Builder {
@@ -387,8 +416,10 @@ public:
              std::span<const std::uint16_t> uploadPool,
              std::span<const RecordCanvas> canvases,
              const std::optional<RecordReadBack> &readBack,
-             bool declares) {
+             bool declares,
+             const present::DepthTest *depthTest) {
     plan_.scale = scale;
+    depthTest_ = depthTest;
     plan_.capture.reset();
     readBack_ = readBack;
     declared_.reset();
@@ -449,8 +480,12 @@ private:
 
   void addPolygon(const DrawPrimitive &primitive);
   // `scaled` at the plan scale draws; `native`, the same vertices at 1x, decides what the op writes.
-  void addTriangle(
-      const TriVertex scaled[3], const TriVertex native[3], const DrawPrimitive &primitive, bool offU, bool offV);
+  void addTriangle(const TriVertex scaled[3],
+                   const TriVertex native[3],
+                   const DrawPrimitive &primitive,
+                   int firstVertex,
+                   bool offU,
+                   bool offV);
   void addSprite(const DrawPrimitive &primitive);
   void addLine(const DrawPrimitive &primitive);
   // A flat rectangle spanning the buffer's columns fills the margins; a read-back one continues past either edge.
@@ -493,6 +528,7 @@ private:
   std::optional<RecordReadBack> readBack_; // what primitives sample
   std::optional<RecordReadBack> declared_; // this record's declaration, from the next record on
   bool declares_ = false;
+  const present::DepthTest *depthTest_ = nullptr; // null: every primitive in slot order
   std::optional<ReadBackShift> sampling_; // the primitive being planned's
 };
 
@@ -801,17 +837,21 @@ void RecordPlanner::Builder::addPolygon(const DrawPrimitive &primitive) {
   if (primitive.textured) {
     adjustUv(first, s, offU, offV);
   }
-  addTriangle(first, native, primitive, offU, offV);
+  addTriangle(first, native, primitive, 0, offU, offV);
   if (primitive.vertexCount == 4) {
     if (primitive.textured) {
       adjustUv(second, s, offU, offV);
     }
-    addTriangle(second, native + 1, primitive, offU, offV);
+    addTriangle(second, native + 1, primitive, 1, offU, offV);
   }
 }
 
-void RecordPlanner::Builder::addTriangle(
-    const TriVertex scaled[3], const TriVertex native[3], const DrawPrimitive &primitive, bool offU, bool offV) {
+void RecordPlanner::Builder::addTriangle(const TriVertex scaled[3],
+                                         const TriVertex native[3],
+                                         const DrawPrimitive &primitive,
+                                         int firstVertex,
+                                         bool offU,
+                                         bool offV) {
   const int s = plan_.scale;
   const std::optional<TriangleWalk> walk = walkTriangle(scaled, s);
   if (!walk || !withinVramSpan(native, 1)) {
@@ -903,6 +943,9 @@ void RecordPlanner::Builder::addTriangle(
     storeWords(op, words + kPartRight, part.edge[1]);
     storeWords(op, words + kPartLeftStep, part.step[0]);
     storeWords(op, words + kPartRightStep, part.step[1]);
+  }
+  if (depthTest_ != nullptr && depthTest_->tests(primitive)) {
+    storeDepthPlane(op, primitive, firstVertex);
   }
   if (primitive.textured && !sampling_) {
     // Every covered pixel lies within a pixel of the vertices' hull, where the interpolant is linear.
@@ -1284,8 +1327,10 @@ const RecordRasterPlan &RecordPlanner::plan(const FrameRecord &record,
                                             int scale,
                                             std::span<const RecordCanvas> canvases,
                                             const std::optional<RecordReadBack> &readBack,
-                                            bool declares) {
-  builder_->begin(std::max(scale, 1), record.clutPool(), record.uploadPixels(), canvases, readBack, declares);
+                                            bool declares,
+                                            const present::DepthTest *depthTest) {
+  builder_->begin(
+      std::max(scale, 1), record.clutPool(), record.uploadPixels(), canvases, readBack, declares, depthTest);
   for (const present::RecordEntry &entry : record.entries()) {
     if (const auto *primitive = std::get_if<DrawPrimitive>(&entry)) {
       builder_->addPrimitive(*primitive);
@@ -1303,7 +1348,7 @@ const RecordRasterPlan &RecordPlanner::plan(const FrameRecord &record,
 }
 
 const RecordRasterPlan &RecordPlanner::planVramUpload(std::span<const std::uint16_t> vram, int scale) {
-  builder_->begin(std::max(scale, 1), {}, vram, {}, std::nullopt, false);
+  builder_->begin(std::max(scale, 1), {}, vram, {}, std::nullopt, false, nullptr);
   present::VramUpload upload;
   upload.width = kVramWidth;
   upload.height = kVramHeight;

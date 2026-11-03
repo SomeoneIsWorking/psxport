@@ -349,23 +349,44 @@ there are no per-vertex keys. An in-between with nothing produced is the shown r
 
 ## Depth
 
-Depth is a per-vertex record attribute next to the key: view-space depth, later a normal and material.
-A producer writes it from its own transform; nothing else fills it yet. The rasterizer writes it to its
-own target without changing colour, for host effects (lighting, SSAO, shadows) and for the test below.
-
 Visibility is OT slot order by default, because games are designed around their OT: decals and shadows
 win by being drawn later, skies sit in far slots, effects are sorted forward on purpose, and 2D draws
-over 3D. A depth buffer applied to all of that is wrong.
+over 3D. A depth buffer applied to all of that is wrong. Native depth corrects only the coarse sort
+between opaque world meshes, where a polygon's bucket says less than its pixels' real distance (a ledge
+trim over Spyro's feet, a wall seam over the floor), and leaves everything else to the slot order.
 
-- **Opt-in depth test.** A producer may mark primitives depth-tested. Those test and write depth
-  against each other only; every other entry draws in slot order with neither. This fixes coarse-sort
-  pops inside geometry the producer knows is safe (a terrain mesh), and a producer turns it on only
-  once its shots look right. The opt-in is a flag on the emitted primitive, so turning it off restores
-  the slot-order picture exactly.
-- **Guest depth, later.** An unported guest 3D primitive that sorts visibly wrong against a
-  depth-tested producer is the trigger to fill the same attribute from GTE projection tracking (the
-  vertex word a projection result was stored to, as PGXP does). It lands in the same attribute and the
-  same flag; nothing above changes.
+- **Where depth comes from.** The Beetle GTE hook keeps each projection's view depth beside its
+  sub-pixel place (`GtePlace.z`: Beetle's SZ3, at least H/2). `Gte::projected` scales it by the open
+  `psx::cpu::DepthUnit` (default 1), so a draw site whose translation and model are scaled from the
+  title's common view units (Spyro 1's mobys at their position shift, Spyro himself in world units)
+  names that scale once and depths compare across draws. A producer's computed vertex (a split
+  midpoint, a resplit) carries `screenBlendDepth` of its sources: 1/z is linear on screen.
+- **Who keeps it.** Over host memory the place travels with the word (`HostMemory`). Over guest
+  memory `EmitMemory::storeVertex` notes (address, word, depth) in `Core::vertexDepths`
+  (`psx::cpu::VertexDepths`, one flat table over main RAM and the scratchpad) and `loadVertex` reads it
+  back while that address still holds that word; a later store of any other word invalidates it by
+  value, with no store hook. The OT walk passes each command word's depth in `Gp0Origin.depth`, and the
+  tap sets `RecordVertex.depth` for each polygon position word. Guest code's own SWC2 stores are not
+  tracked: an unported 3D draw keeps depth 0 and draws in slot order.
+- **Which primitives test.** `Core::depthTest` (`psx::present::DepthTest`) holds the producer entries
+  a title marks: opaque world 3D only (terrain, mobys, the player model), never 2D, HUD, sky,
+  translucent, decal or shadow producers. A primitive tests when it is a polygon, opaque, keyed to a
+  marked producer and every vertex has depth > 0.
+- **How it draws.** The planner stores the triangle's 1/z plane (op words `kOpDepth..+4`, over native
+  coordinates with sub-pixel places) and sets `kOpDepthTest`; `record.frag` writes
+  `log2(z) / 16` to a D16 target. A plane's depth clears to far on its first pass of each record. In a
+  pass with tested quads, tested runs use compare LESS_OR_EQUAL with writes and every other run uses
+  ALWAYS with no write, in the same OT order, so marked and unmarked draws interleave exactly as the
+  slot order says. A pass with none uses the pipeline with no depth target.
+- **Interpolation.** In-betweens re-run the producer body at `t`, so depth is re-projected with the
+  vertex; there is no separate depth lerp.
+- **Off.** The `depth` setting (default on, `PSXPORT_DEPTH`, menu "Native Depth") passes no policy:
+  no op tests, and the picture is the slot-order picture exactly, so 4:3 with depth off stays
+  oracle-exact.
+- **Cost.** One multiply per projected vertex read, one table write per stored vertex, five words per
+  tested op; nothing per pixel on the CPU and nothing that scales with ires.
+- **Check it.** Spyro 1, Toasty portal (`gate-teleport 0 0`): the rock wall meets the floor along its
+  real intersection with depth on; `PSXPORT_DEPTH=0` shows the wall's slot-order overlap.
 
 Planned effects, all reading those attributes: dynamic lighting with real shadows, vertex smoothing
 (normals averaged across shared vertices) and SSAO. They are chosen by preset (off, low, high), not
@@ -638,5 +659,5 @@ reports carry no `motion.png`.
 
 The native and GTE draw paths, the render queue, painter, keyed blend and every title's
 `RenderCapabilities` are deleted; `record` and `device` are the only paths. Remaining work:
-`StateProducer` renders for each title's keyed producers by census rank, the depth attribute and
-target, then the opt-in depth test.
+`StateProducer` renders for each title's keyed producers by census rank; native depth for every title
+beyond Spyro 1 (which marks its terrain, mobys and Spyro), and depth for guest-code SWC2 stores.

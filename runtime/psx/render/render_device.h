@@ -138,12 +138,19 @@ public:
   // Submit and wait with a wall-clock bound; false (and latched) on failure or timeout.
   bool submitAndWait(SDL_GPUCommandBuffer *cmd, const char *where);
 
-  // A pipeline drawing triangle lists into one colour target. Without `input` the vertex stage makes its own vertices.
+  // A depth target's format and the test a pipeline runs against it.
+  struct DepthTarget {
+    SDL_GPUTextureFormat format = SDL_GPU_TEXTUREFORMAT_INVALID;
+    SDL_GPUDepthStencilState state{};
+  };
+  // A pipeline drawing triangle lists into one colour target, and `depth`'s target when given. Without `input` the
+  // vertex stage makes its own vertices.
   SDL_GPUGraphicsPipeline *makePipeline(const ShaderCode &vertex,
                                         const ShaderCode &fragment,
                                         SDL_GPUTextureFormat format,
                                         const SDL_GPUColorTargetBlendState *blend = nullptr,
-                                        const SDL_GPUVertexInputState *input = nullptr);
+                                        const SDL_GPUVertexInputState *input = nullptr,
+                                        const DepthTarget *depth = nullptr);
   SDL_GPUTexture *makeTexture(PixelSize size, SDL_GPUTextureFormat format, SDL_GPUTextureUsageFlags usage);
   SDL_GPUTransferBuffer *makeTransferBuffer(SDL_GPUTransferBufferUsage usage, std::uint32_t bytes);
   // Copies `pixels` into `staging` and records their upload into the whole of `texture`.

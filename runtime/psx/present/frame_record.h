@@ -83,6 +83,8 @@ struct RecordVertex {
   // Polygons and lines: where the vertex lies past x/y above native scale, under two pixels either way.
   float subX = 0.0f;
   float subY = 0.0f;
+  // Polygons: the view depth its projection divided by (GtePlace::z), 0 when unknown.
+  float depth = 0.0f;
 
   bool operator==(const RecordVertex &) const = default;
 };

@@ -55,7 +55,8 @@ public:
   bool drawInBetween(SDL_GPUCommandBuffer *cmd, const present::FrameRecord &record, int scale, const RecordView &view);
 
   // One present: `composed` when given and drawable, then with `advanceToRecord` the image is brought to
-  // `record` without showing it; else `record` through update(). True when `composed` was drawn.
+  // `record` without showing it; else `record` through update(). True when `composed` was drawn. The polygons
+  // `depthTest` tests order by depth among themselves; with none, everything draws in slot order.
   bool show(SDL_GPUCommandBuffer *cmd,
             const present::FrameRecord &record,
             const present::FrameRecord *composed,
@@ -63,7 +64,8 @@ public:
             bool deviceAhead,
             std::span<const std::uint16_t> vram,
             int scale,
-            const RecordView &view);
+            const RecordView &view,
+            const present::DepthTest *depthTest);
 
   // `picture` at the image scale as row-major halfwords, after everything submitted before it.
   MappedTransfer download(const RecordPicture &picture);
@@ -102,6 +104,7 @@ private:
     SDL_GPUTexture *snapshot = nullptr; // equals the target at the start of every execute
     SDL_GPUTexture *inBetween = nullptr;
     SDL_GPUTexture *before = nullptr;
+    SDL_GPUTexture *depth = nullptr; // made when a record first depth-tests on this plane; cleared per record
     int width = 0; // native pixels
     int height = 0;
     int originX = 0; // VRAM-space position of pixel (0, 0)
@@ -132,6 +135,12 @@ private:
   // Replaces the presented picture by the field `record` drew, when it draws one field per frame.
   void selectField(SDL_GPUCommandBuffer *cmd, const present::FrameRecord &record);
   void execute(SDL_GPUCommandBuffer *cmd, const gpu::RecordRasterPlan &plan, bool inBetween);
+  // Quads [first, end) of a pass, each run of depth-tested quads through the depth pipeline.
+  void drawQuads(SDL_GPURenderPass *pass,
+                 const gpu::RecordRasterPlan &plan,
+                 std::span<const gpu::RecordQuad> quads,
+                 std::uint32_t firstVertexQuad,
+                 bool depthTarget);
   // Copies the capture's canvas pixels into capture_, sized to them.
   void capture(SDL_GPUCommandBuffer *cmd, const gpu::RecordCapture &capture);
   void copyTexture(SDL_GPUCommandBuffer *cmd,
@@ -149,6 +158,10 @@ private:
 
   RenderDevice &device_;
   SDL_GPUGraphicsPipeline *pipeline_ = nullptr;
+  // With a depth target: slot order (no test, no write), and the depth test.
+  SDL_GPUGraphicsPipeline *slotPipeline_ = nullptr;
+  SDL_GPUGraphicsPipeline *depthPipeline_ = nullptr;
+  const present::DepthTest *depthTest_ = nullptr; // this present's
   gpu::RecordPlanner planner_;
   Plane vram_;
   std::vector<Canvas> canvases_;

@@ -15,6 +15,8 @@ using gpu::RecordCanvas;
 using gpu::RecordRect;
 
 constexpr SDL_GPUTextureFormat kVramFormat = SDL_GPU_TEXTUREFORMAT_R8G8_UNORM;
+// record.frag writes log2(z) / 16; at 16 bits that resolves z to 0.02%.
+constexpr SDL_GPUTextureFormat kDepthFormat = SDL_GPU_TEXTUREFORMAT_D16_UNORM;
 constexpr ShaderCode kRecordVertex{spv_g_record_vert, spv_g_record_vert_len, {0, 1, 1}};
 constexpr ShaderCode kRecordFragment{spv_g_record_frag, spv_g_record_frag_len, {3, 1, 3}};
 
@@ -31,6 +33,19 @@ struct ParamsUniform {
   std::int32_t unused = 0;
 };
 
+RenderDevice::DepthTarget depthTarget(bool tests) {
+  RenderDevice::DepthTarget target;
+  target.format = kDepthFormat;
+  target.state.enable_depth_test = true;
+  target.state.enable_depth_write = tests;
+  target.state.compare_op = tests ? SDL_GPU_COMPAREOP_LESS_OR_EQUAL : SDL_GPU_COMPAREOP_ALWAYS;
+  return target;
+}
+
+bool depthTested(const gpu::RecordRasterPlan &plan, const gpu::RecordQuad &quad) {
+  return (plan.ops[quad.op][gpu::kOpFlags] & gpu::kOpDepthTest) != 0u;
+}
+
 // Storage buffers are read as whole words, and never sized zero.
 std::uint32_t paddedBytes(std::size_t bytes) {
   return static_cast<std::uint32_t>(std::max<std::size_t>((bytes + 3) & ~std::size_t{3}, 16));
@@ -40,6 +55,10 @@ std::uint32_t paddedBytes(std::size_t bytes) {
 
 RecordRasterizer::RecordRasterizer(RenderDevice &device)
     : device_(device), pipeline_(device.makePipeline(kRecordVertex, kRecordFragment, kVramFormat)) {
+  const RenderDevice::DepthTarget slot = depthTarget(false);
+  const RenderDevice::DepthTarget tests = depthTarget(true);
+  slotPipeline_ = device.makePipeline(kRecordVertex, kRecordFragment, kVramFormat, nullptr, nullptr, &slot);
+  depthPipeline_ = device.makePipeline(kRecordVertex, kRecordFragment, kVramFormat, nullptr, nullptr, &tests);
   canvases_.reserve(gpu::kRecordMaxCanvases);
 }
 
@@ -51,6 +70,8 @@ RecordRasterizer::~RecordRasterizer() {
   device_.release(upload_);
   device_.release(readback_);
   device_.release(pipeline_);
+  device_.release(slotPipeline_);
+  device_.release(depthPipeline_);
 }
 
 RecordRasterizer::Plane RecordRasterizer::makePlane(const RecordCanvas &shape) {
@@ -69,7 +90,7 @@ RecordRasterizer::Plane RecordRasterizer::makePlane(const RecordCanvas &shape) {
 }
 
 void RecordRasterizer::releasePlane(Plane &plane) {
-  for (SDL_GPUTexture **texture : {&plane.image, &plane.snapshot, &plane.inBetween, &plane.before}) {
+  for (SDL_GPUTexture **texture : {&plane.image, &plane.snapshot, &plane.inBetween, &plane.before, &plane.depth}) {
     device_.release(*texture);
   }
   plane = {};
@@ -245,7 +266,7 @@ void RecordRasterizer::advance(SDL_GPUCommandBuffer *cmd,
       const Plane &target = plane(index);
       copyTexture(cmd, target.image, {0, 0, target.width, target.height}, target.before, 0, 0);
     }
-    const gpu::RecordRasterPlan &plan = planner_.plan(record, scale_, canvasShapes(), readBack_, true);
+    const gpu::RecordRasterPlan &plan = planner_.plan(record, scale_, canvasShapes(), readBack_, true, depthTest_);
     execute(cmd, plan, false);
     readBack_ = plan.readBack;
     beforeOf_ = applied_;
@@ -284,7 +305,7 @@ bool RecordRasterizer::drawInBetween(SDL_GPUCommandBuffer *cmd,
       copyTexture(cmd, target.before, whole, target.snapshot, 0, 0);
     }
   }
-  execute(cmd, planner_.plan(record, scale_, canvasShapes(), readBack_, false), true);
+  execute(cmd, planner_.plan(record, scale_, canvasShapes(), readBack_, false, depthTest_), true);
   for (int index = 0; index <= static_cast<int>(canvases_.size()); index++) {
     const Plane &target = plane(index);
     copyTexture(cmd, target.image, {0, 0, target.width, target.height}, target.snapshot, 0, 0);
@@ -301,7 +322,9 @@ bool RecordRasterizer::show(SDL_GPUCommandBuffer *cmd,
                             bool deviceAhead,
                             std::span<const std::uint16_t> vram,
                             int scale,
-                            const RecordView &view) {
+                            const RecordView &view,
+                            const present::DepthTest *depthTest) {
+  depthTest_ = depthTest;
   if (composed != nullptr && drawInBetween(cmd, *composed, scale, view)) {
     if (advanceToRecord) {
       advance(cmd, record, deviceAhead, vram);
@@ -439,6 +462,19 @@ void RecordRasterizer::execute(SDL_GPUCommandBuffer *cmd, const gpu::RecordRaste
 
   const int s = plan.scale;
   const int planes = 1 + static_cast<int>(canvases_.size());
+  // A plane any depth-tested quad lands on draws every pass of this record against its depth, cleared first.
+  std::array<bool, gpu::kRecordPlanes> depthCleared{};
+  std::array<bool, gpu::kRecordPlanes> usesDepth{};
+  for (int p = 0; p < planes; p++) {
+    const auto &quads = plan.quads[static_cast<std::size_t>(p)];
+    usesDepth[static_cast<std::size_t>(p)] =
+        std::ranges::any_of(quads, [&](const gpu::RecordQuad &quad) { return depthTested(plan, quad); });
+    Plane &target = plane(p);
+    if (usesDepth[static_cast<std::size_t>(p)] && target.depth == nullptr) {
+      target.depth = device_.makeTexture(
+          {target.width * s, target.height * s}, kDepthFormat, SDL_GPU_TEXTUREUSAGE_DEPTH_STENCIL_TARGET);
+    }
+  }
   for (std::size_t b = 0; b < plan.batches.size(); b++) {
     const gpu::RecordBatch &batch = plan.batches[b];
     captureBefore(b);
@@ -456,8 +492,20 @@ void RecordRasterizer::execute(SDL_GPUCommandBuffer *cmd, const gpu::RecordRaste
       colour.texture = inBetween ? target.inBetween : target.image;
       colour.load_op = SDL_GPU_LOADOP_LOAD;
       colour.store_op = SDL_GPU_STOREOP_STORE;
-      SDL_GPURenderPass *pass = SDL_BeginGPURenderPass(cmd, &colour, 1, nullptr);
-      SDL_BindGPUGraphicsPipeline(pass, pipeline_);
+      const bool depth = usesDepth[static_cast<std::size_t>(p)];
+      SDL_GPUDepthStencilTargetInfo depthInfo = {};
+      if (depth) {
+        bool &cleared = depthCleared[static_cast<std::size_t>(p)];
+        depthInfo.texture = target.depth;
+        depthInfo.clear_depth = 1.0f;
+        depthInfo.load_op = cleared ? SDL_GPU_LOADOP_LOAD : SDL_GPU_LOADOP_CLEAR;
+        depthInfo.store_op = SDL_GPU_STOREOP_STORE;
+        depthInfo.stencil_load_op = SDL_GPU_LOADOP_DONT_CARE;
+        depthInfo.stencil_store_op = SDL_GPU_STOREOP_DONT_CARE;
+        cleared = true;
+      }
+      SDL_GPURenderPass *pass = SDL_BeginGPURenderPass(cmd, &colour, 1, depth ? &depthInfo : nullptr);
+      SDL_BindGPUGraphicsPipeline(pass, depth ? slotPipeline_ : pipeline_);
       SDL_BindGPUVertexStorageBuffers(pass, 0, &quads_.buffer, 1);
       SDL_GPUSampler *nearest = device_.nearestSampler();
       // With no capture the binding is never sampled: only a held read-back plans read-back ops.
@@ -467,11 +515,12 @@ void RecordRasterizer::execute(SDL_GPUCommandBuffer *cmd, const gpu::RecordRaste
       SDL_BindGPUFragmentSamplers(pass, 0, snapshots, 3);
       SDL_GPUBuffer *fragmentBuffers[3] = {ops_.buffer, cluts_.buffer, pixels_.buffer};
       SDL_BindGPUFragmentStorageBuffers(pass, 0, fragmentBuffers, 3);
-      SDL_DrawGPUPrimitives(pass,
-                            (range.endQuad - range.firstQuad) * 6,
-                            1,
-                            (firstQuad[static_cast<std::size_t>(p)] + range.firstQuad) * 6,
-                            0);
+      const auto &quads = plan.quads[static_cast<std::size_t>(p)];
+      drawQuads(pass,
+                plan,
+                std::span(quads).subspan(range.firstQuad, range.endQuad - range.firstQuad),
+                firstQuad[static_cast<std::size_t>(p)] + range.firstQuad,
+                depth);
       SDL_EndGPURenderPass(pass);
     }
     // Every pass of the batch read the snapshots as they were; refresh them only now.
@@ -487,6 +536,30 @@ void RecordRasterizer::execute(SDL_GPUCommandBuffer *cmd, const gpu::RecordRaste
     }
   }
   captureBefore(plan.batches.size());
+}
+
+void RecordRasterizer::drawQuads(SDL_GPURenderPass *pass,
+                                 const gpu::RecordRasterPlan &plan,
+                                 std::span<const gpu::RecordQuad> quads,
+                                 std::uint32_t firstVertexQuad,
+                                 bool depthTarget) {
+  if (!depthTarget) {
+    SDL_BindGPUGraphicsPipeline(pass, pipeline_);
+    SDL_DrawGPUPrimitives(pass, static_cast<Uint32>(quads.size()) * 6, 1, firstVertexQuad * 6, 0);
+    return;
+  }
+  std::size_t run = 0;
+  while (run < quads.size()) {
+    const bool tests = depthTested(plan, quads[run]);
+    std::size_t end = run + 1;
+    while (end < quads.size() && depthTested(plan, quads[end]) == tests) {
+      end++;
+    }
+    SDL_BindGPUGraphicsPipeline(pass, tests ? depthPipeline_ : slotPipeline_);
+    SDL_DrawGPUPrimitives(
+        pass, static_cast<Uint32>(end - run) * 6, 1, (firstVertexQuad + static_cast<std::uint32_t>(run)) * 6, 0);
+    run = end;
+  }
 }
 
 MappedTransfer RecordRasterizer::download(const RecordPicture &picture) {

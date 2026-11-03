@@ -69,7 +69,9 @@ void Gte::writeData(std::uint32_t reg, std::uint32_t value) {
 
 gte::ProjectedVertex Gte::projected(std::uint32_t entry) {
   bind();
-  return {GTE_ReadDR(gte::kSxy0 + entry), regs_.places[entry]};
+  GtePlace place = regs_.places[entry];
+  place.z *= depthUnit_;
+  return {GTE_ReadDR(gte::kSxy0 + entry), place};
 }
 
 std::uint32_t Gte::readControl(std::uint32_t reg) {
