@@ -17,12 +17,24 @@
 
 namespace psx::render {
 
+bool RenderState::recordPresents() const {
+  Core &core = game_.core;
+  // 24bpp scanout reads VRAM bytes, which the scaled image does not hold; the device picture stands.
+  return core.rsub.mode.path() == present::RenderPath::Record && !core.gpuDevice().displayArea().depth24;
+}
+
+void RenderState::latchDisplay(gpu::VramRect display) {
+  if (!recordPresents()) {
+    return;
+  }
+  const gpu::RecordRect shown = gpu::clampedVramRect(display);
+  present::latchRecordDisplay(game_.core, {shown.x1 - shown.x0, shown.y1 - shown.y0});
+}
+
 void RenderState::presentRecord(present::PresentInputs &inputs) {
   presentsRecord_ = false;
   Core &core = game_.core;
-  const gpu::DisplayArea area = core.gpuDevice().displayArea();
-  // 24bpp scanout reads VRAM bytes, which the scaled image does not hold; the device picture stands.
-  if (core.rsub.mode.path() != present::RenderPath::Record || area.depth24) {
+  if (!recordPresents()) {
     return;
   }
   const int scale = videoStatus(core).ires;
@@ -30,8 +42,7 @@ void RenderState::presentRecord(present::PresentInputs &inputs) {
     record_ = std::make_unique<RecordRasterizer>(device_);
   }
   const gpu::RecordRect display = gpu::clampedVramRect({inputs.sx, inputs.sy, inputs.native_w, inputs.disp_h});
-  const present::GuestProjectionPlan plan =
-      present::latchRecordDisplay(core, {display.x1 - display.x0, display.y1 - display.y0});
+  const present::GuestProjectionPlan &plan = core.game->guestDisplay.plan();
   const RecordView view{display, plan.presentationHorizontalMargin};
   const present::FrameRecord &record = game_.presentation.currentRecord();
   const present::FrameRecord *composed = game_.presentation.composedRecord();

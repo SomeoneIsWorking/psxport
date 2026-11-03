@@ -136,6 +136,7 @@ void RenderState::buildDisplay(gpu::VramRect display) {
     return;
   }
   bringUp();
+  latchDisplay(display);
   const Core &core = game_.core;
   const int width = present::presentDisplayWidth(
       present::widePresentation(core), present::widePresentationWidth(core), display.width);
