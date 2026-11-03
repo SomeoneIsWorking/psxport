@@ -572,8 +572,10 @@ iteration where the focused panel did not present, and skips the pace when the p
 samples the session's newest present image (`RenderState::lastPresented`; `title-host.md` for when a
 panel counts as ready).
 
-A pane's present image is filled, not letterboxed: `PresentInputs::fill` centre-crops the picture to
-the image's shape at its displayed 4:3 aspect, at the rendered resolution. The
+A pane's present image is filled, not letterboxed: `present::fitPicture` (`viewport_layout.h`) centre-crops the
+source to the image's shape at its displayed 4:3 aspect, a guest picture at the rendered resolution
+(`PresentInputs::fill`) and a host picture (a native movie) through its sampled uv rectangle; the picture then
+covers the whole image. The
 selector draws each picture 1:1 at its own size, centred on its panel's cover rectangle and cut by the
 seams (`PickerPanes`), so nothing is cropped to fit or magnified.
 
