@@ -1,4 +1,4 @@
-// Required Beetle GTE ABI hooks. The projection push keeps the bound register file's unrounded FIFO places;
+// Required Beetle GTE ABI hooks. The projection push keeps the bound register file's unrounded FIFO places and depths;
 // the vendor's value-keyed PGXP memory tracking is not enabled.
 //
 // MDFNSS_StateAction (the save-state chunk codec, mednafen/state.c) is NOT stubbed here any more:
@@ -9,11 +9,11 @@
 
 #include <cstdint>
 
-extern "C" void PGXP_pushSXYZ2f(float x, float y, float, uint32_t) {
+extern "C" void PGXP_pushSXYZ2f(float x, float y, float z, uint32_t) {
   GteRegs *regs = GTE_CurState();
   regs->places[0] = regs->places[1];
   regs->places[1] = regs->places[2];
-  regs->places[2] = GtePlace{x, y};
+  regs->places[2] = GtePlace{x, y, z};
 }
 
 extern "C" int PGXP_NCLIP_valid(uint32_t, uint32_t, uint32_t) {

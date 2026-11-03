@@ -19,6 +19,7 @@ void place(present::RecordVertex &vertex, const PacketView &packet, std::size_t 
     return;
   }
   const GtePlace &at = *packet.places[word];
+  vertex.depth = at.z;
   if (!placesWhole(vertex.x, at.x) || !placesWhole(vertex.y, at.y)) {
     return;
   }
@@ -37,6 +38,10 @@ present::RecordVertex colourVertex(std::uint32_t colourWord) {
   return vertex;
 }
 
+std::size_t polygonPositionWord(std::size_t index, const Gp0PrimitiveFlags &flags, bool isFirst) {
+  return index + ((isFirst || flags.gouraud) ? 1u : 0u);
+}
+
 present::RecordVertex polygonVertex(std::span<const std::uint32_t> words,
                                     std::size_t &index,
                                     const Gp0PrimitiveFlags &flags,
@@ -49,6 +54,7 @@ present::RecordVertex polygonVertex(std::span<const std::uint32_t> words,
   // A flat polygon's later vertex takes the first one's colour, not its place.
   vertex.subX = 0.0f;
   vertex.subY = 0.0f;
+  vertex.depth = 0.0f;
   if (flags.textured) {
     const Gp0TextureCoord coord = Gp0Command(words[index++]).textureCoord();
     vertex.u = static_cast<std::uint8_t>(coord.u);
@@ -126,7 +132,7 @@ std::optional<present::DrawPrimitive> decodePacketPrimitive(PacketView packet) {
     primitive.vertexCount = command.polygonVertexCount();
     std::size_t index = 0;
     for (int v = 0; v < primitive.vertexCount; v++) {
-      const std::size_t position = index + ((v == 0 || flags.gouraud) ? 1u : 0u);
+      const std::size_t position = polygonPositionWord(index, flags, v == 0);
       present::RecordVertex &vertex = primitive.vertices[static_cast<std::size_t>(v)];
       vertex = polygonVertex(words, index, flags, primitive.vertices[0], v == 0);
       place(vertex, packet, position);

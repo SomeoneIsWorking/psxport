@@ -152,7 +152,8 @@ SDL_GPUGraphicsPipeline *RenderDevice::makePipeline(const ShaderCode &vertex,
                                                     const ShaderCode &fragment,
                                                     SDL_GPUTextureFormat format,
                                                     const SDL_GPUColorTargetBlendState *blend,
-                                                    const SDL_GPUVertexInputState *input) {
+                                                    const SDL_GPUVertexInputState *input,
+                                                    const DepthTarget *depth) {
   SDL_GPUShader *vs = makeShader(device_, vertex, SDL_GPU_SHADERSTAGE_VERTEX);
   SDL_GPUShader *fs = makeShader(device_, fragment, SDL_GPU_SHADERSTAGE_FRAGMENT);
   SDL_GPUColorTargetDescription target = {};
@@ -172,6 +173,11 @@ SDL_GPUGraphicsPipeline *RenderDevice::makePipeline(const ShaderCode &vertex,
   info.multisample_state.sample_count = SDL_GPU_SAMPLECOUNT_1;
   info.target_info.color_target_descriptions = &target;
   info.target_info.num_color_targets = 1;
+  if (depth != nullptr) {
+    info.depth_stencil_state = depth->state;
+    info.target_info.depth_stencil_format = depth->format;
+    info.target_info.has_depth_stencil_target = true;
+  }
   SDL_GPUGraphicsPipeline *pipeline = SDL_CreateGPUGraphicsPipeline(device_, &info);
   GPUCHK(pipeline, "SDL_CreateGPUGraphicsPipeline");
   SDL_ReleaseGPUShader(device_, vs);

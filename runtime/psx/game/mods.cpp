@@ -16,6 +16,7 @@ Var<long> cv_aspect("aspect", ASPECT_4_3, {lucent::cvar::Persistence::Saved, "PS
 Var<long> cv_ires("ires", 1, {lucent::cvar::Persistence::Saved, "PSXPORT_IRES"});
 // PSXPORT_FPS60 is this run's choice at the Override layer; the saved one stays in the file.
 Var<bool> cv_fps60("fps60", false, {lucent::cvar::Persistence::Saved, "PSXPORT_FPS60"});
+Var<bool> cv_depth("depth", true, {lucent::cvar::Persistence::Saved, "PSXPORT_DEPTH"});
 Var<double> cv_picker_selected_share("picker_selected_share",
                                      0.6,
                                      {lucent::cvar::Persistence::Saved, "PSXPORT_PICKER_SELECTED_SHARE"});
@@ -24,7 +25,7 @@ Var<double> cv_picker_width_response("picker_width_response",
                                      0.25,
                                      {lucent::cvar::Persistence::Saved, "PSXPORT_PICKER_WIDTH_RESPONSE"});
 const psx::config::Registration kRegistration{
-    cv_aspect, cv_ires, cv_fps60, cv_picker_selected_share, cv_picker_slant, cv_picker_width_response};
+    cv_aspect, cv_ires, cv_fps60, cv_depth, cv_picker_selected_share, cv_picker_slant, cv_picker_width_response};
 
 constexpr long kMaxIres = 4;
 
@@ -62,6 +63,7 @@ void Mods::reload() {
   pickerSlantPerWidth = static_cast<float>(cv_picker_slant.get());
   pickerWidthResponse = static_cast<float>(cv_picker_width_response.get());
   fps60 = temporalInterpolationSupported_ && cv_fps60.get() ? 1 : 0;
+  depth = cv_depth.get() ? 1 : 0;
 }
 
 // Only what the player changed reaches the file; an environment override stays this run's.
@@ -73,6 +75,7 @@ void Mods::save() const {
   };
   keep(cv_aspect, static_cast<long>(aspect));
   keep(cv_ires, static_cast<long>(ires));
+  keep(cv_depth, depth != 0);
   keep(cv_picker_selected_share, pickerSelectedShare);
   keep(cv_picker_slant, pickerSlantPerWidth);
   keep(cv_picker_width_response, pickerWidthResponse);

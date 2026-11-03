@@ -7,7 +7,9 @@
 
 #include <cmath>
 #include <cstdint>
+#include <initializer_list>
 #include <optional>
+#include <utility>
 
 namespace psx::gte {
 
@@ -36,7 +38,7 @@ public:
   [[nodiscard]] constexpr ProjectedVertex steppedTo(std::uint32_t word) const {
     const GtePlace from = whole(word_).place_;
     const GtePlace to = whole(word).place_;
-    return {word, {place_.x + to.x - from.x, place_.y + to.y - from.y}};
+    return {word, {place_.x + to.x - from.x, place_.y + to.y - from.y, place_.z}};
   }
 
   [[nodiscard]] constexpr std::uint32_t word() const {
@@ -50,6 +52,19 @@ private:
   std::uint32_t word_ = 0;
   GtePlace place_{};
 };
+
+// The depth of a point a producer places at screen-space weights of projected points' depths, each (depth, weight),
+// the weights summing to one: 1/z is linear across the screen. 0 when any depth is unknown.
+[[nodiscard]] inline float screenBlendDepth(std::initializer_list<std::pair<float, float>> points) {
+  float inverse = 0.0f;
+  for (const auto &[depth, weight] : points) {
+    if (depth <= 0.0f) {
+      return 0.0f;
+    }
+    inverse += weight / depth;
+  }
+  return inverse > 0.0f ? 1.0f / inverse : 0.0f;
+}
 
 // A packet vertex word with no place of its own: it lies on the pixel it names.
 struct VertexWord {

@@ -217,12 +217,13 @@ public:
     write(address, value);
   }
 
-  // A vertex into the word at `address`; host memory keeps its place, the guest only its word.
+  // A vertex into the word at `address`; host memory keeps its place, the guest its word and depth.
   void storeVertex(std::uint32_t address, const gte::ProjectedVertex &vertex) const {
     if (host_ != nullptr) {
       host_->writeVertex(address, vertex);
     } else {
       mem_w32(address, vertex.word());
+      core_->vertexDepths.note(address, vertex.word(), vertex.place().z);
     }
   }
   // The vertex a body stored at `address`, on its word's pixel where no place was kept.
@@ -234,7 +235,13 @@ public:
   [[nodiscard]] gte::ProjectedVertex loadVertex(std::uint32_t address, gte::VertexWord word) const {
     gte::WordPlace place;
     readPlaces(address, std::span(&place, 1));
-    return place ? gte::ProjectedVertex(word.value, *place) : gte::ProjectedVertex::whole(word.value);
+    if (place) {
+      return {word.value, *place};
+    }
+    // A word with no place keeps the depth a draw site stored with it into the guest, while it holds that word.
+    GtePlace at = gte::ProjectedVertex::whole(word.value).place();
+    at.z = core_->vertexDepths.at(address, mem_r32(address));
+    return {word.value, at};
   }
 
 private:

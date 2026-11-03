@@ -3,10 +3,12 @@
 #pragma once
 #include <stdint.h>
 
-// A projected point's screen position before RTPS/RTPT truncate it into an SXY word.
+// A projected point's screen position before RTPS/RTPT truncate it into an SXY word, and the view depth it was
+// divided by (Beetle's SZ3, at least H/2); depth 0 for a point no projection made.
 typedef struct GtePlace {
   float x;
   float y;
+  float z;
 } GtePlace;
 
 typedef struct GteRegs {

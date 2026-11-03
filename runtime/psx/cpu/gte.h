@@ -55,6 +55,7 @@ public:
   }
 
   // SXY entry 0..2 with its place: from the projection that pushed it, or its word's pixel once a write replaced it.
+  // Its depth is in the title's common view units: SZ times the open DepthUnit's scale.
   gte::ProjectedVertex projected(std::uint32_t entry);
 
   // The whole register file, flags and SXY places, copied without running a read port.
@@ -90,9 +91,32 @@ private:
     return words;
   }
 
+  friend class DepthUnit;
+
   Core &core_;
   GteRegs regs_{};
   GtePreOpObserver observer_;
+  float depthUnit_ = 1.0f;
+};
+
+// While open, `projected` depths are SZ times `scale`: a draw site whose translation and model are scaled from the
+// title's common view units (a moby drawn at its own position shift) names that scale, so depths compare across draws.
+class DepthUnit {
+public:
+  DepthUnit(Gte &gte, float scale) : gte_(gte), previous_(gte.depthUnit_) {
+    gte_.depthUnit_ = scale;
+  }
+  DepthUnit(const DepthUnit &) = delete;
+  DepthUnit &operator=(const DepthUnit &) = delete;
+  DepthUnit(DepthUnit &&) = delete;
+  DepthUnit &operator=(DepthUnit &&) = delete;
+  ~DepthUnit() {
+    gte_.depthUnit_ = previous_;
+  }
+
+private:
+  Gte &gte_;
+  float previous_;
 };
 
 } // namespace psx::cpu

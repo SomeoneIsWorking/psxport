@@ -104,6 +104,15 @@ int edgeX(uint edge, uint step, int yi) {
     return int(word(edge + 1u) + productHigh + carry);
 }
 
+float depthWord(uint field) { return uintBitsToFloat(word(kOpDepth + field)); }
+
+// A depth-tested triangle's view depth at native VRAM point `at`, as log2(z) / 16 over SZ's 16-bit range.
+float fragmentDepth(vec2 at) {
+    float inverse = depthWord(kDepthInverse) + depthWord(kDepthSlopeX) * (at.x - depthWord(kDepthOriginX)) +
+                    depthWord(kDepthSlopeY) * (at.y - depthWord(kDepthOriginY));
+    return clamp(log2(max(1.0 / max(inverse, 1.0e-6), 1.0)) / 16.0, 0.0, 1.0);
+}
+
 void write(uint value) {
     o_col = vec4(float(value & 0xFFu) / 255.0, float((value >> 8) & 0xFFu) / 255.0, 0.0, 1.0);
 }
@@ -117,6 +126,8 @@ void main() {
     ivec2 n = (p + kVramWidth * S) / S - kVramWidth;
     uint flags = word(kOpFlags);
     uint kind = flags & kOpKindMask;
+    // Only a depth-tested pipeline writes it; every other op draws with neither test nor write.
+    gl_FragDepth = (flags & kOpDepthTest) != 0u ? fragmentDepth((vec2(p) + 0.5) / float(S)) : 1.0;
     if ((flags & kOpSkipRows) != 0u && uint(n.y & 1) == ((flags & kOpSkipParity) != 0u ? 1u : 0u)) {
         discard;
     }

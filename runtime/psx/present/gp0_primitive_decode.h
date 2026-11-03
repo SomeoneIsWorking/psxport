@@ -16,6 +16,8 @@
 namespace psx::gpu {
 
 present::RecordVertex colourVertex(std::uint32_t colourWord);
+// The word holding the position of the polygon vertex polygonVertex reads at `index`.
+std::size_t polygonPositionWord(std::size_t index, const Gp0PrimitiveFlags &flags, bool isFirst);
 // The polygon vertex at `words[index]`, advancing `index`; a flat polygon's later vertices take
 // `first`'s colour. Position is as written, before the draw offset.
 present::RecordVertex polygonVertex(std::span<const std::uint32_t> words,
