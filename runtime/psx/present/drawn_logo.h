@@ -20,7 +20,8 @@ struct LogoTexture {
 };
 
 // Rasterizes the record's textured primitives that sample one of `textures` into one image over their screen
-// bounds; texel 0 stays transparent. nullopt when none was drawn.
+// bounds; texel 0 stays transparent. nullopt when none was drawn or the draws hold too little artwork to be the
+// wordmark yet.
 std::optional<psx::host::LogoImage>
 drawnLogo(const FrameRecord &record, std::span<const std::uint16_t> vram, std::span<const LogoTexture> textures);
 

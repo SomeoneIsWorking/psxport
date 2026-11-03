@@ -151,7 +151,8 @@ return` or the ESC row ends it as `ReturnedToSelector` and the selector is rebui
   when it lost focus) greyed, and its logo. A panel never focused yet has no picture; it shows its logo
   on black when one is saved.
 - **The logo comes from the running game.** `GameRuntime::panelLogo(Core &)` reads the title's own
-  logo from its live machine (its title screen's own draws from VRAM while that screen is up). The first read in a selector
+  logo from its live machine (its title screen's own draws from VRAM while that screen is up). It is taken once
+  two steps in a row read it at one size, so a logo still sliding or spinning in is not kept. The first read in a selector
   replaces the panel's logo and is saved (`SavedLogo`, `picker-logo.rgba` in the title's user-data
   directory, beside `disc-path`); every later selector loads it when it creates its panels, so a panel
   shows its logo from the selector's first frame without running its title. A title never focused on

@@ -73,7 +73,22 @@ presents `fields=2/2` at t 0.5 and 1, 1210 `1/1`). Crash: `psx-crash/scratch/pic
 - `SavedLogo` repeated `SavedDisc`'s user-data path and `.pending` rename; both now keep their file through
   `TitleUserFile`, the one owner of a title user-data file and its whole-file replace.
 
+## Follow-up 2 (2026-11-03, picker2 review)
+- Before the focused panel boots, a machine verb is refused (`focused panel not booted`) instead of reading the
+  selector's empty machine: `DbgServer::routeMachineVerbsToPanel` is set when the channel starts and every
+  selector frame. Not reproduced in a run: panel 0 boots in the selector's first frame, before a client's first
+  command arrives.
+- `SavedLogo` and `SavedDisc` keep their files through `TitleUserFile` (one user-data path and `.pending` rename).
+- Logos come from the title screen's draws (`psx::present::drawnLogo`), taken once two steps in a row read the same
+  size. Spyro 1, 2 and 3 supply them (psx-spyro 0201). `psx-spyro/scratch/picker2/final1`: each is read on
+  its title screen, unfocused counters stay fixed (Spyro 3 `steps=1764` from 49 s to the pick), `pick spyro1`
+  starts Spyro the Dragon and `rw 800757D8` reads its machine (0x0D). `final2/sheet.png`: the next process draws
+  all three saved logos in its first frame, Spyro 2 and 3 never focused (`steps=0 insns=0`).
+
 ## Open
+- Crash 1/2/3, Tomba! 1/2 and Spider-Man 1/2 supply no logo yet. Crash's title scene id (C1 0x19, C2/C3 0x3C) also
+  covers the publisher intros, so a scene gate read the wrong art (psx-crash 0036); each needs its title menu's
+  own state word.
 - Wall-clock pacing of the focused demo was not judged: host load stayed far above 4 for the whole pass.
 - No all-title real-time run since the psxport changes (same load); Spyro and Crash were rebuilt, the other nine
   products were not.
