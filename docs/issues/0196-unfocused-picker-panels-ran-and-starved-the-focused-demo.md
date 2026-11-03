@@ -93,12 +93,32 @@ presents `fields=2/2` at t 0.5 and 1, 1210 `1/1`). Crash: `psx-crash/scratch/pic
 - Crash 3's attract hang is fixed (psx-crash 0035): the loader's VBlank-counter poll ends the host frame.
 - Enter Electro now shows its intro movie, title and DEMO (psx-spider-man 0039: the libapi DMA callback table and
   the heap-1 overlay window); in the DEMO only the actors draw and the city is black, not traced.
-- Tomba! 1 is not stuck: its attract loop is the intro movie whose last segment is the PRESS START title, about
-  4 s, then the movie restarts (psx-tomba `titles/tomba1/docs/project-state.md` S004).
+- Tomba! 1 is not stuck: its attract loop is the intro movie whose last segment is the PRESS START title, held
+  about 890 guest fields, then the movie restarts (psx-tomba `titles/tomba1/docs/project-state.md` S004).
 - Crash, Tomba and Spider-Man pickers walked hidden (each repo's `scratch/picker3/pw/sheet.png` and `run.log`): cold
   panels black with `steps=0`, every unfocused panel's step count unchanged in all 3335/3293/5105 `panels:` lines,
-  focused titles run their intros and demos, and `pick` starts the title full-window (Crash 1 to its title and
-  story intro, `psx-crash/scratch/picker3/pw2`).
+  and `pick` starts the title full-window (Crash 1 to its title and story intro, `psx-crash/scratch/picker3/pw2`).
+  Tomba! 2's focused panel was black there (Follow-up 4).
+
+## Follow-up 4 (2026-11-03, picker3 review)
+- `drawnLogo` no longer rasterizes: it replays the logo's recorded primitives through gpu.c on a scratch
+  `GpuDevice` over the live VRAM, with the E6 mask bit forced so the written pixels are the alpha; the bounds
+  follow gpu.c's exclusive right column and bottom row. The "1 visible texel in 50" test is gone.
+- A logo is taken on the second step in a row with the title's gate open (`PanelSessions::takeLogo`), not after
+  two equal sizes; Spyro's gates are each title screen's resting-logo state (psx-spyro 0201). `logoRect` draws
+  every panel's logo at the whole texel scale at which the largest one fits, so Spyro 1/2/3 share one scale
+  (`psx-spyro/scratch/picker3/r4/sheet.png`).
+- Tomba! 2's panel stayed black while focused: its native boot movie and SCEA card present through
+  `RenderState::buildImage`, which never told the pane host, so the selector never composited them (also in the
+  earlier `psx-tomba/scratch/picker3/pw`, where Follow-up 3 called it fine). Every build now ends in
+  `RenderState::finishBuild`. `psx-tomba/scratch/picker3/pw4/sheet.png`: Tomba! 2's movie in its panel beside
+  Tomba! 1's greyed still, then picked full-window.
+- Walks with 40-45 s holds (hidden, unpaced, sink 3840x2160, ires 0, fps60 1), each repo's `scratch/picker3/pw3`
+  (Tomba `pw4`): Crash 1/2 titles and Crash 3 through four DEMO levels and `pick crash3` to its title; Spider-Man 1
+  menu and demo, Enter Electro title, movie and DEMO; Tomba! 1 movie, Tomba! 2 movie. Unfocused step counts
+  never change in any `panels:` line. Tomba! 1's title is reached at guest field ~14,390 (`t1g/title_loop.png`).
+- The `focused panel not booted` refusal stays unexercised: the focused panel boots before the channel serves
+  its first command.
 
 ## Open
 - Crash 1/2/3, Tomba! 1/2 and Spider-Man 1/2 supply no logo yet and answer `showsOwnLogo` false. Crash has no

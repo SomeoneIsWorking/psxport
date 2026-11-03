@@ -47,6 +47,13 @@ std::span<const psx::render::Pane> PickerPanes::build(const PickerLayout &layout
   const int surfaceHeight = panels.empty() ? 0 : layout.panel(0).bounds.h;
   const int dividerPixels =
       std::max(kDividerMinimumPixels, static_cast<int>(static_cast<float>(surfaceHeight) * kDividerPerHeight));
+  LogoSize largest;
+  for (const PanelSource &source : panels) {
+    if (source.logo != nullptr && !source.logo->empty()) {
+      largest.width = std::max(largest.width, source.logo->width());
+      largest.height = std::max(largest.height, source.logo->height());
+    }
+  }
   for (std::size_t index = 0; index < panels.size(); ++index) {
     const PanelSource &source = panels[index];
     const bool isSelected = static_cast<int>(index) == selected;
@@ -65,9 +72,10 @@ std::span<const psx::render::Pane> PickerPanes::build(const PickerLayout &layout
       panes_.push_back(picture);
     }
 
-    // The title's own logo at whole texels, so the nearest sampler keeps it sharp.
+    // The title's own logo at whole texels and every panel's one scale, so the nearest sampler keeps it sharp.
     if (source.logo != nullptr && !source.logo->empty()) {
-      const psx::present::PaneRect box = geometry.logoRect(source.logo->width(), source.logo->height());
+      const psx::present::PaneRect box =
+          geometry.logoRect(LogoSize{source.logo->width(), source.logo->height()}, largest);
       psx::render::Pane logo{};
       logo.texture = source.logo->texture(device);
       logo.x = static_cast<float>(box.x);

@@ -12,8 +12,8 @@ constexpr float kSettled = 0.0005f;
 
 } // namespace
 
-psx::present::PaneRect PanelLayout::logoRect(int texelWidth, int texelHeight) const {
-  if (texelWidth <= 0 || texelHeight <= 0 || cover.h <= 0) {
+psx::present::PaneRect PanelLayout::logoRect(LogoSize logo, LogoSize largest) const {
+  if (logo.width <= 0 || logo.height <= 0 || largest.width <= 0 || largest.height <= 0 || cover.h <= 0) {
     return psx::present::PaneRect{cover.x, cover.y, 0, 0};
   }
   const double surfaceHeight = static_cast<double>(cover.h);
@@ -21,10 +21,10 @@ psx::present::PaneRect PanelLayout::logoRect(int texelWidth, int texelHeight) co
   const auto seamAt = [&](int topX, int bottomX, double y) {
     return static_cast<double>(topX) + static_cast<double>(bottomX - topX) * y / surfaceHeight;
   };
-  // The rectangle at `scale`, or an empty one when it crosses a seam or the top edge.
-  const auto placed = [&](double scale) {
-    const double width = static_cast<double>(texelWidth) * scale;
-    const double height = static_cast<double>(texelHeight) * scale;
+  // `size` at `scale`, or an empty rectangle when it crosses a seam or the top edge.
+  const auto placed = [&](LogoSize size, double scale) {
+    const double width = static_cast<double>(size.width) * scale;
+    const double height = static_cast<double>(size.height) * scale;
     const double top = centreY - height / 2.0;
     const double bottom = top + height;
     const double left =
@@ -39,11 +39,10 @@ psx::present::PaneRect PanelLayout::logoRect(int texelWidth, int texelHeight) co
                                   static_cast<int>(std::lround(width)),
                                   static_cast<int>(std::lround(height))};
   };
-  const int widest = std::max(cover.w / texelWidth, 0);
+  const int widest = std::max(cover.w / largest.width, 0);
   for (int scale = widest; scale >= 1; --scale) {
-    const psx::present::PaneRect rect = placed(static_cast<double>(scale));
-    if (rect.w > 0) {
-      return rect;
+    if (placed(largest, static_cast<double>(scale)).w > 0) {
+      return placed(logo, static_cast<double>(scale));
     }
   }
   // Smaller than its texels: the largest fraction that fits.
@@ -51,13 +50,13 @@ psx::present::PaneRect PanelLayout::logoRect(int texelWidth, int texelHeight) co
   double high = 1.0;
   for (int step = 0; step < 24; ++step) {
     const double middle = (low + high) / 2.0;
-    if (placed(middle).w > 0) {
+    if (placed(largest, middle).w > 0) {
       low = middle;
     } else {
       high = middle;
     }
   }
-  return placed(low);
+  return placed(logo, low);
 }
 
 PickerLayout::PickerLayout(int panelCount, Motion motion)

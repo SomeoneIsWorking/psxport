@@ -26,7 +26,7 @@ PanelSessions::PanelSessions(const TitleCatalog &catalog, const PickerContent &c
   tried_.assign(panels, false);
   logos_.resize(panels);
   logoRead_.assign(panels, false);
-  lastReadSize_.assign(panels, {0, 0});
+  gateOpenBefore_.assign(panels, false);
   for (int panel = 0; panel < content_.panelCount(); ++panel) {
     // A panel shows its logo from the first frame without running its title.
     if (std::optional<LogoImage> saved = SavedLogo(*content_.panelTitle(panel).identity).load()) {
@@ -100,11 +100,10 @@ void PanelSessions::takeLogo(int panel, TitleSession &session) {
   }
   Core &core = session.core();
   std::optional<LogoImage> image = core.runtime.panelLogo(core);
-  const std::pair<int, int> size = image ? std::pair{image->width, image->height} : std::pair{0, 0};
-  // A logo still sliding or spinning in reads at a new size each step.
-  const bool still = image && size == lastReadSize_[index];
-  lastReadSize_[index] = size;
-  if (still) {
+  // The gate is read after the step, so the frame of the step it first opens on may predate it.
+  const bool drawnInsideGate = image && gateOpenBefore_[index];
+  gateOpenBefore_[index] = image.has_value();
+  if (drawnInsideGate) {
     logoRead_[index] = true;
     SavedLogo(*session.title().identity).save(*image);
     logos_[index] = std::make_unique<PanelLogo>(std::move(*image));

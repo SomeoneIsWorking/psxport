@@ -19,9 +19,9 @@ struct LogoTexture {
   std::optional<psx::gpu::VramPoint> clut;
 };
 
-// Rasterizes the record's textured primitives that sample one of `textures` into one image over their screen
-// bounds; texel 0 stays transparent. nullopt when none was drawn or the draws hold too little artwork to be the
-// wordmark yet.
+// gpu.c draws the record's textured primitives that sample one of `textures` again, over a cleared scratch
+// device, into one image over their screen bounds; a pixel they did not write is transparent. nullopt when
+// none was drawn or none wrote a pixel.
 std::optional<psx::host::LogoImage>
 drawnLogo(const FrameRecord &record, std::span<const std::uint16_t> vram, std::span<const LogoTexture> textures);
 
