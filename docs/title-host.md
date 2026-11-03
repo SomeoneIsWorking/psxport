@@ -104,8 +104,8 @@ and a title's own run-end lines come from `reportRun`.
 `GameRuntime` carries two optional virtuals the host asks, each with a neutral default:
 
 - `panelLogo(Core &)`: the title's own logo, read from its live machine; `nullopt` until there is one.
-- `playsAttractDemo(Core &)`: the title's own attract demo is playing; `false` by default, so the
-  focused panel then never draws the logo over its picture.
+- `showsOwnLogo(Core &)`: the title's picture shows its own logo right now (its title screen); `false`
+  by default, so a panel with a logo always draws it.
 - `reportRun(Core &)`: title-specific lines after the framework's `run complete` line.
 
 ## Data flow
@@ -134,19 +134,25 @@ return` or the ESC row ends it as `ReturnedToSelector` and the selector is rebui
   instruction count).
 - **Focus change.** The old focus is paused (its guest, VRAM and last present stay exactly as they
   were) and released from the audio device; the new one is resumed, or booted from power-on the first
-  time it is focused, and claims audio. The focused panel never sees the player's pad.
+  time it is focused, and claims audio. No panel ever sees the player's pad: Spyro 1's demo ends on any
+  button, and a triangle tap on the selector during it leaves the demo running.
 - **The attract demo is the title's own.** A focused panel runs its title's boot path with no input:
   publisher cards, title screen, and the demo the title itself starts when its title screen times
-  out, looping as on the console. Every title today reaches its demo that way, so there is no route
-  hook; a title whose boot never reaches a demo without input would add one to `GameRuntime`.
+  out, looping as on the console. That is the only route today; a title whose attract loop needs
+  another route would supply it through `GameRuntime`. Walked in the selector (issue 0196): Spyro 1,
+  Crash 2, Spider-Man 1 and Tomba! 2 reach their demos; Crash 3 hangs on the way (psx-crash 0035),
+  Enter Electro presents only black (psx-spider-man 0039), Tomba! 1 showed only its opening movie in
+  21812 steps; Spyro 2/3 and Crash 1 reach theirs per their title docs, not walked here.
 - **Unfocused panels show their still.** A paused panel draws its newest present (the frame it was on
   when it lost focus) greyed, and its logo. A panel never focused yet has no picture.
 - **The logo comes from the running game.** `GameRuntime::panelLogo(Core &)` reads the title's own
   logo from its live machine (its VRAM while its title screen is up); the panel keeps the first one it
-  gets for the selector's life. No committed image of game art is drawn. `PickerPanes` draws it at 0.6
-  of the panel's average width, its centre at a fifth of the panel's height. On the focused panel it is
-  drawn only while `GameRuntime::playsAttractDemo(Core &)` says the title's own demo plays, since its
-  title screen shows that logo itself; unfocused panels always draw it.
+  gets for the selector's life. No committed image of game art is drawn. `PanelLayout::logoRect` sizes it
+  at the largest whole multiple of its texels that stays inside the panel's seams over the rows it covers
+  (shrunk to fit only when one multiple does not), its centre at a fifth of the panel's height, so the
+  nearest sampler keeps it sharp and a narrow panel never cuts it. It is hidden while
+  `GameRuntime::showsOwnLogo(Core &)` says the panel's picture already shows it. The question is asked of
+  every panel's machine, focused or paused: a paused machine holds the state its still was drawn from.
 - **One process, one window.** The window and GPU device are `ProductHost`'s and outlive every session.
 
 The selector's frame follows the focused panel's presents: the picker is that panel's pane host
@@ -223,7 +229,7 @@ the event drain, so it reaches the run-end report like a client `quit`.
 
 1. Implement `TitleCatalog` with the title identities (measured from the executables) and one
    `GameRuntime` per title.
-2. Override `panelLogo` and `playsAttractDemo` where the title can say them.
+2. Override `panelLogo` and `showsOwnLogo` where the title can say them.
 3. Declare `std::unique_ptr<psx::host::TitleCatalog> createCatalog();` in the catalog header and build
    the product with `psxport_add_product(<target> CATALOG <ns>::createCatalog HEADER <header>
    [SOURCES ...] [LIBRARIES ...])` (`cmake/psxport.cmake`). The title writes no `main`.

@@ -25,14 +25,12 @@ struct PanelLayout {
     int leftBottomX = 0, rightBottomX = 0; // at y = the surface's height
   };
   Seams seams;
-  int averageWidth() const {
-    return ((seams.rightTopX - seams.leftTopX) + (seams.rightBottomX - seams.leftBottomX)) / 2;
-  }
   // Upright, covering every point the seams enclose: neighbours overlap across their shared seam by
   // up to one slant, and the mask decides which owns each pixel there.
   psx::present::PaneRect cover{0, 0, 0, 0};
-  // Centred horizontally, its centre at `logoCentrePerHeight` of the panel's height.
-  psx::present::PaneRect logoRect(int logoWidth, int logoHeight) const;
+  // A logo of this many texels at the largest whole multiple that stays inside the seams over the rows
+  // it covers (shrunk to fit below one), centred between them, its centre at `logoCentrePerHeight`.
+  psx::present::PaneRect logoRect(int texelWidth, int texelHeight) const;
   int slantX = 0; // the top of a seam sits this many pixels left of its bottom
 };
 
