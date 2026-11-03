@@ -19,8 +19,8 @@ struct RunBudgetInputs {
 };
 
 // The cap for a whole process run, counted in presentation-fence steps: one per product step, since a
-// step presents exactly once (FrameLoopShell enforces it), and one per selector frame. A panel's
-// pre-roll is not counted; that is PreRollBudget's, which bounds wall time inside one selector frame.
+// step presents exactly once (FrameLoopShell enforces it), and one per selector frame; a panel's step is
+// the selector frame it runs in.
 class RunBudget {
 public:
   // An unmapped tool window with nothing else asked: a smoke run, bounded.

@@ -45,7 +45,7 @@ private:
 
   // The selector's present: every panel's current picture built into the host's present image.
   void build(const PickerLayout &layout);
-  // Attach the host to the selected, settled panel and detach it from every other.
+  // Attach the host to the focused panel and detach it from every other.
   void attachPaneHost(const PickerLayout &layout);
 
   PickerRuntime &runtime_;
@@ -59,9 +59,8 @@ private:
   std::vector<PanelSource> sources_;
   // A panel presented during this loop iteration, so the loop must not build or pace a second time.
   bool built_ = false;
-  // The panel the host is attached to, and whether it had settled then.
+  // The panel the host is attached to.
   int hostedPanel_ = -1;
-  bool hostedSettled_ = false;
 };
 
 } // namespace psx::host
