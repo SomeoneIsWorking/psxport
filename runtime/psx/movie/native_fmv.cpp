@@ -211,7 +211,7 @@ bool Fmv::begin(psx::movie::SectorSource &source, uint32_t lba, uint32_t size_by
   }
   if (!uncapped_ && game->fastForwarding()) {
     uncapped_ = true;
-    lucent::info("fmv", "uncapped: the run is fast-forwarding (resume replay or host pre-roll)");
+    lucent::info("fmv", "uncapped: the run is fast-forwarding a resume replay");
   }
   max_frames_ = static_cast<int>(psx::config::movie_max_frames());
 

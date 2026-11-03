@@ -48,3 +48,7 @@ Measured, paced, headless, Spyro trilogy panels settled, intervals of the `[pane
 
 Also measured at 3840x2160: 2.00 presents per picker loop iteration and 0.99 composites per present,
 which is the hook firing on the in-between.
+
+## Superseded (2026-11-03)
+The pre-roll, `PreRollBudget` and `SessionControl::setPreRolling` are deleted: only the focused panel runs, one paced
+step per selector iteration, and unfocused panels execute nothing (issue 0196).

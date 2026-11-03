@@ -54,3 +54,7 @@ and `picker-shots2`, contact sheets `spyro1_ready.png` and `flips.png`):
 - Spyro 2 and Spyro 3 turn ready on their "Developed by Insomniac" card (mean luma about 4), as in the original report.
 - Not shown: a panel deselected in the middle of a fade. That needs a selector input injected while a panel fades;
   a deselected panel then holds whatever it last presented, black included.
+
+## Superseded (2026-11-03)
+`nextPanelNeedingWork` and the pre-roll rotation are deleted; unfocused panels no longer boot or run at all, so a
+panel boots on its first focus (issue 0196). Readiness from guest state stands.

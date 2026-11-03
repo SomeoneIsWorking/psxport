@@ -173,8 +173,8 @@ public:
     (void)core;
     return std::nullopt;
   }
-  // The title's own attract demo is playing, so its title screen (and its logo) is not on screen.
-  virtual bool playsAttractDemo(Core &core) const {
+  // The title's picture shows its own logo right now, so the picker draws none over it.
+  virtual bool showsOwnLogo(Core &core) const {
     (void)core;
     return false;
   }

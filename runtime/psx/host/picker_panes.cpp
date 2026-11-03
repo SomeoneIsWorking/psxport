@@ -5,7 +5,6 @@
 #include <lucent/log.h>
 
 #include <algorithm>
-#include <cmath>
 
 namespace psx::host {
 namespace {
@@ -13,9 +12,6 @@ namespace {
 // An unselected panel is grey and dimmed.
 constexpr float kUnselectedDesaturation = 1.0f;
 constexpr float kUnselectedBrightness = 0.78f;
-
-// The logo's width as a share of its panel's average width.
-constexpr double kLogoPerPanelWidth = 0.6;
 
 // A divider is half a percent of the surface height (at least one pixel), in the selection's gold.
 constexpr float kDividerPerHeight = 0.005f;
@@ -69,14 +65,9 @@ std::span<const psx::render::Pane> PickerPanes::build(const PickerLayout &layout
       panes_.push_back(picture);
     }
 
-    // The title's own logo, scaled to a share of the panel's width like the game scales its own art.
+    // The title's own logo at whole texels, so the nearest sampler keeps it sharp.
     if (source.logo != nullptr && !source.logo->empty()) {
-      const int logoWidth =
-          std::max(1, static_cast<int>(std::lround(static_cast<double>(geometry.averageWidth()) * kLogoPerPanelWidth)));
-      const int logoHeight = std::max(
-          1,
-          static_cast<int>(std::lround(static_cast<double>(logoWidth) * source.logo->height() / source.logo->width())));
-      const psx::present::PaneRect box = geometry.logoRect(logoWidth, logoHeight);
+      const psx::present::PaneRect box = geometry.logoRect(source.logo->width(), source.logo->height());
       psx::render::Pane logo{};
       logo.texture = source.logo->texture(device);
       logo.x = static_cast<float>(box.x);

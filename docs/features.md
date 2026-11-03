@@ -40,7 +40,7 @@ title answers there. A hop with no title entry runs on the framework alone.
 
 | hop | owner | title |
 |---|---|---|
-| 1 | `psx/host/panel_sessions.cpp:PanelSessions::takeLogo` → `GameRuntime::panelLogo`; `PanelSessions::logo` → `GameRuntime::playsAttractDemo` hides it on the focused panel while the title screen shows it | `panelLogo`, `playsAttractDemo` |
+| 1 | `psx/host/panel_sessions.cpp:PanelSessions::takeLogo` → `GameRuntime::panelLogo`; `PanelSessions::logo` → `GameRuntime::showsOwnLogo` hides it on any panel whose picture shows it; `PanelLayout::logoRect` sizes it | `panelLogo`, `showsOwnLogo` |
 | 2 | `psx/host/picker_session.cpp:PickerSession::run`, `psx/host/panel_sessions.cpp:PanelSessions::advance` — only the focused panel runs, one paced step per iteration; `psx/host/picker_runtime.h:PickerRuntime`; one window | |
 
 ## F-RENDER — guest GPU work to the screen

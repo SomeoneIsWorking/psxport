@@ -74,11 +74,12 @@ PanelLogo *PanelSessions::logo(int panel) {
     return nullptr;
   }
   PanelLogo *held = logos_[static_cast<std::size_t>(panel)].get();
-  if (held == nullptr || panel != focused_) {
-    return held;
+  if (held == nullptr) {
+    return nullptr;
   }
+  // A paused machine still holds the state its last picture was drawn from.
   Core &core = sessions_[static_cast<std::size_t>(panel)]->core();
-  return core.runtime.playsAttractDemo(core) ? held : nullptr;
+  return core.runtime.showsOwnLogo(core) ? nullptr : held;
 }
 
 void PanelSessions::takeLogo(int panel, TitleSession &session) {
