@@ -102,7 +102,7 @@ Every boot goes through `TitleSession::boot`; the framework has no other boot sp
 Story 2, Mega Man X4, CTR, Tekken 3, Vagrant Story and C-12 are one-title catalogs (`SingleTitleCatalog`): no argument provisions and boots their one executable,
 and a title's own run-end lines come from `reportRun`.
 
-`GameRuntime` carries two optional virtuals the host asks, each with a neutral default:
+`GameRuntime` carries four optional virtuals the host asks, each with a neutral default:
 
 - `logoTextures()`: the texture pages (and palettes, when the page holds other art) its title screen draws its
   wordmark from; empty by default, so the title has no logo.
@@ -114,7 +114,7 @@ and a title's own run-end lines come from `reportRun`.
   logo is not drawn from textures.
 - `showsOwnLogo(Core &)`: the title's picture shows its own logo right now (its title screen); `false`
   by default, so a panel with a logo always draws it. It is also the logo's gate: guest state that holds only once
-  the wordmark is finished (Spyro: the title screen's waiting sub-state; Crash: the title object's GOOL state).
+  the wordmark is finished (Spyro: the title screen's waiting sub-state).
 - `reportRun(Core &)`: title-specific lines after the framework's `run complete` line.
 
 ## Data flow

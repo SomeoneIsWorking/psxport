@@ -90,23 +90,14 @@ inline PresentPlan planPresent(const PresentInputs &in) {
   const int aspect_w = content_w > 0 ? content_w : 1;
   // An unknown native width degrades to 4:3.
   const int aspect_h = in.native_w > 0 ? in.native_w : aspect_w;
-  if (in.fill && in.sink_w > 0 && in.sink_h > 0 && in.disp_h > 0) {
-    // The crop is taken from the rendered source, so the compositor does not resample it again.
-    p.viewport = PaneRect{0, 0, in.sink_w, in.sink_h};
-    const long long pictureW = 4LL * aspect_w;
-    const long long pictureH = 3LL * aspect_h;
-    if (pictureW * in.sink_h > pictureH * in.sink_w) {
-      const int keepWidth = static_cast<int>(aspect_w * pictureH * in.sink_w / (pictureW * in.sink_h));
-      p.disp[0] += (aspect_w - keepWidth) / 2 * scale;
-      p.disp[2] = keepWidth * scale;
-    } else {
-      const int keepHeight = static_cast<int>(in.disp_h * pictureW * in.sink_h / (pictureH * in.sink_w));
-      p.disp[1] += (in.disp_h - keepHeight) / 2 * scale;
-      p.disp[3] = keepHeight * scale;
-    }
-    return p;
-  }
-  p.viewport = letterbox(4 * aspect_w, 3 * aspect_h, in.sink_w, in.sink_h);
+  // A fill crop is taken from the rendered source, so the compositor does not resample it again.
+  const PictureFit fit =
+      fitPicture(4LL * aspect_w, 3LL * aspect_h, content_w, in.disp_h, in.sink_w, in.sink_h, in.fill != 0);
+  p.viewport = fit.viewport;
+  p.disp[0] += fit.source.x * scale;
+  p.disp[1] += fit.source.y * scale;
+  p.disp[2] = fit.source.w * scale;
+  p.disp[3] = fit.source.h * scale;
   return p;
 }
 

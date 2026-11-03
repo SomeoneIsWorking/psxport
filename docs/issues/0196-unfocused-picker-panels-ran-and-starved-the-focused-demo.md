@@ -123,17 +123,20 @@ presents `fields=2/2` at t 0.5 and 1, 1210 `1/1`). Crash: `psx-crash/scratch/pic
 ## Follow-up 5 (2026-11-04, picker4)
 - `GameRuntime::panelLogo` has one default (`game_runtime.cpp`): `drawnLogo` of the title's `logoTextures` while
   `showsOwnLogo`. Spyro's own extraction (`extractPanelLogo`) is deleted; a title names its gate and textures only.
-- Crash 1/2/3 answer `showsOwnLogo` from the title object's GOOL state (psx-crash `game/gool/title_logo.cpp`,
-  issue 0036). They save no logo: the wordmark letters are untextured Gouraud models, so texture pages read only the
-  sign, backplate or clock.
+- Crash 1/2/3 save no logo: the wordmark letters are untextured Gouraud models, so texture pages read only the
+  sign, backplate or clock. The title object's GOOL states that mark the finished wordmark are recorded in psx-crash
+  issue 0036; a gate on them is not landed, because with no logo the picker never asks it.
 - Tomba! 1, Tomba! 2 and Spider-Man 2 draw their wordmark inside one opaque full-screen picture (Tomba! 1's MDEC
-  frame; Tomba! 2's 8bpp title sprite on pages (640,256)/(768,256), `psx-tomba/scratch/picker4/t2a/run.log`;
+  frame; Tomba! 2's 8bpp title picture on pages (640,256)/(768,256), `psx-tomba/scratch/picker4/t2b/title_vram_640_256.png`
+  with the frame's two rects and three polys in `t2b/cmd.log`;
   Enter Electro's PRESS START image, which the record shows with no primitives at all,
   `psx-spider-man/scratch/picker4/ram1`). Spider-Man 1 shows no wordmark on any attract screen (`ram1/sheet_a.png`).
   None of the four supplies a logo: a cut of an opaque picture carries its background at a hand-placed rectangle.
 - A host image on a pane (Tomba! 2's native movie and SCEA card) was letterboxed 4:3 inside its panel.
-  `RenderState::buildHostImage` now lays a pane out with `present::cover` (the 4:3 rectangle covering the panel,
-  cropped by the target scissor) and keeps `letterbox` for the window. Movie content spans panel rows 35..504 of 540
+  `present::fitPicture` (`viewport_layout.h`) is now the one fit rule: letterbox, or on a pane fill the output with
+  the source centre-cropped. `planPresent` crops a guest frame's sampled rectangle with it and
+  `RenderState::buildHostImage` a host image's uv rectangle (`image.frag`), so both leave the full image as the
+  viewport. Movie content spans panel rows 35..504 of 540
   before (`psx-tomba/scratch/picker3/pw4/b2_tomba2.png`) and 0..539 after (`scratch/picker4/t2a/b11.png`).
 - Walks, hidden, unpaced, sink 3840x2160, ires 0, fps60 1, all 11 products rebuilt with Clang into `build/picker4`
   (each repo's `scratch/picker4/w*/sheet.png`):
@@ -145,7 +148,7 @@ presents `fields=2/2` at t 0.5 and 1, 1210 `1/1`). Crash: `psx-crash/scratch/pic
     Spider-Man 1 7883) and cold panels at 0.
 
 ## Open
-- Crash's logo needs draws attributed to the GOOL object that emitted them (psx-crash 0036). Tomba! 1/2 and
+- Crash's logo needs draws attributed to the GOOL object that emitted them, then the gate (psx-crash 0036). Tomba! 1/2 and
   Spider-Man 1/2 have no separable wordmark (Follow-up 5). A title never focused on this machine has no logo until
   its title screen shows once.
 - Wall-clock pacing of the focused demo was not judged and no all-title real-time run was made: host load stayed

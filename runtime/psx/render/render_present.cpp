@@ -30,9 +30,11 @@ struct PresentUniform {
   std::int32_t fmt[4];
 };
 
-// image.frag's brightness; 1 when the picture's own fade was applied when it was built.
+// image.frag's `PC { vec4 fade; vec4 source; }`: brightness in fade[0], 1 when the picture's own fade was applied
+// when it was built; the sampled part of the image as uv origin and size.
 struct ImageUniform {
   float brightness[4];
+  float source[4] = {0.0f, 0.0f, 1.0f, 1.0f};
 };
 
 template <typename T> std::span<const std::byte> bytesOf(const T &value) {
@@ -264,21 +266,31 @@ void RenderState::repaint() {
 
 void RenderState::buildHostImage(SDL_GPUCommandBuffer *cmd, float fade) {
   ensurePresentImage(presentImageSize());
-  // A pane fills its panel as the guest picture does; the scissor crops the overflow.
-  const present::PaneRect laidOut =
-      target_ == PresentTarget::Pane ? present::cover(4, 3, presentImageSize_.width, presentImageSize_.height)
-                                     : present::letterbox(4, 3, presentImageSize_.width, presentImageSize_.height);
+  // A pane fills its panel as the guest picture does.
+  const present::PictureFit fit = present::fitPicture(4,
+                                                      3,
+                                                      hostImageSize_.width,
+                                                      hostImageSize_.height,
+                                                      presentImageSize_.width,
+                                                      presentImageSize_.height,
+                                                      target_ == PresentTarget::Pane);
+  const auto width = static_cast<float>(hostImageSize_.width);
+  const auto height = static_cast<float>(hostImageSize_.height);
   SDL_GPURenderPass *pass = beginClearedPass(cmd, presentImage_);
   drawFullscreen(cmd,
                  pass,
                  device_.imagePipeline(),
                  {hostImage_, device_.linearSampler()},
-                 bytesOf(ImageUniform{{fade, 0.0f, 0.0f, 0.0f}}),
-                 laidOut,
+                 bytesOf(ImageUniform{{fade, 0.0f, 0.0f, 0.0f},
+                                      {static_cast<float>(fit.source.x) / width,
+                                       static_cast<float>(fit.source.y) / height,
+                                       static_cast<float>(fit.source.w) / width,
+                                       static_cast<float>(fit.source.h) / height}}),
+                 fit.viewport,
                  presentImageSize_);
   SDL_EndGPURenderPass(pass);
   clipPresent(cmd);
-  viewport_ = laidOut;
+  viewport_ = fit.viewport;
 }
 
 void RenderState::buildImage(const std::uint8_t *rgba, PixelSize size, float fade) {
