@@ -1,4 +1,4 @@
-// blend.h — the integer blends a render moves its saved inputs with.
+// blend.h — the blends a render moves its saved inputs with.
 #pragma once
 
 #include <cmath>
@@ -17,19 +17,27 @@ inline std::uint32_t lerpWord(std::uint32_t from, std::uint32_t to, float t) {
   return static_cast<std::uint32_t>(lerpInt(static_cast<std::int32_t>(from), static_cast<std::int32_t>(to), t));
 }
 
+// The step from `from` to `to` the short way round a ring of `period`: in (-period/2, period/2].
+inline std::int32_t ringStep(std::int64_t from, std::int64_t to, std::int64_t period) {
+  std::int64_t step = ((to - from) % period + period) % period;
+  if (step > period / 2) {
+    step -= period;
+  }
+  return static_cast<std::int32_t>(step);
+}
+
 // An angle of `bits` bits at `t` from `from` to `to` the short way round, wrapped into the turn.
 inline std::uint32_t lerpTurn(std::uint32_t from, std::uint32_t to, unsigned bits, float t) {
   const std::uint32_t mask = (1u << bits) - 1u;
-  auto step = static_cast<std::int32_t>((to - from) & mask);
-  if (step > static_cast<std::int32_t>((mask >> 1) + 1u)) {
-    step -= static_cast<std::int32_t>(mask + 1u);
-  }
+  const std::int32_t step = ringStep(from & mask, to & mask, std::int64_t{mask} + 1);
   return (from + static_cast<std::uint32_t>(lerpInt(0, step, t))) & mask;
 }
 
-// `t` of the way from `from` to `to` on a ring of `period`, the short way round, wrapped into [0, period).
-inline double lerpRing(double from, double to, double period, float t) {
-  const double at = std::fmod(from + std::remainder(to - from, period) * static_cast<double>(t), period);
+// `t` of the way from `from` to `to` on a ring of `period`, the short way round, unrounded and wrapped into
+// [0, period).
+inline double lerpRing(std::int32_t from, std::int32_t to, std::int32_t period, float t) {
+  const double at =
+      std::fmod(from + static_cast<double>(ringStep(from, to, period)) * static_cast<double>(t), period);
   return at < 0.0 ? at + period : at;
 }
 
