@@ -85,9 +85,9 @@ public:
   psx::frame::FramePresenter presentation;           // non-temporal current-frame fence, present and pacing owner
   psx::present::OwnerJournal ownerJournal;           // draws with no owner and held intervals, per screen
   psx::present::GuestPresentationState guestDisplay; // latched only when the title publishes matching guest projection
-  // A resume replay or a host pre-roll: the pacer does not sleep, movies run uncapped, audio is dropped.
+  // A resume replay: the pacer does not sleep, movies run uncapped, audio is dropped.
   bool fastForwarding() const {
-    return pad.fastForwarding() || session.preRolling();
+    return pad.fastForwarding();
   }
   SpuAudio spu_audio;       // host audio output sink (SDL3 device + optional WAV capture)
   RmlOverlay rml_overlay;   // in-app mod/debug HTML UI + live world-position HUD

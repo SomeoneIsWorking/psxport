@@ -23,8 +23,8 @@ catalog contract a title implements (`title_catalog.h`, `single_title_catalog`, 
 | `title_session.{h,cpp}` | `TitleSession`: one boot-to-exit run of one title as a steppable owner; destruction is the whole teardown |
 | `session_run.h` (`runtime/psx/game/`) | `SessionRun`, held per `Game` as `Game::run`: a title's request to end its run |
 | `run_budget.{h,cpp}` | `RunBudget`: the process's run cap in presentation-fence steps, decided once from `PSXPORT_NATIVE_FRAMES` |
-| `panel_sessions.{h,cpp}` | `PanelSessions`: one live session per panel (the available titles `PSXPORT_PICKER_TITLES` asks for) and the rules about which of them runs |
-| `picker_session.{h,cpp}` | `PickerSession`: the selector frame loop; one guest advances per frame |
+| `panel_sessions.{h,cpp}` | `PanelSessions`: panel session lifetime and focus: one session per panel (the available titles `PSXPORT_PICKER_TITLES` asks for), only the focused one runs |
+| `picker_session.{h,cpp}` | `PickerSession`: the selector frame loop; the focused panel steps once per iteration |
 | `picker_runtime.{h,cpp}` | `PickerRuntime`: the selector's own `GameRuntime`; the control commands `picker`, `pick`, `select` |
 | `picker_content.{h,cpp}` | `PickerContent`: the available titles and the panel-to-title mapping |
 | `picker_layout.{h,cpp}` | `PickerLayout`: panel geometry, seams, the width animation and each panel's present size |
@@ -114,36 +114,50 @@ argument runs that serial-identified executable (`runExecutable`). No argument r
 for a catalog of one title, which boots `<root>/<slug>/<serial>` directly. Anything else is refused with
 exit status 2, as is an executable that does not authenticate.
 
-`ProductHost::runSelector` probes the catalog, builds `PickerContent`, and runs `PickerSession`. The
-picker creates one unbooted `TitleSession` per available title, boots them one at a time (one guest
-advances per frame; only the selected panel is audible and no panel sees the player's pad), and on a
-choice destroys every panel session and returns a fresh `TitleSession` for the title. `runToEnd`
-boots it, claims the debug endpoint, and steps it until `TitleSession::end()`; `session return` or
-the ESC row ends it as `ReturnedToSelector` and the selector is rebuilt from a fresh probe.
+`ProductHost::runSelector` probes the catalog, builds `PickerContent`, and runs `PickerSession`. On a
+choice the picker destroys every panel session and returns a fresh `TitleSession` for the title.
+`runToEnd` boots it, claims the debug endpoint, and steps it until `TitleSession::end()`; `session
+return` or the ESC row ends it as `ReturnedToSelector` and the selector is rebuilt from a fresh probe.
 `runExecutable` skips the selector and runs one serial-identified executable.
-Each panel pre-rolls 900 steps from power-on, past its publisher cards onto the title's own
-press-start page or opening movie, whether or not it has drawn a picture by then; after that only the
-selected panel runs and the others hold. A pre-roll is a fast-forward (`SessionControl::setPreRolling`,
-read through `Game::fastForwarding`): its steps do not sleep on the panel's pacer and its audio is
-dropped. Each picker frame pre-rolls one panel for as many steps as fit in one NTSC field
-(`PreRollBudget`), at least one. The selected panel takes every pre-roll turn until it shows a picture; then the
-unsettled panels take turns. A settled panel steps once per picker frame on its own pacer, so the
-picker's loop runs at that title's step cadence, but the selector's frame follows the selected panel's
-presents: the picker is that panel's pane host (`TitleSession::setPaneHost`), building at each pane
-build and showing at each pane show, so an interpolated logic frame's in-between reaches the window.
-The loop builds, paces and shows itself only on an iteration where no panel presented,
-and paces only when the panel's step paced nothing. A pre-rolling panel gets no host, since its
-fast-forward steps would build many times inside one picker frame. The selector is the host Game's
-screen: it builds through `DisplayPresenter::buildPanes` and shows through the same present, overlay
-and RmlUi menu as a title frame, so ESC opens the menu over it and a changed setting reaches the
-running panel (`Mods::reload`). D-pad Left/Right and `select left|right` step the selection with wrap
-(`PanelSessions::step`); Cross or Start confirms. Panel 0 starts selected and
-audible. Each panel presents at its settled cover size and is drawn 1:1 (`presentation.md`). The selected
-panel's share of the window width is the settings file's `picker_selected_share` (default 0.6) and the
-others split the rest evenly (`PickerLayout::retarget`), so two titles are 60/40 and three 60/20/20. A panel is ready once its title is past its boot prefix and has presented a field with the guest display enabled
-(GP1(03), `DisplayArea::enabled`; `TitleSession::showsTitlePicture`); no pixels are sampled. Every panel shows its
-newest present, so a panel deselected during a fade holds that faded frame (issue 0181). The selector logs its end state with the panel
-summary (`selector ended ... ; panels: [0]*slug demo ...`).
+
+### The selector
+
+- **One owner for panel lifetime.** `PanelSessions` creates one unbooted `TitleSession` per panel, and
+  is the only thing that boots, steps, pauses, resumes or destroys one. It also owns the focus: which
+  panel the player is on (`focus`, `step`).
+- **Only the focused panel runs.** Each selector iteration steps the focused session exactly once, as
+  an ordinary paced step on its own `FramePacer`, so its title runs at the game's own field rate. There
+  is no pre-roll, no fast-forward and no shared selector clock: no unfocused session is stepped, ever,
+  so an unfocused panel executes zero guest instructions (`panels:` reports each panel's executed
+  instruction count).
+- **Focus change.** The old focus is paused (its guest, VRAM and last present stay exactly as they
+  were) and released from the audio device; the new one is resumed, or booted from power-on the first
+  time it is focused, and claims audio. The focused panel never sees the player's pad.
+- **The attract demo is the title's own.** A focused panel runs its title's boot path with no input:
+  publisher cards, title screen, and the demo the title itself starts when its title screen times
+  out, looping as on the console. Every title today reaches its demo that way, so there is no route
+  hook; a title whose boot never reaches a demo without input would add one to `GameRuntime`.
+- **Unfocused panels show their still.** A paused panel draws its newest present (the frame it was on
+  when it lost focus) greyed, and its logo. A panel never focused yet has no picture.
+- **The logo comes from the running game.** `GameRuntime::panelLogo(Core &)` reads the title's own
+  logo from its live machine (its VRAM while its title screen is up); the panel keeps the first one it
+  gets for the selector's life. No committed image of game art is drawn.
+- **One process, one window.** The window and GPU device are `ProductHost`'s and outlive every session.
+
+The selector's frame follows the focused panel's presents: the picker is that panel's pane host
+(`TitleSession::setPaneHost`), building at each pane build and showing at each pane show, so an
+interpolated logic frame's in-between reaches the window. The loop builds, paces and shows itself only
+on an iteration where the panel did not present, and paces only when the panel's step paced nothing.
+The selector is the host Game's screen: it builds through `DisplayPresenter::buildPanes` and shows
+through the same present, overlay and RmlUi menu as a title frame, so ESC opens the menu over it and a
+changed setting reaches the focused panel (`Mods::reload`). D-pad Left/Right and `select left|right`
+move the focus with wrap; Cross or Start confirms. Panel 0 starts focused. Each panel presents at its
+settled cover size and is drawn 1:1 (`presentation.md`). The focused panel's share of the window width
+is the settings file's `picker_selected_share` (default 0.6) and the others split the rest evenly
+(`PickerLayout::retarget`), so two titles are 60/40 and three 60/20/20. A panel is ready once its title
+is past its boot prefix and has presented a field with the guest display enabled (GP1(03),
+`DisplayArea::enabled`; `TitleSession::showsTitlePicture`); no pixels are sampled. The selector logs its
+end state with the panel summary (`selector ended ... ; panels: [0]*slug picture steps=… insns=… ...`).
 
 `ProductHost` hands every session its `SessionServices`: the presentation device, the process
 `QuitScope`, the `RunBudget` and whether `PSXPORT_LOAD_STATE` is still owed (only the process's first
@@ -152,7 +166,7 @@ product session loads it; a title picked after a return boots from power-on). A 
 
 `TitleSession::boot`, in order: refuse a boot entry the image cannot honour; read the executable;
 install the title's runtime and build its `Game`; attach the
-`QuitScope` to its `HostInput`; panel defaults (pane route, suppressed pad, audibility, pre-roll);
+`QuitScope` to its `HostInput`; panel defaults (pane route, suppressed pad, audibility);
 the disc key from the title's `TitleIdentity`; `GameRuntime::admitExecutable`; the configuration audit
 (`psx::config::report_once`); the per-Core device binds (init then bind, then `Pad::overridesInit`, then
 the `a0`/`a1` seed); `GameRuntime::registerOverrides` then `FrameLoopShell::prepareProduct`;
@@ -173,16 +187,15 @@ ledger, guest-call census, present intervals, record stability, audio queue, `re
 `BudgetSpent` end the process; `ReturnedToSelector` and `TitleEnded` rebuild the selector when the
 run came from it, and end the process under `runExecutable`.
 
-### RunBudget and PreRollBudget
+### RunBudget
 
 `RunBudget` bounds a whole run, counted in presentation-fence steps: one per product step and one per
 selector frame. An explicit `PSXPORT_NATIVE_FRAMES` wins; otherwise a pad replay or resume, the REPL or
 a live control client leaves it uncapped, a shown window is uncapped and a hidden one stops at 120.
 This is the only place the live-client rule lives: `DbgServer::start` opens the channel and answers
 no cap, and `ProductHost` takes the process's cap from `RunBudget::fromConfig`.
-It never counts a panel's pre-roll steps, and panels never print a run-end report, apply configured
-state or pump the REPL. `PreRollBudget` stays the pre-roll owner: how many panel steps fit in one
-selector frame's wall time.
+A panel's steps are not counted (the selector frame they run in is), and panels never print a run-end
+report, apply configured state or pump the REPL.
 
 ### Process lifetime
 
@@ -198,8 +211,7 @@ the event drain, so it reaches the run-end report like a client `quit`.
 - The window and its device are the product's and outlive every session.
 - A Core snapshots the installed `GameRuntime` when it is constructed, so `TitleSession::boot`
   installs `catalog.runtime(index)` immediately before building its `Game`.
-- Exactly one guest advances per picker frame.
-- The picker frame owns wall time while a panel pre-rolls: no pre-roll step sleeps.
+- Only the focused panel's guest ever advances, one paced step per selector iteration.
 - Nothing under `runtime/psx/host/` names a title, a serial or a slug.
 
 ## Adopting it
@@ -215,7 +227,8 @@ the event drain, so it reaches the run-end report like a client `quit`.
 
 ## Running
 
-Picker frame time is read
-from consecutive `[picker] panels:` lines of a paced run (`PSXPORT_DEBUG=picker,pacer`, no NOPACE). The headless walk (`picker`, `select left|right`, `tap left|right`, `pshot <path>` for the
+`PSXPORT_DEBUG=picker` logs one `[picker] panels:` line per selector iteration with each panel's steps
+and executed guest instructions (Lightrec plus fallback); an unfocused panel's two numbers stay fixed.
+Picker frame time is read from those lines in a paced run (`PSXPORT_DEBUG=picker,pacer`, no NOPACE). The headless walk (`picker`, `select left|right`, `tap left|right`, `pshot <path>` for the
 selector's frame, `key`/`mouse`/`gamepad` input, `pick <slug>`, `session return`, `pick <slug>`) runs on a built port with `PSXPORT_DEBUG_SERVER` and
 `tools/dbgclient.py`; see the consuming port's docs for its route.

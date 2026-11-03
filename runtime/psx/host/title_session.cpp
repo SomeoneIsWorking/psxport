@@ -95,7 +95,6 @@ bool TitleSession::boot() {
     game.pad.setPlayerInputSuppressed(!playerInput_);
     // Only the session the player is looking at is heard (see setAudible).
     game.spu_audio.output().setClaimed(audible_);
-    game.session.setPreRolling(preRolling_);
   }
 
   SavedDisc(*title_.identity).bind(game.disc);
@@ -217,6 +216,10 @@ void TitleSession::step() {
   endRequested(game);
 }
 
+bool TitleSession::booted() const {
+  return parts_->booted;
+}
+
 bool TitleSession::returnRequested() const {
   return parts_->booted && parts_->game->session.returnRequested();
 }
@@ -289,13 +292,6 @@ void TitleSession::setAudible(bool audible) {
   audible_ = audible;
   if (parts_->booted) {
     parts_->game->spu_audio.output().setClaimed(audible);
-  }
-}
-
-void TitleSession::setPreRolling(bool preRolling) {
-  preRolling_ = preRolling;
-  if (parts_->booted) {
-    parts_->game->session.setPreRolling(preRolling);
   }
 }
 

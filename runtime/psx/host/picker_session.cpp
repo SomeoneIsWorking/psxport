@@ -14,7 +14,6 @@
 
 #include <lucent/log.h>
 
-#include <chrono>
 #include <cstdlib>
 #include <optional>
 #include <string>
@@ -49,16 +48,16 @@ void PickerSession::build(const PickerLayout &layout) {
   for (int panel = 0; panel < panels_->count(); ++panel) {
     sources_.push_back({.picture = panels_->picture(panel), .logo = panels_->logo(panel)});
   }
-  host_->display.buildPanes(panes_.build(layout, sources_, panels_->selected(), services_.presentation));
+  host_->display.buildPanes(panes_.build(layout, sources_, panels_->focused(), services_.presentation));
   built_ = true;
 }
 
-// The settled selected panel's presents drive the selector; a pre-rolling one gets no host.
-// The layout lives in run(), which the hosted panel's presents happen inside.
+// The focused panel's presents drive the selector. The layout lives in run(), which the hosted
+// panel's presents happen inside.
 void PickerSession::attachPaneHost(const PickerLayout &layout) {
   for (int panel = 0; panel < panels_->count(); ++panel) {
     if (TitleSession *session = panels_->session(panel)) {
-      if (panel == hostedPanel_ && panels_->panelSettled(hostedPanel_)) {
+      if (panel == hostedPanel_) {
         session->setPaneHost({.built =
                                   [this, &layout] {
                                     build(layout);
@@ -75,7 +74,7 @@ void PickerSession::attachPaneHost(const PickerLayout &layout) {
 }
 
 int PickerSession::serviceInput(PickerLayout &layout) {
-  const int before = panels_->selected();
+  const int before = panels_->focused();
   // The host's pad is the only one that sees the player, so a tap moves one selection.
   if (panels_->count() > 0) {
     const int step = runtime_.takeStep() + (host_->pad.pressedButton(psx::input::kButtonRight) ? 1 : 0) -
@@ -84,34 +83,31 @@ int PickerSession::serviceInput(PickerLayout &layout) {
       panels_->step(step);
     }
     if (std::optional<int> requested = runtime_.takePanel()) {
-      panels_->select(*requested);
+      panels_->focus(*requested);
     }
   }
 
   int chosen = -1;
   if (host_->pad.pressedButton(kConfirm) && panels_->count() > 0) {
-    chosen = panels_->selected();
+    chosen = panels_->focused();
   }
   if (std::optional<std::string> slug = runtime_.takePick()) {
     std::string refusal;
     if (const TitleAvailability *title = content_.findAvailable(*slug, refusal)) {
       const int requested = content_.panelOf(title->identity->slug);
       if (requested >= 0) {
-        panels_->select(requested);
+        panels_->focus(requested);
         chosen = requested;
       }
     } else {
       lucent::warn("picker", "pick refused: {}", refusal);
     }
   }
-  if (panels_->selected() != before) {
-    layout.setSelection(panels_->selected());
+  if (panels_->focused() != before) {
+    layout.setSelection(panels_->focused());
   }
-  // The host follows the selected panel and is attached once that panel has settled.
-  const bool settled = panels_->panelSettled(panels_->selected());
-  if (hostedPanel_ != panels_->selected() || hostedSettled_ != settled) {
-    hostedPanel_ = panels_->selected();
-    hostedSettled_ = settled;
+  if (hostedPanel_ != panels_->focused()) {
+    hostedPanel_ = panels_->focused();
     attachPaneHost(layout);
   }
   return chosen;
@@ -136,9 +132,6 @@ PickerSession::Result PickerSession::run() {
   // The same services a title's field owes: the player is read, panels advance, the screen presents.
   const psx::frame::FieldTurn fieldTurn;
   int frame = 0;
-  const auto fieldInterval =
-      std::chrono::duration_cast<PreRollBudget::Clock::duration>(std::chrono::duration<double, std::milli>(
-          psx::frame::fieldIntervalMs(psx::frame::kHostScreenFieldRateMilliHz, 1, 1)));
   for (; !services_.budget.exhausted(); ++frame) {
     if (services_.presentation.faulted()) {
       return Result{Outcome::DrawFault, nullptr};
@@ -147,7 +140,6 @@ PickerSession::Result PickerSession::run() {
       lucent::info("picker", "selector asked to quit after {} frame(s)", frame);
       return {};
     }
-    const PreRollBudget preRoll(PreRollBudget::Clock::now() + fieldInterval);
     fieldTurn.beginField(core);
     host_->pad.serviceFrame();
     // Reset before anything can present, so it asks whether a panel presented this iteration.
@@ -177,7 +169,7 @@ PickerSession::Result PickerSession::run() {
     }
 
     // The width animation runs on the same frame, so a selection change is drawn from its first frame.
-    const unsigned long long pacedFields = panels_->advance(preRoll);
+    const unsigned long long pacedFields = panels_->advance();
     layout.advance();
     lucent::debug("layout",
                   "panel widths {} {} {} of {}",

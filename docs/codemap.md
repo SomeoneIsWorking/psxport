@@ -4,7 +4,7 @@ Dependency direction: title repo → `runtime/psx/game/` (the title interface) �
 
 - `runtime/psx/host/product_host.*`, `product_main.cpp` — the one `main`, process top level, command line, window and GPU device lifetime across sessions, quit request, title selector then title then selector loop
 - `runtime/psx/host/title_session.*` — one title's session: shared boot steps for every product, one field step, session services, load-state at first boot
-- `runtime/psx/host/picker_*`, `panel_sessions.*`, `panel_logo.*`, `pre_roll_budget.*` — in-window title selector, a host screen built through the host Game's present: panel-to-title mapping, selection, panel layout and seams, panes from each panel's own picture, panel logo texture, one live session per panel, pre-roll budget, `picker` / `pick` / `select` commands
+- `runtime/psx/host/picker_*`, `panel_sessions.*`, `panel_logo.*` — in-window title selector, a host screen built through the host Game's present: panel-to-title mapping, panel session lifetime and focus (only the focused panel runs), panel layout and seams, panes from each panel's own picture, panel logo texture, `picker` / `pick` / `select` commands
 - `runtime/psx/host/run_budget.*` — run length cap in presentation-fence steps, frame limit
 - `runtime/psx/host/first_run_setup.*`, `saved_disc.*`, `title_disc.*` — first-run disc picker (setup-ui), remembered disc image choice, a title's disc opened for one read
 - `runtime/psx/host/executable_provisioner.*` — extract and authenticate a missing boot executable (SCUS/SLUS) from the title's own disc

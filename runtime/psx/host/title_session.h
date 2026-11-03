@@ -73,6 +73,8 @@ public:
   TitleSession(const TitleSession &) = delete;
   TitleSession &operator=(const TitleSession &) = delete;
 
+  // boot() succeeded.
+  bool booted() const;
   // Construct the Game, boot the authenticated executable and run the init prefix. False when the
   // executable could not be loaded; a session that failed to boot has no picture and never will.
   bool boot();
@@ -130,8 +132,6 @@ public:
   }
   // This session alone may be heard. Exactly one session in a process holds it at a time.
   void setAudible(bool audible);
-  // Bringing the session up to its picture: its steps run unpaced and unheard (Game::fastForwarding).
-  void setPreRolling(bool preRolling);
   // A claim does not outlive a Game, and confirming destroys the picker Game, so the session that
   // becomes the product must claim it or later commands time out on a healthy run. See
   // psxport::DbgServer::claimEndpoint.
@@ -155,7 +155,6 @@ private:
   bool paused_ = false;
   bool playerInput_ = false;
   bool audible_ = false;
-  bool preRolling_ = false;
   bool paneDestination_ = false;
   psx::present::PixelSize paneImage_;
   bool showsTitlePicture_ = false;

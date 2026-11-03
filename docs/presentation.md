@@ -518,12 +518,12 @@ once. A movie frame is decoded and built before its field wait and shown after i
 A pane present follows the same order through its host (`psx::present::PaneHost`, attached with
 `TitleSession::setPaneHost` → `RenderState::setPaneHost`): `buildDisplay` calls the host's `built`
 after the pane's build, and `show` calls its `show` after the pane's wait. The picker attaches itself to
-the selected, settled panel, builds its own present image at `built` and shows it at `show`, so its cadence
+the focused panel, builds its own present image at `built` and shows it at `show`, so its cadence
 is that panel's presents, in-betweens included. The selector is a host screen of the product: its Game
 builds panes into its present image (`DisplayPresenter::buildPanes` → `RenderState::buildPanes`) and
 shows it through `showPresentImage`, so the overlay, the RmlUi menu and host input are the ones a title
 frame has. The picker's loop builds, paces with `FramePacer::hostScreenPace` and shows itself only on an
-iteration where no panel presented, and skips the pace when the panel's step already paced its fields (`title-host.md`). A pane
+iteration where the focused panel did not present, and skips the pace when the panel's step already paced its fields (`title-host.md`). A pane
 samples the session's newest present image (`RenderState::lastPresented`; `title-host.md` for when a
 panel counts as ready).
 
