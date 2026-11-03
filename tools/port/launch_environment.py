@@ -7,6 +7,7 @@ subprocesses keep the caller's environment. Agent tools call :func:`agent_enviro
 from __future__ import annotations
 
 import os
+import shutil
 import sys
 from collections.abc import Mapping
 from pathlib import Path
@@ -26,26 +27,17 @@ CARD_ENV = "PSXPORT_CARD"
 FRAMEWORK_ROOT = Path(__file__).resolve().parents[2]
 
 
-def player_environment(environment: Mapping[str, str], *,
-                       product: str,
-                       settings: str | Path | None = None) -> dict[str, str]:
+def player_environment(environment: Mapping[str, str], *, product: str) -> dict[str, str]:
     """The windowed, audible, paced shipping environment.
 
-    ``product`` names the run-log directory. ``settings`` names the tracked shipping .ini, so the
-    picture never depends on an untracked file beside the binary; an explicit PSXPORT_SETTINGS wins.
+    ``product`` names the run-log directory. The product keeps the player's settings in its own
+    user-data file (runtime/psx/config/config.cpp), so no PSXPORT_SETTINGS is set here.
     """
     result = dict(environment)
     for key in AGENT_RUNTIME_KEYS:
         result.pop(key, None)
     result[SHOW_WINDOW] = "1"
     result.setdefault("PSXPORT_ASSET_DIR", str(FRAMEWORK_ROOT))
-    if settings is not None and "PSXPORT_SETTINGS" not in result:
-        chosen = Path(settings)
-        if chosen.is_file():
-            result["PSXPORT_SETTINGS"] = str(chosen.resolve())
-        else:
-            print(f"[run] no tracked shipping settings at {chosen}; the product will use its own "
-                  f"working-directory discovery", file=sys.stderr)
     if "PSXPORT_LOG_FILE" not in result:
         result["PSXPORT_LOG_FILE"] = str(_prepared_player_log(product, result))
     return result
@@ -94,27 +86,33 @@ def agent_environment(environment: Mapping[str, str],
                       card: str | Path | None = None) -> dict[str, str]:
     """The hidden-window, silent, unpaced automation environment.
 
-    ``settings`` (or PSXPORT_SETTINGS) must name an existing tracked .ini: unset would hand the
-    product its working-directory discovery. ``card`` starts the run on a blank memory card.
+    The run gets its own settings file under ``scratch/settings/`` of the working directory, seeded
+    from ``settings`` (or PSXPORT_SETTINGS) when given, so a tool run never reads or writes the
+    player's file and never rewrites a tracked seed. ``card`` starts the run on a blank memory card.
     """
     result = dict(environment)
     result[SHOW_WINDOW] = "0"
     for key in AGENT_RUNTIME_KEYS:
         result[key] = "1"
     result.setdefault("PSXPORT_ASSET_DIR", str(FRAMEWORK_ROOT))
-    result["PSXPORT_SETTINGS"] = str(_resolved_settings(settings, result))
+    result["PSXPORT_SETTINGS"] = str(tool_settings(settings or result.get("PSXPORT_SETTINGS")))
     if card is not None:
         result = blank_card_environment(result, card)
     return result
 
 
-def _resolved_settings(settings: str | Path | None, environment: Mapping[str, str]) -> Path:
-    chosen = settings if settings is not None else environment.get("PSXPORT_SETTINGS")
-    if not chosen:
-        raise ValueError(
-            "agent_environment needs a settings file: pass settings=<tracked .ini> or set PSXPORT_SETTINGS"
-        )
-    path = Path(chosen).resolve()
-    if not path.is_file():
-        raise FileNotFoundError(f"settings file {path} does not exist")
+def tool_settings(seed: str | Path | None) -> Path:
+    """This run's settings file under scratch/settings/: a copy of ``seed``, else empty (defaults)."""
+    directory = Path.cwd() / "scratch" / "settings"
+    directory.mkdir(parents=True, exist_ok=True)
+    if not seed:
+        path = directory / "defaults.ini"
+        path.write_text("")
+        return path
+    source = Path(seed).resolve()
+    if not source.is_file():
+        raise FileNotFoundError(f"settings file {source} does not exist")
+    path = directory / source.name
+    if path != source:
+        shutil.copyfile(source, path)
     return path

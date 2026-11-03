@@ -5,6 +5,7 @@
 
 #include <lucent/config.h>
 #include <lucent/log.h>
+#include <lucent/platform.h>
 #include <lucent/text.h>
 
 #include <algorithm>
@@ -12,8 +13,8 @@
 #include <filesystem>
 #include <fstream>
 #include <mutex>
+#include <optional>
 #include <set>
-#include <system_error>
 
 namespace psx::config {
 
@@ -41,7 +42,8 @@ Var<long> cv_watchdog_boot("PSXPORT_WATCHDOG_BOOT", -1, kRunOnly);
 Var<long> cv_native_frames("PSXPORT_NATIVE_FRAMES", 0, kRunOnly);
 Var<std::string> cv_asset_dir("PSXPORT_ASSET_DIR", "", kRunOnly);
 Var<bool> cv_show_window("PSXPORT_SHOW_WINDOW", false, kRunOnly);
-Var<std::string> cv_settings_path("PSXPORT_SETTINGS", "psxport_settings.ini", kRunOnly);
+// Empty is the player's own file in the user-data directory; tools name a file of their own.
+Var<std::string> cv_settings_path("PSXPORT_SETTINGS", "", kRunOnly);
 // Arms the producer census, a diagnostic the player's product never pays for (ot_attr.h).
 Var<bool> cv_producers("PSXPORT_PRODUCERS", false, kRunOnly);
 Var<std::string> cv_render_path("PSXPORT_RENDER_PATH", "record", kSaved);
@@ -145,18 +147,25 @@ std::string dotenvValue(std::string_view key) {
   return {};
 }
 
-// Saves never land in a source checkout, where they would overwrite a tracked file.
-bool insideCheckout(const std::string &path) {
-  std::error_code error;
-  for (std::filesystem::path dir(path); !dir.empty(); dir = dir.parent_path()) {
-    if (std::filesystem::exists(dir / ".git", error)) {
-      return true;
-    }
-    if (dir == dir.parent_path()) {
-      return false;
-    }
+// The player's file belongs to the shown window: a hidden run never reads or writes it.
+std::optional<std::filesystem::path> settingsFile() {
+  const std::string &named = cv_settings_path.get();
+  if (!named.empty()) {
+    return std::filesystem::path(named);
   }
-  return false;
+  if (!cv_show_window.get()) {
+    return std::nullopt;
+  }
+  const std::optional<std::filesystem::path> executable = lucent::platform::executable_path();
+  if (!executable) {
+    return std::nullopt;
+  }
+  const std::optional<std::filesystem::path> directory =
+      lucent::platform::user_data_directory(executable->stem().string());
+  if (!directory) {
+    return std::nullopt;
+  }
+  return *directory / "settings.ini";
 }
 
 bool reported = false;
@@ -288,10 +297,6 @@ long native_frames() {
 
 std::string asset_dir() {
   return cv_asset_dir.get();
-}
-
-std::string settings_path() {
-  return cv_settings_path.get();
 }
 
 bool fullscreen_requested() {
@@ -462,17 +467,28 @@ void note_runtime_debug_channels(std::string_view channels) {
 }
 
 void load_settings() {
-  lucent::cvar::load_file(cv_settings_path.get().c_str());
+  const std::optional<std::filesystem::path> file = settingsFile();
+  if (!file) {
+    lucent::info("cfg", "settings: none; a hidden run without PSXPORT_SETTINGS keeps its settings in memory");
+    return;
+  }
+  lucent::info("cfg", "settings: {}", file->string());
+  lucent::cvar::load_file(file->string().c_str());
 }
 
 bool save_settings() {
-  const std::string &path = cv_settings_path.get();
-  if (insideCheckout(path)) {
-    lucent::warn("cfg", "refusing to save settings into a source checkout: {}; point PSXPORT_SETTINGS elsewhere", path);
+  const std::optional<std::filesystem::path> file = settingsFile();
+  if (!file) {
+    lucent::info("cfg", "settings not saved: this run has no settings file");
     return false;
   }
-  if (!lucent::cvar::save_file(path.c_str())) {
-    lucent::error("cfg", "could not write settings file {}", path);
+  std::string error;
+  if (cv_settings_path.get().empty() && !lucent::platform::ensure_user_data_directory(file->parent_path(), error)) {
+    lucent::error("cfg", "could not make the settings directory {}: {}", file->parent_path().string(), error);
+    return false;
+  }
+  if (!lucent::cvar::save_file(file->string().c_str())) {
+    lucent::error("cfg", "could not write settings file {}", file->string());
     return false;
   }
   return true;

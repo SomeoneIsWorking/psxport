@@ -34,7 +34,8 @@ bool clear_runtime(std::string_view name);
 // Records at the Runtime layer the PSXPORT_DEBUG channel set a console command applied.
 void note_runtime_debug_channels(std::string_view channels);
 
-// The settings file (PSXPORT_SETTINGS): every saved knob's Value layer.
+// Every saved knob's Value layer: PSXPORT_SETTINGS, else for a shown window the player's
+// <user-data>/<executable>/settings.ini, else none.
 void load_settings();
 bool save_settings();
 

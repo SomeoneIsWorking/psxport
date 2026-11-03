@@ -24,6 +24,20 @@ Declared variables resolve in this order, from lowest to highest precedence:
 3. a `PSXPORT_*` environment override;
 4. a runtime control-channel override.
 
+## The settings file
+
+`load_settings`/`save_settings` (`config.cpp`) own the one file that holds the Value layer:
+
+- `PSXPORT_SETTINGS` set: that file. `tools/port/launch_environment.py` `agent_environment` always sets
+  it to a per-run copy under the working directory's `scratch/settings/` (seeded from the tool's
+  tracked `.ini`, else empty), so a tool run never reads or writes the player's file or a tracked seed.
+- unset, window shown: the player's `<user-data>/<executable stem>/settings.ini` from
+  `lucent::platform::user_data_directory` (`~/.config/spyro_port/settings.ini` on Linux).
+- unset, window hidden: no file; the run keeps its settings in memory and a save is refused.
+
+The boot log names the file (`[cfg] settings: ...`). `Mods::save` writes only the values the player
+changed in the menu; a knob whose live value still equals its environment override is not written.
+
 Environment values are read only by the configuration owner and are never persisted. Runtime
 overrides last for the process lifetime only. Invalid values and unknown names fail or are reported
 at the configuration boundary; callers do not add local `getenv()` fallbacks.
