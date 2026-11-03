@@ -14,6 +14,9 @@ namespace {
 constexpr float kUnselectedDesaturation = 1.0f;
 constexpr float kUnselectedBrightness = 0.78f;
 
+// The logo's width as a share of its panel's average width.
+constexpr double kLogoPerPanelWidth = 0.6;
+
 // A divider is half a percent of the surface height (at least one pixel), in the selection's gold.
 constexpr float kDividerPerHeight = 0.005f;
 constexpr int kDividerMinimumPixels = 1;
@@ -66,9 +69,10 @@ std::span<const psx::render::Pane> PickerPanes::build(const PickerLayout &layout
       panes_.push_back(picture);
     }
 
-    // The title's own logo at its own texel size, narrowed only to fit the panel.
+    // The title's own logo, scaled to a share of the panel's width like the game scales its own art.
     if (source.logo != nullptr && !source.logo->empty()) {
-      const int logoWidth = std::clamp(geometry.averageWidth(), 1, source.logo->width());
+      const int logoWidth =
+          std::max(1, static_cast<int>(std::lround(static_cast<double>(geometry.averageWidth()) * kLogoPerPanelWidth)));
       const int logoHeight = std::max(
           1,
           static_cast<int>(std::lround(static_cast<double>(logoWidth) * source.logo->height() / source.logo->width())));

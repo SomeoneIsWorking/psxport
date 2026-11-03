@@ -173,6 +173,11 @@ public:
     (void)core;
     return std::nullopt;
   }
+  // The title's own attract demo is playing, so its title screen (and its logo) is not on screen.
+  virtual bool playsAttractDemo(Core &core) const {
+    (void)core;
+    return false;
+  }
 
   // The guest picture covers only the native width, so the present samples those columns alone.
   virtual bool guestPictureIsNativeWidth(const Game &game) const {
