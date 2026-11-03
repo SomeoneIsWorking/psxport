@@ -803,7 +803,6 @@ int Memcard::dispatchBiosB0(uint32_t fn, Core *c) {
 }
 
 void Memcard::install() {
-  init();
   // Publish the card as an installed BIOS device. Guest code that resolves a path prefix walks the
   // kernel device table itself instead of calling a BIOS vector (Tomba!2's card browser does, in
   // FUN_80080940), and an unpublished table is not "no devices" — it is a garbage base and length
