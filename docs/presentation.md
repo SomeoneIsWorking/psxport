@@ -362,10 +362,11 @@ trim over Spyro's feet, a wall seam over the floor), and leaves everything else 
   when that is not in front of the eye. `scale` is derived from the draw site's own transform against the
   common one (Spyro 1: terrain views the camera word >> 2; a moby's translation is that view << 2 >>
   its position shift, times scale / 32; Spyro's centre is world minus camera, so 1/4; the far terrain
-  pass works in world >> 4, so 4). `nearer` is the distance the guest itself sorts the object nearer
-  than its centre, read from the guest's own bin bias (a moby's z step, Spyro's depth-bias byte, each
-  in bins of 32 view units), so an object the retail sort keeps in front of the floor it stands in
-  stays in front. A producer's computed vertex (a split midpoint, a resplit) carries `screenBlendDepth`
+  pass works in world >> 4, so 4; a terrain grid point near the eye projects at 16x and the guest shifts its
+  SZ back, so that projection names 1/16). `nearer` is the distance the guest itself sorts the draw nearer
+  than it lies, read from the guest's own bin bias in bins of 32 view units: a moby's z step and Spyro's
+  depth-bias byte are nearer, the far terrain pass's base (Spyro 1 0x40 bins) is farther, so the
+  low-detail mesh never covers near terrain, as its slot never does. A producer's computed vertex (a split midpoint, a resplit) carries `screenBlendDepth`
   of its sources: 1/z is linear on screen.
 - **Who keeps it.** Over host memory the place travels with the word (`HostMemory`). Over guest
   memory `EmitMemory::storeVertex` notes (address, word, depth) in `Core::vertexDepths`
@@ -381,20 +382,21 @@ trim over Spyro's feet, a wall seam over the floor), and leaves everything else 
   never 2D, HUD, sky, translucent, decal or shadow producers. A primitive tests when it is a polygon,
   opaque, keyed to a marked producer and every vertex has depth > 0. `Polygon` (a terrain mesh the
   guest sorts per polygon) tests and writes per polygon. `Object` (a model the guest sorts into one
-  slot, its parts painter-ordered: a horn base over a crest) keeps the producer's own order among its
-  polygons, tests them against the scene drawn before, then writes the object's depth.
+  slot, its parts painter-ordered: a horn base over a crest) follows the guest's own rule for a model:
+  nothing the slot order drew before it covers it, so it draws over that scene in its own order without
+  testing, and writes its depth, so what the slot order puts after it (a ledge trim in a nearer bin) is
+  tested against it. A pedestal sunk into the grass keeps its buried rim, as retail draws it.
 - **How it draws.** A tested triangle is followed in the op buffer by a `DepthPlane` op (never drawn)
   holding its 1/z plane over native coordinates; the op carries `kOpDepthTest`, and an `Object`
-  polygon also `kOpDepthObject` and a parity bit that flips per object, so adjacent objects form
-  separate runs. Only the `RECORD_DEPTH` variant of `record.frag` reads the plane and writes
+  polygon also `kOpDepthObject`. Only the `RECORD_DEPTH` variant of `record.frag` reads the plane and writes
   `log2(z) / 16` to a D16 target. A plane's depth clears to far on its first pass of each record. In a
-  pass with tested quads, a `Polygon` run uses LESS_OR_EQUAL with writes; an `Object` run draws twice,
-  colour with LESS_OR_EQUAL and no write, then depth alone; every other run uses the plain shader with
-  ALWAYS and no write, in the same OT order, so marked and unmarked draws interleave exactly as the slot
+  pass with tested quads, a `Polygon` run uses LESS_OR_EQUAL with writes; an `Object` run ALWAYS with
+  writes, so its last-drawn part's depth is the one kept, as its colour is; every other run uses the plain
+  shader with ALWAYS and no write, in the same OT order, so marked and unmarked draws interleave exactly as the slot
   order says. A pass with none uses the pipeline with no depth target.
 - **Interpolation.** In-betweens re-run the producer body at `t`, so depth is re-projected with the
   vertex; there is no separate depth lerp.
-- **Off.** The `depth` setting (default off, `PSXPORT_DEPTH`, menu "Native Depth") passes no policy: no
+- **Off.** The `depth` setting (default on, `PSXPORT_DEPTH`, menu "Native Depth") off passes no policy: no
   op tests, so no plane is written and the planner and rasterizer take the slot-order path unchanged.
   The menu row shows only for a title that marks a producer (`Mods::nativeDepthOffered`). Off is the
   slot-order record picture, which is not the device picture: at 4:3, ires 1, one Toasty portal frame's
@@ -403,12 +405,14 @@ trim over Spyro's feet, a wall seam over the floor), and leaves everything else 
 - **Cost.** One multiply per projected vertex read, one table write per stored vertex and one table
   check per guest store once a title has noted a depth, one extra op per tested triangle; a title or
   op that marks nothing pays no op words and no `gl_FragDepth`. Nothing per pixel on the CPU and
-  nothing that scales with ires.
+  nothing that scales with ires. Measured on Spyro 1's Stone Hill terrace (600 fields, ires 8x, 4K sink,
+  `perf stat instructions:u` on the main thread): 195.8 G on against 192.3 G off, 1.8%. The store check
+  (`VertexDepths::forget`) is 0.4% of the thread's instructions, the read (`at`) 0.5%, on or off.
 - **Check it.** Spyro 1, Toasty portal (`warp Artisans/Toasty/portal`): the rock wall meets the floor along its
   real intersection with depth on; `PSXPORT_DEPTH=0` shows the wall's slot-order overlap. Spyro,
-  his toes, horns and crest draw the same with depth on and off. It stays off by default because true
-  depth also shows what the retail sort hides: at the Artisans fountain (`warp Artisans/Artisans/dragon 4`) a moby
-  pedestal sunk into the ground loses its outer rim to the grass (psx-spyro issue 0223).
+  his toes, horns and crest draw the same with depth on and off. At the Artisans fountain
+  (`warp Artisans/Artisans/dragon 4`) the sunk pedestal keeps its rim and no far-pass river shows
+  through the wall in the 16:9 margin (psx-spyro issue 0223).
 
 Planned effects, all reading those attributes: dynamic lighting with real shadows, vertex smoothing
 (normals averaged across shared vertices) and SSAO. They are chosen by preset (off, low, high), not
@@ -693,6 +697,5 @@ state names it through `GameRuntime::nativeState`, and a state carries the activ
 
 The native and GTE draw paths, the render queue, painter, keyed blend and every title's
 `RenderCapabilities` are deleted; `record` and `device` are the only paths. Remaining work:
-`StateProducer` renders for each title's keyed producers by census rank; native depth on by default
-(Spyro 1 marks its terrain, mobys and Spyro; objects sunk into terrain lose their buried rim, psx-spyro
-issue 0223), depth for every other title, and depth for guest-code SWC2 stores.
+`StateProducer` renders for each title's keyed producers by census rank; depth for every title but
+Spyro 1, and depth for guest-code SWC2 stores.

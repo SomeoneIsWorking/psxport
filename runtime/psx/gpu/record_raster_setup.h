@@ -98,8 +98,7 @@ enum RecordOpFlag : std::uint32_t {
   kOpFlipY = 1u << 23,
   kOpReadBack = 1u << 24, // texels from the read-back capture, not VRAM
   kOpDepthTest = 1u << 25,   // tests depth (present::DepthTest); the next op is its DepthPlane
-  kOpDepthObject = 1u << 26, // DepthOrder::Object: tested in its object's order, then writes depth
-  kOpDepthParity = 1u << 27, // flips at each new object, so adjacent objects draw apart
+  kOpDepthObject = 1u << 26, // DepthOrder::Object: draws over what came before it and writes its depth
 };
 
 // One rectangle of a plane's pixels belonging to an op, scaled, half open. Op origins are in VRAM space,
