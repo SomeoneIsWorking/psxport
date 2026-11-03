@@ -404,10 +404,10 @@ trim over Spyro's feet, a wall seam over the floor), and leaves everything else 
   check per guest store once a title has noted a depth, one extra op per tested triangle; a title or
   op that marks nothing pays no op words and no `gl_FragDepth`. Nothing per pixel on the CPU and
   nothing that scales with ires.
-- **Check it.** Spyro 1, Toasty portal (`gate-teleport 0 0`): the rock wall meets the floor along its
+- **Check it.** Spyro 1, Toasty portal (`warp Artisans/Toasty/portal`): the rock wall meets the floor along its
   real intersection with depth on; `PSXPORT_DEPTH=0` shows the wall's slot-order overlap. Spyro,
   his toes, horns and crest draw the same with depth on and off. It stays off by default because true
-  depth also shows what the retail sort hides: at the Artisans fountain (`dragon-teleport 3`) a moby
+  depth also shows what the retail sort hides: at the Artisans fountain (`warp Artisans/Artisans/dragon 4`) a moby
   pedestal sunk into the ground loses its outer rim to the grass (psx-spyro issue 0223).
 
 Planned effects, all reading those attributes: dynamic lighting with real shadows, vertex smoothing

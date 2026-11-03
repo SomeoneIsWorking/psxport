@@ -250,13 +250,17 @@ void TitleDebugMenu::section(std::string_view heading) {
 }
 
 void TitleDebugMenu::verb(DebugVerb verb) {
+  current().verbs.push_back(add(std::move(verb)));
+}
+
+std::size_t TitleDebugMenu::add(DebugVerb verb) {
   if (verb.params.size() > kMaxDebugParams) {
     lucent::error(
         "debug-menu", "verb {} declares {} parameters; at most {}", verb.name, verb.params.size(), kMaxDebugParams);
     std::abort();
   }
-  current().verbs.push_back(verbs_.size());
   verbs_.push_back(std::move(verb));
+  return verbs_.size() - 1;
 }
 
 void TitleDebugMenu::readout(std::string_view label, std::function<std::string(Core &)> text) {
@@ -317,8 +321,8 @@ void TitleDebugMenu::screen(std::function<std::uint64_t(Core &)> key,
 
 void TitleDebugMenu::warp(WarpCatalogue catalogue) {
   warp_ = std::move(catalogue);
-  section("Warp");
-  verb({
+  // In no section: the Debug tab draws the catalogue's pickers under their own heading.
+  add({
       .name = "warp",
       .summary = "Go to a place: names or numbers joined by '/', '?' lists",
       .params = {DebugParam::text("path").orAbsent()},
@@ -380,8 +384,9 @@ std::string TitleDebugMenu::warpTo(Core &core, std::string_view path) const {
   if (const std::string refusal = warpRefusal(core); !refusal.empty()) {
     return "refused: " + refusal;
   }
-  lucent::info("warp", "arrival {} armed", reached);
-  return place->arrive(core);
+  std::string reply = place->arrive(core);
+  lucent::info("warp", "{}: {}", reached, reply);
+  return reply;
 }
 
 void TitleDebugMenu::aboutLine(std::string_view line) {

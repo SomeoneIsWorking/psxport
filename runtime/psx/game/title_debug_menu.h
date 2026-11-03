@@ -188,7 +188,8 @@ public:
   std::uint64_t screenKey(Core &core) const {
     return screenKey_ ? screenKey_(core) : 0u;
   }
-  // The control-channel line that reaches the screen `key` names ("warp 11"); empty when no route does.
+  // The control-channel line that reaches the screen `key` names ("warp Artisans/Stone Hill/start"); empty when no
+  // route does.
   std::string screenRoute(Core &core, std::uint64_t key) const {
     return screenRoute_ ? screenRoute_(core, key) : std::string{};
   }
@@ -203,7 +204,7 @@ protected:
   void readout(std::string_view label, std::function<std::string(Core &)> text);
   // `music <track>` and `music-stop` over the title's TitleAudio, with a now-playing readout.
   void soundTest();
-  // The `warp <path>` verb over the title's catalogue, under its own heading.
+  // The `warp <path>` verb over the title's catalogue; the verbs and readouts after it stay in the current section.
   void warp(WarpCatalogue catalogue);
   // A credit or prior-art line under the framework's own About lines.
   void aboutLine(std::string_view line);
@@ -212,6 +213,8 @@ protected:
 
 private:
   Section &current();
+  // Registers a verb in no section; its index in verbs().
+  std::size_t add(DebugVerb verb);
 
   std::vector<DebugVerb> verbs_;
   std::vector<DebugReadout> readouts_;
