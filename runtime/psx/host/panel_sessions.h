@@ -9,7 +9,6 @@
 
 #include <memory>
 #include <string>
-#include <utility>
 #include <vector>
 
 class Core;
@@ -65,8 +64,8 @@ public:
   void report() const;
 
 private:
-  // Read this panel's own logo from its live machine and save it once it holds still; a no-op once read in this
-  // process.
+  // Read this panel's own logo from its live machine and save it once a whole frame was drawn inside its gate;
+  // a no-op once read in this process.
   void takeLogo(int panel, TitleSession &session);
   // Guest instructions this panel's machine has executed; 0 before it boots.
   std::uint64_t executedInstructions(int panel) const;
@@ -81,8 +80,8 @@ private:
   // Each panel's logo: the saved one until its running title gives one.
   std::vector<std::unique_ptr<PanelLogo>> logos_;
   std::vector<bool> logoRead_;
-  // The size the previous step's read had; a logo is taken once two steps in a row read it at one size.
-  std::vector<std::pair<int, int>> lastReadSize_;
+  // The previous step's read found the title's logo gate open, so this step's frame was drawn wholly inside it.
+  std::vector<bool> gateOpenBefore_;
   int focused_ = 0;
 };
 

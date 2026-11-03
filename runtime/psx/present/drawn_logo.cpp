@@ -1,35 +1,18 @@
 #include "drawn_logo.h"
 
 #include "frame_record.h"
+#include "gpu_device.h"
 #include "vram_pixel.h"
 
 #include <algorithm>
-#include <array>
 #include <cstddef>
+#include <cstdint>
 #include <utility>
 #include <variant>
 #include <vector>
 
 namespace psx::present {
 namespace {
-
-// A wordmark fits one display; anything larger is not a logo.
-constexpr int kMaximumSide = 1024;
-
-struct Canvas {
-  int left = 0;
-  int top = 0;
-  int width = 0;
-  int height = 0;
-  std::vector<std::uint8_t> rgba;
-};
-
-struct TexelSource {
-  std::span<const std::uint16_t> vram;
-  psx::gpu::TexPage page;
-  psx::gpu::VramPoint clut;
-  bool modulate = false;
-};
 
 bool samples(const DrawPrimitive &primitive, std::span<const LogoTexture> textures) {
   if (!primitive.textured || primitive.kind == PrimitiveKind::Line) {
@@ -42,7 +25,7 @@ bool samples(const DrawPrimitive &primitive, std::span<const LogoTexture> textur
   });
 }
 
-// Screen bounds of the primitives drawn so far, right and bottom exclusive.
+// Screen bounds of the primitives drawn so far inside their draw areas, right and bottom exclusive.
 struct Bounds {
   int left = 0;
   int top = 0;
@@ -50,117 +33,131 @@ struct Bounds {
   int bottom = 0;
   bool empty = true;
 
-  void include(int x, int y, int width, int height) {
+  void include(int x0, int y0, int x1, int y1) {
     if (empty) {
-      *this = {x, y, x + width, y + height, false};
+      *this = {x0, y0, x1, y1, false};
       return;
     }
-    left = std::min(left, x);
-    top = std::min(top, y);
-    right = std::max(right, x + width);
-    bottom = std::max(bottom, y + height);
+    left = std::min(left, x0);
+    top = std::min(top, y0);
+    right = std::max(right, x1);
+    bottom = std::max(bottom, y1);
   }
 
   void include(const DrawPrimitive &primitive) {
-    if (primitive.kind == PrimitiveKind::Sprite) {
-      include(primitive.vertices[0].x, primitive.vertices[0].y, primitive.width, primitive.height);
-      return;
+    int x0 = primitive.vertices[0].x;
+    int y0 = primitive.vertices[0].y;
+    int x1 = x0 + primitive.width;
+    int y1 = y0 + primitive.height;
+    // gpu.c leaves a polygon's rightmost column and bottom row undrawn.
+    if (primitive.kind != PrimitiveKind::Sprite) {
+      x1 = x0;
+      y1 = y0;
+      for (int vertex = 1; vertex < primitive.vertexCount; ++vertex) {
+        const RecordVertex &at = primitive.vertices[static_cast<std::size_t>(vertex)];
+        x0 = std::min(x0, at.x);
+        y0 = std::min(y0, at.y);
+        x1 = std::max(x1, at.x);
+        y1 = std::max(y1, at.y);
+      }
     }
-    for (int vertex = 0; vertex < primitive.vertexCount; ++vertex) {
-      const RecordVertex &at = primitive.vertices[static_cast<std::size_t>(vertex)];
-      include(at.x, at.y, 1, 1);
+    const RecordDrawState &state = primitive.state;
+    x0 = std::max({x0, state.clipX0, 0});
+    y0 = std::max({y0, state.clipY0, 0});
+    x1 = std::min({x1, state.clipX1 + 1, psx::gpu::kVramWidth});
+    y1 = std::min({y1, state.clipY1 + 1, psx::gpu::kVramHeight});
+    if (x1 > x0 && y1 > y0) {
+      include(x0, y0, x1, y1);
     }
   }
 };
 
-// One pixel at `at` (position, texture coordinate, colour). Texel 0 is not drawn; modulation is the GPU's
-// colour * texel / 128.
-void plot(Canvas &canvas, const TexelSource &source, const RecordVertex &at) {
-  const int column = at.x - canvas.left;
-  const int row = at.y - canvas.top;
-  if (column < 0 || column >= canvas.width || row < 0 || row >= canvas.height) {
-    return;
-  }
-  const std::uint16_t texel = psx::gpu::sampleTexel(source.vram, source.page, source.clut, at.u, at.v);
-  if (texel == 0) {
-    return;
-  }
-  const psx::gpu::VramPixel pixel = psx::gpu::decodeVramPixel(texel);
-  std::array<int, 3> channel{
-      psx::gpu::scale5to8(pixel.red), psx::gpu::scale5to8(pixel.green), psx::gpu::scale5to8(pixel.blue)};
-  if (source.modulate) {
-    channel[0] = std::min(255, channel[0] * at.r / 128);
-    channel[1] = std::min(255, channel[1] * at.g / 128);
-    channel[2] = std::min(255, channel[2] * at.b / 128);
-  }
-  std::uint8_t *out = &canvas.rgba[((static_cast<std::size_t>(row) * canvas.width) + column) * 4];
-  out[0] = static_cast<std::uint8_t>(channel[0]);
-  out[1] = static_cast<std::uint8_t>(channel[1]);
-  out[2] = static_cast<std::uint8_t>(channel[2]);
-  out[3] = 255;
-}
+// GP0 words that make gpu.c draw `primitive` as it was recorded, its vertices relative to the draw offset
+// `origin`.
+class PrimitiveWords {
+public:
+  PrimitiveWords(const DrawPrimitive &primitive, psx::gpu::VramPoint origin) : primitive_(primitive), origin_(origin) {}
 
-void drawSprite(Canvas &canvas, const TexelSource &source, const DrawPrimitive &primitive) {
-  const RecordVertex &at = primitive.vertices[0];
-  for (int row = 0; row < primitive.height; ++row) {
-    for (int column = 0; column < primitive.width; ++column) {
-      RecordVertex texel = at;
-      texel.x = at.x + column;
-      texel.y = at.y + row;
-      texel.u = static_cast<std::uint8_t>(at.u + (primitive.flipX ? -column : column));
-      texel.v = static_cast<std::uint8_t>(at.v + (primitive.flipY ? -row : row));
-      plot(canvas, source, texel);
+  void sendTo(psx::gpu::GpuDevice &device) const {
+    const RecordDrawState &state = primitive_.state;
+    device.gp0((0xE1u << 24) | texPage() | (primitive_.flipX ? 1u << 12 : 0u) | (primitive_.flipY ? 1u << 13 : 0u));
+    device.gp0((0xE2u << 24) | static_cast<std::uint32_t>(state.windowMaskX & 0x1F) |
+               (static_cast<std::uint32_t>(state.windowMaskY & 0x1F) << 5) |
+               (static_cast<std::uint32_t>(state.windowOffsetX & 0x1F) << 10) |
+               (static_cast<std::uint32_t>(state.windowOffsetY & 0x1F) << 15));
+    device.gp0((0xE3u << 24) | corner(state.clipX0, state.clipY0));
+    device.gp0((0xE4u << 24) | corner(state.clipX1, state.clipY1));
+    device.gp0((0xE5u << 24) | (static_cast<std::uint32_t>(origin_.x) & 0x7FFu) |
+               ((static_cast<std::uint32_t>(origin_.y) & 0x7FFu) << 11));
+    if (primitive_.kind == PrimitiveKind::Sprite) {
+      device.gp0(colour(0) | ((0x64u | flags()) << 24));
+      device.gp0(position(0));
+      device.gp0(texel(0) | (static_cast<std::uint32_t>(primitive_.clutWord) << 16));
+      device.gp0((static_cast<std::uint32_t>(primitive_.height) << 16) | static_cast<std::uint32_t>(primitive_.width));
+      return;
     }
-  }
-}
-
-// Affine over pixel centres, as the GPU interpolates texture coordinates.
-void drawTriangle(
-    Canvas &canvas, const TexelSource &source, const RecordVertex &a, const RecordVertex &b, const RecordVertex &c) {
-  const long long area =
-      (static_cast<long long>(b.x - a.x) * (c.y - a.y)) - (static_cast<long long>(b.y - a.y) * (c.x - a.x));
-  if (area == 0) {
-    return;
-  }
-  const int left = std::min({a.x, b.x, c.x});
-  const int right = std::max({a.x, b.x, c.x});
-  const int top = std::min({a.y, b.y, c.y});
-  const int bottom = std::max({a.y, b.y, c.y});
-  const double inverse = 1.0 / static_cast<double>(area);
-  for (int y = top; y < bottom; ++y) {
-    for (int x = left; x < right; ++x) {
-      const double px = x + 0.5;
-      const double py = y + 0.5;
-      const double wa = (((b.x - px) * (c.y - py)) - ((b.y - py) * (c.x - px))) * inverse;
-      const double wb = (((c.x - px) * (a.y - py)) - ((c.y - py) * (a.x - px))) * inverse;
-      const double wc = 1.0 - wa - wb;
-      if (wa < 0.0 || wb < 0.0 || wc < 0.0) {
-        continue;
+    const std::uint32_t command =
+        0x24u | flags() | (primitive_.gouraud ? 0x10u : 0u) | (primitive_.vertexCount == 4 ? 0x08u : 0u);
+    for (int vertex = 0; vertex < primitive_.vertexCount; ++vertex) {
+      if (vertex == 0) {
+        device.gp0(colour(0) | (command << 24));
+      } else if (primitive_.gouraud) {
+        device.gp0(colour(vertex));
       }
-      const auto mix = [&](int ka, int kb, int kc) {
-        return static_cast<std::uint8_t>((wa * ka) + (wb * kb) + (wc * kc));
-      };
-      RecordVertex texel;
-      texel.x = x;
-      texel.y = y;
-      texel.u = mix(a.u, b.u, c.u);
-      texel.v = mix(a.v, b.v, c.v);
-      texel.r = mix(a.r, b.r, c.r);
-      texel.g = mix(a.g, b.g, c.g);
-      texel.b = mix(a.b, b.b, c.b);
-      plot(canvas, source, texel);
+      device.gp0(position(vertex));
+      std::uint32_t attribute = 0;
+      if (vertex == 0) {
+        attribute = primitive_.clutWord;
+      } else if (vertex == 1) {
+        attribute = texPage();
+      }
+      device.gp0(texel(vertex) | (attribute << 16));
     }
   }
-}
 
-// Under one texel in fifty drawn is a fade or a part, not the wordmark; a saved empty panel would last.
-bool holdsArtwork(const Canvas &canvas) {
-  std::size_t visible = 0;
-  for (std::size_t at = 3; at < canvas.rgba.size(); at += 4) {
-    visible += canvas.rgba[at] != 0 ? 1 : 0;
+private:
+  // Semi-transparency, and raw texture when the texel is not modulated.
+  std::uint32_t flags() const {
+    return (primitive_.semiTransparent ? 0x02u : 0u) | (primitive_.modulate ? 0u : 0x01u);
   }
-  return visible * 50 >= static_cast<std::size_t>(canvas.width) * canvas.height;
-}
+
+  std::uint32_t texPage() const {
+    const RecordDrawState &state = primitive_.state;
+    return (static_cast<std::uint32_t>(state.texPageX / 64) & 0xFu) |
+           ((static_cast<std::uint32_t>(state.texPageY / 256) & 1u) << 4) |
+           ((static_cast<std::uint32_t>(state.blendMode) & 3u) << 5) |
+           ((static_cast<std::uint32_t>(state.texMode) & 3u) << 7) | (1u << 10);
+  }
+
+  static std::uint32_t corner(int x, int y) {
+    return (static_cast<std::uint32_t>(std::clamp(x, 0, 1023))) |
+           (static_cast<std::uint32_t>(std::clamp(y, 0, 511)) << 10);
+  }
+
+  const RecordVertex &vertex(int index) const {
+    return primitive_.vertices[static_cast<std::size_t>(index)];
+  }
+
+  std::uint32_t colour(int index) const {
+    const RecordVertex &at = vertex(index);
+    return static_cast<std::uint32_t>(at.r) | (static_cast<std::uint32_t>(at.g) << 8) |
+           (static_cast<std::uint32_t>(at.b) << 16);
+  }
+
+  std::uint32_t position(int index) const {
+    const RecordVertex &at = vertex(index);
+    return (static_cast<std::uint32_t>(at.x - origin_.x) & 0x7FFu) |
+           ((static_cast<std::uint32_t>(at.y - origin_.y) & 0x7FFu) << 16);
+  }
+
+  std::uint32_t texel(int index) const {
+    const RecordVertex &at = vertex(index);
+    return static_cast<std::uint32_t>(at.u) | (static_cast<std::uint32_t>(at.v) << 8);
+  }
+
+  const DrawPrimitive &primitive_;
+  psx::gpu::VramPoint origin_;
+};
 
 } // namespace
 
@@ -176,37 +173,48 @@ drawnLogo(const FrameRecord &record, std::span<const std::uint16_t> vram, std::s
     bounds.include(*primitive);
     drawn.push_back(primitive);
   }
+  if (drawn.empty() || bounds.empty) {
+    return std::nullopt;
+  }
   const int width = bounds.right - bounds.left;
   const int height = bounds.bottom - bounds.top;
-  if (drawn.empty() || width <= 0 || height <= 0 || width > kMaximumSide || height > kMaximumSide) {
-    return std::nullopt;
+
+  // Binding the scratch device parks the live one, whose VRAM `vram` views.
+  const std::vector<std::uint16_t> textureSource(vram.begin(), vram.end());
+  psx::gpu::GpuDevice device;
+  device.loadImage({0, 0, psx::gpu::kVramWidth, psx::gpu::kVramHeight}, textureSource, 0);
+  const std::vector<std::uint16_t> cleared(static_cast<std::size_t>(width) * height, 0);
+  device.loadImage({bounds.left, bounds.top, width, height}, cleared, 0);
+  // Every pixel the logo writes carries the mask bit; texel 0 writes nothing and stays clear.
+  device.gp0(0xE6000001u);
+  const psx::gpu::VramPoint origin{bounds.left, bounds.top};
+  for (const DrawPrimitive *primitive : drawn) {
+    PrimitiveWords(*primitive, origin).sendTo(device);
   }
 
-  Canvas canvas{bounds.left,
-                bounds.top,
-                width,
-                height,
-                std::vector<std::uint8_t>(static_cast<std::size_t>(width) * height * 4, 0)};
-  for (const DrawPrimitive *primitive : drawn) {
-    psx::gpu::TexPage page{primitive->state.texPageX,
-                           primitive->state.texPageY,
-                           primitive->state.blendMode,
-                           static_cast<psx::gpu::TexDepth>(primitive->state.texMode & 3)};
-    const TexelSource source{vram, page, psx::gpu::decodeClut(primitive->clutWord), primitive->modulate};
-    if (primitive->kind == PrimitiveKind::Sprite) {
-      drawSprite(canvas, source, *primitive);
-      continue;
-    }
-    const std::array<RecordVertex, 4> &corner = primitive->vertices;
-    drawTriangle(canvas, source, corner[0], corner[1], corner[2]);
-    if (primitive->vertexCount == 4) {
-      drawTriangle(canvas, source, corner[1], corner[2], corner[3]);
+  const std::span<const std::uint16_t> drawnVram = device.vram();
+  std::vector<std::uint8_t> rgba(static_cast<std::size_t>(width) * height * 4, 0);
+  bool written = false;
+  for (int row = 0; row < height; ++row) {
+    for (int column = 0; column < width; ++column) {
+      const std::uint16_t halfWord =
+          drawnVram[(static_cast<std::size_t>(bounds.top + row) * psx::gpu::kVramWidth) + bounds.left + column];
+      const psx::gpu::VramPixel pixel = psx::gpu::decodeVramPixel(halfWord);
+      if (!pixel.mask) {
+        continue;
+      }
+      written = true;
+      std::uint8_t *out = &rgba[((static_cast<std::size_t>(row) * width) + column) * 4];
+      out[0] = static_cast<std::uint8_t>(psx::gpu::scale5to8(pixel.red));
+      out[1] = static_cast<std::uint8_t>(psx::gpu::scale5to8(pixel.green));
+      out[2] = static_cast<std::uint8_t>(psx::gpu::scale5to8(pixel.blue));
+      out[3] = 255;
     }
   }
-  if (!holdsArtwork(canvas)) {
+  if (!written) {
     return std::nullopt;
   }
-  return psx::host::LogoImage{width, height, std::move(canvas.rgba)};
+  return psx::host::LogoImage{width, height, std::move(rgba)};
 }
 
 } // namespace psx::present

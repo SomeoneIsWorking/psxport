@@ -14,6 +14,12 @@ inline constexpr double logoCentrePerHeight = 0.2;
 // A catalog longer than this is refused rather than laid out at zero width.
 inline constexpr int kMaxPickerPanels = 8;
 
+// A logo's size in texels.
+struct LogoSize {
+  int width = 0;
+  int height = 0;
+};
+
 // One panel's geometry for one frame, in surface pixels.
 struct PanelLayout {
   // Full height, between the neighbouring boundaries.
@@ -28,9 +34,10 @@ struct PanelLayout {
   // Upright, covering every point the seams enclose: neighbours overlap across their shared seam by
   // up to one slant, and the mask decides which owns each pixel there.
   psx::present::PaneRect cover{0, 0, 0, 0};
-  // A logo of this many texels at the largest whole multiple that stays inside the seams over the rows
-  // it covers (shrunk to fit below one), centred between them, its centre at `logoCentrePerHeight`.
-  psx::present::PaneRect logoRect(int texelWidth, int texelHeight) const;
+  // A logo of this many texels at the largest whole multiple at which `largest`, the selector's largest logo,
+  // stays inside the seams over the rows it covers (shrunk to fit below one), centred between them, its centre at
+  // `logoCentrePerHeight`. Panels of one width draw their logos at one texel scale.
+  psx::present::PaneRect logoRect(LogoSize logo, LogoSize largest) const;
   int slantX = 0; // the top of a seam sits this many pixels left of its bottom
 };
 

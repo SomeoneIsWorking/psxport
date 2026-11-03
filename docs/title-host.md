@@ -107,7 +107,10 @@ and a title's own run-end lines come from `reportRun`.
 - `panelLogo(Core &)`: the title's own logo, read from its live machine; `nullopt` until there is one. A title
   usually answers with `psx::present::drawnLogo` (`runtime/psx/present/drawn_logo.h`) at its title screen's own
   gate: the last committed frame's textured primitives that sample the wordmark's texture page (and palette,
-  when the page holds other art), rasterized from VRAM into one image over their screen bounds.
+  when the page holds other art), drawn again by gpu.c on a scratch `GpuDevice` holding the live VRAM, over a
+  cleared canvas with GP0(E6) setting the mask bit, so a pixel is the logo's exactly where the device wrote it.
+  The title's gate is guest state that holds only once the wordmark is finished (Spyro: the title screen's
+  waiting sub-state).
 - `showsOwnLogo(Core &)`: the title's picture shows its own logo right now (its title screen); `false`
   by default, so a panel with a logo always draws it.
 - `reportRun(Core &)`: title-specific lines after the framework's `run complete` line.
@@ -151,15 +154,16 @@ return` or the ESC row ends it as `ReturnedToSelector` and the selector is rebui
   when it lost focus) greyed, and its logo. A panel never focused yet has no picture; it shows its logo
   on black when one is saved.
 - **The logo comes from the running game.** `GameRuntime::panelLogo(Core &)` reads the title's own
-  logo from its live machine (its title screen's own draws from VRAM while that screen is up). It is taken once
-  two steps in a row read it at one size, so a logo still sliding or spinning in is not kept. The first read in a selector
+  logo from its live machine (its title screen's own draws from VRAM while that screen is up). It is taken on
+  the second step in a row its gate is open, so the frame read was drawn wholly inside the gate. The first read in a selector
   replaces the panel's logo and is saved (`SavedLogo`, `picker-logo.rgba` in the title's user-data
   directory, beside `disc-path`); every later selector loads it when it creates its panels, so a panel
   shows its logo from the selector's first frame without running its title. A title never focused on
   this machine has no logo until its title screen first shows. No committed image of game art is drawn:
   the saved file is read from the player's own disc at run time. `PanelLayout::logoRect` sizes it
-  at the largest whole multiple of its texels that stays inside the panel's seams over the rows it covers
-  (shrunk to fit only when one multiple does not), its centre at a fifth of the panel's height, so the
+  at the largest whole multiple at which the selector's largest logo stays inside the panel's seams over the
+  rows it covers (shrunk to fit only when one multiple does not), so panels of one width draw every logo at
+  one texel scale, as large against each other as on their own title screens; its centre at a fifth of the panel's height, so the
   nearest sampler keeps it sharp and a narrow panel never cuts it. It is hidden while
   `GameRuntime::showsOwnLogo(Core &)` says the panel's picture already shows it. The question is asked of
   every panel's machine, focused or paused: a paused machine holds the state its still was drawn from.
