@@ -13,7 +13,7 @@ Dependency direction: title repo → `runtime/psx/game/` (the title interface) �
 - `runtime/psx/game/game_runtime.*` — the title interface: GameRuntime virtuals, FrameDriver, title audio and sound-test track names, host identity, the title's debug menu
 - `runtime/psx/game/game.*` — one machine instance: Core, devices, presenters, session wiring
 - `runtime/psx/game/session_run.*` — a title asking to end its run
-- `runtime/psx/game/title_debug_menu.*` — TitleDebugMenu: a title's debug verbs (warp, teleport, items), typed parameters (integer range, hex, named enumeration, word list, optional), refusals, sections, readouts, sound test, About lines; one table behind the control channel, REPL, `help` and the Debug tab
+- `runtime/psx/game/title_debug_menu.*` — TitleDebugMenu: a title's debug verbs (items, flags, diagnostics), typed parameters (integer range, hex, named enumeration, word list, text, optional), refusals, sections, readouts, sound test, About lines, and the warp catalogue (a named place tree behind the one `warp <path>` verb); one table behind the control channel, REPL, `help` and the Debug tab
 - `runtime/psx/game/title_settings.h`, `mods.*` — per-Game live player settings (aspect / widescreen, internal resolution / ires, fps60, selector layout), the settings file, title-declared integer settings
 - `runtime/psx/game/crt0_boot.*`, `crt0_scan.h` — PSY-Q crt0 boot group decoded from the guest prologue and replayed natively: gp, sp, heap, InitHeap, .bss
 - `runtime/psx/game/psx_exe_image.*`, `disc_executable.*` — PS-X EXE header parse, top-level executable load and entry registers, second executable from disc (boot stub hand-off)

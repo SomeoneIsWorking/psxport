@@ -56,7 +56,9 @@ The reason is the framework/game seam: **the menu's structure is CONTENT.** A ga
 The two generated exceptions are the Debug tab's `#title_debug` and the About tab's `#about`:
 `TitleDebugRows` fills them from the running title's `TitleDebugMenu` before the panes adopt their
 rows, so every title gets its own warps, readouts, sound test and About lines with no title text in
-`menu.rml`. Row ids are `debug:<verb>:<param>` (a stepped parameter) and `debug:<verb>` (run).
+`menu.rml`. Row ids are `debug:<verb>:<param>` (a stepped parameter) and `debug:<verb>` (run). A title with a warp
+catalogue gets a Warp section first: `debug:warp:<level>` steps one picker among the places under the pickers above
+it (stepping resets the pickers below), and `debug:warp` (Go) sends `warp <i>/<j>/<k>`.
 
 ## ONE stack, not two — the ImGui decision (2026-08-06)
 
