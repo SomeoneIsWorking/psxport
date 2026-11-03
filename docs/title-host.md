@@ -19,6 +19,7 @@ catalog contract a title implements (`title_catalog.h`, `single_title_catalog`, 
 | `executable_provisioner.{h,cpp}` | `provisionExecutable`: a missing `<root>/<slug>/<serial>` extracted from the title's own disc, authenticated before it is written |
 | `title_disc.{h,cpp}` | `TitleDisc`: a title's disc for one read, keyed (`discEnvVar`, `PSXPORT_DISC`, the saved choice) or one exact image |
 | `saved_disc.{h,cpp}` | `SavedDisc`: the disc image the player chose at first run, `<user data>/<slug>/disc-path`, and `bind` that points a `DiscState` at the title's key and then at it |
+| `title_user_file.{h,cpp}` | `TitleUserFile`: one file in a title's user-data directory and its whole-file replace (written to `<file>.pending`, renamed over); `SavedDisc` and `SavedLogo` keep their files through it |
 | `first_run_setup.{h,cpp}` | `FirstRunSetup`: the shared setup-ui screen that asks for the disc (`judge` is its validator), saved through `SavedDisc` |
 | `title_session.{h,cpp}` | `TitleSession`: one boot-to-exit run of one title as a steppable owner; destruction is the whole teardown |
 | `session_run.h` (`runtime/psx/game/`) | `SessionRun`, held per `Game` as `Game::run`: a title's request to end its run |
@@ -29,7 +30,7 @@ catalog contract a title implements (`title_catalog.h`, `single_title_catalog`, 
 | `picker_content.{h,cpp}` | `PickerContent`: the available titles and the panel-to-title mapping |
 | `picker_layout.{h,cpp}` | `PickerLayout`: panel geometry, seams, the width animation and each panel's present size |
 | `picker_panes.{h,cpp}` | `PickerPanes`: the panes one selector frame draws: each panel's picture 1:1, its logo, the seams |
-| `panel_logo.{h,cpp}` | `PanelLogo`: a `LogoImage` plus its lazily uploaded texture |
+| `panel_logo.{h,cpp}` | `PanelLogo`: a `LogoImage` plus its lazily uploaded texture; `SavedLogo`: the last logo read from the running title, `<user data>/<slug>/picker-logo.rgba` |
 | `logo_image.h` | `LogoImage`: straight-alpha RGBA8, included by `game_runtime.h` without SDL |
 | `product_host.{h,cpp}` | `ProductHost`: the process top level; owns the command line and help, the window and device, the `QuitScope`, the `RunBudget` and the process watchdog |
 | `product_main.cpp` | The framework's only `main`: builds the title's catalog and calls `ProductHost::run`; compiled into each product by `psxport_add_product` |
@@ -103,7 +104,10 @@ and a title's own run-end lines come from `reportRun`.
 
 `GameRuntime` carries two optional virtuals the host asks, each with a neutral default:
 
-- `panelLogo(Core &)`: the title's own logo, read from its live machine; `nullopt` until there is one.
+- `panelLogo(Core &)`: the title's own logo, read from its live machine; `nullopt` until there is one. A title
+  usually answers with `psx::present::drawnLogo` (`runtime/psx/present/drawn_logo.h`) at its title screen's own
+  gate: the last committed frame's textured primitives that sample the wordmark's texture page (and palette,
+  when the page holds other art), rasterized from VRAM into one image over their screen bounds.
 - `showsOwnLogo(Core &)`: the title's picture shows its own logo right now (its title screen); `false`
   by default, so a panel with a logo always draws it.
 - `reportRun(Core &)`: title-specific lines after the framework's `run complete` line.
@@ -147,7 +151,7 @@ return` or the ESC row ends it as `ReturnedToSelector` and the selector is rebui
   when it lost focus) greyed, and its logo. A panel never focused yet has no picture; it shows its logo
   on black when one is saved.
 - **The logo comes from the running game.** `GameRuntime::panelLogo(Core &)` reads the title's own
-  logo from its live machine (its VRAM while its title screen is up). The first read in a selector
+  logo from its live machine (its title screen's own draws from VRAM while that screen is up). The first read in a selector
   replaces the panel's logo and is saved (`SavedLogo`, `picker-logo.rgba` in the title's user-data
   directory, beside `disc-path`); every later selector loads it when it creates its panels, so a panel
   shows its logo from the selector's first frame without running its title. A title never focused on
@@ -170,7 +174,8 @@ changed setting reaches the focused panel (`Mods::reload`). D-pad Left/Right and
 move the focus with wrap; Cross or Start confirms. The selector's Game holds the control channel; a
 verb its own menu does not name and that acts on a machine (`DebugCommands::reachesMachine`: memory,
 registers, the machine's picture, its devices, a title's own verbs) runs on the focused panel's machine
-once it has booted (`DbgServer::routeMachineVerbsTo`), and window, host-input and configuration verbs
+once it has booted (`DbgServer::routeMachineVerbsToPanel`) and is refused with `focused panel not booted` before
+that, and window, host-input and configuration verbs
 (`pshot`, `gamepad`, `cvar`) stay on the selector. Panel 0 starts focused. Each panel presents at its
 settled cover size and is drawn 1:1 (`presentation.md`). The focused panel's share of the window width
 is the settings file's `picker_selected_share` (default 0.6) and the others split the rest evenly

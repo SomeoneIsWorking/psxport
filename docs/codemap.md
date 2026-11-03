@@ -4,9 +4,9 @@ Dependency direction: title repo → `runtime/psx/game/` (the title interface) �
 
 - `runtime/psx/host/product_host.*`, `product_main.cpp` — the one `main`, process top level, command line, window and GPU device lifetime across sessions, quit request, title selector then title then selector loop
 - `runtime/psx/host/title_session.*` — one title's session: shared boot steps for every product, one field step, session services, load-state at first boot
-- `runtime/psx/host/picker_*`, `panel_sessions.*`, `panel_logo.*` — in-window title selector, a host screen built through the host Game's present: panel-to-title mapping, panel session lifetime and focus (only the focused panel runs), panel layout and seams, panes from each panel's own picture, panel logo texture, `picker` / `pick` / `select` commands
+- `runtime/psx/host/picker_*`, `panel_sessions.*`, `panel_logo.*` — in-window title selector, a host screen built through the host Game's present: panel-to-title mapping, panel session lifetime and focus (only the focused panel runs), panel layout and seams, panes from each panel's own picture, panel logo texture and its saved copy in user data, `picker` / `pick` / `select` commands
 - `runtime/psx/host/run_budget.*` — run length cap in presentation-fence steps, frame limit
-- `runtime/psx/host/first_run_setup.*`, `saved_disc.*`, `title_disc.*` — first-run disc picker (setup-ui), remembered disc image choice, a title's disc opened for one read
+- `runtime/psx/host/first_run_setup.*`, `saved_disc.*`, `title_disc.*`, `title_user_file.*` — first-run disc picker (setup-ui), remembered disc image choice, a title's disc opened for one read, a title user-data file replaced whole
 - `runtime/psx/host/executable_provisioner.*` — extract and authenticate a missing boot executable (SCUS/SLUS) from the title's own disc
 - `runtime/psx/boot/run_end_report.*` — run-end report: executor ledger, guest-call census, RAM dump, title lines
 - `runtime/psx/catalog/` — title catalog, title identity (serial, hashes, disc key, executable path), single-title product, availability probe, executable selection and authentication, logo image
@@ -69,6 +69,7 @@ Dependency direction: title repo → `runtime/psx/game/` (the title interface) �
 - `runtime/psx/shaders_gpu/`, `cmake/gpu_shaders.cmake`, `tools/gen_gpu_shaders.py` — shaders and SPIR-V, generated record op layout
 - `runtime/psx/present/display_presenter.*`, `present_plan.h`, `present_ledger.*`, `video_plan.h`, `pixel_size.h` — present: guest display to screen, letterbox, fade, 24bpp, internal resolution scale, present ledger
 - `runtime/psx/present/render_mode.h`, `render_substrate.*` — render path (Record, Device), display-pass guard, per-Core host render state
+- `runtime/psx/present/drawn_logo.*` — a title's logo rebuilt from its title screen's draws: the frame record's primitives on the wordmark's texture page, rasterized from VRAM
 - `runtime/psx/present/frame_composer.*`, `frame_record.*`, `frame_state.*`, `state_producer.*`, `state_bytes.h`, `emission_scope.*`, `emit_memory.*`, `blend.h` — 60 fps interpolation / in-betweens: frame record, producer keys on primitives and VRAM copies and object state, state producers and their composition, emission scope (and a packet's own key reopened for an in-place rewrite, `amend`), guest or host emit memory and the scratch a title keeps for it (`Kept`), lerp blends, sub-pixel vertex places stored with their words (`storeVertex`/`loadVertex`)
 - `runtime/psx/present/depth_test.h` — native depth policy: the producers a title marks as opaque world 3D, which record polygons test and write depth
 - `runtime/psx/present/owner_ledger.*` — owner ledger: one owner handle per RAM word, scope instances, unowned writers, port owners (block DMA, MMIO GP0, LoadImage), overwrite pairs

@@ -2,6 +2,7 @@
 #pragma once
 
 #include "logo_image.h"
+#include "title_user_file.h"
 
 #include <SDL3/SDL_gpu.h>
 
@@ -29,7 +30,7 @@ public:
   bool save(const LogoImage &image) const;
 
 private:
-  std::optional<std::filesystem::path> file_;
+  TitleUserFile file_;
 };
 
 // An RGBA8 image in memory plus the GPU texture the picker draws it from.

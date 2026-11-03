@@ -123,6 +123,7 @@ set(PSXPORT_FRAMEWORK_SRC
   ${PSXPORT_ROOT}/runtime/psx/gpu/texture_feedback.cpp # draws that sample VRAM gpu.c's texture cache may hold stale
   ${PSXPORT_ROOT}/runtime/psx/present/gp0_primitive_decode.cpp # a GP0 draw packet's words to a record primitive
   ${PSXPORT_ROOT}/runtime/psx/present/frame_record.cpp # one logic frame's GPU work in execution order
+  ${PSXPORT_ROOT}/runtime/psx/present/drawn_logo.cpp # a title logo rebuilt from its title screen's draws
   ${PSXPORT_ROOT}/runtime/psx/present/emission_scope.cpp # producer scopes and the packet keys they bind
   ${PSXPORT_ROOT}/runtime/psx/present/owner_ledger.cpp # owner of every RAM word: scope instance or unowned writer
   ${PSXPORT_ROOT}/runtime/psx/present/ownership_verdict.cpp # unowned draws still or moving across an interval
@@ -210,6 +211,7 @@ set(PSXPORT_FRAMEWORK_SRC
   ${PSXPORT_ROOT}/runtime/psx/host/executable_provisioner.cpp
   ${PSXPORT_ROOT}/runtime/psx/host/title_disc.cpp # a title's disc, keyed or one exact image
   ${PSXPORT_ROOT}/runtime/psx/host/saved_disc.cpp # the first-run disc choice in user data
+  ${PSXPORT_ROOT}/runtime/psx/host/title_user_file.cpp # a title user-data file, replaced whole
   ${PSXPORT_ROOT}/runtime/psx/host/first_run_setup.cpp # the setup-ui screen that asks for the disc
   ${PSXPORT_ROOT}/runtime/psx/catalog/title_availability.cpp
   ${PSXPORT_ROOT}/runtime/psx/catalog/title_selection.cpp

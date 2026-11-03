@@ -1,5 +1,7 @@
 #pragma once
 
+#include "title_user_file.h"
+
 #include <filesystem>
 #include <optional>
 
@@ -24,7 +26,7 @@ public:
 
 private:
   const TitleIdentity &title_;
-  std::optional<std::filesystem::path> file_;
+  TitleUserFile file_;
 };
 
 } // namespace psx::host

@@ -4,30 +4,21 @@
 #include "title_catalog.h"
 
 #include <lucent/log.h>
-#include <lucent/platform.h>
 #include <lucent/text.h>
 
 #include <cstring>
 #include <fstream>
 #include <string>
-#include <system_error>
 
 namespace psx::host {
 
-SavedDisc::SavedDisc(const TitleIdentity &title)
-    : title_(title), file_([&title]() -> std::optional<std::filesystem::path> {
-        const std::optional<std::filesystem::path> directory = lucent::platform::user_data_directory(title.slug);
-        if (!directory) {
-          return std::nullopt;
-        }
-        return *directory / "disc-path";
-      }()) {}
+SavedDisc::SavedDisc(const TitleIdentity &title) : title_(title), file_(title, "disc-path") {}
 
 std::optional<std::filesystem::path> SavedDisc::load() const {
-  if (!file_) {
+  if (!file_.path()) {
     return std::nullopt;
   }
-  std::ifstream in(*file_);
+  std::ifstream in(*file_.path());
   std::string line;
   if (!std::getline(in, line)) {
     return std::nullopt;
@@ -41,28 +32,10 @@ std::optional<std::filesystem::path> SavedDisc::load() const {
 }
 
 bool SavedDisc::save(const std::filesystem::path &image) const {
-  if (!file_) {
-    lucent::error("disc", "{} has no user-data directory to remember its disc in", title_.displayName);
-    return false;
-  }
-  std::string error;
-  if (!lucent::platform::ensure_user_data_directory(file_->parent_path(), error)) {
-    lucent::error("disc", "cannot create {}: {}", file_->parent_path().string(), error);
-    return false;
-  }
-  const std::filesystem::path pending = std::filesystem::path(*file_) += ".pending";
-  {
-    std::ofstream out(pending, std::ios::trunc);
-    out << image.string() << '\n';
-    if (!out.flush()) {
-      lucent::error("disc", "cannot write {}", pending.string());
-      return false;
-    }
-  }
-  std::error_code renamed;
-  std::filesystem::rename(pending, *file_, renamed);
-  if (renamed) {
-    lucent::error("disc", "cannot replace {}: {}", file_->string(), renamed.message());
+  if (const std::optional<std::string> error = file_.replace(std::ios::out, [&image](std::ostream &out) {
+        out << image.string() << '\n';
+      })) {
+    lucent::error("disc", "{} cannot remember its disc: {}", title_.displayName, *error);
     return false;
   }
   lucent::info("disc", "{} will read its disc from {}", title_.displayName, image.string());
