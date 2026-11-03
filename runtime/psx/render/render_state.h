@@ -110,6 +110,8 @@ private:
   void checkRecord(const present::FrameRecord &record, bool drewComposed, bool deviceAhead, int scale);
   bool recordShot(const char *path);
   void buildPresentImage(SDL_GPUCommandBuffer *cmd, const present::PresentPlan &plan);
+  // Counts the present and hands it to the pane host, or marks it for show().
+  void finishBuild(bool built);
   void buildHostImage(SDL_GPUCommandBuffer *cmd, float fade);
   void showPresentImage(SDL_GPUCommandBuffer *cmd);
   // The window's contents drawn into `target`: the present image letterboxed, the overlay on top.

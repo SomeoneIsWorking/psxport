@@ -149,7 +149,6 @@ void RenderState::buildDisplay(gpu::VramRect display) {
   }
   const present::PresentPlan plan = present::planPresent(inputs);
   viewport_ = plan.viewport;
-  ++presentSerial_;
   lucent::debug("present",
                 "sink {}x{} pane={} src_ires={} rgb24={} disp={},{},{},{} viewport={},{},{},{}",
                 plan.sink_w,
@@ -169,9 +168,14 @@ void RenderState::buildDisplay(gpu::VramRect display) {
     buildPresentImage(cmd, plan);
   }
   device_.submit(cmd, "present build");
+  finishBuild(plan.build);
+}
+
+void RenderState::finishBuild(bool built) {
+  ++presentSerial_;
   // A pane's window belongs to the host compositing it, so the host composites here and shows at show().
   const bool toPaneHost = target_ == PresentTarget::Pane && paneHost_.attached();
-  showPending_ = toPaneHost || (plan.build && target_ == PresentTarget::Swapchain);
+  showPending_ = toPaneHost || (built && target_ == PresentTarget::Swapchain);
   if (toPaneHost) {
     paneHost_.built();
   }
@@ -284,7 +288,7 @@ void RenderState::buildImage(const std::uint8_t *rgba, PixelSize size, float fad
   device_.upload(cmd, hostUpload_, {rgba, static_cast<std::size_t>(size.width) * size.height * 4}, hostImage_, size);
   buildHostImage(cmd, std::clamp(fade, 0.0f, 1.0f));
   device_.submit(cmd, "host image build");
-  showPending_ = target_ == PresentTarget::Swapchain;
+  finishBuild(true);
 }
 
 void RenderState::preseqArm(int count, const char *dir) {
