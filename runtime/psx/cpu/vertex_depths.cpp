@@ -33,6 +33,17 @@ void VertexDepths::note(std::uint32_t address, std::uint32_t word, float depth) 
   entries_[at] = {word, depth};
 }
 
+void VertexDepths::forget(std::uint32_t address, std::uint32_t bytes) {
+  if (entries_.empty()) {
+    return;
+  }
+  for (std::uint32_t word = address & ~3u; word < address + bytes; word += 4u) {
+    if (const std::uint32_t at = slot(word); at != kNoSlot) {
+      entries_[at].depth = 0.0f;
+    }
+  }
+}
+
 float VertexDepths::at(std::uint32_t address, std::uint32_t word) const {
   const std::uint32_t at = slot(address);
   if (at == kNoSlot || entries_.empty()) {

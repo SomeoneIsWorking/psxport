@@ -66,7 +66,10 @@ bool ModRowModel::knows(std::string_view id) {
 }
 
 bool ModRowModel::available(const Mods &m, std::string_view id) {
-  return id != "fps60" || m.temporalInterpolationSupported();
+  if (id == "fps60") {
+    return m.temporalInterpolationSupported();
+  }
+  return id != "depth" || m.nativeDepthOffered();
 }
 
 bool ModRowModel::value_text(const Mods &m, std::string_view id, std::string &out) {

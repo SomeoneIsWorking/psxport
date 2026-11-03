@@ -356,37 +356,58 @@ between opaque world meshes, where a polygon's bucket says less than its pixels'
 trim over Spyro's feet, a wall seam over the floor), and leaves everything else to the slot order.
 
 - **Where depth comes from.** The Beetle GTE hook keeps each projection's view depth beside its
-  sub-pixel place (`GtePlace.z`: Beetle's SZ3, at least H/2). `Gte::projected` scales it by the open
-  `psx::cpu::DepthUnit` (default 1), so a draw site whose translation and model are scaled from the
-  title's common view units (Spyro 1's mobys at their position shift, Spyro himself in world units)
-  names that scale once and depths compare across draws. A producer's computed vertex (a split
-  midpoint, a resplit) carries `screenBlendDepth` of its sources: 1/z is linear on screen.
+  sub-pixel place (`GtePlace.z`: Beetle's SZ3, at least H/2). `Gte::projected` maps it through the open
+  `psx::cpu::DepthUnit`: SZ times `scale`, less `nearer`, in the title's common view units, 0 (unknown)
+  when that is not in front of the eye. `scale` is derived from the draw site's own transform against the
+  common one (Spyro 1: terrain views the camera word >> 2; a moby's translation is that view << 2 >>
+  its position shift, times scale / 32; Spyro's centre is world minus camera, so 1/4; the far terrain
+  pass works in world >> 4, so 4). `nearer` is the distance the guest itself sorts the object nearer
+  than its centre, read from the guest's own bin bias (a moby's z step, Spyro's depth-bias byte, each
+  in bins of 32 view units), so an object the retail sort keeps in front of the floor it stands in
+  stays in front. A producer's computed vertex (a split midpoint, a resplit) carries `screenBlendDepth`
+  of its sources: 1/z is linear on screen.
 - **Who keeps it.** Over host memory the place travels with the word (`HostMemory`). Over guest
   memory `EmitMemory::storeVertex` notes (address, word, depth) in `Core::vertexDepths`
-  (`psx::cpu::VertexDepths`, one flat table over main RAM and the scratchpad) and `loadVertex` reads it
-  back while that address still holds that word; a later store of any other word invalidates it by
-  value, with no store hook. The OT walk passes each command word's depth in `Gp0Origin.depth`, and the
-  tap sets `RecordVertex.depth` for each polygon position word. Guest code's own SWC2 stores are not
-  tracked: an unported 3D draw keeps depth 0 and draws in slot order.
+  (`psx::cpu::VertexDepths`, one flat table over main RAM and the scratchpad, allocated by the first
+  known depth) and `loadVertex` reads it back while the address still holds that word. Every guest
+  store (`Core::bookStore`) forgets the words it touches, so a later writer of the same word, a reused
+  packet buffer included, never inherits a stale depth; only `storeVertex` sets one. The OT walk passes
+  each command word's depth in `Gp0Origin.depth`, and the tap sets `RecordVertex.depth` for each polygon
+  position word. Guest code's own SWC2 stores are not tracked: an unported 3D draw keeps depth 0 and
+  draws in slot order.
 - **Which primitives test.** `Core::depthTest` (`psx::present::DepthTest`) holds the producer entries
-  a title marks: opaque world 3D only (terrain, mobys, the player model), never 2D, HUD, sky,
-  translucent, decal or shadow producers. A primitive tests when it is a polygon, opaque, keyed to a
-  marked producer and every vertex has depth > 0.
-- **How it draws.** The planner stores the triangle's 1/z plane (op words `kOpDepth..+4`, over native
-  coordinates with sub-pixel places) and sets `kOpDepthTest`; `record.frag` writes
+  a title marks, each with its `DepthOrder`: opaque world 3D only (terrain, mobys, the player model),
+  never 2D, HUD, sky, translucent, decal or shadow producers. A primitive tests when it is a polygon,
+  opaque, keyed to a marked producer and every vertex has depth > 0. `Polygon` (a terrain mesh the
+  guest sorts per polygon) tests and writes per polygon. `Object` (a model the guest sorts into one
+  slot, its parts painter-ordered: a horn base over a crest) keeps the producer's own order among its
+  polygons, tests them against the scene drawn before, then writes the object's depth.
+- **How it draws.** A tested triangle is followed in the op buffer by a `DepthPlane` op (never drawn)
+  holding its 1/z plane over native coordinates; the op carries `kOpDepthTest`, and an `Object`
+  polygon also `kOpDepthObject` and a parity bit that flips per object, so adjacent objects form
+  separate runs. Only the `RECORD_DEPTH` variant of `record.frag` reads the plane and writes
   `log2(z) / 16` to a D16 target. A plane's depth clears to far on its first pass of each record. In a
-  pass with tested quads, tested runs use compare LESS_OR_EQUAL with writes and every other run uses
-  ALWAYS with no write, in the same OT order, so marked and unmarked draws interleave exactly as the
-  slot order says. A pass with none uses the pipeline with no depth target.
+  pass with tested quads, a `Polygon` run uses LESS_OR_EQUAL with writes; an `Object` run draws twice,
+  colour with LESS_OR_EQUAL and no write, then depth alone; every other run uses the plain shader with
+  ALWAYS and no write, in the same OT order, so marked and unmarked draws interleave exactly as the slot
+  order says. A pass with none uses the pipeline with no depth target.
 - **Interpolation.** In-betweens re-run the producer body at `t`, so depth is re-projected with the
   vertex; there is no separate depth lerp.
-- **Off.** The `depth` setting (default on, `PSXPORT_DEPTH`, menu "Native Depth") passes no policy:
-  no op tests, and the picture is the slot-order picture exactly, so 4:3 with depth off stays
-  oracle-exact.
-- **Cost.** One multiply per projected vertex read, one table write per stored vertex, five words per
-  tested op; nothing per pixel on the CPU and nothing that scales with ires.
+- **Off.** The `depth` setting (default off, `PSXPORT_DEPTH`, menu "Native Depth") passes no policy: no
+  op tests, so no plane is written and the planner and rasterizer take the slot-order path unchanged.
+  The menu row shows only for a title that marks a producer (`Mods::nativeDepthOffered`). Off is the
+  slot-order record picture, which is not the device picture: at 4:3, ires 1, one Toasty portal frame's
+  record and device VRAM (same run, same frame) differ in 1,252 of 122,880 pixels by more than 8
+  levels, scattered along edges, none in the portal sky (psx-spyro issue 0224).
+- **Cost.** One multiply per projected vertex read, one table write per stored vertex and one table
+  check per guest store once a title has noted a depth, one extra op per tested triangle; a title or
+  op that marks nothing pays no op words and no `gl_FragDepth`. Nothing per pixel on the CPU and
+  nothing that scales with ires.
 - **Check it.** Spyro 1, Toasty portal (`gate-teleport 0 0`): the rock wall meets the floor along its
-  real intersection with depth on; `PSXPORT_DEPTH=0` shows the wall's slot-order overlap.
+  real intersection with depth on; `PSXPORT_DEPTH=0` shows the wall's slot-order overlap. Spyro,
+  his toes, horns and crest draw the same with depth on and off. It stays off by default because true
+  depth also shows what the retail sort hides: at the Artisans fountain (`dragon-teleport 3`) a moby
+  pedestal sunk into the ground loses its outer rim to the grass (psx-spyro issue 0223).
 
 Planned effects, all reading those attributes: dynamic lighting with real shadows, vertex smoothing
 (normals averaged across shared vertices) and SSAO. They are chosen by preset (off, low, high), not
@@ -655,9 +676,18 @@ CPU work per present, and its size does not depend on the internal resolution. T
 `PSXPORT_BUG_REPORT_CLIP=0` turns it off on hardware that cannot spare the memory: no texture, no blit, and
 reports carry no `motion.png`.
 
+A report reproduces from `state.bin`, the whole machine state (`psx::state::saveToFile`) taken at the
+reported frame, loaded with `PSXPORT_LOAD_STATE` on a writable copy of `memcard.mcr` (the state restores
+the card it held). `repro.pad` from boot is kept, but a replay follows only the build and settings that
+recorded it: Spyro 1's 2026-10-31 reports replay deterministically on a later build and still walk
+elsewhere after the first gameplay phase (psx-spyro issue 0225). A title whose frame driver keeps native
+state names it through `GameRuntime::nativeState`, and a state carries the active code images
+(`images` section), so a fresh process loading it can dispatch the title's loaded overlays.
+
 ## Status
 
 The native and GTE draw paths, the render queue, painter, keyed blend and every title's
 `RenderCapabilities` are deleted; `record` and `device` are the only paths. Remaining work:
-`StateProducer` renders for each title's keyed producers by census rank; native depth for every title
-beyond Spyro 1 (which marks its terrain, mobys and Spyro), and depth for guest-code SWC2 stores.
+`StateProducer` renders for each title's keyed producers by census rank; native depth on by default
+(Spyro 1 marks its terrain, mobys and Spyro; objects sunk into terrain lose their buried rim, psx-spyro
+issue 0223), depth for every other title, and depth for guest-code SWC2 stores.

@@ -6,6 +6,7 @@
 
 #include <lucent/log.h>
 
+#include <algorithm>
 #include <cstdlib>
 #include <cstring>
 
@@ -70,7 +71,7 @@ void Gte::writeData(std::uint32_t reg, std::uint32_t value) {
 gte::ProjectedVertex Gte::projected(std::uint32_t entry) {
   bind();
   GtePlace place = regs_.places[entry];
-  place.z *= depthUnit_;
+  place.z = std::max(place.z * depthScale_ - depthNearer_, 0.0f);
   return {GTE_ReadDR(gte::kSxy0 + entry), place};
 }
 

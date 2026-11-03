@@ -16,7 +16,7 @@ Var<long> cv_aspect("aspect", ASPECT_4_3, {lucent::cvar::Persistence::Saved, "PS
 Var<long> cv_ires("ires", 1, {lucent::cvar::Persistence::Saved, "PSXPORT_IRES"});
 // PSXPORT_FPS60 is this run's choice at the Override layer; the saved one stays in the file.
 Var<bool> cv_fps60("fps60", false, {lucent::cvar::Persistence::Saved, "PSXPORT_FPS60"});
-Var<bool> cv_depth("depth", true, {lucent::cvar::Persistence::Saved, "PSXPORT_DEPTH"});
+Var<bool> cv_depth("depth", false, {lucent::cvar::Persistence::Saved, "PSXPORT_DEPTH"});
 Var<double> cv_picker_selected_share("picker_selected_share",
                                      0.6,
                                      {lucent::cvar::Persistence::Saved, "PSXPORT_PICKER_SELECTED_SHARE"});

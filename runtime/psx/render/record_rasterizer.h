@@ -135,7 +135,7 @@ private:
   // Replaces the presented picture by the field `record` drew, when it draws one field per frame.
   void selectField(SDL_GPUCommandBuffer *cmd, const present::FrameRecord &record);
   void execute(SDL_GPUCommandBuffer *cmd, const gpu::RecordRasterPlan &plan, bool inBetween);
-  // Quads [first, end) of a pass, each run of depth-tested quads through the depth pipeline.
+  // Quads [first, end) of a pass, each run of depth-tested quads through its depth pipelines.
   void drawQuads(SDL_GPURenderPass *pass,
                  const gpu::RecordRasterPlan &plan,
                  std::span<const gpu::RecordQuad> quads,
@@ -158,9 +158,12 @@ private:
 
   RenderDevice &device_;
   SDL_GPUGraphicsPipeline *pipeline_ = nullptr;
-  // With a depth target: slot order (no test, no write), and the depth test.
+  // With a depth target: slot order (no test, no write); a tested polygon; an object's colour against the scene, then
+  // its depth with no colour.
   SDL_GPUGraphicsPipeline *slotPipeline_ = nullptr;
   SDL_GPUGraphicsPipeline *depthPipeline_ = nullptr;
+  SDL_GPUGraphicsPipeline *objectPipeline_ = nullptr;
+  SDL_GPUGraphicsPipeline *objectDepthPipeline_ = nullptr;
   const present::DepthTest *depthTest_ = nullptr; // this present's
   gpu::RecordPlanner planner_;
   Plane vram_;

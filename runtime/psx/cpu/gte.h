@@ -55,7 +55,8 @@ public:
   }
 
   // SXY entry 0..2 with its place: from the projection that pushed it, or its word's pixel once a write replaced it.
-  // Its depth is in the title's common view units: SZ times the open DepthUnit's scale.
+  // Its depth is in the title's common view units: SZ times the open DepthUnit's scale less its nearer, 0 when that is
+  // not in front of the eye.
   gte::ProjectedVertex projected(std::uint32_t entry);
 
   // The whole register file, flags and SXY places, copied without running a read port.
@@ -96,27 +97,33 @@ private:
   Core &core_;
   GteRegs regs_{};
   GtePreOpObserver observer_;
-  float depthUnit_ = 1.0f;
+  float depthScale_ = 1.0f;
+  float depthNearer_ = 0.0f;
 };
 
-// While open, `projected` depths are SZ times `scale`: a draw site whose translation and model are scaled from the
-// title's common view units (a moby drawn at its own position shift) names that scale, so depths compare across draws.
+// While open, `projected` depths are SZ times `scale`, less `nearer`: a draw site whose translation and model are scaled
+// from the title's common view units (a moby drawn at its own position shift) names that scale, so depths compare
+// across draws, and one the guest sorts nearer than it lies (a bias in ordering-table bins) names that distance.
 class DepthUnit {
 public:
-  DepthUnit(Gte &gte, float scale) : gte_(gte), previous_(gte.depthUnit_) {
-    gte_.depthUnit_ = scale;
+  DepthUnit(Gte &gte, float scale, float nearer = 0.0f)
+      : gte_(gte), previousScale_(gte.depthScale_), previousNearer_(gte.depthNearer_) {
+    gte_.depthScale_ = scale;
+    gte_.depthNearer_ = nearer;
   }
   DepthUnit(const DepthUnit &) = delete;
   DepthUnit &operator=(const DepthUnit &) = delete;
   DepthUnit(DepthUnit &&) = delete;
   DepthUnit &operator=(DepthUnit &&) = delete;
   ~DepthUnit() {
-    gte_.depthUnit_ = previous_;
+    gte_.depthScale_ = previousScale_;
+    gte_.depthNearer_ = previousNearer_;
   }
 
 private:
   Gte &gte_;
-  float previous_;
+  float previousScale_;
+  float previousNearer_;
 };
 
 } // namespace psx::cpu
