@@ -104,6 +104,8 @@ and a title's own run-end lines come from `reportRun`.
 `GameRuntime` carries two optional virtuals the host asks, each with a neutral default:
 
 - `panelLogo(Core &)`: the title's own logo, read from its live machine; `nullopt` until there is one.
+- `playsAttractDemo(Core &)`: the title's own attract demo is playing; `false` by default, so the
+  focused panel then never draws the logo over its picture.
 - `reportRun(Core &)`: title-specific lines after the framework's `run complete` line.
 
 ## Data flow
@@ -141,7 +143,10 @@ return` or the ESC row ends it as `ReturnedToSelector` and the selector is rebui
   when it lost focus) greyed, and its logo. A panel never focused yet has no picture.
 - **The logo comes from the running game.** `GameRuntime::panelLogo(Core &)` reads the title's own
   logo from its live machine (its VRAM while its title screen is up); the panel keeps the first one it
-  gets for the selector's life. No committed image of game art is drawn.
+  gets for the selector's life. No committed image of game art is drawn. `PickerPanes` draws it at 0.6
+  of the panel's average width, its centre at a fifth of the panel's height. On the focused panel it is
+  drawn only while `GameRuntime::playsAttractDemo(Core &)` says the title's own demo plays, since its
+  title screen shows that logo itself; unfocused panels always draw it.
 - **One process, one window.** The window and GPU device are `ProductHost`'s and outlive every session.
 
 The selector's frame follows the focused panel's presents: the picker is that panel's pane host
@@ -218,7 +223,7 @@ the event drain, so it reaches the run-end report like a client `quit`.
 
 1. Implement `TitleCatalog` with the title identities (measured from the executables) and one
    `GameRuntime` per title.
-2. Override `panelLogo` where the title can say it.
+2. Override `panelLogo` and `playsAttractDemo` where the title can say them.
 3. Declare `std::unique_ptr<psx::host::TitleCatalog> createCatalog();` in the catalog header and build
    the product with `psxport_add_product(<target> CATALOG <ns>::createCatalog HEADER <header>
    [SOURCES ...] [LIBRARIES ...])` (`cmake/psxport.cmake`). The title writes no `main`.

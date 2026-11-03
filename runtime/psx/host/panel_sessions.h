@@ -38,7 +38,8 @@ public:
   bool panelReady(int panel) const;
   // The panel's newest picture at the size its session built it; invalid while the panel is not ready.
   psx::render::PresentedImage picture(int panel) const;
-  // This panel's own logo, read from its own session; null until its title has shown it.
+  // The logo to draw over this panel now: its title's own logo once read, except on the focused panel
+  // while its title screen, which shows that logo itself, is up.
   PanelLogo *logo(int panel);
 
   // Move the focus: the old panel pauses and goes silent, the new one resumes (or boots) and is heard.

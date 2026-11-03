@@ -73,7 +73,12 @@ PanelLogo *PanelSessions::logo(int panel) {
   if (panel < 0 || panel >= count()) {
     return nullptr;
   }
-  return logos_[static_cast<std::size_t>(panel)].get();
+  PanelLogo *held = logos_[static_cast<std::size_t>(panel)].get();
+  if (held == nullptr || panel != focused_) {
+    return held;
+  }
+  Core &core = sessions_[static_cast<std::size_t>(panel)]->core();
+  return core.runtime.playsAttractDemo(core) ? held : nullptr;
 }
 
 void PanelSessions::takeLogo(int panel, TitleSession &session) {
