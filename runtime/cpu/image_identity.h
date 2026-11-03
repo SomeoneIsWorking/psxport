@@ -5,6 +5,7 @@
 
 #include <cstdint>
 #include <optional>
+#include <span>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -51,6 +52,11 @@ public:
   // byte. Empty, invalid, and virtual-alias ranges do not resolve.
   std::optional<ImageIdentity> resolve(GuestAddressRange physicalRange) const;
   std::size_t activeCount() const;
+  // Every active residency, oldest first: later ones take precedence.
+  std::vector<ImageDescription> activeResidencies() const;
+  // Makes `residencies` (oldest first) the active set: the live prefix that matches is kept, every other live
+  // residency is deactivated and the rest activated afresh (a loaded state's images).
+  void adopt(std::span<const ImageDescription> residencies);
   std::optional<ImageDescription> describe(ImageIdentity identity) const;
   // Advances on every activation, deactivation and subtraction, so a cache of address residency can
   // tell that it is stale without re-resolving every address.

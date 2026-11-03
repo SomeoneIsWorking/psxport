@@ -102,6 +102,41 @@ std::size_t ImageCatalog::activeCount() const {
   });
 }
 
+std::vector<ImageDescription> ImageCatalog::activeResidencies() const {
+  std::vector<ImageDescription> active;
+  for (const Entry &entry : entries_) {
+    if (entry.active) {
+      active.push_back({entry.name, entry.contentIdentity, entry.ranges});
+    }
+  }
+  return active;
+}
+
+void ImageCatalog::adopt(std::span<const ImageDescription> residencies) {
+  const auto same = [](const Entry &entry, const ImageDescription &residency) {
+    return entry.name == residency.name && entry.contentIdentity == residency.contentIdentity &&
+           entry.ranges == residency.ranges;
+  };
+  std::size_t kept = 0;
+  bool matching = true;
+  for (Entry &entry : entries_) {
+    if (!entry.active) {
+      continue;
+    }
+    if (matching && kept < residencies.size() && same(entry, residencies[kept])) {
+      kept++;
+      continue;
+    }
+    matching = false;
+    entry.active = false;
+  }
+  for (const ImageDescription &residency : residencies.subspan(kept)) {
+    entries_.push_back(
+        {residency.name, residency.ranges, residency.contentIdentity, {nextId_++, nextGeneration_++}, true});
+  }
+  changed();
+}
+
 std::optional<ImageDescription> ImageCatalog::describe(ImageIdentity identity) const {
   const auto entry = std::find_if(entries_.begin(), entries_.end(), [identity](const Entry &candidate) {
     return candidate.identity == identity;

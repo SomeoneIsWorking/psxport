@@ -14,6 +14,10 @@ namespace psx::state {
 namespace {
 
 constexpr std::uint8_t kCpuLayoutVersion = 4;
+constexpr std::uint8_t kImagesLayoutVersion = 1;
+// Bounds a malformed count before it allocates.
+constexpr std::uint32_t kMaxImages = 4096;
+constexpr std::uint32_t kMaxImageRanges = 4096;
 
 } // namespace
 
@@ -52,6 +56,53 @@ bool readCpuSection(Core &core, psx::platform::BlobReader &in, std::string &erro
   core.pending_work = pendingWork;
   // Saves are taken between frames, never inside an override.
   core.active_native_address = 0;
+  return true;
+}
+
+void writeImagesSection(Core &core, psx::platform::BlobWriter &out) {
+  const std::vector<psx::cpu::ImageDescription> active = core.imageCatalog().activeResidencies();
+  out.u8(kImagesLayoutVersion);
+  out.u32(static_cast<std::uint32_t>(active.size()));
+  for (const psx::cpu::ImageDescription &image : active) {
+    out.blob(std::span(reinterpret_cast<const std::uint8_t *>(image.name.data()), image.name.size()));
+    out.u64(image.contentIdentity);
+    out.u32(static_cast<std::uint32_t>(image.ranges.size()));
+    for (const GuestAddressRange range : image.ranges) {
+      out.u32(range.begin);
+      out.u32(range.end);
+    }
+  }
+}
+
+bool readImagesSection(Core &core, psx::platform::BlobReader &in, std::string &error) {
+  if (!in.expectLayout("images", kImagesLayoutVersion, error)) {
+    return false;
+  }
+  const std::uint32_t count = in.u32();
+  if (count > kMaxImages) {
+    error = "images: " + std::to_string(count) + " residencies is past any machine's";
+    return false;
+  }
+  std::vector<psx::cpu::ImageDescription> images(count);
+  for (psx::cpu::ImageDescription &image : images) {
+    std::vector<std::uint8_t> name;
+    in.blob(name);
+    image.name.assign(name.begin(), name.end());
+    image.contentIdentity = in.u64();
+    const std::uint32_t ranges = in.u32();
+    if (ranges > kMaxImageRanges) {
+      error = "images: a residency of " + std::to_string(ranges) + " ranges is malformed";
+      return false;
+    }
+    for (std::uint32_t i = 0; i < ranges; i++) {
+      const std::uint32_t begin = in.u32();
+      image.ranges.push_back({begin, in.u32()});
+    }
+  }
+  if (!in.decoded("images", error)) {
+    return false;
+  }
+  core.imageCatalog().adopt(images);
   return true;
 }
 

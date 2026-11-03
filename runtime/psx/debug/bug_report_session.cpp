@@ -5,6 +5,7 @@
 #include "game.h"
 #include "gpu_device.h"
 #include "image_writer.h" // image_write_rgb24
+#include "machine_state.h"
 #include "psxport_build_id.h"
 #include "render_mode.h"
 #include "render_state.h"
@@ -32,6 +33,7 @@ constexpr const char *kClipFile = "motion.png";
 constexpr const char *kOwnersFile = "owners.jsonl";
 constexpr const char *kRecordingFile = "repro.pad";
 constexpr const char *kCardFile = "memcard.mcr";
+constexpr const char *kStateFile = "state.bin";
 
 // Fields a capture waits for a sealed frame before it reports without a reference picture.
 constexpr int kReferenceWaitFields = 4;
@@ -188,12 +190,38 @@ void BugReportSession::attachCaptures(Core &core, bug_report::Draft &draft) {
     attachOrWarn(draft, kCardFile, AttachmentRole::Reproduction, "Memory card the recording started from");
   }
 
+  // A pad replay from boot follows only the build that recorded it; the state reproduces on any build that loads it.
+  bool stated = false;
+  if (const auto path = draft.pathFor(kStateFile, error)) {
+    if (std::string stateError; psx::state::saveToFile(core, path->string(), stateError)) {
+      attachOrWarn(draft, kStateFile, AttachmentRole::Reproduction, "Machine state at the reported frame");
+      stated = true;
+    } else {
+      draft.addFact("Machine state", "not captured: " + stateError);
+    }
+  }
+
   draft.addFact("pad frame", std::to_string(reportedFrame));
   draft.addFact("present frame", std::to_string(game.display.frame()));
   draft.addFact("render path", psx::present::renderPathName(core.rsub.mode.path()));
   draft.addFact("build", PSXPORT_BUILD_ID_COMPOSITE);
 
-  if (recorded) {
+  if (stated) {
+    draft.setReproduction(bug_report::Reproduction{
+        .summary = "Load the machine state saved at the reported frame and run on from it without input. The pad "
+                   "recording replays the same session from boot only on the build that recorded it (pad frame " +
+                   std::to_string(reportedFrame) + ").",
+        .steps =
+            {
+                "Copy memcard.mcr to a writable place outside the report: the state restores the card it "
+                "held at the reported frame into that copy.",
+                "Run the title with the variables below. It screenshots the reported scene 30 pad frames after "
+                "the load to scratch/screenshots/padshot_30.ppm.",
+            },
+        .command = std::string("PSXPORT_CARD=<copy of memcard.mcr> PSXPORT_LOAD_STATE=<report>/") + kStateFile +
+                   " PSXPORT_PAD_SHOT_AT=30",
+    });
+  } else if (recorded) {
     draft.setReproduction(bug_report::Reproduction{
         .summary = "Replay the pad recording from boot on the memory card it started from; pad frame " +
                    std::to_string(reportedFrame) + " is the reported frame.",
