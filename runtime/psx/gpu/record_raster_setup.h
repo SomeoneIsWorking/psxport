@@ -21,10 +21,19 @@
 
 namespace psx::gpu {
 
-inline constexpr int kRecordOpWords = 48;
+inline constexpr int kRecordOpWords = 40;
 using RecordOp = std::array<std::uint32_t, kRecordOpWords>;
 
-enum class RecordOpKind : std::uint8_t { Triangle = 0, Sprite = 1, LinePixel = 2, Fill = 3, Copy = 4, Upload = 5 };
+// A DepthPlane op follows each depth-tested triangle and is never drawn itself.
+enum class RecordOpKind : std::uint8_t {
+  Triangle = 0,
+  Sprite = 1,
+  LinePixel = 2,
+  Fill = 3,
+  Copy = 4,
+  Upload = 5,
+  DepthPlane = 6
+};
 
 // RecordOp word indices.
 enum RecordOpField : std::uint8_t {
@@ -46,7 +55,6 @@ enum RecordOpField : std::uint8_t {
   kOpSourceY = 25, // copy source; sprite v0; upload height
   kOpPool = 26,    // upload pixel pool halfword offset
   kOpParts = 22,   // triangle: its two RecordPartField blocks, upper then lower
-  kOpDepth = 40,   // depth-tested triangle: RecordDepthField floats
   // kOpReadBack: the capture pixel a fragment samples minus the fragment, native pixels (the u and v slots).
   kOpReadBackX = 10,
   kOpReadBackY = 11,
@@ -64,15 +72,14 @@ enum RecordPartField : std::uint8_t {
   kPartWords = 9,
 };
 
-// A depth-tested triangle's floats from kOpDepth: 1/z at its first vertex, its x and y slopes per native pixel, and
-// that vertex's native VRAM position.
+// A DepthPlane op's floats: 1/z at its triangle's first vertex, its x and y slopes per native pixel, and that
+// vertex's native VRAM position.
 enum RecordDepthField : std::uint8_t {
-  kDepthInverse = 0,
-  kDepthSlopeX = 1,
-  kDepthSlopeY = 2,
-  kDepthOriginX = 3,
-  kDepthOriginY = 4,
-  kDepthWords = 5,
+  kDepthInverse = 1,
+  kDepthSlopeX = 2,
+  kDepthSlopeY = 3,
+  kDepthOriginX = 4,
+  kDepthOriginY = 5,
 };
 
 enum RecordOpFlag : std::uint32_t {
@@ -90,7 +97,9 @@ enum RecordOpFlag : std::uint32_t {
   kOpFlipX = 1u << 22,
   kOpFlipY = 1u << 23,
   kOpReadBack = 1u << 24, // texels from the read-back capture, not VRAM
-  kOpDepthTest = 1u << 25, // tests and writes depth (present::DepthTest)
+  kOpDepthTest = 1u << 25,   // tests depth (present::DepthTest); the next op is its DepthPlane
+  kOpDepthObject = 1u << 26, // DepthOrder::Object: tested in its object's order, then writes depth
+  kOpDepthParity = 1u << 27, // flips at each new object, so adjacent objects draw apart
 };
 
 // One rectangle of a plane's pixels belonging to an op, scaled, half open. Op origins are in VRAM space,

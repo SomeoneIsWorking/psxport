@@ -380,7 +380,7 @@ void storeWords(RecordOp &op, int index, std::uint64_t value) {
 }
 
 // The triangle's 1/depth as a plane over native VRAM coordinates, from its first vertex: 1/z is linear on screen.
-void storeDepthPlane(RecordOp &op, const DrawPrimitive &primitive, int firstVertex) {
+RecordOp depthPlane(const DrawPrimitive &primitive, int firstVertex) {
   double x[3];
   double y[3];
   double w[3];
@@ -398,13 +398,15 @@ void storeDepthPlane(RecordOp &op, const DrawPrimitive &primitive, int firstVert
     a = ((w[1] - w[0]) * (y[2] - y[0]) - (w[2] - w[0]) * (y[1] - y[0])) / det;
     b = ((x[1] - x[0]) * (w[2] - w[0]) - (x[2] - x[0]) * (w[1] - w[0])) / det;
   }
-  const float plane[kDepthWords] = {static_cast<float>(w[0]),
-                                    static_cast<float>(a),
-                                    static_cast<float>(b),
-                                    static_cast<float>(x[0]),
-                                    static_cast<float>(y[0])};
-  std::memcpy(&op[kOpDepth], plane, sizeof plane);
-  op[kOpFlags] |= kOpDepthTest;
+  const float plane[] = {static_cast<float>(w[0]),
+                         static_cast<float>(a),
+                         static_cast<float>(b),
+                         static_cast<float>(x[0]),
+                         static_cast<float>(y[0])};
+  RecordOp op{};
+  op[kOpFlags] = static_cast<std::uint32_t>(RecordOpKind::DepthPlane);
+  std::memcpy(&op[kDepthInverse], plane, sizeof plane);
+  return op;
 }
 
 } // namespace
@@ -420,6 +422,8 @@ public:
              const present::DepthTest *depthTest) {
     plan_.scale = scale;
     depthTest_ = depthTest;
+    depthObject_.reset();
+    depthParity_ = false;
     plan_.capture.reset();
     readBack_ = readBack;
     declared_.reset();
@@ -510,7 +514,10 @@ private:
   // A copy placed past its whole pixels, as emitTransferRects for one rect: `quad` scaled, `written` its footprint.
   void emitPlacedTransfer(const RecordRect &written, const RecordQuad &quad);
   // Keeps the op when its native footprint reached a plane, whatever its quads at this scale.
-  void commit(const RecordOp &op, bool readsDestination);
+  // `plane`, when given, is pushed right after `op`: its DepthPlane.
+  void commit(const RecordOp &op, bool readsDestination, const RecordOp *plane = nullptr);
+  // The depth flags of a polygon `depthTest_` tests, with its object's parity.
+  std::uint32_t depthFlags(const DrawPrimitive &primitive, present::DepthOrder order);
   void closeBatch();
 
   RecordRasterPlan plan_;
@@ -529,6 +536,8 @@ private:
   std::optional<RecordReadBack> declared_; // this record's declaration, from the next record on
   bool declares_ = false;
   const present::DepthTest *depthTest_ = nullptr; // null: every primitive in slot order
+  std::optional<present::RecordKey> depthObject_; // the last DepthOrder::Object polygon's key
+  bool depthParity_ = false;
   std::optional<ReadBackShift> sampling_; // the primitive being planned's
 };
 
@@ -747,7 +756,19 @@ void RecordPlanner::Builder::emitPlacedTransfer(const RecordRect &written, const
   target(0);
 }
 
-void RecordPlanner::Builder::commit(const RecordOp &op, bool readsDestination) {
+std::uint32_t RecordPlanner::Builder::depthFlags(const DrawPrimitive &primitive, present::DepthOrder order) {
+  if (order == present::DepthOrder::Polygon) {
+    depthObject_.reset();
+    return kOpDepthTest;
+  }
+  if (depthObject_ != primitive.key) {
+    depthObject_ = primitive.key;
+    depthParity_ = !depthParity_;
+  }
+  return kOpDepthTest | kOpDepthObject | (depthParity_ ? kOpDepthParity : 0u);
+}
+
+void RecordPlanner::Builder::commit(const RecordOp &op, bool readsDestination, const RecordOp *plane) {
   if (!reaches_) {
     opQuads_.clear();
     opWrites_.clear();
@@ -769,6 +790,9 @@ void RecordPlanner::Builder::commit(const RecordOp &op, bool readsDestination) {
   }
   const auto opIndex = static_cast<std::uint32_t>(plan_.ops.size());
   plan_.ops.push_back(op);
+  if (plane != nullptr) {
+    plan_.ops.push_back(*plane);
+  }
   const int s = plan_.scale;
   for (PlaneQuad &pending : opQuads_) {
     pending.quad.op = opIndex;
@@ -944,8 +968,12 @@ void RecordPlanner::Builder::addTriangle(const TriVertex scaled[3],
     storeWords(op, words + kPartLeftStep, part.step[0]);
     storeWords(op, words + kPartRightStep, part.step[1]);
   }
-  if (depthTest_ != nullptr && depthTest_->tests(primitive)) {
-    storeDepthPlane(op, primitive, firstVertex);
+  std::optional<RecordOp> plane;
+  if (depthTest_ != nullptr) {
+    if (const std::optional<present::DepthOrder> order = depthTest_->tests(primitive)) {
+      op[kOpFlags] |= depthFlags(primitive, *order);
+      plane = depthPlane(primitive, firstVertex);
+    }
   }
   if (primitive.textured && !sampling_) {
     // Every covered pixel lies within a pixel of the vertices' hull, where the interpolant is linear.
@@ -973,7 +1001,7 @@ void RecordPlanner::Builder::addTriangle(const TriVertex scaled[3],
     }
     textureReads(primitive.state, ranges[0], ranges[1]);
   }
-  commit(op, primitive.semiTransparent || primitive.state.maskCheck);
+  commit(op, primitive.semiTransparent || primitive.state.maskCheck, plane ? &*plane : nullptr);
 }
 
 // gpu_sprite.c DrawSprite. The op keeps the unclipped origin; u and v wrap at 256 either way.

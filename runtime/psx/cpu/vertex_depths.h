@@ -1,5 +1,6 @@
 // vertex_depths.h — the view depth of each projected vertex a draw site stored into guest RAM or the scratchpad,
-// kept by the word it was stored to, so the record tap gives the guest's own packets the depth their producer saw.
+// kept by the word it was stored to until any store touches that word, so the record tap gives the guest's own
+// packets the depth their producer saw.
 #pragma once
 
 #include <cstdint>
@@ -11,6 +12,8 @@ class VertexDepths {
 public:
   // `word`, a vertex of view depth `depth` (0 unknown), was stored at `address`.
   void note(std::uint32_t address, std::uint32_t word, float depth);
+  // A store of `bytes` at `address` ends the depth of every word it touches.
+  void forget(std::uint32_t address, std::uint32_t bytes);
   // The depth noted at `address` while it still holds that word, else 0.
   [[nodiscard]] float at(std::uint32_t address, std::uint32_t word) const;
 
