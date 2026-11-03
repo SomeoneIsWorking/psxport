@@ -7,9 +7,10 @@
 namespace psx::present {
 
 // `t` of the way from `from` to `to`, rounded to the nearest integer; the span is taken in 64 bits.
+// A tie rounds the blended value to even, so an odd span at t = 0.5 favours neither end.
 inline std::int32_t lerpInt(std::int32_t from, std::int32_t to, float t) {
-  const std::int64_t span = static_cast<std::int64_t>(to) - from;
-  return static_cast<std::int32_t>(from + std::llround(static_cast<double>(span) * static_cast<double>(t)));
+  const double span = static_cast<double>(static_cast<std::int64_t>(to) - from);
+  return static_cast<std::int32_t>(std::nearbyint(static_cast<double>(from) + span * static_cast<double>(t)));
 }
 
 // A guest word blended as a signed 32-bit value.
@@ -30,7 +31,8 @@ inline std::int32_t ringStep(std::int64_t from, std::int64_t to, std::int64_t pe
 inline std::uint32_t lerpTurn(std::uint32_t from, std::uint32_t to, unsigned bits, float t) {
   const std::uint32_t mask = (1u << bits) - 1u;
   const std::int32_t step = ringStep(from & mask, to & mask, std::int64_t{mask} + 1);
-  return (from + static_cast<std::uint32_t>(lerpInt(0, step, t))) & mask;
+  const auto start = static_cast<std::int32_t>(from & mask);
+  return static_cast<std::uint32_t>(lerpInt(start, start + step, t)) & mask;
 }
 
 // `t` of the way from `from` to `to` on a ring of `period`, the short way round, unrounded and wrapped into
