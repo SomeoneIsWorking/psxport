@@ -48,8 +48,6 @@ bool show_window();
 // A packaged product's defaults: a window, and the assets under `<packageRoot>/usr/share/psxport`.
 void applyPackagedDefaults(const std::filesystem::path &packageRoot);
 
-std::string settings_path(); // PSXPORT_SETTINGS: the settings file; selects the Value layer, so never saved
-
 // PSXPORT_LIGHTREC_FALLBACK_BLOCK_LIMIT: interpreter-fallback blocks one bounded execution may admit.
 psx::cpu::FallbackPolicy lightrec_fallback_policy();
 // PSXPORT_OVERRIDE_DIFF (+ _FIRST, _EVERY, _DEAD_STACK, _REPORT): the override differential; empty selectors disarm.

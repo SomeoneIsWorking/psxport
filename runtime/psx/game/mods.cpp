@@ -64,14 +64,20 @@ void Mods::reload() {
   fps60 = temporalInterpolationSupported_ && cv_fps60.get() ? 1 : 0;
 }
 
+// Only what the player changed reaches the file; an environment override stays this run's.
 void Mods::save() const {
-  cv_aspect.set(aspect, Layer::Value);
-  cv_ires.set(ires, Layer::Value);
-  cv_picker_selected_share.set(pickerSelectedShare, Layer::Value);
-  cv_picker_slant.set(pickerSlantPerWidth, Layer::Value);
-  cv_picker_width_response.set(pickerWidthResponse, Layer::Value);
-  if (temporalInterpolationSupported_ && !cv_fps60.has(Layer::Override)) {
-    cv_fps60.set(fps60 != 0, Layer::Value);
+  const auto keep = [](auto &var, auto value) {
+    if (value != static_cast<decltype(value)>(var.get())) {
+      var.set(value, Layer::Value);
+    }
+  };
+  keep(cv_aspect, static_cast<long>(aspect));
+  keep(cv_ires, static_cast<long>(ires));
+  keep(cv_picker_selected_share, pickerSelectedShare);
+  keep(cv_picker_slant, pickerSlantPerWidth);
+  keep(cv_picker_width_response, pickerWidthResponse);
+  if (temporalInterpolationSupported_) {
+    keep(cv_fps60, fps60 != 0);
   }
   psx::config::save_settings();
 }
