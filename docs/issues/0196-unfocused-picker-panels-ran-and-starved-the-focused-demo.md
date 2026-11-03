@@ -52,10 +52,30 @@ presents `fields=2/2` at t 0.5 and 1, 1210 `1/1`). Crash: `psx-crash/scratch/pic
   field, Tomba! 1 showed only its opening movie in 21812 steps (`psx-tomba/scratch/picker2/sheet.png`). In every
   walk the unfocused panel's steps and instructions stay fixed.
 
+## Follow-up (2026-11-03, picker2)
+- `rw` on the selector's channel returned 0: the selector's Game holds the channel and has no guest, so every
+  shared verb read its empty machine. Cause: `DbgServer::runCommand` ran every verb against the Core of the Game
+  that claimed the endpoint. Fix: `DebugCommands::reachesMachine` classes each shared verb (machine, or window /
+  host input / configuration), and the selector routes machine verbs and title verbs to the focused panel's
+  booted machine (`DbgServer::routeMachineVerbsTo`, set each selector frame from `PanelSessions::focusedMachine`).
+  Shown in `psx-spyro/scratch/picker2b/run1`: `rw 800757D8` reads 0x0000000D (Spyro 1's title state) with Spyro 1
+  focused, Spyro 2's word 0x30420006 with Spyro 2 focused, 0x0000000D again back on Spyro 1; `pshot` still
+  shoots the composed selector (`run2/sheet.png`).
+- A panel never focused had no logo. Decision: the logo read from the running title is saved in the title's
+  user-data directory (`SavedLogo`, `picker-logo.rgba`) and loaded when the selector creates its panels, so the
+  panel shows it from the first frame with zero guest instructions; it is derived from the player's own disc at
+  run time and never committed. Rejected: extracting each title's logo from disc files at session creation, which
+  needs each title's archive and texture formats reverse-engineered for no visible difference after the first
+  launch. Shown in `run2` (logo snapshotted 255x128 at 29 s, saved) then `run3/sheet.png`: the next process
+  draws Spyro 1's logo over its black panel in the first selector frame, before the title has presented.
+
 ## Open
 - Wall-clock pacing of the focused demo was not judged: host load stayed far above 4 for the whole pass.
-- No all-title real-time run since the psxport change (same load).
-- Only Spyro 1 has a logo; Spyro 2/3, Crash, Tomba and Spider-Man supply no `panelLogo`.
-- A panel never focused shows nothing until it is focused once; the first focus shows the title's boot cards
-  before its demo.
-- Crash 3, Enter Electro and Tomba! 1 show no attract demo in the selector (above).
+- No all-title real-time run since the psxport changes (same load); Spyro and Crash were rebuilt, the other nine
+  products were not.
+- Only Spyro 1 reads a logo; Spyro 2/3, Crash 1/2/3, Tomba! 1/2 and Spider-Man 1/2 supply no `panelLogo` and
+  answer `showsOwnLogo` false. A title never focused on this machine still has no logo until its title screen
+  shows once.
+- Crash 3 hangs in its level loader's VBlank-counter poll (psx-crash 0035, cause traced, fix named, not landed);
+  Enter Electro presents only black (psx-spider-man 0039, likely EE-04); Tomba! 1 showed only its opening movie
+  in 21812 steps (not traced); Spyro 2/3 and Crash 1 attract demos not walked in the selector.
