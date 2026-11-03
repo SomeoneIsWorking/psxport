@@ -15,8 +15,8 @@ namespace psx::present {
 enum class DepthOrder : std::uint8_t {
   // Each polygon tests and writes depth (a terrain mesh sorted per polygon).
   Polygon,
-  // Each object's polygons keep the producer's own order among themselves, test against the scene drawn before
-  // them, then write the object's depth (a model the guest sorts into one OT slot, its parts painter-ordered).
+  // A model the guest sorts into one OT slot, its parts painter-ordered: it draws over everything the slot order put
+  // before it, as retail does, and writes its depth so what the slot order puts after it is tested against it.
   Object,
 };
 

@@ -158,12 +158,10 @@ private:
 
   RenderDevice &device_;
   SDL_GPUGraphicsPipeline *pipeline_ = nullptr;
-  // With a depth target: slot order (no test, no write); a tested polygon; an object's colour against the scene, then
-  // its depth with no colour.
+  // With a depth target: slot order (no test, no write); a tested polygon; an object over the scene, writing its depth.
   SDL_GPUGraphicsPipeline *slotPipeline_ = nullptr;
   SDL_GPUGraphicsPipeline *depthPipeline_ = nullptr;
   SDL_GPUGraphicsPipeline *objectPipeline_ = nullptr;
-  SDL_GPUGraphicsPipeline *objectDepthPipeline_ = nullptr;
   const present::DepthTest *depthTest_ = nullptr; // this present's
   gpu::RecordPlanner planner_;
   Plane vram_;

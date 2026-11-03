@@ -422,8 +422,6 @@ public:
              const present::DepthTest *depthTest) {
     plan_.scale = scale;
     depthTest_ = depthTest;
-    depthObject_.reset();
-    depthParity_ = false;
     plan_.capture.reset();
     readBack_ = readBack;
     declared_.reset();
@@ -516,8 +514,6 @@ private:
   // Keeps the op when its native footprint reached a plane, whatever its quads at this scale.
   // `plane`, when given, is pushed right after `op`: its DepthPlane.
   void commit(const RecordOp &op, bool readsDestination, const RecordOp *plane = nullptr);
-  // The depth flags of a polygon `depthTest_` tests, with its object's parity.
-  std::uint32_t depthFlags(const DrawPrimitive &primitive, present::DepthOrder order);
   void closeBatch();
 
   RecordRasterPlan plan_;
@@ -536,8 +532,6 @@ private:
   std::optional<RecordReadBack> declared_; // this record's declaration, from the next record on
   bool declares_ = false;
   const present::DepthTest *depthTest_ = nullptr; // null: every primitive in slot order
-  std::optional<present::RecordKey> depthObject_; // the last DepthOrder::Object polygon's key
-  bool depthParity_ = false;
   std::optional<ReadBackShift> sampling_; // the primitive being planned's
 };
 
@@ -756,18 +750,6 @@ void RecordPlanner::Builder::emitPlacedTransfer(const RecordRect &written, const
   target(0);
 }
 
-std::uint32_t RecordPlanner::Builder::depthFlags(const DrawPrimitive &primitive, present::DepthOrder order) {
-  if (order == present::DepthOrder::Polygon) {
-    depthObject_.reset();
-    return kOpDepthTest;
-  }
-  if (depthObject_ != primitive.key) {
-    depthObject_ = primitive.key;
-    depthParity_ = !depthParity_;
-  }
-  return kOpDepthTest | kOpDepthObject | (depthParity_ ? kOpDepthParity : 0u);
-}
-
 void RecordPlanner::Builder::commit(const RecordOp &op, bool readsDestination, const RecordOp *plane) {
   if (!reaches_) {
     opQuads_.clear();
@@ -971,7 +953,7 @@ void RecordPlanner::Builder::addTriangle(const TriVertex scaled[3],
   std::optional<RecordOp> plane;
   if (depthTest_ != nullptr) {
     if (const std::optional<present::DepthOrder> order = depthTest_->tests(primitive)) {
-      op[kOpFlags] |= depthFlags(primitive, *order);
+      op[kOpFlags] |= kOpDepthTest | (*order == present::DepthOrder::Object ? kOpDepthObject : 0u);
       plane = depthPlane(primitive, firstVertex);
     }
   }

@@ -20,7 +20,7 @@ constexpr SDL_GPUTextureFormat kDepthFormat = SDL_GPU_TEXTUREFORMAT_D16_UNORM;
 constexpr ShaderCode kRecordVertex{spv_g_record_vert, spv_g_record_vert_len, {0, 1, 1}};
 constexpr ShaderCode kRecordFragment{spv_g_record_frag, spv_g_record_frag_len, {3, 1, 3}};
 constexpr ShaderCode kRecordDepthFragment{spv_g_record_depth_frag, spv_g_record_depth_frag_len, {3, 1, 3}};
-constexpr std::uint32_t kDepthRunFlags = gpu::kOpDepthTest | gpu::kOpDepthObject | gpu::kOpDepthParity;
+constexpr std::uint32_t kDepthRunFlags = gpu::kOpDepthTest | gpu::kOpDepthObject;
 
 struct TargetUniform {
   float width = 0;
@@ -58,16 +58,11 @@ std::uint32_t paddedBytes(std::size_t bytes) {
 RecordRasterizer::RecordRasterizer(RenderDevice &device)
     : device_(device), pipeline_(device.makePipeline(kRecordVertex, kRecordFragment, kVramFormat)) {
   const RenderDevice::DepthTarget slot = depthTarget(SDL_GPU_COMPAREOP_ALWAYS, false);
-  const RenderDevice::DepthTarget writes = depthTarget(SDL_GPU_COMPAREOP_LESS_OR_EQUAL, true);
-  const RenderDevice::DepthTarget reads = depthTarget(SDL_GPU_COMPAREOP_LESS_OR_EQUAL, false);
-  SDL_GPUColorTargetBlendState noColour = {};
-  noColour.enable_color_write_mask = true;
-  noColour.color_write_mask = 0;
+  const RenderDevice::DepthTarget tests = depthTarget(SDL_GPU_COMPAREOP_LESS_OR_EQUAL, true);
+  const RenderDevice::DepthTarget covers = depthTarget(SDL_GPU_COMPAREOP_ALWAYS, true);
   slotPipeline_ = device.makePipeline(kRecordVertex, kRecordFragment, kVramFormat, nullptr, nullptr, &slot);
-  depthPipeline_ = device.makePipeline(kRecordVertex, kRecordDepthFragment, kVramFormat, nullptr, nullptr, &writes);
-  objectPipeline_ = device.makePipeline(kRecordVertex, kRecordDepthFragment, kVramFormat, nullptr, nullptr, &reads);
-  objectDepthPipeline_ =
-      device.makePipeline(kRecordVertex, kRecordDepthFragment, kVramFormat, &noColour, nullptr, &writes);
+  depthPipeline_ = device.makePipeline(kRecordVertex, kRecordDepthFragment, kVramFormat, nullptr, nullptr, &tests);
+  objectPipeline_ = device.makePipeline(kRecordVertex, kRecordDepthFragment, kVramFormat, nullptr, nullptr, &covers);
   canvases_.reserve(gpu::kRecordMaxCanvases);
 }
 
@@ -82,7 +77,6 @@ RecordRasterizer::~RecordRasterizer() {
   device_.release(slotPipeline_);
   device_.release(depthPipeline_);
   device_.release(objectPipeline_);
-  device_.release(objectDepthPipeline_);
 }
 
 RecordRasterizer::Plane RecordRasterizer::makePlane(const RecordCanvas &shape) {
@@ -566,17 +560,12 @@ void RecordRasterizer::drawQuads(SDL_GPURenderPass *pass,
     while (end < quads.size() && depthRun(plan, quads[end]) == flags) {
       end++;
     }
-    const auto draw = [&](SDL_GPUGraphicsPipeline *pipeline) {
-      SDL_BindGPUGraphicsPipeline(pass, pipeline);
-      SDL_DrawGPUPrimitives(
-          pass, static_cast<Uint32>(end - run) * 6, 1, (firstVertexQuad + static_cast<std::uint32_t>(run)) * 6, 0);
-    };
-    if ((flags & gpu::kOpDepthObject) != 0u) {
-      draw(objectPipeline_);
-      draw(objectDepthPipeline_);
-    } else {
-      draw((flags & gpu::kOpDepthTest) != 0u ? depthPipeline_ : slotPipeline_);
-    }
+    SDL_BindGPUGraphicsPipeline(pass,
+                                (flags & gpu::kOpDepthObject) != 0u ? objectPipeline_
+                                : (flags & gpu::kOpDepthTest) != 0u ? depthPipeline_
+                                                                    : slotPipeline_);
+    SDL_DrawGPUPrimitives(
+        pass, static_cast<Uint32>(end - run) * 6, 1, (firstVertexQuad + static_cast<std::uint32_t>(run)) * 6, 0);
     run = end;
   }
 }
