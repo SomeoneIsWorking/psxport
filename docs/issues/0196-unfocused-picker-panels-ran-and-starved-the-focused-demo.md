@@ -86,15 +86,13 @@ presents `fields=2/2` at t 0.5 and 1, 1210 `1/1`). Crash: `psx-crash/scratch/pic
   all three saved logos in its first frame, Spyro 2 and 3 never focused (`steps=0 insns=0`).
 
 ## Open
-- Crash 1/2/3, Tomba! 1/2 and Spider-Man 1/2 supply no logo yet. Crash's title scene id (C1 0x19, C2/C3 0x3C) also
-  covers the publisher intros, so a scene gate read the wrong art (psx-crash 0036); each needs its title menu's
-  own state word.
-- Wall-clock pacing of the focused demo was not judged: host load stayed far above 4 for the whole pass.
-- No all-title real-time run since the psxport changes (same load); Spyro and Crash were rebuilt, the other nine
-  products were not.
-- Only Spyro 1 reads a logo; Spyro 2/3, Crash 1/2/3, Tomba! 1/2 and Spider-Man 1/2 supply no `panelLogo` and
-  answer `showsOwnLogo` false. A title never focused on this machine still has no logo until its title screen
-  shows once.
-- Crash 3 hangs in its level loader's VBlank-counter poll (psx-crash 0035, cause traced, fix named, not landed);
+- Crash 1/2/3, Tomba! 1/2 and Spider-Man 1/2 supply no logo yet and answer `showsOwnLogo` false. Crash's title
+  scene id (C1 0x19, C2/C3 0x3C) also covers the publisher intros, so a scene gate read the wrong art
+  (psx-crash 0036); each needs its title menu's own state word. A title never focused on this machine has no logo
+  until its title screen shows once.
+- Crash 3 hangs in its level loader's VBlank-counter poll (psx-crash 0035, cause traced, fix named, not landed;
+  reproduced again in `psx-crash/scratch/picker2/cprobe`: Crash 3 reached its demo, then the channel timed out);
   Enter Electro presents only black (psx-spider-man 0039, likely EE-04); Tomba! 1 showed only its opening movie
-  in 21812 steps (not traced); Spyro 2/3 and Crash 1 attract demos not walked in the selector.
+  in 21812 steps (not traced).
+- Wall-clock pacing of the focused demo was not judged and no all-title real-time run was made: host load stayed
+  between 35 and 57 for the whole pass.

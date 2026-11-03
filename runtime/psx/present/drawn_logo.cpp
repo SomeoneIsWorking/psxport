@@ -42,32 +42,46 @@ bool samples(const DrawPrimitive &primitive, std::span<const LogoTexture> textur
   });
 }
 
-void extend(int &left, int &top, int &right, int &bottom, const DrawPrimitive &primitive) {
-  if (primitive.kind == PrimitiveKind::Sprite) {
-    const RecordVertex &at = primitive.vertices[0];
-    left = std::min(left, at.x);
-    top = std::min(top, at.y);
-    right = std::max(right, at.x + primitive.width);
-    bottom = std::max(bottom, at.y + primitive.height);
-    return;
-  }
-  for (int vertex = 0; vertex < primitive.vertexCount; ++vertex) {
-    const RecordVertex &at = primitive.vertices[static_cast<std::size_t>(vertex)];
-    left = std::min(left, at.x);
-    top = std::min(top, at.y);
-    right = std::max(right, at.x + 1);
-    bottom = std::max(bottom, at.y + 1);
-  }
-}
+// Screen bounds of the primitives drawn so far, right and bottom exclusive.
+struct Bounds {
+  int left = 0;
+  int top = 0;
+  int right = 0;
+  int bottom = 0;
+  bool empty = true;
 
-// Texel 0 is not drawn; modulation is the GPU's colour * texel / 128.
-void plot(Canvas &canvas, const TexelSource &source, int x, int y, int u, int v, int red, int green, int blue) {
-  const int column = x - canvas.left;
-  const int row = y - canvas.top;
+  void include(int x, int y, int width, int height) {
+    if (empty) {
+      *this = {x, y, x + width, y + height, false};
+      return;
+    }
+    left = std::min(left, x);
+    top = std::min(top, y);
+    right = std::max(right, x + width);
+    bottom = std::max(bottom, y + height);
+  }
+
+  void include(const DrawPrimitive &primitive) {
+    if (primitive.kind == PrimitiveKind::Sprite) {
+      include(primitive.vertices[0].x, primitive.vertices[0].y, primitive.width, primitive.height);
+      return;
+    }
+    for (int vertex = 0; vertex < primitive.vertexCount; ++vertex) {
+      const RecordVertex &at = primitive.vertices[static_cast<std::size_t>(vertex)];
+      include(at.x, at.y, 1, 1);
+    }
+  }
+};
+
+// One pixel at `at` (position, texture coordinate, colour). Texel 0 is not drawn; modulation is the GPU's
+// colour * texel / 128.
+void plot(Canvas &canvas, const TexelSource &source, const RecordVertex &at) {
+  const int column = at.x - canvas.left;
+  const int row = at.y - canvas.top;
   if (column < 0 || column >= canvas.width || row < 0 || row >= canvas.height) {
     return;
   }
-  const std::uint16_t texel = psx::gpu::sampleTexel(source.vram, source.page, source.clut, u & 0xFF, v & 0xFF);
+  const std::uint16_t texel = psx::gpu::sampleTexel(source.vram, source.page, source.clut, at.u, at.v);
   if (texel == 0) {
     return;
   }
@@ -75,9 +89,9 @@ void plot(Canvas &canvas, const TexelSource &source, int x, int y, int u, int v,
   std::array<int, 3> channel{
       psx::gpu::scale5to8(pixel.red), psx::gpu::scale5to8(pixel.green), psx::gpu::scale5to8(pixel.blue)};
   if (source.modulate) {
-    channel[0] = std::min(255, channel[0] * red / 128);
-    channel[1] = std::min(255, channel[1] * green / 128);
-    channel[2] = std::min(255, channel[2] * blue / 128);
+    channel[0] = std::min(255, channel[0] * at.r / 128);
+    channel[1] = std::min(255, channel[1] * at.g / 128);
+    channel[2] = std::min(255, channel[2] * at.b / 128);
   }
   std::uint8_t *out = &canvas.rgba[((static_cast<std::size_t>(row) * canvas.width) + column) * 4];
   out[0] = static_cast<std::uint8_t>(channel[0]);
@@ -90,9 +104,12 @@ void drawSprite(Canvas &canvas, const TexelSource &source, const DrawPrimitive &
   const RecordVertex &at = primitive.vertices[0];
   for (int row = 0; row < primitive.height; ++row) {
     for (int column = 0; column < primitive.width; ++column) {
-      const int u = at.u + (primitive.flipX ? -column : column);
-      const int v = at.v + (primitive.flipY ? -row : row);
-      plot(canvas, source, at.x + column, at.y + row, u, v, at.r, at.g, at.b);
+      RecordVertex texel = at;
+      texel.x = at.x + column;
+      texel.y = at.y + row;
+      texel.u = static_cast<std::uint8_t>(at.u + (primitive.flipX ? -column : column));
+      texel.v = static_cast<std::uint8_t>(at.v + (primitive.flipY ? -row : row));
+      plot(canvas, source, texel);
     }
   }
 }
@@ -121,17 +138,17 @@ void drawTriangle(
         continue;
       }
       const auto mix = [&](int ka, int kb, int kc) {
-        return static_cast<int>((wa * ka) + (wb * kb) + (wc * kc));
+        return static_cast<std::uint8_t>((wa * ka) + (wb * kb) + (wc * kc));
       };
-      plot(canvas,
-           source,
-           x,
-           y,
-           mix(a.u, b.u, c.u),
-           mix(a.v, b.v, c.v),
-           mix(a.r, b.r, c.r),
-           mix(a.g, b.g, c.g),
-           mix(a.b, b.b, c.b));
+      RecordVertex texel;
+      texel.x = x;
+      texel.y = y;
+      texel.u = mix(a.u, b.u, c.u);
+      texel.v = mix(a.v, b.v, c.v);
+      texel.r = mix(a.r, b.r, c.r);
+      texel.g = mix(a.g, b.g, c.g);
+      texel.b = mix(a.b, b.b, c.b);
+      plot(canvas, source, texel);
     }
   }
 }
@@ -150,31 +167,26 @@ bool holdsArtwork(const Canvas &canvas) {
 std::optional<psx::host::LogoImage>
 drawnLogo(const FrameRecord &record, std::span<const std::uint16_t> vram, std::span<const LogoTexture> textures) {
   std::vector<const DrawPrimitive *> drawn;
-  int left = 0;
-  int top = 0;
-  int right = 0;
-  int bottom = 0;
+  Bounds bounds;
   for (const RecordEntry &entry : record.entries()) {
     const auto *primitive = std::get_if<DrawPrimitive>(&entry);
     if (primitive == nullptr || !samples(*primitive, textures)) {
       continue;
     }
-    if (drawn.empty()) {
-      left = primitive->vertices[0].x;
-      top = primitive->vertices[0].y;
-      right = left;
-      bottom = top;
-    }
-    extend(left, top, right, bottom, *primitive);
+    bounds.include(*primitive);
     drawn.push_back(primitive);
   }
-  const int width = right - left;
-  const int height = bottom - top;
+  const int width = bounds.right - bounds.left;
+  const int height = bounds.bottom - bounds.top;
   if (drawn.empty() || width <= 0 || height <= 0 || width > kMaximumSide || height > kMaximumSide) {
     return std::nullopt;
   }
 
-  Canvas canvas{left, top, width, height, std::vector<std::uint8_t>(static_cast<std::size_t>(width) * height * 4, 0)};
+  Canvas canvas{bounds.left,
+                bounds.top,
+                width,
+                height,
+                std::vector<std::uint8_t>(static_cast<std::size_t>(width) * height * 4, 0)};
   for (const DrawPrimitive *primitive : drawn) {
     psx::gpu::TexPage page{primitive->state.texPageX,
                            primitive->state.texPageY,
