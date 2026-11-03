@@ -189,6 +189,8 @@ PickerSession::Result PickerSession::run() {
       host_->display.show();
     }
     services_.budget.step();
+    // The channel's guest verbs (`rw`, `regs`, `shot`) read the panel the player is on.
+    host_->dbg_server.routeMachineVerbsTo(panels_->focusedMachine());
     fieldTurn.endField(core, static_cast<std::uint32_t>(frame));
   }
   lucent::info("picker", "selector ended after {} frame(s) with no choice; {}", frame, panels_->summary());

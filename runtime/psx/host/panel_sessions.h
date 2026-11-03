@@ -38,8 +38,8 @@ public:
   bool panelReady(int panel) const;
   // The panel's newest picture at the size its session built it; invalid while the panel is not ready.
   psx::render::PresentedImage picture(int panel) const;
-  // The logo to draw over this panel: its title's own logo once read, except while the panel's picture
-  // already shows it.
+  // The logo to draw over this panel: its title's own logo, read from the running title or saved from an
+  // earlier read, except while the panel's picture already shows it.
   PanelLogo *logo(int panel);
 
   // Move the focus: the old panel pauses and goes silent, the new one resumes (or boots) and is heard.
@@ -49,6 +49,8 @@ public:
   int focused() const {
     return focused_;
   }
+  // The focused panel's machine once it has booted; null before.
+  Core *focusedMachine();
 
   // One step of the focused session, booting it first if it never ran. Returns the display fields that
   // step waited for, so the loop paces the frame itself only when the panel did not.
@@ -62,7 +64,7 @@ public:
   void report() const;
 
 private:
-  // Read this panel's own logo from its live machine; a no-op once one is held.
+  // Read this panel's own logo from its live machine and save it; a no-op once read in this process.
   void takeLogo(int panel, TitleSession &session);
   // Guest instructions this panel's machine has executed; 0 before it boots.
   std::uint64_t executedInstructions(int panel) const;
@@ -74,7 +76,9 @@ private:
   SessionServices &services_;
   // A boot was attempted, so a refused one is not retried every frame.
   std::vector<bool> tried_;
+  // Each panel's logo: the saved one until its running title gives one.
   std::vector<std::unique_ptr<PanelLogo>> logos_;
+  std::vector<bool> logoRead_;
   int focused_ = 0;
 };
 

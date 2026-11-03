@@ -144,10 +144,15 @@ return` or the ESC row ends it as `ReturnedToSelector` and the selector is rebui
   Enter Electro presents only black (psx-spider-man 0039), Tomba! 1 showed only its opening movie in
   21812 steps; Spyro 2/3 and Crash 1 reach theirs per their title docs, not walked here.
 - **Unfocused panels show their still.** A paused panel draws its newest present (the frame it was on
-  when it lost focus) greyed, and its logo. A panel never focused yet has no picture.
+  when it lost focus) greyed, and its logo. A panel never focused yet has no picture; it shows its logo
+  on black when one is saved.
 - **The logo comes from the running game.** `GameRuntime::panelLogo(Core &)` reads the title's own
-  logo from its live machine (its VRAM while its title screen is up); the panel keeps the first one it
-  gets for the selector's life. No committed image of game art is drawn. `PanelLayout::logoRect` sizes it
+  logo from its live machine (its VRAM while its title screen is up). The first read in a selector
+  replaces the panel's logo and is saved (`SavedLogo`, `picker-logo.rgba` in the title's user-data
+  directory, beside `disc-path`); every later selector loads it when it creates its panels, so a panel
+  shows its logo from the selector's first frame without running its title. A title never focused on
+  this machine has no logo until its title screen first shows. No committed image of game art is drawn:
+  the saved file is read from the player's own disc at run time. `PanelLayout::logoRect` sizes it
   at the largest whole multiple of its texels that stays inside the panel's seams over the rows it covers
   (shrunk to fit only when one multiple does not), its centre at a fifth of the panel's height, so the
   nearest sampler keeps it sharp and a narrow panel never cuts it. It is hidden while
@@ -162,7 +167,11 @@ on an iteration where the panel did not present, and paces only when the panel's
 The selector is the host Game's screen: it builds through `DisplayPresenter::buildPanes` and shows
 through the same present, overlay and RmlUi menu as a title frame, so ESC opens the menu over it and a
 changed setting reaches the focused panel (`Mods::reload`). D-pad Left/Right and `select left|right`
-move the focus with wrap; Cross or Start confirms. Panel 0 starts focused. Each panel presents at its
+move the focus with wrap; Cross or Start confirms. The selector's Game holds the control channel; a
+verb its own menu does not name and that acts on a machine (`DebugCommands::reachesMachine`: memory,
+registers, the machine's picture, its devices, a title's own verbs) runs on the focused panel's machine
+once it has booted (`DbgServer::routeMachineVerbsTo`), and window, host-input and configuration verbs
+(`pshot`, `gamepad`, `cvar`) stay on the selector. Panel 0 starts focused. Each panel presents at its
 settled cover size and is drawn 1:1 (`presentation.md`). The focused panel's share of the window width
 is the settings file's `picker_selected_share` (default 0.6) and the others split the rest evenly
 (`PickerLayout::retarget`), so two titles are 60/40 and three 60/20/20. A panel is ready once its title

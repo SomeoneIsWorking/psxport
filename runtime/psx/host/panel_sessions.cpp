@@ -15,6 +15,7 @@
 #include <format>
 #include <optional>
 #include <string>
+#include <utility>
 
 namespace psx::host {
 
@@ -24,7 +25,12 @@ PanelSessions::PanelSessions(const TitleCatalog &catalog, const PickerContent &c
   sessions_.reserve(panels);
   tried_.assign(panels, false);
   logos_.resize(panels);
+  logoRead_.assign(panels, false);
   for (int panel = 0; panel < content_.panelCount(); ++panel) {
+    // A panel shows its logo from the first frame without running its title.
+    if (std::optional<LogoImage> saved = SavedLogo(*content_.panelTitle(panel).identity).load()) {
+      logos_[static_cast<std::size_t>(panel)] = std::make_unique<PanelLogo>(std::move(*saved));
+    }
     auto session = std::make_unique<TitleSession>(
         catalog_, content_.panelTitle(panel), TitleSession::Role::Panel, true, services_);
     session->pause();
@@ -77,19 +83,25 @@ PanelLogo *PanelSessions::logo(int panel) {
   if (held == nullptr) {
     return nullptr;
   }
+  TitleSession &session = *sessions_[static_cast<std::size_t>(panel)];
+  if (!session.booted()) {
+    return held;
+  }
   // A paused machine still holds the state its last picture was drawn from.
-  Core &core = sessions_[static_cast<std::size_t>(panel)]->core();
+  Core &core = session.core();
   return core.runtime.showsOwnLogo(core) ? nullptr : held;
 }
 
 void PanelSessions::takeLogo(int panel, TitleSession &session) {
-  std::unique_ptr<PanelLogo> &held = logos_[static_cast<std::size_t>(panel)];
-  if (held != nullptr) {
+  const auto index = static_cast<std::size_t>(panel);
+  if (logoRead_[index]) {
     return;
   }
   Core &core = session.core();
   if (std::optional<LogoImage> image = core.runtime.panelLogo(core)) {
-    held = std::make_unique<PanelLogo>(std::move(*image));
+    logoRead_[index] = true;
+    SavedLogo(*session.title().identity).save(*image);
+    logos_[index] = std::make_unique<PanelLogo>(std::move(*image));
   }
 }
 
@@ -105,6 +117,14 @@ void PanelSessions::focus(int panel) {
   next.setAudible(true);
   next.resume();
   lucent::info("picker", "focused panel {}: {}", panel, content_.panelTitle(panel).identity->displayName);
+}
+
+Core *PanelSessions::focusedMachine() {
+  if (count() == 0) {
+    return nullptr;
+  }
+  TitleSession &current = *sessions_[static_cast<std::size_t>(focused_)];
+  return current.booted() ? &current.core() : nullptr;
 }
 
 void PanelSessions::step(int dir) {

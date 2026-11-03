@@ -1,4 +1,4 @@
-// One title's own logo as the picker draws it: an RGBA image and its lazily uploaded texture.
+// One title's own logo as the picker draws it: an RGBA image, its copy in user data and its lazily uploaded texture.
 #pragma once
 
 #include "logo_image.h"
@@ -6,6 +6,8 @@
 #include <SDL3/SDL_gpu.h>
 
 #include <cstdint>
+#include <filesystem>
+#include <optional>
 #include <vector>
 
 namespace psx::render {
@@ -13,6 +15,22 @@ class RenderDevice;
 } // namespace psx::render
 
 namespace psx::host {
+
+struct TitleIdentity;
+
+// The logo last read from the running title, kept in its user-data directory so a panel never focused in this
+// process still shows it. Read from the player's own disc at run time; never shipped.
+class SavedLogo {
+public:
+  explicit SavedLogo(const TitleIdentity &title);
+
+  std::optional<LogoImage> load() const;
+  // Replaces the saved logo atomically; false when it cannot be written.
+  bool save(const LogoImage &image) const;
+
+private:
+  std::optional<std::filesystem::path> file_;
+};
 
 // An RGBA8 image in memory plus the GPU texture the picker draws it from.
 class PanelLogo {
