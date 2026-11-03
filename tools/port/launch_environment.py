@@ -102,17 +102,20 @@ def agent_environment(environment: Mapping[str, str],
 
 
 def tool_settings(seed: str | Path | None) -> Path:
-    """This run's settings file under scratch/settings/: a copy of ``seed``, else empty (defaults)."""
+    """This tool's settings file under scratch/settings/: a copy of ``seed``, else empty (defaults).
+
+    The name carries the tool's PID, so concurrent tools in one checkout never share a file.
+    """
     directory = Path.cwd() / "scratch" / "settings"
     directory.mkdir(parents=True, exist_ok=True)
     if not seed:
-        path = directory / "defaults.ini"
+        path = directory / f"{os.getpid()}-defaults.ini"
         path.write_text("")
         return path
     source = Path(seed).resolve()
     if not source.is_file():
         raise FileNotFoundError(f"settings file {source} does not exist")
-    path = directory / source.name
+    path = directory / f"{os.getpid()}-{source.name}"
     if path != source:
         shutil.copyfile(source, path)
     return path
