@@ -104,15 +104,17 @@ and a title's own run-end lines come from `reportRun`.
 
 `GameRuntime` carries two optional virtuals the host asks, each with a neutral default:
 
-- `panelLogo(Core &)`: the title's own logo, read from its live machine; `nullopt` until there is one. A title
-  usually answers with `psx::present::drawnLogo` (`runtime/psx/present/drawn_logo.h`) at its title screen's own
-  gate: the last committed frame's textured primitives that sample the wordmark's texture page (and palette,
-  when the page holds other art), drawn again by gpu.c on a scratch `GpuDevice` holding the live VRAM, over a
-  cleared canvas with GP0(E6) setting the mask bit, so a pixel is the logo's exactly where the device wrote it.
-  The title's gate is guest state that holds only once the wordmark is finished (Spyro: the title screen's
-  waiting sub-state).
+- `logoTextures()`: the texture pages (and palettes, when the page holds other art) its title screen draws its
+  wordmark from; empty by default, so the title has no logo.
+- `panelLogo(Core &)`: the title's own logo, read from its live machine; `nullopt` until there is one. By default,
+  while `showsOwnLogo` and with `logoTextures` named, it is `psx::present::drawnLogo`
+  (`runtime/psx/present/drawn_logo.h`): the last committed frame's textured primitives that sample those textures,
+  drawn again by gpu.c on a scratch `GpuDevice` holding the live VRAM, over a cleared canvas with GP0(E6) setting
+  the mask bit, so a pixel is the logo's exactly where the device wrote it. A title overrides it only when its
+  logo is not drawn from textures.
 - `showsOwnLogo(Core &)`: the title's picture shows its own logo right now (its title screen); `false`
-  by default, so a panel with a logo always draws it.
+  by default, so a panel with a logo always draws it. It is also the logo's gate: guest state that holds only once
+  the wordmark is finished (Spyro: the title screen's waiting sub-state; Crash: the title object's GOOL state).
 - `reportRun(Core &)`: title-specific lines after the framework's `run complete` line.
 
 ## Data flow
@@ -248,7 +250,7 @@ the event drain, so it reaches the run-end report like a client `quit`.
 
 1. Implement `TitleCatalog` with the title identities (measured from the executables) and one
    `GameRuntime` per title.
-2. Override `panelLogo` and `showsOwnLogo` where the title can say them.
+2. Override `showsOwnLogo` and `logoTextures` where the title can say them.
 3. Declare `std::unique_ptr<psx::host::TitleCatalog> createCatalog();` in the catalog header and build
    the product with `psxport_add_product(<target> CATALOG <ns>::createCatalog HEADER <header>
    [SOURCES ...] [LIBRARIES ...])` (`cmake/psxport.cmake`). The title writes no `main`.

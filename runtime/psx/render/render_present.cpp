@@ -264,7 +264,10 @@ void RenderState::repaint() {
 
 void RenderState::buildHostImage(SDL_GPUCommandBuffer *cmd, float fade) {
   ensurePresentImage(presentImageSize());
-  const present::PaneRect laidOut = present::letterbox(4, 3, presentImageSize_.width, presentImageSize_.height);
+  // A pane fills its panel as the guest picture does; the scissor crops the overflow.
+  const present::PaneRect laidOut =
+      target_ == PresentTarget::Pane ? present::cover(4, 3, presentImageSize_.width, presentImageSize_.height)
+                                     : present::letterbox(4, 3, presentImageSize_.width, presentImageSize_.height);
   SDL_GPURenderPass *pass = beginClearedPass(cmd, presentImage_);
   drawFullscreen(cmd,
                  pass,
