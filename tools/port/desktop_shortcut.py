@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """Install this title's desktop shortcut: the menu entry, its icon and the Desktop copy.
 
     uv run --frozen python external/psxport/tools/port/desktop_shortcut.py
