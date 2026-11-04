@@ -31,6 +31,17 @@ All public under `github.com/SomeoneIsWorking`, side by side, no superproject.
 
 Fresh machine: `git clone https://github.com/SomeoneIsWorking/psxport.git ~/repo/psx/psxport && cd ~/repo/psx/psxport && uv run --frozen python scripts/bootstrap_workspace.py`.
 
+## Focus
+
+Work is Tomba 2 and Spyro, one defect at a time, taken from what the user reported, until the user names another
+title. The title scope below is the long-term list, not a work queue; the issue backlog is not one either.
+
+psxport is a general PSX tool, so a framework change is not work on every title. It is built and checked on the
+title that needed it, plus Tomba 2 and Spyro when it touches presentation, audio or timing. A changed API still
+updates and builds its callers in the same change. Other titles are not run for it.
+
+Agents and workflows run only when the user asks for them in that request. When a task lands, report and stop.
+
 ## Title scope
 
 Spyro 1/2/3, Crash 1/2/3, Crash Bash, CTR, Vagrant Story, Mega Man X4, Tomba! 1/2, Tekken 3, Spider-Man 1/2,
@@ -94,7 +105,9 @@ Products: `spyro_port`, `toystory2_port`, `crashbash_port`, `crash_port`, `ctr_p
 - Only pacing needs real time on a quiet host. Composition, identity and halfway motion are judged unpaced
   (`PSXPORT_NOPACE=1`, same ires and sink) at any load. Walk from boot once to find the earliest defect, then
   iterate on that screen through its warp; one real-time walk from boot closes the pass. A reviewer reads the
-  diff and runs only what a claim needs. A psxport change gets the all-title real-time run once, at pass end.
+  diff and runs only what a claim needs.
+- Numbers do not close a defect. Look at the frames on the defect's screen and judge them as the player would; a
+  check that would pass with the defect present is not evidence. A filed issue, a trace or a decision is not a fix.
 - Weak hardware is met by having no needlessly expensive operations, never by generating host load: measure a
   present's cost in load-independent units (thread CPU time, `perf stat` instructions, GPU timestamps, allocations)
   on a quiet host and remove work that is redundant, repeated or scales with ires/sink on the CPU.
