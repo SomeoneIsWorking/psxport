@@ -368,12 +368,18 @@ trim over Spyro's feet, a wall seam over the floor), and leaves everything else 
   depth-bias byte are nearer, the far terrain pass's base (Spyro 1 0x40 bins) is farther, so the
   low-detail mesh never covers near terrain, as its slot never does. A producer's computed vertex (a split midpoint, a resplit) carries `screenBlendDepth`
   of its sources: 1/z is linear on screen.
+- **Terrain sorts back.** Spyro's terrain bins a polygon by its depth sum plus the draw word's bias
+  (`guest_terrain_polygon.h:polygonBin`). Its producers store each vertex moved back by that bias
+  (`sortedBack`, bins of 32 view units), so a pedestal skirt the guest sorts over the grass by its bias
+  stays over it (Toasty start plinth, Dark Hollow portal logs).
 - **Who keeps it.** Over host memory the place travels with the word (`HostMemory`). Over guest
   memory `EmitMemory::storeVertex` notes (address, word, depth) in `Core::vertexDepths`
   (`psx::cpu::VertexDepths`, one flat table over main RAM and the scratchpad, allocated by the first
   known depth) and `loadVertex` reads it back while the address still holds that word. Every guest
   store (`Core::bookStore`) forgets the words it touches, so a later writer of the same word, a reused
-  packet buffer included, never inherits a stale depth; only `storeVertex` sets one. The OT walk passes
+  packet buffer included, never inherits a stale depth; only `storeVertex` sets one. The table
+  tracks only while the setting is on (`RenderState::recordPresents` calls `track` each present); off it is
+  released, `note` returns at once and the store check is an inline range test over an empty range. The OT walk passes
   each command word's depth in `Gp0Origin.depth`, and the tap sets `RecordVertex.depth` for each polygon
   position word. Guest code's own SWC2 stores are not tracked: an unported 3D draw keeps depth 0 and
   draws in slot order.
@@ -385,7 +391,13 @@ trim over Spyro's feet, a wall seam over the floor), and leaves everything else 
   slot, its parts painter-ordered: a horn base over a crest) follows the guest's own rule for a model:
   nothing the slot order drew before it covers it, so it draws over that scene in its own order without
   testing, and writes its depth, so what the slot order puts after it (a ledge trim in a nearer bin) is
-  tested against it. A pedestal sunk into the grass keeps its buried rim, as retail draws it.
+  tested against it.
+- **Not expressed: contact within the sort's resolution.** Depth replaces slot order wherever the two
+  disagree, also where two surfaces touch within one bin and slot order was right. With `sortedBack`, the
+  Peace Keepers fairy pad's buried skirt draws over the sand that retail draws over it (psx-spyro issue
+  0233). The rule that keeps both that and the Toasty plinth is "a later draw loses only where it is
+  farther by more than the guest's bin": a test margin the written depth must not carry, which one
+  fixed-function depth test cannot express.
 - **How it draws.** A tested triangle is followed in the op buffer by a `DepthPlane` op (never drawn)
   holding its 1/z plane over native coordinates; the op carries `kOpDepthTest`, and an `Object`
   polygon also `kOpDepthObject`. Only the `RECORD_DEPTH` variant of `record.frag` reads the plane and writes
@@ -402,16 +414,19 @@ trim over Spyro's feet, a wall seam over the floor), and leaves everything else 
   slot-order record picture, which is not the device picture: at 4:3, ires 1, one Toasty portal frame's
   record and device VRAM (same run, same frame) differ in 1,252 of 122,880 pixels by more than 8
   levels, scattered along edges, none in the portal sky (psx-spyro issue 0224).
-- **Cost.** One multiply per projected vertex read, one table write per stored vertex and one table
-  check per guest store once a title has noted a depth, one extra op per tested triangle; a title or
-  op that marks nothing pays no op words and no `gl_FragDepth`. Nothing per pixel on the CPU and
-  nothing that scales with ires. Measured on Spyro 1's Stone Hill terrace (600 fields, ires 8x, 4K sink,
-  `perf stat instructions:u` on the main thread): 195.8 G on against 192.3 G off, 1.8%. The store check
-  (`VertexDepths::forget`) is 0.4% of the thread's instructions, the read (`at`) 0.5%, on or off.
+- **Cost.** On: one multiply per projected vertex read, one table write per stored vertex, one table
+  check per guest store, one extra op per tested triangle. Off: an inline range test per store and an
+  early return per stored vertex. A title or op that marks nothing pays no op words and no
+  `gl_FragDepth`. Nothing per pixel on the CPU and nothing that scales with ires. Spyro 1 Stone Hill
+  terrace, 600 fields, ires 8x, 4K sink, unpaced, main thread (`perf stat`): 212.4 G instructions and
+  16.03 s CPU on, 206.8 G and 15.61 s off (+2.7%; 26.7 against 26.0 ms CPU a field). `perf record`: on,
+  `VertexDepths::at` 0.27%, `forgetNoted` 0.23%, `note` 0.16%; off, `note` and `at` 0.04% each and no
+  `forgetNoted` (the inline check does not show). GPU time is not measured: SDL_GPU has no timestamp queries.
 - **Check it.** Spyro 1, Toasty portal (`warp Artisans/Toasty/portal`): the rock wall meets the floor along its
   real intersection with depth on; `PSXPORT_DEPTH=0` shows the wall's slot-order overlap. Spyro,
-  his toes, horns and crest draw the same with depth on and off. At the Artisans fountain
-  (`warp Artisans/Artisans/dragon 4`) the sunk pedestal keeps its rim and no far-pass river shows
+  his toes, horns and crest draw the same with depth on and off. At the Toasty start (`warp 0/4/0`) the
+  plinth keeps its skirt over the grass. At the Artisans fountain
+  (`warp Artisans/Artisans/dragon 4`) the sunk pedestal keeps its rim, the pond's stepping disks meet the water at the waterline, and no far-pass river shows
   through the wall in the 16:9 margin (psx-spyro issue 0223).
 
 Planned effects, all reading those attributes: dynamic lighting with real shadows, vertex smoothing
@@ -674,10 +689,12 @@ that the journal lists exactly those.
 
 ## Bug report capture
 
-A bug report takes three pictures. `screen.png` is the window's last present. `psx.png` is the guest draw
-area from the device VRAM, captured by `BugReportSession::frameSealed` right after `FramePresenter::commit`
-seals the next record, so every title produces it through the one commit path; the report says "not
-captured" only when no frame seals within 4 fields. `motion.png` is an APNG of the last second of window
+A bug report takes three pictures of one frame. `psx.png` is the guest draw area from the device VRAM,
+captured by `BugReportSession::frameSealed` right after `FramePresenter::commit` seals the next record, so
+every title produces it through the one commit path. `screen.png` is that sealed frame's first whole present
+(`BugReportSession::presented`, from `DisplayPresenter::showScheduled`: the present that shows that sequence
+and is not an in-between). With no sealed frame shown whole within 4 fields the newest present is the
+screenshot and the report says the device render was not captured. `motion.png` is an APNG of the last second of window
 presents: `PresentClip` keeps 60 layers of a 640x360 RGBA8 GPU texture array (about 55 MB of VRAM,
 allocated on the first window present), letterboxes one GPU blit per swapchain present into the next
 layer and records its time, and downloads the ring only when a report is written. Nothing in it is

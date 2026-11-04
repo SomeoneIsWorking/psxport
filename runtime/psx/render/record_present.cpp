@@ -48,22 +48,24 @@ void RenderState::presentRecord(present::PresentInputs &inputs) {
   const present::FrameRecord *composed = game_.presentation.composedRecord();
   const bool advances = game_.presentation.composedAdvances();
   const bool deviceAhead = core.gpuDevice().hasUnsealedWork();
+  const bool depth = game_.mods.depth != 0;
+  // Vertex depths are kept only while presents test them.
+  core.vertexDepths.track(depth);
   SDL_GPUCommandBuffer *cmd = device_.acquire();
   presentsRecord_ = true;
   recordFade_[0] = inputs.fade_mode;
   recordFade_[1] = inputs.fade_r;
   recordFade_[2] = inputs.fade_g;
   recordFade_[3] = inputs.fade_b;
-  const bool drewComposed =
-      record_->show(cmd,
-                    record,
-                    composed,
-                    advances,
-                    deviceAhead,
-                    core.gpuDevice().vram(),
-                    scale,
-                    view,
-                    game_.mods.depth != 0 ? &core.depthTest : nullptr);
+  const bool drewComposed = record_->show(cmd,
+                                          record,
+                                          composed,
+                                          advances,
+                                          deviceAhead,
+                                          core.gpuDevice().vram(),
+                                          scale,
+                                          view,
+                                          depth ? &core.depthTest : nullptr);
   // The display, or its wide canvas, at the 4:3 display's aspect per column.
   const gpu::RecordRect shown = record_->presented().rect;
   inputs.sx = shown.x0;
