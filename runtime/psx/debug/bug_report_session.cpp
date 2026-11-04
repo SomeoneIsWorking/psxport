@@ -2,6 +2,7 @@
 
 #include "config_vars.h"
 #include "core.h"
+#include "display_presenter.h"
 #include "game.h"
 #include "gpu_device.h"
 #include "image_writer.h" // image_write_rgb24
@@ -35,7 +36,7 @@ constexpr const char *kRecordingFile = "repro.pad";
 constexpr const char *kCardFile = "memcard.mcr";
 constexpr const char *kStateFile = "state.bin";
 
-// Fields a capture waits for a sealed frame before it reports without a reference picture.
+// Fields a capture waits for a sealed frame and its present before it reports without them.
 constexpr int kReferenceWaitFields = 4;
 
 // The directory name under the user-data root when a title declares none: the framework's own, so
@@ -63,7 +64,7 @@ void BugReportSession::request() {
   }
 }
 
-void BugReportSession::frameSealed(Core &core) {
+void BugReportSession::frameSealed(Core &core, std::uint64_t sequence) {
   if (mState != State::Capturing || mReference) {
     return;
   }
@@ -72,6 +73,28 @@ void BugReportSession::frameSealed(Core &core) {
   const psx::gpu::DisplayArea display = device.displayArea();
   const psx::gpu::VramPoint origin = device.drawAreaOrigin();
   mReference = device.picture({origin.x, origin.y, display.width, display.height}, false);
+  mSealed = sequence;
+}
+
+void BugReportSession::presented(Core &core, const psx::present::PresentNote &note) {
+  if (mState != State::Capturing || !mReference || mScreenShot || note.shown != mSealed || note.from) {
+    return;
+  }
+  shootScreen(core);
+  mScreenMatches = mScreenShot;
+}
+
+void BugReportSession::shootScreen(Core &core) {
+  std::string error;
+  const std::optional<std::filesystem::path> path = mDraft->pathFor(kScreenshotFile, error);
+  if (!path) {
+    lucent::warn("bugreport", "{} is not in the report: {}", kScreenshotFile, error);
+    mScreenShot = true;
+    return;
+  }
+  core.game->render().presentShot(path->string().c_str());
+  std::error_code exists;
+  mScreenShot = std::filesystem::exists(*path, exists);
 }
 
 void BugReportSession::atFieldBoundary(Core &core) {
@@ -87,16 +110,23 @@ void BugReportSession::atFieldBoundary(Core &core) {
   case State::Idle:
     return;
   case State::Requested:
+    mDraft = openDraft(core);
     mReference.reset();
+    mScreenShot = false;
+    mScreenMatches = false;
     mFieldsCapturing = 0;
-    mState = State::Capturing;
+    mState = mDraft ? State::Capturing : State::Idle;
     return;
   case State::Capturing:
-    if (!mReference && ++mFieldsCapturing < kReferenceWaitFields) {
+    if (!mScreenShot && ++mFieldsCapturing < kReferenceWaitFields) {
       return;
     }
-    report(core);
+    if (!mScreenShot) {
+      shootScreen(core);
+    }
+    report(core, *mDraft);
     mState = State::Idle;
+    mDraft.reset();
     mReference.reset();
     return;
   }
@@ -116,12 +146,12 @@ std::optional<std::filesystem::path> BugReportSession::reportRoot(Core &core) co
   return *userData / "bug-reports";
 }
 
-void BugReportSession::report(Core &core) {
+std::optional<bug_report::Draft> BugReportSession::openDraft(Core &core) const {
   Game &game = *core.game;
   const std::optional<std::filesystem::path> root = reportRoot(core);
   if (!root) {
     lucent::error("bugreport", "no user-data directory on this host; set PSXPORT_BUG_REPORT_DIR");
-    return;
+    return std::nullopt;
   }
   const psx::game::HostIdentity identity = game.hostIdentity();
   const std::string application(!game.productName.empty()          ? game.productName
@@ -132,12 +162,15 @@ void BugReportSession::report(Core &core) {
       bug_report::Draft::open(*root, application, std::chrono::system_clock::now(), error);
   if (!draft) {
     lucent::error("bugreport", "cannot start a report under {}: {}", root->string(), error);
-    return;
   }
-  attachCaptures(core, *draft);
+  return draft;
+}
+
+void BugReportSession::report(Core &core, bug_report::Draft &draft) {
+  attachCaptures(core, draft);
 
   psx::platform::Watchdog::suspend(); // the player may write for as long as they like
-  const bool saved = holdForm(core, *draft);
+  const bool saved = holdForm(core, draft);
   psx::platform::Watchdog::resume();
   if (!saved) {
     lucent::info("bugreport", "report cancelled; nothing saved");
@@ -149,23 +182,20 @@ void BugReportSession::attachCaptures(Core &core, bug_report::Draft &draft) {
   Game &game = *core.game;
   std::string error;
 
-  if (const auto path = draft.pathFor(kScreenshotFile, error)) {
-    core.game->render().presentShot(path->string().c_str());
-    std::error_code exists;
-    if (std::filesystem::exists(*path, exists)) {
-      attachOrWarn(draft, kScreenshotFile, AttachmentRole::Screenshot, "On screen");
-    }
+  if (mScreenShot) {
+    attachOrWarn(draft, kScreenshotFile, AttachmentRole::Screenshot, "On screen");
   }
 
-  if (mReference && !mReference->pixels.empty()) {
+  if (mReference && !mReference->pixels.empty() && mScreenMatches) {
     if (const auto path = draft.pathFor(kReferenceFile, error);
         path && psx::debug::writeImageRgb24(
                     path->string().c_str(), mReference->pixels.data(), mReference->width, mReference->height)) {
       attachOrWarn(draft, kReferenceFile, AttachmentRole::Reference, "GPU device render of the same frame");
     }
   } else {
-    draft.addFact("Device render",
-                  lucent::format("not captured (no frame was sealed in {} fields)", kReferenceWaitFields));
+    draft.addFact(
+        "Device render",
+        lucent::format("not captured (no frame was sealed and shown whole in {} fields)", kReferenceWaitFields));
   }
 
   if (const auto path = draft.pathFor(kClipFile, error); path && game.render().writeClip(path->string().c_str())) {

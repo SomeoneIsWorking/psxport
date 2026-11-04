@@ -122,6 +122,7 @@ void DisplayPresenter::showScheduled() {
   scheduled_.reset();
   showBuilt();
   const PresentNote &note = scheduled.note;
+  core_.game->bugReport.presented(core_, note);
   lucent::debug(presentSequenceChannel,
                 "at={:.3f}ms fence={} shown={} from={} t={} n={} fields={}/{} composed={} cut={} logic={} due={:.3f}ms",
                 psx::platform::hostNowMs(),
