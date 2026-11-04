@@ -223,7 +223,7 @@ public:
       host_->writeVertex(address, vertex);
     } else {
       mem_w32(address, vertex.word());
-      core_->vertexDepths.note(address, vertex.word(), vertex.place().z);
+      core_->vertexDepths.note(address, vertex.word(), {vertex.place().z, vertex.place().back});
     }
   }
   // The vertex a body stored at `address`, on its word's pixel where no place was kept.
@@ -240,7 +240,9 @@ public:
     }
     // A word with no place keeps the depth a draw site stored with it into the guest, while it holds that word.
     GtePlace at = gte::ProjectedVertex::whole(word.value).place();
-    at.z = core_->vertexDepths.at(address, mem_r32(address));
+    const cpu::NotedDepth noted = core_->vertexDepths.at(address, mem_r32(address));
+    at.z = noted.depth;
+    at.back = noted.back;
     return {word.value, at};
   }
 

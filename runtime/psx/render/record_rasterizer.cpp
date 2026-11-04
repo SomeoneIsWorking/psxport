@@ -15,12 +15,14 @@ using gpu::RecordCanvas;
 using gpu::RecordRect;
 
 constexpr SDL_GPUTextureFormat kVramFormat = SDL_GPU_TEXTUREFORMAT_R8G8_UNORM;
-// record_depth.frag writes log2(z) / 16; at 16 bits that resolves z to 0.02%.
-constexpr SDL_GPUTextureFormat kDepthFormat = SDL_GPU_TEXTUREFORMAT_D16_UNORM;
 constexpr ShaderCode kRecordVertex{spv_g_record_vert, spv_g_record_vert_len, {0, 1, 1}};
 constexpr ShaderCode kRecordFragment{spv_g_record_frag, spv_g_record_frag_len, {3, 1, 3}};
 constexpr ShaderCode kRecordDepthFragment{spv_g_record_depth_frag, spv_g_record_depth_frag_len, {3, 1, 3}};
-constexpr std::uint32_t kDepthRunFlags = gpu::kOpDepthTest | gpu::kOpDepthObject;
+constexpr ShaderCode kRecordDepthBackFragment{
+    spv_g_record_depth_back_frag, spv_g_record_depth_back_frag_len, {3, 1, 3}};
+constexpr std::uint32_t kDepthRunFlags = gpu::kOpDepthTest | gpu::kOpDepthObject | gpu::kOpDepthGroup;
+// The stencil value a depth group's test draw leaves where its polygons passed; its write draw clears it again.
+constexpr std::uint8_t kGroupPassed = 1;
 
 struct TargetUniform {
   float width = 0;
@@ -35,12 +37,38 @@ struct ParamsUniform {
   std::int32_t unused = 0;
 };
 
-RenderDevice::DepthTarget depthTarget(SDL_GPUCompareOp compare, bool writes) {
+// record.frag writes log2(z) / 16; 24 bits resolve z far below a bin.
+SDL_GPUTextureFormat depthFormat(SDL_GPUDevice *device) {
+  return SDL_GPUTextureSupportsFormat(device,
+                                      SDL_GPU_TEXTUREFORMAT_D24_UNORM_S8_UINT,
+                                      SDL_GPU_TEXTURETYPE_2D,
+                                      SDL_GPU_TEXTUREUSAGE_DEPTH_STENCIL_TARGET)
+             ? SDL_GPU_TEXTUREFORMAT_D24_UNORM_S8_UINT
+             : SDL_GPU_TEXTUREFORMAT_D32_FLOAT_S8_UINT;
+}
+
+RenderDevice::DepthTarget depthTarget(SDL_GPUTextureFormat format, SDL_GPUCompareOp compare, bool writes) {
   RenderDevice::DepthTarget target;
-  target.format = kDepthFormat;
+  target.format = format;
   target.state.enable_depth_test = true;
   target.state.enable_depth_write = writes;
   target.state.compare_op = compare;
+  return target;
+}
+
+// Every face runs `compare` against kGroupPassed and on passing both tests applies `passed`.
+RenderDevice::DepthTarget
+withStencil(RenderDevice::DepthTarget target, SDL_GPUCompareOp compare, SDL_GPUStencilOp passed) {
+  SDL_GPUStencilOpState face = {};
+  face.fail_op = SDL_GPU_STENCILOP_KEEP;
+  face.depth_fail_op = SDL_GPU_STENCILOP_KEEP;
+  face.pass_op = passed;
+  face.compare_op = compare;
+  target.state.enable_stencil_test = true;
+  target.state.front_stencil_state = face;
+  target.state.back_stencil_state = face;
+  target.state.compare_mask = 0xFF;
+  target.state.write_mask = 0xFF;
   return target;
 }
 
@@ -56,12 +84,22 @@ std::uint32_t paddedBytes(std::size_t bytes) {
 } // namespace
 
 RecordRasterizer::RecordRasterizer(RenderDevice &device)
-    : device_(device), pipeline_(device.makePipeline(kRecordVertex, kRecordFragment, kVramFormat)) {
-  const RenderDevice::DepthTarget slot = depthTarget(SDL_GPU_COMPAREOP_ALWAYS, false);
-  const RenderDevice::DepthTarget tests = depthTarget(SDL_GPU_COMPAREOP_LESS_OR_EQUAL, true);
-  const RenderDevice::DepthTarget covers = depthTarget(SDL_GPU_COMPAREOP_ALWAYS, true);
+    : device_(device), pipeline_(device.makePipeline(kRecordVertex, kRecordFragment, kVramFormat)),
+      depthFormat_(depthFormat(device.handle())) {
+  const RenderDevice::DepthTarget slot = depthTarget(depthFormat_, SDL_GPU_COMPAREOP_ALWAYS, false);
+  const RenderDevice::DepthTarget tests = withStencil(depthTarget(depthFormat_, SDL_GPU_COMPAREOP_LESS_OR_EQUAL, false),
+                                                      SDL_GPU_COMPAREOP_ALWAYS,
+                                                      SDL_GPU_STENCILOP_REPLACE);
+  const RenderDevice::DepthTarget marks = withStencil(
+      depthTarget(depthFormat_, SDL_GPU_COMPAREOP_ALWAYS, true), SDL_GPU_COMPAREOP_EQUAL, SDL_GPU_STENCILOP_ZERO);
+  const RenderDevice::DepthTarget covers = depthTarget(depthFormat_, SDL_GPU_COMPAREOP_ALWAYS, true);
+  SDL_GPUColorTargetBlendState noColour = {};
+  noColour.enable_color_write_mask = true;
+  noColour.color_write_mask = 0;
   slotPipeline_ = device.makePipeline(kRecordVertex, kRecordFragment, kVramFormat, nullptr, nullptr, &slot);
-  depthPipeline_ = device.makePipeline(kRecordVertex, kRecordDepthFragment, kVramFormat, nullptr, nullptr, &tests);
+  groupTestPipeline_ = device.makePipeline(kRecordVertex, kRecordDepthFragment, kVramFormat, nullptr, nullptr, &tests);
+  groupMarkPipeline_ =
+      device.makePipeline(kRecordVertex, kRecordDepthBackFragment, kVramFormat, &noColour, nullptr, &marks);
   objectPipeline_ = device.makePipeline(kRecordVertex, kRecordDepthFragment, kVramFormat, nullptr, nullptr, &covers);
   canvases_.reserve(gpu::kRecordMaxCanvases);
 }
@@ -75,7 +113,8 @@ RecordRasterizer::~RecordRasterizer() {
   device_.release(readback_);
   device_.release(pipeline_);
   device_.release(slotPipeline_);
-  device_.release(depthPipeline_);
+  device_.release(groupTestPipeline_);
+  device_.release(groupMarkPipeline_);
   device_.release(objectPipeline_);
 }
 
@@ -472,12 +511,13 @@ void RecordRasterizer::execute(SDL_GPUCommandBuffer *cmd, const gpu::RecordRaste
   std::array<bool, gpu::kRecordPlanes> usesDepth{};
   for (int p = 0; p < planes; p++) {
     const auto &quads = plan.quads[static_cast<std::size_t>(p)];
-    usesDepth[static_cast<std::size_t>(p)] =
-        std::ranges::any_of(quads, [&](const gpu::RecordQuad &quad) { return depthRun(plan, quad) != 0u; });
+    usesDepth[static_cast<std::size_t>(p)] = std::ranges::any_of(quads, [&](const gpu::RecordQuad &quad) {
+      return depthRun(plan, quad) != 0u;
+    });
     Plane &target = plane(p);
     if (usesDepth[static_cast<std::size_t>(p)] && target.depth == nullptr) {
       target.depth = device_.makeTexture(
-          {target.width * s, target.height * s}, kDepthFormat, SDL_GPU_TEXTUREUSAGE_DEPTH_STENCIL_TARGET);
+          {target.width * s, target.height * s}, depthFormat_, SDL_GPU_TEXTUREUSAGE_DEPTH_STENCIL_TARGET);
     }
   }
   for (std::size_t b = 0; b < plan.batches.size(); b++) {
@@ -503,13 +543,17 @@ void RecordRasterizer::execute(SDL_GPUCommandBuffer *cmd, const gpu::RecordRaste
         bool &cleared = depthCleared[static_cast<std::size_t>(p)];
         depthInfo.texture = target.depth;
         depthInfo.clear_depth = 1.0f;
+        depthInfo.clear_stencil = 0;
         depthInfo.load_op = cleared ? SDL_GPU_LOADOP_LOAD : SDL_GPU_LOADOP_CLEAR;
         depthInfo.store_op = SDL_GPU_STOREOP_STORE;
-        depthInfo.stencil_load_op = SDL_GPU_LOADOP_DONT_CARE;
-        depthInfo.stencil_store_op = SDL_GPU_STOREOP_DONT_CARE;
+        depthInfo.stencil_load_op = depthInfo.load_op;
+        depthInfo.stencil_store_op = SDL_GPU_STOREOP_STORE;
         cleared = true;
       }
       SDL_GPURenderPass *pass = SDL_BeginGPURenderPass(cmd, &colour, 1, depth ? &depthInfo : nullptr);
+      if (depth) {
+        SDL_SetGPUStencilReference(pass, kGroupPassed);
+      }
       SDL_BindGPUGraphicsPipeline(pass, depth ? slotPipeline_ : pipeline_);
       SDL_BindGPUVertexStorageBuffers(pass, 0, &quads_.buffer, 1);
       SDL_GPUSampler *nearest = device_.nearestSampler();
@@ -560,12 +604,19 @@ void RecordRasterizer::drawQuads(SDL_GPURenderPass *pass,
     while (end < quads.size() && depthRun(plan, quads[end]) == flags) {
       end++;
     }
+    const auto count = static_cast<Uint32>(end - run) * 6;
+    const Uint32 first = (firstVertexQuad + static_cast<std::uint32_t>(run)) * 6;
+    const bool group = (flags & (gpu::kOpDepthTest | gpu::kOpDepthObject)) == gpu::kOpDepthTest;
     SDL_BindGPUGraphicsPipeline(pass,
                                 (flags & gpu::kOpDepthObject) != 0u ? objectPipeline_
-                                : (flags & gpu::kOpDepthTest) != 0u ? depthPipeline_
+                                : group                             ? groupTestPipeline_
                                                                     : slotPipeline_);
-    SDL_DrawGPUPrimitives(
-        pass, static_cast<Uint32>(end - run) * 6, 1, (firstVertexQuad + static_cast<std::uint32_t>(run)) * 6, 0);
+    SDL_DrawGPUPrimitives(pass, count, 1, first, 0);
+    if (group) {
+      // Its polygons cover no pixel twice, so each wrote its colour exactly where it passed; now its depth there.
+      SDL_BindGPUGraphicsPipeline(pass, groupMarkPipeline_);
+      SDL_DrawGPUPrimitives(pass, count, 1, first, 0);
+    }
     run = end;
   }
 }

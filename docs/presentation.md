@@ -368,12 +368,13 @@ trim over Spyro's feet, a wall seam over the floor), and leaves everything else 
   depth-bias byte are nearer, the far terrain pass's base (Spyro 1 0x40 bins) is farther, so the
   low-detail mesh never covers near terrain, as its slot never does. A producer's computed vertex (a split midpoint, a resplit) carries `screenBlendDepth`
   of its sources: 1/z is linear on screen.
-- **Terrain sorts back.** Spyro's terrain bins a polygon by its depth sum plus the draw word's bias
-  (`guest_terrain_polygon.h:polygonBin`). Its producers store each vertex moved back by that bias
-  (`sortedBack`, bins of 32 view units), so a pedestal skirt the guest sorts over the grass by its bias
-  stays over it (Toasty start plinth, Dark Hollow portal logs).
+- **Sort-back.** A draw site may also say how far back the guest sorts a polygon beyond its depth
+  (`GtePlace.back`, view units). Spyro's terrain bins a polygon by its depth sum plus the draw word's bias
+  (`guest_terrain_polygon.h:polygonBin`); its producers set each vertex's `back` to that bias
+  (`sortedBack`, bins of 32 view units). Only the depth the polygon leaves for later draws lies back by it;
+  the polygon itself tests at its true depth (How it draws).
 - **Who keeps it.** Over host memory the place travels with the word (`HostMemory`). Over guest
-  memory `EmitMemory::storeVertex` notes (address, word, depth) in `Core::vertexDepths`
+  memory `EmitMemory::storeVertex` notes (address, word, depth, back) in `Core::vertexDepths`
   (`psx::cpu::VertexDepths`, one flat table over main RAM and the scratchpad, allocated by the first
   known depth) and `loadVertex` reads it back while the address still holds that word. Every guest
   store (`Core::bookStore`) forgets the words it touches, so a later writer of the same word, a reused
@@ -381,31 +382,44 @@ trim over Spyro's feet, a wall seam over the floor), and leaves everything else 
   tracks only while the setting is on (`RenderState::recordPresents` calls `track` each present); off it is
   released, `note` returns at once and the store check is an inline range test over an empty range. The OT walk passes
   each command word's depth in `Gp0Origin.depth`, and the tap sets `RecordVertex.depth` for each polygon
-  position word. Guest code's own SWC2 stores are not tracked: an unported 3D draw keeps depth 0 and
+  position word, and `RecordVertex.back` with it. Guest code's own SWC2 stores are not tracked: an unported 3D draw keeps depth 0 and
   draws in slot order.
 - **Which primitives test.** `Core::depthTest` (`psx::present::DepthTest`) holds the producer entries
-  a title marks, each with its `DepthOrder`: opaque world 3D only (terrain, mobys, the player model),
+  a title marks, each with its `DepthMark` (order and bin): opaque world 3D only (terrain, mobys, the player model),
   never 2D, HUD, sky, translucent, decal or shadow producers. A primitive tests when it is a polygon,
-  opaque, keyed to a marked producer and every vertex has depth > 0. `Polygon` (a terrain mesh the
-  guest sorts per polygon) tests and writes per polygon. `Object` (a model the guest sorts into one
+  opaque, keyed to a marked producer and every vertex has depth > 0; a draw site that projects with no
+  view depth (a HUD model, `DepthUnit` scale 0) leaves its vertices at 0 and draws in slot order. `Polygon` (a
+  terrain mesh the guest sorts per polygon) tests and writes per polygon, with the mark's `bin`: the depth one
+  slot of the guest's sort spans (Spyro 1 terrain: 32 view units). `Object` (a model the guest sorts into one
   slot, its parts painter-ordered: a horn base over a crest) follows the guest's own rule for a model:
   nothing the slot order drew before it covers it, so it draws over that scene in its own order without
   testing, and writes its depth, so what the slot order puts after it (a ledge trim in a nearer bin) is
   tested against it.
-- **Not expressed: contact within the sort's resolution.** Depth replaces slot order wherever the two
-  disagree, also where two surfaces touch within one bin and slot order was right. With `sortedBack`, the
-  Peace Keepers fairy pad's buried skirt draws over the sand that retail draws over it (psx-spyro issue
-  0233). The rule that keeps both that and the Toasty plinth is "a later draw loses only where it is
-  farther by more than the guest's bin": a test margin the written depth must not carry, which one
-  fixed-function depth test cannot express.
+- **Contact within the sort's resolution.** Surfaces that touch within one bin are ordered by the slot
+  order, as retail orders them: a later `Polygon` loses only where its true depth lies farther than the
+  depth there, and the depth a `Polygon` leaves is its own moved back by its `bin` and its `back`. So the
+  Peace Keepers fairy pad's buried skirt stays under the sand drawn after it, and the Toasty start plinth's
+  skirt, sorted after the grass by the grass's bias, stays over it (psx-spyro issue 0233). An `Object`
+  leaves its true depth: a terrain polygon after it beside Spyro's toes still loses to them. Not expressed: an
+  unmarked or `Object` draw over nearer terrain that the slot order then hides with a later, farther polygon
+  stays visible, because that polygon loses to the nearer terrain's depth (a Stone Hill tree's trunk base over a
+  grass hill, psx-spyro issue 0233).
 - **How it draws.** A tested triangle is followed in the op buffer by a `DepthPlane` op (never drawn)
   holding its 1/z plane over native coordinates; the op carries `kOpDepthTest`, and an `Object`
-  polygon also `kOpDepthObject`. Only the `RECORD_DEPTH` variant of `record.frag` reads the plane and writes
-  `log2(z) / 16` to a D16 target. A plane's depth clears to far on its first pass of each record. In a
-  pass with tested quads, a `Polygon` run uses LESS_OR_EQUAL with writes; an `Object` run ALWAYS with
-  writes, so its last-drawn part's depth is the one kept, as its colour is; every other run uses the plain
-  shader with ALWAYS and no write, in the same OT order, so marked and unmarked draws interleave exactly as the slot
-  order says. A pass with none uses the pipeline with no depth target.
+  polygon also `kOpDepthObject`; the plane's `kDepthBin` holds the polygon's bin plus its `back`. Only the
+  `RECORD_DEPTH` variants of `record.frag` read the plane and write `log2(z) / 16` (`RECORD_DEPTH_BACK`, the draw
+  that marks, moves z back by `kDepthBin`) to a D24S8 target (D32S8 where the GPU lacks it). A
+  plane's depth and stencil clear on its first pass of each record. The test and the depth it leaves
+  differ, which one fixed-function test cannot do, so the planner splits tested `Polygon` ops into depth
+  groups (`RecordPlanner::Builder::depthGroup`): a group's ops cover no native pixel twice, and the next op
+  that would starts a new group (parity bit `kOpDepthGroup`). A group draws twice in its pass: LESS_OR_EQUAL
+  with no depth write, its colour where it passes and stencil 1 there; then ALWAYS with depth write and no
+  colour where stencil is 1, writing the moved-back depth and clearing the stencil. An `Object` run draws
+  ALWAYS with writes, so its last-drawn part's depth is the one kept, as its colour is; every other run uses
+  the plain shader with ALWAYS and no write, in the same OT order, so marked and unmarked draws interleave
+  exactly as the slot order says. A pass with none uses the pipeline with no depth target. Overlap is
+  judged on native pixels, as batches are; where two group members share only a scaled pixel, the later one
+  keeps it, as slot order does.
 - **Interpolation.** In-betweens re-run the producer body at `t`, so depth is re-projected with the
   vertex; there is no separate depth lerp.
 - **Off.** The `depth` setting (default on, `PSXPORT_DEPTH`, menu "Native Depth") off passes no policy: no
@@ -415,13 +429,15 @@ trim over Spyro's feet, a wall seam over the floor), and leaves everything else 
   record and device VRAM (same run, same frame) differ in 1,252 of 122,880 pixels by more than 8
   levels, scattered along edges, none in the portal sky (psx-spyro issue 0224).
 - **Cost.** On: one multiply per projected vertex read, one table write per stored vertex, one table
-  check per guest store, one extra op per tested triangle. Off: an inline range test per store and an
-  early return per stored vertex. A title or op that marks nothing pays no op words and no
-  `gl_FragDepth`. Nothing per pixel on the CPU and nothing that scales with ires. Spyro 1 Stone Hill
-  terrace, 600 fields, ires 8x, 4K sink, unpaced, main thread (`perf stat`): 212.4 G instructions and
-  16.03 s CPU on, 206.8 G and 15.61 s off (+2.7%; 26.7 against 26.0 ms CPU a field). `perf record`: on,
-  `VertexDepths::at` 0.27%, `forgetNoted` 0.23%, `note` 0.16%; off, `note` and `at` 0.04% each and no
-  `forgetNoted` (the inline check does not show). GPU time is not measured: SDL_GPU has no timestamp queries.
+  check per guest store, one extra op per tested triangle, and per tested `Polygon` op a check and a mark of its
+  native rows in the open group's map (`grouped_`); per depth group two draws and two pipeline binds. Off: an
+  inline range test per store and an early return per stored vertex. A title or op that marks nothing pays no op
+  words, no groups and no `gl_FragDepth`. Nothing per pixel on the CPU and nothing that scales with ires. Spyro 1
+  Stone Hill terrace (`warp 0/1/3`, `spyro-at 196200 148000 27000 1536`), 600 fields, ires 8x, 4K sink, unpaced,
+  main thread (`perf stat` instructions): 236.7 G on, 213.5 G off (+10.9%; the slot-order pass before depth
+  groups measured +2.7%). About 120 depth groups per record there. `perf record` on against off: the group map
+  (`WrittenMap::mark`, `any`, `depthGroup`) about 9.6 G, the driver's extra draws and pipeline binds about 6 G,
+  vertex depth tracking under 2 G. GPU time is not measured: SDL_GPU has no timestamp queries.
 - **Check it.** Spyro 1, Toasty portal (`warp Artisans/Toasty/portal`): the rock wall meets the floor along its
   real intersection with depth on; `PSXPORT_DEPTH=0` shows the wall's slot-order overlap. Spyro,
   his toes, horns and crest draw the same with depth on and off. At the Toasty start (`warp 0/4/0`) the

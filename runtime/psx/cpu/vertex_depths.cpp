@@ -35,9 +35,9 @@ void VertexDepths::track(bool on) {
   }
 }
 
-void VertexDepths::note(std::uint32_t address, std::uint32_t word, float depth) {
+void VertexDepths::note(std::uint32_t address, std::uint32_t word, NotedDepth depth) {
   const std::uint32_t at = slot(address);
-  if (!tracking_ || at == kNoSlot || (entries_.empty() && depth <= 0.0f)) {
+  if (!tracking_ || at == kNoSlot || (entries_.empty() && depth.depth <= 0.0f)) {
     return;
   }
   if (entries_.empty()) {
@@ -55,21 +55,21 @@ void VertexDepths::note(std::uint32_t address, std::uint32_t word, float depth) 
 void VertexDepths::forgetNoted(std::uint32_t address, std::uint32_t bytes) {
   for (std::uint32_t word = address & ~3u; word < address + bytes; word += 4u) {
     if (const std::uint32_t at = slot(word); at != kNoSlot) {
-      entries_[at].depth = 0.0f;
+      entries_[at].depth = {};
     }
   }
 }
 
-float VertexDepths::at(std::uint32_t address, std::uint32_t word) const {
+NotedDepth VertexDepths::at(std::uint32_t address, std::uint32_t word) const {
   if (entries_.empty()) {
-    return 0.0f;
+    return {};
   }
   const std::uint32_t at = slot(address);
   if (at == kNoSlot) {
-    return 0.0f;
+    return {};
   }
   const Entry &entry = entries_[at];
-  return entry.word == word ? entry.depth : 0.0f;
+  return entry.word == word ? entry.depth : NotedDepth{};
 }
 
 } // namespace psx::cpu

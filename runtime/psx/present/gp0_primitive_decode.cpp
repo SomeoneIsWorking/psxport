@@ -20,6 +20,7 @@ void place(present::RecordVertex &vertex, const PacketView &packet, std::size_t 
   }
   const GtePlace &at = *packet.places[word];
   vertex.depth = at.z;
+  vertex.back = at.back;
   if (!placesWhole(vertex.x, at.x) || !placesWhole(vertex.y, at.y)) {
     return;
   }
@@ -55,6 +56,7 @@ present::RecordVertex polygonVertex(std::span<const std::uint32_t> words,
   vertex.subX = 0.0f;
   vertex.subY = 0.0f;
   vertex.depth = 0.0f;
+  vertex.back = 0.0f;
   if (flags.textured) {
     const Gp0TextureCoord coord = Gp0Command(words[index++]).textureCoord();
     vertex.u = static_cast<std::uint8_t>(coord.u);

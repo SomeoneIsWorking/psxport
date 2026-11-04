@@ -105,7 +105,7 @@ private:
     SDL_GPUTexture *inBetween = nullptr;
     SDL_GPUTexture *before = nullptr;
     SDL_GPUTexture *depth = nullptr; // made when a record first depth-tests on this plane; cleared per record
-    int width = 0; // native pixels
+    int width = 0;                   // native pixels
     int height = 0;
     int originX = 0; // VRAM-space position of pixel (0, 0)
     int originY = 0;
@@ -158,9 +158,13 @@ private:
 
   RenderDevice &device_;
   SDL_GPUGraphicsPipeline *pipeline_ = nullptr;
-  // With a depth target: slot order (no test, no write); a tested polygon; an object over the scene, writing its depth.
+  // With a depth target: slot order (no test, no write); a depth group's test, colour where it passes, marked in
+  // stencil; the group's depth written where marked, moved back by its bin; an object over the scene, writing its
+  // depth.
+  SDL_GPUTextureFormat depthFormat_ = SDL_GPU_TEXTUREFORMAT_INVALID;
   SDL_GPUGraphicsPipeline *slotPipeline_ = nullptr;
-  SDL_GPUGraphicsPipeline *depthPipeline_ = nullptr;
+  SDL_GPUGraphicsPipeline *groupTestPipeline_ = nullptr;
+  SDL_GPUGraphicsPipeline *groupMarkPipeline_ = nullptr;
   SDL_GPUGraphicsPipeline *objectPipeline_ = nullptr;
   const present::DepthTest *depthTest_ = nullptr; // this present's
   gpu::RecordPlanner planner_;

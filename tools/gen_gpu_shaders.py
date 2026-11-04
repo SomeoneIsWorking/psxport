@@ -42,6 +42,7 @@ SHADERS = (
     Shader("record.vert", "spv_g_record_vert"),
     Shader("record.frag", "spv_g_record_frag"),
     Shader("record.frag", "spv_g_record_depth_frag", "RECORD_DEPTH"),
+    Shader("record.frag", "spv_g_record_depth_back_frag", "RECORD_DEPTH_BACK"),
 )
 
 

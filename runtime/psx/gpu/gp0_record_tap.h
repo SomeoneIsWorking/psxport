@@ -4,6 +4,7 @@
 #include "frame_record.h"
 #include "owner_ledger.h"
 #include "texture_feedback.h"
+#include "vertex_depths.h"
 
 #include <array>
 #include <cstdint>
@@ -38,7 +39,7 @@ struct Gp0Origin {
   std::optional<present::RecordKey> packetKey;
   present::OwnerHandle owner = present::kNoOwner;
   present::OwnerHandle mixedOwner = present::kNoOwner;
-  float depth = 0.0f; // the view depth a draw site stored with this word (VertexDepths), 0 unknown
+  cpu::NotedDepth depth; // what a draw site stored with this word (VertexDepths)
 };
 
 // Frames the GP0 word stream exactly as gpu.c's ProcessFIFO does, decodes each command with
@@ -103,7 +104,7 @@ private:
   void stampPacket(present::DrawPrimitive &primitive);
   // Keeps the depth of the word about to join words_.
   void noteDepth(const Gp0Origin &origin);
-  [[nodiscard]] float wordDepth(std::size_t index) const;
+  [[nodiscard]] cpu::NotedDepth wordDepth(std::size_t index) const;
 
   std::uint64_t nextSequence_ = 1; // 0 is the presenter's empty record
   present::FrameRecord record_;
@@ -111,7 +112,7 @@ private:
 
   Mode mode_ = Mode::Command;
   std::vector<std::uint32_t> words_;
-  std::array<float, 16> depths_{}; // of words_ by index
+  std::array<cpu::NotedDepth, 16> depths_{}; // of words_ by index
   unsigned need_ = 0;
   std::uint32_t packetSource_ = 0;
   std::optional<present::RecordKey> packetKey_;

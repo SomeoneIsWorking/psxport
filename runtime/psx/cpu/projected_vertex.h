@@ -38,7 +38,7 @@ public:
   [[nodiscard]] constexpr ProjectedVertex steppedTo(std::uint32_t word) const {
     const GtePlace from = whole(word_).place_;
     const GtePlace to = whole(word).place_;
-    return {word, {place_.x + to.x - from.x, place_.y + to.y - from.y, place_.z}};
+    return {word, {place_.x + to.x - from.x, place_.y + to.y - from.y, place_.z, place_.back}};
   }
 
   [[nodiscard]] constexpr std::uint32_t word() const {

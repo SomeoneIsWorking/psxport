@@ -189,8 +189,8 @@ void Gp0RecordTap::noteDepth(const Gp0Origin &origin) {
   }
 }
 
-float Gp0RecordTap::wordDepth(std::size_t index) const {
-  return index < depths_.size() ? depths_[index] : 0.0f;
+cpu::NotedDepth Gp0RecordTap::wordDepth(std::size_t index) const {
+  return index < depths_.size() ? depths_[index] : cpu::NotedDepth{};
 }
 
 void Gp0RecordTap::stampPacket(present::DrawPrimitive &primitive) {
@@ -364,7 +364,9 @@ void Gp0RecordTap::recordPolygon(const DeviceProbe &probe) {
   for (int v = 0; v < 3; v++) {
     const std::size_t position = polygonPositionWord(index, flags, v == 0);
     present::RecordVertex vertex = polygonVertex(words_, index, flags, primitive.vertices[0], v == 0);
-    vertex.depth = wordDepth(position);
+    const cpu::NotedDepth noted = wordDepth(position);
+    vertex.depth = noted.depth;
+    vertex.back = noted.back;
     vertex.x += probe.state.offsetX;
     vertex.y += probe.state.offsetY;
     primitive.vertices[static_cast<std::size_t>(v)] = vertex;
@@ -387,7 +389,9 @@ void Gp0RecordTap::finishQuad(const DeviceProbe &probe) {
     std::size_t index = 0;
     const std::size_t position = polygonPositionWord(index, flags, false);
     present::RecordVertex vertex = polygonVertex(words_, index, flags, primitive->vertices[0], false);
-    vertex.depth = wordDepth(position);
+    const cpu::NotedDepth noted = wordDepth(position);
+    vertex.depth = noted.depth;
+    vertex.back = noted.back;
     vertex.x += probe.state.offsetX;
     vertex.y += probe.state.offsetY;
     primitive->vertices[3] = vertex;

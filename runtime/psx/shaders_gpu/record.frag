@@ -3,6 +3,10 @@
 // Record rasterizer: one PSX pixel per fragment, by gpu.c's rules; record_raster_setup.h sets up each op.
 // The target is a plane: the VRAM image or a display canvas, whose pixel p is VRAM-space pixel p + origin * scale.
 #include "record_op.glsl"
+// A draw that leaves its depth moved back by the plane's kDepthBin (RecordRasterizer::drawQuads).
+#ifdef RECORD_DEPTH_BACK
+#define RECORD_DEPTH
+#endif
 
 layout(location = 0) flat in uvec4 v_info;
 layout(location = 0) out vec4 o_col;
@@ -108,11 +112,16 @@ int edgeX(uint edge, uint step, int yi) {
 // The op's DepthPlane, the op after it.
 float depthWord(uint field) { return uintBitsToFloat(ops[(op + 1u) * kRecordOpWords + field]); }
 
-// A depth-tested triangle's view depth at native VRAM point `at`, as log2(z) / 16 over SZ's 16-bit range.
+// A depth-tested triangle's view depth at native VRAM point `at`, as log2(z) / 16 over SZ's 16-bit range. The
+// draw that writes a tested polygon's depth moves it back by the polygon's bin; the draw that tests it does not.
 float fragmentDepth(vec2 at) {
     float inverse = depthWord(kDepthInverse) + depthWord(kDepthSlopeX) * (at.x - depthWord(kDepthOriginX)) +
                     depthWord(kDepthSlopeY) * (at.y - depthWord(kDepthOriginY));
-    return clamp(log2(max(1.0 / max(inverse, 1.0e-6), 1.0)) / 16.0, 0.0, 1.0);
+    float z = 1.0 / max(inverse, 1.0e-6);
+#ifdef RECORD_DEPTH_BACK
+    z += depthWord(kDepthBin);
+#endif
+    return clamp(log2(max(z, 1.0)) / 16.0, 0.0, 1.0);
 }
 #endif
 

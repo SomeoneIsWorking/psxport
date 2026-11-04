@@ -7,8 +7,8 @@
 
 #include <algorithm>
 #include <cmath>
-#include <cstring>
 #include <cstdlib>
+#include <cstring>
 #include <optional>
 #include <utility>
 #include <variant>
@@ -379,16 +379,19 @@ void storeWords(RecordOp &op, int index, std::uint64_t value) {
   op[static_cast<std::size_t>(index) + 1] = static_cast<std::uint32_t>(value >> 32);
 }
 
-// The triangle's 1/depth as a plane over native VRAM coordinates, from its first vertex: 1/z is linear on screen.
-RecordOp depthPlane(const DrawPrimitive &primitive, int firstVertex) {
+// The triangle's 1/depth as a plane over native VRAM coordinates, from its first vertex: 1/z is linear on screen. The
+// depth it leaves lies back by the mark's bin and by what its draw site sorts it back.
+RecordOp depthPlane(const DrawPrimitive &primitive, int firstVertex, const present::DepthMark &mark) {
   double x[3];
   double y[3];
   double w[3];
+  float back = 0.0f;
   for (int i = 0; i < 3; i++) {
     const present::RecordVertex &v = primitive.vertices[static_cast<std::size_t>(firstVertex + i)];
     x[i] = v.x + static_cast<double>(v.subX);
     y[i] = v.y + static_cast<double>(v.subY);
     w[i] = 1.0 / static_cast<double>(v.depth);
+    back = std::max(back, v.back);
   }
   const double det = (x[1] - x[0]) * (y[2] - y[0]) - (x[2] - x[0]) * (y[1] - y[0]);
   double a = 0.0;
@@ -402,7 +405,8 @@ RecordOp depthPlane(const DrawPrimitive &primitive, int firstVertex) {
                          static_cast<float>(a),
                          static_cast<float>(b),
                          static_cast<float>(x[0]),
-                         static_cast<float>(y[0])};
+                         static_cast<float>(y[0]),
+                         mark.bin + back};
   RecordOp op{};
   op[kOpFlags] = static_cast<std::uint32_t>(RecordOpKind::DepthPlane);
   std::memcpy(&op[kDepthInverse], plane, sizeof plane);
@@ -437,6 +441,7 @@ public:
     canvases_ = canvases;
     batchStart_ = {};
     lines_ = 0;
+    depthGroups_ = 0;
     target(0);
   }
 
@@ -455,12 +460,13 @@ public:
       quads += plane.size();
     }
     lucent::debug("record_plan",
-                  "record {} scale {}: {} ops, {} quads, {} batches, {} lines",
+                  "record {} scale {}: {} ops, {} quads, {} batches, {} depth groups, {} lines",
                   sequence,
                   plan_.scale,
                   plan_.ops.size(),
                   quads,
                   plan_.batches.size(),
+                  depthGroups_,
                   lines_);
     return plan_;
   }
@@ -514,6 +520,9 @@ private:
   // Keeps the op when its native footprint reached a plane, whatever its quads at this scale.
   // `plane`, when given, is pushed right after `op`: its DepthPlane.
   void commit(const RecordOp &op, bool readsDestination, const RecordOp *plane = nullptr);
+  // The depth group parity of a tested polygon writing opWrites_: a new group when it covers a pixel the open one does.
+  std::uint32_t depthGroup();
+  void closeDepthGroup();
   void closeBatch();
 
   RecordRasterPlan plan_;
@@ -522,6 +531,10 @@ private:
   int originX_ = 0;
   int originY_ = 0;
   std::array<WrittenMap, kRecordPlanes> written_;
+  std::array<WrittenMap, kRecordPlanes> grouped_; // pixels the open depth group's polygons cover
+  std::uint32_t groupParity_ = 0;
+  bool groupOpen_ = false;
+  int depthGroups_ = 0;
   std::array<std::uint32_t, kRecordPlanes> batchStart_{};
   std::vector<PlaneQuad> opQuads_;
   std::vector<PlaneRect> opWrites_;
@@ -532,7 +545,7 @@ private:
   std::optional<RecordReadBack> declared_; // this record's declaration, from the next record on
   bool declares_ = false;
   const present::DepthTest *depthTest_ = nullptr; // null: every primitive in slot order
-  std::optional<ReadBackShift> sampling_; // the primitive being planned's
+  std::optional<ReadBackShift> sampling_;         // the primitive being planned's
 };
 
 PlaneClips RecordPlanner::Builder::planeClips(const RecordDrawState &state) const {
@@ -772,6 +785,9 @@ void RecordPlanner::Builder::commit(const RecordOp &op, bool readsDestination, c
   }
   const auto opIndex = static_cast<std::uint32_t>(plan_.ops.size());
   plan_.ops.push_back(op);
+  if ((op[kOpFlags] & (kOpDepthTest | kOpDepthObject)) == kOpDepthTest) {
+    plan_.ops.back()[kOpFlags] |= depthGroup();
+  }
   if (plane != nullptr) {
     plan_.ops.push_back(*plane);
   }
@@ -794,7 +810,37 @@ void RecordPlanner::Builder::commit(const RecordOp &op, bool readsDestination, c
   opReads_.clear();
 }
 
+std::uint32_t RecordPlanner::Builder::depthGroup() {
+  bool covered = false;
+  for (const PlaneRect &write : opWrites_) {
+    covered = covered || grouped_[static_cast<std::size_t>(write.plane)].any(write.rect);
+  }
+  if (covered) {
+    closeDepthGroup();
+  }
+  if (!groupOpen_) {
+    groupOpen_ = true;
+    depthGroups_++;
+  }
+  for (const PlaneRect &write : opWrites_) {
+    grouped_[static_cast<std::size_t>(write.plane)].mark(write.rect);
+  }
+  return groupParity_;
+}
+
+void RecordPlanner::Builder::closeDepthGroup() {
+  if (!groupOpen_) {
+    return;
+  }
+  for (WrittenMap &plane : grouped_) {
+    plane.clear();
+  }
+  groupParity_ ^= kOpDepthGroup;
+  groupOpen_ = false;
+}
+
 void RecordPlanner::Builder::closeBatch() {
+  closeDepthGroup();
   RecordBatch batch;
   bool any = false;
   for (std::size_t plane = 0; plane < kRecordPlanes; plane++) {
@@ -952,9 +998,9 @@ void RecordPlanner::Builder::addTriangle(const TriVertex scaled[3],
   }
   std::optional<RecordOp> plane;
   if (depthTest_ != nullptr) {
-    if (const std::optional<present::DepthOrder> order = depthTest_->tests(primitive)) {
-      op[kOpFlags] |= kOpDepthTest | (*order == present::DepthOrder::Object ? kOpDepthObject : 0u);
-      plane = depthPlane(primitive, firstVertex);
+    if (const std::optional<present::DepthMark> mark = depthTest_->tests(primitive)) {
+      op[kOpFlags] |= kOpDepthTest | (mark->order == present::DepthOrder::Object ? kOpDepthObject : 0u);
+      plane = depthPlane(primitive, firstVertex, *mark);
     }
   }
   if (primitive.textured && !sampling_) {

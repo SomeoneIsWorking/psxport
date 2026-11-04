@@ -72,14 +72,15 @@ enum RecordPartField : std::uint8_t {
   kPartWords = 9,
 };
 
-// A DepthPlane op's floats: 1/z at its triangle's first vertex, its x and y slopes per native pixel, and that
-// vertex's native VRAM position.
+// A DepthPlane op's floats: 1/z at its triangle's first vertex, its x and y slopes per native pixel, that
+// vertex's native VRAM position, and the view units its written depth lies back by (its DepthMark::bin and back).
 enum RecordDepthField : std::uint8_t {
   kDepthInverse = 1,
   kDepthSlopeX = 2,
   kDepthSlopeY = 3,
   kDepthOriginX = 4,
   kDepthOriginY = 5,
+  kDepthBin = 6,
 };
 
 enum RecordOpFlag : std::uint32_t {
@@ -96,9 +97,12 @@ enum RecordOpFlag : std::uint32_t {
   kOpSkipParity = 1u << 21,
   kOpFlipX = 1u << 22,
   kOpFlipY = 1u << 23,
-  kOpReadBack = 1u << 24, // texels from the read-back capture, not VRAM
+  kOpReadBack = 1u << 24,    // texels from the read-back capture, not VRAM
   kOpDepthTest = 1u << 25,   // tests depth (present::DepthTest); the next op is its DepthPlane
   kOpDepthObject = 1u << 26, // DepthOrder::Object: draws over what came before it and writes its depth
+  // A tested polygon's depth group parity. A group's polygons cover no native pixel twice, so the group tests in one
+  // draw and then writes its depth in another; consecutive groups differ in parity.
+  kOpDepthGroup = 1u << 27,
 };
 
 // One rectangle of a plane's pixels belonging to an op, scaled, half open. Op origins are in VRAM space,

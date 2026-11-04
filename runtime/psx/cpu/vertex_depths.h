@@ -10,12 +10,18 @@
 
 namespace psx::cpu {
 
+// A stored vertex's view depth (0 unknown) and how far its draw site sorts it back (GtePlace::back).
+struct NotedDepth {
+  float depth = 0.0f;
+  float back = 0.0f;
+};
+
 class VertexDepths {
 public:
   // Off (the native depth setting) frees the table, so no store or read pays for it.
   void track(bool on);
-  // `word`, a vertex of view depth `depth` (0 unknown), was stored at `address`.
-  void note(std::uint32_t address, std::uint32_t word, float depth);
+  // `word`, a vertex of `depth`, was stored at `address`.
+  void note(std::uint32_t address, std::uint32_t word, NotedDepth depth);
   // A store of `bytes` at `address` ends the depth of every word it touches.
   void forget(std::uint32_t address, std::uint32_t bytes) {
     const std::uint32_t p = physical(address);
@@ -28,13 +34,13 @@ public:
       forgetNoted(address, bytes);
     }
   }
-  // The depth noted at `address` while it still holds that word, else 0.
-  [[nodiscard]] float at(std::uint32_t address, std::uint32_t word) const;
+  // The depth noted at `address` while it still holds that word, else unknown.
+  [[nodiscard]] NotedDepth at(std::uint32_t address, std::uint32_t word) const;
 
 private:
   struct Entry {
     std::uint32_t word = 0;
-    float depth = 0.0f;
+    NotedDepth depth;
   };
   // Main RAM's words, then the scratchpad's; allocated on the first note.
   [[nodiscard]] static std::uint32_t slot(std::uint32_t address);
