@@ -154,15 +154,21 @@ void submitOrderingTable(Core &core, GpuDevice &device, std::uint32_t rootGuestA
     if (node.carriesPrimitive()) {
       const std::optional<present::RecordKey> key = core.emission.keyFor(node.guestAddress());
       // The command word's owner, and the other side of an overwrite pair in the packet: the writer that stored
-      // over an owned packet's word, or the scope an unowned packet's writer stored over.
+      // over a word the owned packet's own scope wrote, or the scope an unowned packet's writer stored over. A word
+      // another scope left in memory the packet reuses is not the packet's.
       const present::OwnerHandle owner = core.owners.ownerOf(node.guestAddress() + 4u);
       const bool owned = present::OwnerLedger::isScope(owner);
       present::OwnerHandle mixed = present::kNoOwner;
       for (unsigned i = 0; i < node.gp0WordCount() && mixed == present::kNoOwner; i++) {
         const std::uint32_t address = guestAddressOf(node.gp0WordRamOffset(i));
         const present::OwnerHandle replaced = core.owners.overwrote(address);
-        if (replaced != present::kNoOwner) {
-          mixed = owned ? core.owners.ownerOf(address) : replaced;
+        if (replaced == present::kNoOwner) {
+          continue;
+        }
+        if (!owned) {
+          mixed = replaced;
+        } else if (key && core.owners.scopeKey(replaced) == key) {
+          mixed = core.owners.ownerOf(address);
         }
       }
       device.beginPacket();

@@ -304,7 +304,9 @@ there are no per-vertex keys. An in-between with nothing produced is the shown r
   each group's picture relative to the draw offset (so a double-buffered still draw matches). A group that
   moved, appeared or vanished makes a finding (`UnownedMoving`, `Port`, `Overwrote`) and holds the interval.
   A keyed packet a writer stored into (`mixedOwner`) is an `Overwrote` finding too and holds the interval:
-  its render cannot know what the writer changed. S's groups are kept, so the next interval's S' is not
+  its render cannot know what the writer changed. Only a word the packet's own scope wrote counts: a word
+  another scope left past its cursor (a drawer's store at a primitive it then rejected) is free pool memory
+  the next drawer's packet reuses, not an amendment. S's groups are kept, so the next interval's S' is not
   collected again.
 - **One mode per interval.** The interval is composed whole at every present or held at every present,
   including `t = 1`: the presenter composes every later present first, and a refusal at any of them holds
