@@ -12,7 +12,7 @@ state_items: S012, S016
 ## Root cause
 
 The maintained fork is now consumed directly at revision
-`b1457137c31cedff5f440d59da29401d021ba2da`, and its Linux x86-64 runtime executes translated blocks
+`739bf2e3ca8ab23e219168f8e164b932798f7b1f`, and its Linux x86-64 runtime executes translated blocks
 with classified fallback telemetry, pre-interpreter admission, and an exact block-boundary callback
 used by psxport's image-qualified native/HLE dispatcher. GNU Lightning's process-wide
 initialization/teardown still prevents two initialized Lightrec machines from living safely

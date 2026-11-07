@@ -168,7 +168,7 @@ prove hashing distinguishes changed RAM, pixels and samples; only this real full
 can establish that observer instrumentation preserves that scenario. Matching counts alone do not.
 
 Qualified on Linux x86-64 with Clang 22.1.8 and fork commit
-`5791d27a41e7ffd759f68e88114b50a1c6a168c0`: Spyro USA CHD SHA-256
+`d508cb3ec0f3f8dad2d1e1b8743ed335f91984b1`: Spyro USA CHD SHA-256
 `8fe0a6e735ee399a8251f2173cf61c6e20fa565611b934fa3d90788beab9d6cb`, authentic North American
 BIOS SHA-1 `10155d8d6e6e832d6ea66db9bc098321fb5e8ebf`, empty saves and identical recorded inputs.
 At Artisans fields 6739–6746, all 48 cumulative RAM/video/audio comparisons matched across observer

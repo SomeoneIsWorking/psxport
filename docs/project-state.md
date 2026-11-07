@@ -204,7 +204,7 @@ shown window and is unrun by an agent.
 
 The direct maintained Lightrec fork is now the Linux x86-64 product dependency. Hosted verification
 builds the maintained GNU Lightning fork at exact revision
-`f305e50483e9794e8fb0b99fb77d82954a4924e5` and passes its validated installed prefix explicitly to
+`8138ebae9f5ab23abec1340f0eba00c906c85c78` and passes its validated installed prefix explicitly to
 Lightrec instead of relying on a distribution package or ambient sibling checkout. Gameplay is still
 blocked on multi-`Core` lifecycle support, complete executable-write invalidation coverage, and
 representative title/device integration. Its AArch64 dependency also
