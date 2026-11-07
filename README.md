@@ -66,3 +66,5 @@ evidence does not qualify either AArch64 platform.
 
 Framework code is provided for research and preservation. Vendored components retain their own
 licenses. No copyrighted game assets are distributed.
+
+Built with AI assistance (Claude and other LLMs).
