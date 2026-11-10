@@ -18,6 +18,7 @@ namespace psx::present {
 enum class Motion : std::uint8_t {
   Linear,     // signed 32-bit
   Halves,     // two signed 16-bit values
+  Low16,      // the low halfword a signed 16-bit value; the high halfword steps
   Countdown,  // signed 32-bit while it does not rise; a rise steps
   Angle12x2,  // two halfwords, each a 12-bit angle with whole turns above it
   Angle12Low, // the low halfword a 12-bit angle with whole turns above it; the high halfword steps

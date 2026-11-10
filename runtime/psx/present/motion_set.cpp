@@ -42,6 +42,8 @@ std::uint32_t blendedWord(Motion motion, std::uint32_t from, std::uint32_t to, f
     return lerpWord(from, to, t);
   case Motion::Halves:
     return lerpHalves(from, to, t);
+  case Motion::Low16:
+    return (to & ~kHalfword) | lerpHalf(from, to, Halfword::Low, t);
   case Motion::Countdown:
     return static_cast<std::int32_t>(to) <= static_cast<std::int32_t>(from) ? lerpWord(from, to, t) : to;
   case Motion::Angle12x2:
