@@ -616,7 +616,9 @@ source to the image's shape at its displayed 4:3 aspect, a guest picture at the 
 covers the whole image. The crop's first column joins the display origin in the row's own unit (`planPresent`): a
 halfword per column at 1555, three bytes per column at 24bpp, where `disp.x` is a byte. The
 selector draws each picture 1:1 at its own size, centred on its panel's cover rectangle and cut by the
-seams (`PickerPanes`), so nothing is cropped to fit or magnified.
+seams (`PickerPanes`), so nothing is cropped to fit or magnified. A panel's `PSXPORT_PRESENT_SHOT_AT` captures its
+pane image, which the selector draws only once the panel is ready (a boot prefix shows the logo over black);
+`pshot` captures the window the player sees.
 
 ### Auto, a pane, and the internal-resolution budget
 
