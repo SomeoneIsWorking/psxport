@@ -2,6 +2,7 @@
 
 #include "core.h"
 #include "emit_memory.h"
+#include "game.h"
 #include "guest_redraw.h"
 #include "packet_chains.h"
 
@@ -19,6 +20,11 @@ ReplayFrame::ReplayFrame(const ReplaySection &section,
     : section_(section), motion_(tracks, sources) {}
 
 void ReplayFrame::beforeDraw(Core &core) {
+  // Without fps60 no in-between is presented.
+  if (core.game->mods.fps60 == 0) {
+    forget();
+    return;
+  }
   ran_ = true;
   motion_.sample(core);
   pendingReady_ = false;

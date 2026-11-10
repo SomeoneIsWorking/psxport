@@ -41,7 +41,8 @@ public:
               std::span<const MotionTrack> tracks,
               std::span<MotionSource *const> sources = {});
 
-  // The section is about to run for real: samples the inputs and, when they pair, replays the in-betweens.
+  // The section is about to run for real: samples the inputs and, when they pair, replays the in-betweens;
+  // nothing while fps60 is off.
   void beforeDraw(Core &core);
   // The frame did not run the section, or broke from the last (cut, load): the next sample pairs with nothing.
   void forget();
