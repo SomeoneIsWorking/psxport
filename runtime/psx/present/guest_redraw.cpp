@@ -43,20 +43,31 @@ void GuestRedraw::writeHalf(std::uint32_t address, std::uint16_t half) {
 }
 
 bool GuestRedraw::run(std::uint32_t entry, std::span<const std::uint32_t> arguments) {
-  return call(entry, arguments, false);
+  return call(entry, arguments, Call::Original);
 }
 
 bool GuestRedraw::dispatch(std::uint32_t entry, std::span<const std::uint32_t> arguments) {
-  return call(entry, arguments, true);
+  return call(entry, arguments, Call::Dispatched);
 }
 
-bool GuestRedraw::call(std::uint32_t entry, std::span<const std::uint32_t> arguments, bool dispatched) {
+bool GuestRedraw::dispatchTo(std::uint32_t entry, std::uint32_t end, std::span<const std::uint32_t> arguments) {
+  const std::uint32_t sp = core_.r[cpu::kSp];
+  const std::uint32_t ra = core_.r[cpu::kRa];
+  const bool reached = call(entry, arguments, Call::ToEnd, end);
+  core_.r[cpu::kSp] = sp;
+  core_.r[cpu::kRa] = ra;
+  return reached;
+}
+
+bool GuestRedraw::call(std::uint32_t entry, std::span<const std::uint32_t> arguments, Call kind, std::uint32_t end) {
   std::copy(arguments.begin(), arguments.end(), core_.r + cpu::kA0);
   // No call inside it can suspend at a turn's end; a second of guest time only stops a runaway.
   const cpu::ExecutionBudget runaway = cpu::ExecutionBudget::fromCycles(frame::kNominalPsxCpuHz);
   const cpu::ExecutionControl::Unsuspendable unsuspendable(core_.executionControl(), runaway);
   const cpu::ExecutionResult result =
-      dispatched ? cpu::dispatchGuest(core_, entry, runaway, "redraw") : cpu::callOriginal(core_, entry, runaway);
+      kind == Call::Dispatched ? cpu::dispatchGuest(core_, entry, runaway, "redraw")
+      : kind == Call::ToEnd    ? cpu::resumeGuestToReturn(core_, cpu::GuestCallSite{entry, end}, entry, runaway)
+                               : cpu::callOriginal(core_, entry, runaway);
   if (!result.returned()) {
     lucent::warn("redraw",
                  "the redraw of 0x{:08X} stopped: {} at 0x{:08X}",

@@ -38,9 +38,14 @@ public:
   [[nodiscard]] bool run(std::uint32_t entry, std::span<const std::uint32_t> arguments);
   // The same as a guest call to `entry`: its override, if any, runs. A draw section's steps are called this way.
   [[nodiscard]] bool dispatch(std::uint32_t entry, std::span<const std::uint32_t> arguments);
+  // The routine at `entry` (no override of its own) from its start until execution reaches `end`, a block start of
+  // its body where its device tail begins; the run then continues from the section's sp and ra.
+  [[nodiscard]] bool dispatchTo(std::uint32_t entry, std::uint32_t end, std::span<const std::uint32_t> arguments);
 
 private:
-  [[nodiscard]] bool call(std::uint32_t entry, std::span<const std::uint32_t> arguments, bool dispatched);
+  enum class Call : std::uint8_t { Original, Dispatched, ToEnd };
+  [[nodiscard]] bool
+  call(std::uint32_t entry, std::span<const std::uint32_t> arguments, Call kind, std::uint32_t end = 0);
 
   Core &core_;
   GteGuard gte_;
