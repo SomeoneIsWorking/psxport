@@ -37,11 +37,14 @@ void ReplayFrame::beforeDraw(Core &core) {
     const float t = static_cast<float>(k) / static_cast<float>(fields_);
     if (!replay(core, t, pending_.captures[static_cast<std::size_t>(k - 1)])) {
       ++refused_;
+      motion_.settle(false);
       lucent::warn("replay", "the draw section's replay at {}/{} refused; the interval is shown as drawn", k, fields_);
       return;
     }
-    ++replayed_;
   }
+  ++replayed_;
+  replayedInBetweens_ += static_cast<std::uint64_t>(fields_ - 1);
+  motion_.settle(true);
   pendingReady_ = true;
 }
 
@@ -81,6 +84,7 @@ void ReplayFrame::sealed(std::uint64_t sequence, bool draws) {
   pendingReady_ = false;
   ran_ = false;
   lastDrawing_ = sequence;
+  assembledFor_ = {};
 }
 
 const ReplayFrame::Set *ReplayFrame::setFor(std::uint64_t shown) const {
@@ -106,8 +110,15 @@ const FrameRecord *ReplayFrame::at(const FrameRecord &shown, int k, std::span<co
   if (set == nullptr || k < 1 || k >= set->fields) {
     return nullptr;
   }
-  const FrameRecord *assembled = assemble(shown, set->captures[static_cast<std::size_t>(k - 1)], k, vram);
-  held_ += assembled == nullptr ? 1 : 0;
+  // The presenter asks for each in-between more than once; it is assembled and counted the first time.
+  const auto index = static_cast<std::size_t>(k - 1);
+  if (assembledFor_[index] == shown.sequence()) {
+    return assembledHeld_[index] ? nullptr : &assembled_[index];
+  }
+  const FrameRecord *assembled = assemble(shown, set->captures[index], k, vram);
+  assembledFor_[index] = shown.sequence();
+  assembledHeld_[index] = assembled == nullptr;
+  ++(assembled == nullptr ? held_ : shownInBetweens_);
   return assembled;
 }
 
@@ -152,9 +163,12 @@ ReplayFrame::assemble(const FrameRecord &shown, const Capture &capture, int k, s
 
 void ReplayFrame::report() const {
   lucent::info("replay",
-               "run-end: {} in-between(s) replayed, {} refused by the section, {} held at assembly",
+               "run-end: {} interval(s) replayed ({} in-between(s)), {} refused by the section; {} in-between(s) "
+               "shown, {} held at assembly",
                replayed_,
+               replayedInBetweens_,
                refused_,
+               shownInBetweens_,
                held_);
   motion_.report();
 }

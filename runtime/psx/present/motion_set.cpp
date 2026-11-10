@@ -76,7 +76,8 @@ void TransformRule::blend(const Samples &samples, float t, std::span<std::uint32
 }
 
 MotionSet::MotionSet(std::span<const MotionTrack> tracks, std::span<MotionSource *const> sources)
-    : tracks_(tracks), sources_(sources), tallies_(tracks.size()) {}
+    : tracks_(tracks), sources_(sources), tallies_(tracks.size() + sources.size()),
+      pending_(tracks.size() + sources.size()) {}
 
 void MotionSet::sampleTrack(Core &core, const MotionTrack &track, Sample &into) const {
   const MotionRecords &records = track.records;
@@ -185,11 +186,19 @@ void MotionSet::write(GuestRedraw &redraw, float t) const {
     fromRecord = fromEnd;
     toRecord = toEnd;
     lucent::debug("motion", "{}: {} of {} records paired at t={:.2f}", motion.name, paired, shown, t);
-    tallies_[track].drawn += shown;
-    tallies_[track].unpaired += shown - paired;
+    pending_[track] += {.drawn = shown, .unpaired = shown - paired};
   }
-  for (const MotionSource *source : sources_) {
-    source->write(redraw, t);
+  for (std::size_t source = 0; source < sources_.size(); ++source) {
+    pending_[tracks_.size() + source] += sources_[source]->write(redraw, t);
+  }
+}
+
+void MotionSet::settle(bool kept) {
+  for (std::size_t i = 0; i < pending_.size(); ++i) {
+    if (kept) {
+      tallies_[i] += pending_[i];
+    }
+    pending_[i] = {};
   }
 }
 
@@ -200,6 +209,11 @@ void MotionSet::report() const {
                  tracks_[track].name,
                  tallies_[track].unpaired,
                  tallies_[track].drawn);
+  }
+  for (std::size_t source = 0; source < sources_.size(); ++source) {
+    const MotionCount &tally = tallies_[tracks_.size() + source];
+    lucent::info(
+        "motion", "run-end: {}: {} of {} item draw(s) unpaired", sources_[source]->name(), tally.unpaired, tally.drawn);
   }
 }
 

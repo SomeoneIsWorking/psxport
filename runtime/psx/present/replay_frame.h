@@ -61,7 +61,8 @@ public:
   [[nodiscard]] bool covers(const Interval &interval);
   // In-between `k` of S, assembled; null when S's chain run cannot take it.
   [[nodiscard]] const FrameRecord *at(const FrameRecord &shown, int k, std::span<const std::uint16_t> vram);
-  // Run end: in-betweens replayed, refused by the section and held at assembly, then each track's unpaired records.
+  // Run end: intervals replayed (and their in-betweens) and refused by the section, in-betweens shown and held at
+  // assembly, then each track's and source's unpaired items over the replayed intervals.
   void report() const;
 
 private:
@@ -98,10 +99,17 @@ private:
   std::size_t nextSet_ = 0;
   // One per k: the presenter holds the last present's in-between while it assembles the earlier ones.
   std::array<FrameRecord, kMaxInBetweens> assembled_;
+  // The record each of assembled_ was assembled for since the last seal, and whether it was held.
+  std::array<std::optional<std::uint64_t>, kMaxInBetweens> assembledFor_{};
+  std::array<bool, kMaxInBetweens> assembledHeld_{};
   RecordCluts cluts_;
   std::vector<RecordEntry> decoded_;
+  // Intervals.
   std::uint64_t replayed_ = 0;
   std::uint64_t refused_ = 0;
+  // In-betweens.
+  std::uint64_t replayedInBetweens_ = 0;
+  std::uint64_t shownInBetweens_ = 0;
   std::uint64_t held_ = 0;
 };
 

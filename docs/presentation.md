@@ -204,7 +204,8 @@ records carry no such byte, the title's `MotionLiveness`); two samples of a reco
 while both are live and its `MotionKey` words hold; an unpaired record is replayed as drawn. A PsyQ MATRIX moves by
 `TransformRule` (rotation along the shorter arc, translation straight); a 12-bit angle moves the short way round and
 carries into the whole turns above it. Inputs that pair by the title's own rule (pools whose entries name lists of their own) are a
-`MotionSource`, sampled and written with the tracks. The title calls `forget` at a cut it sees before the draw so the next sample pairs with nothing; a cut it declares after the draw holds the interval in the presenter. Once two samples pair the section is
+`MotionSource`, sampled and written with the tracks; its write returns what it drew and how much of that was
+unpaired, reported at run end beside the tracks. The title calls `forget` at a cut it sees before the draw so the next sample pairs with nothing; a cut it declares after the draw holds the interval in the presenter. Once two samples pair the section is
 re-run in a `GuestRedraw` for each k/n of the interval with the tracks written k/n of the way. The chain head the
 section returns is captured (`PacketChainWalker::capture`). At seal the captures belong to S; in-between k is S
 with the one chain run the section names (`ReplaySection::linked`) replaced by the capture decoded under S's draw

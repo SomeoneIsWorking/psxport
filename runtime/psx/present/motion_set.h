@@ -108,16 +108,30 @@ struct MotionTrack {
   MotionRecords records;
 };
 
+// The items an in-between drew from the later sample, and how many of them had no partner (drawn as now).
+struct MotionCount {
+  std::uint64_t drawn = 0;
+  std::uint64_t unpaired = 0;
+  MotionCount &operator+=(const MotionCount &other) {
+    drawn += other.drawn;
+    unpaired += other.unpaired;
+    return *this;
+  }
+};
+
 // Inputs a title moves by its own pairing rule where records are not one stride apart or pair by more than
 // their keys (pools whose entries name lists of their own). It keeps its last two samples; the set writes it
 // only while its tracks pair, so the two are always consecutive.
 class MotionSource {
 public:
   virtual ~MotionSource() = default;
+  // The run-end report's name for it.
+  [[nodiscard]] virtual const char *name() const = 0;
   // What moves now becomes the later sample; the one before becomes the earlier.
   virtual void sample(Core &core) = 0;
-  // The paired inputs `t` of the way from the earlier sample to the later.
-  virtual void write(GuestRedraw &redraw, float t) const = 0;
+  // The paired inputs `t` of the way from the earlier sample to the later; what the later sample holds and how
+  // much of it was unpaired.
+  virtual MotionCount write(GuestRedraw &redraw, float t) const = 0;
 };
 
 class MotionSet {
@@ -134,7 +148,9 @@ public:
   // Every paired record's fields `t` of the way from the earlier sample to the later, into the replay's
   // guest memory.
   void write(GuestRedraw &redraw, float t) const;
-  // Run end: per track, the records its in-betweens drew and how many of them were unpaired (drawn as now).
+  // The writes since the last call drew an interval that is shown (`kept`) or one the section refused.
+  void settle(bool kept);
+  // Run end: per track and source, the items the shown in-betweens drew and how many were unpaired (drawn as now).
   void report() const;
 
 private:
@@ -159,12 +175,9 @@ private:
   Sample from_;
   Sample to_;
   mutable std::vector<std::uint32_t> ruled_;
-  // Per track, over every in-between written.
-  struct Tally {
-    std::uint64_t drawn = 0;
-    std::uint64_t unpaired = 0;
-  };
-  mutable std::vector<Tally> tallies_;
+  // Per track, then per source: over the kept intervals' in-betweens, and over the interval being written.
+  std::vector<MotionCount> tallies_;
+  mutable std::vector<MotionCount> pending_;
   int samples_ = 0;
 };
 

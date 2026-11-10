@@ -61,8 +61,11 @@ interpolation in its Tomba 2, Ape Escape and Vigilante 8 ports with `docs/RENDER
    instead of the device, and that record is the in-between, rastered onto the VRAM before S as a
    composed record is today. A replay that reaches a device, uploads, or does not return refuses that
    in-between only; the present shows S. Per-pass cost (thread CPU time) is measured and passes shed
-   above budget. At run end `ReplayFrame::report` logs in-betweens replayed, refused by the section and
-   held at assembly, and `MotionSet::report` each track's unpaired record draws (`RunEndReport`).
+   above budget. At run end `ReplayFrame::report` logs intervals replayed (with their in-betweens) and refused
+   by the section (a refusal at any k drops the whole interval, so none of its in-betweens count), then
+   in-betweens shown and held at assembly, each counted once although the presenter asks for it twice; and
+   `MotionSet::report` each track's and each `MotionSource`'s unpaired items over the replayed intervals only
+   (`MotionSource::write` returns its `MotionCount`) (`RunEndReport`).
    With fps60 off `ReplayFrame::beforeDraw` samples and replays nothing, so a run with fps60 off is the
    no-replay side of a leak proof (same inputs, identical `fielddigest` lines).
 4. **Titles.** Spyro 1 first (its draw section and motion tracks; the producers it replaces deleted
