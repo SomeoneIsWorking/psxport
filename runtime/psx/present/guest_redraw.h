@@ -4,7 +4,7 @@
 //
 // The routine is the guest's own code, so its projection is the GTE's and its topology the guest's; the
 // title decides which inputs move (camera, object positions and angles) and pairs each object by its guest
-// address. Nothing the run does outlives the GuestRedraw: memory, registers and GTE are as they were.
+// address. Nothing the run does outlives the GuestRedraw: memory, registers, GTE and the writer latch are as they were.
 // The run cannot suspend at a turn's end, so an override's original call inside it gets the run's budget.
 #pragma once
 
@@ -49,6 +49,8 @@ private:
   std::uint32_t lo_ = 0;
   std::uint32_t pc_ = 0;
   std::array<std::uint32_t, 16> cop0_{};
+  // The call stack the run's stores are attributed to, as the frame left it.
+  cpu::GuestWriterLatch writerLatch_;
   cpu::SideEffectJournal journal_{cpu::SideEffectMode::Discard, {}};
   cpu::SideEffectJournal::Scope journalScope_;
 };

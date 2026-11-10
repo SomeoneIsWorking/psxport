@@ -407,14 +407,17 @@ trim over Spyro's feet, a wall seam over the floor), and leaves everything else 
 - **Who keeps it.** Over host memory the place travels with the word (`HostMemory`). Over guest
   memory `psx::cpu::VertexPlaces` (`Core::vertexPlaces`, PGXP's memory shadow: one flat table over main RAM and
   the scratchpad, allocated by the first note) keeps each vertex word's place (sub-pixel x and y, view depth,
-  sort-back) and the function that placed it, while the address still holds that word. A guest `SWC2` of an SXY
-  entry notes the GTE's place under the enclosing guest function (`GuestWriterLatch`); `MFC2` of an SXY entry and
+  sort-back) and the function that placed it, while the address still holds that word; a bit per word says which are placed, so
+  a load or store of any other word tests one bit. A guest `SWC2` of an SXY
+  entry notes the GTE's place under the enclosing guest function (`GuestWriterLatch`, which also holds a function
+  the host enters without a `jal`: `dispatchGuest`, `callOriginal` and the resumes push it for the call's extent); `MFC2` of an SXY entry and
   `LW` of a placed word carry the place in the GPR, and `SW` of that GPR while it still holds the word notes it at
   the new address (`LightrecExecutor` feeds all four from Lightrec's opcode-carrying callbacks). A native
   override's `EmitMemory::storeVertex` notes its place under the override's entry (`Core::active_native_address`).
   Every guest store (`Core::bookStore`) forgets the words it touches, so a later writer of the same word, a reused
-  packet buffer included, never inherits a stale place. Notes made inside a replay go back with its stores
-  (`WriteRollback`). The table tracks while presents draw places (ires above 1 or the depth setting on,
+  packet buffer included, never inherits a stale place; a replay's stores forget too. Every change to the table
+  inside a replay (notes, forgets, carried registers) goes back with its stores (`WriteRollback`), and
+  `GuestRedraw` puts the writer latch back, so a replay leaves places and attribution as it found them. The table tracks while presents draw places (ires above 1 or the depth setting on,
   `RenderState::presentRecord`); off it is released. The OT walk passes each command word's place in
   `Gp0Origin.place`, and the tap gives each polygon vertex its place (`applyPlace`: depth, `back`, and the
   sub-pixel offset when within two pixels of its word) and the primitive the `site` that placed every vertex. A

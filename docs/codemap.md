@@ -37,7 +37,7 @@ Dependency direction: title repo → `runtime/psx/game/` (the title interface) �
 - `runtime/cpu/override_differential*`, `machine_snapshot.*`, `side_effect_journal.*` — override differential: original vs native shadow run, O32 contract, CPU/RAM snapshot, device side-effect journal and replay
 - `runtime/cpu/function_reach.*` — reached guest functions per code image report
 - `runtime/cpu/store_observe.*` — store-instruction PC observer
-- `runtime/cpu/guest_writer_latch.h` — guest writer latch / shadow call stack: innermost guest function, block-entry PC, dispatched entry of a store
+- `runtime/cpu/guest_writer_latch.h` — guest writer latch / shadow call stack: innermost guest function (called by `jal`/`jalr` or entered by the host, `HostCall`), block-entry PC, dispatched entry of a store
 - `runtime/cpu/host_turn.*` — host turn clock: one display field owed per field period of guest time, PW_HOST
 - `cmake/lightrec_dependency.cmake` — pinned Lightrec revision and worktree
 - `runtime/psx/hle/hle.*`, `hle_heap.cpp`, `hle_interrupt.cpp`, `kernel_syscall.cpp`, `syscall_exception.*` — BIOS / kernel HLE: A0/B0/C0 tables, events, heap, interrupt chain, syscall exception entry and return

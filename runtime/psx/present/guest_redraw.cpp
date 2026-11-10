@@ -13,7 +13,8 @@
 namespace psx::present {
 
 GuestRedraw::GuestRedraw(Core &core)
-    : core_(core), gte_(core.gte()), hi_(core.hi), lo_(core.lo), pc_(core.pc), journalScope_(core, journal_) {
+    : core_(core), gte_(core.gte()), hi_(core.hi), lo_(core.lo), pc_(core.pc), writerLatch_(core.writerLatch),
+      journalScope_(core, journal_) {
   std::copy_n(core.r, gpr_.size(), gpr_.begin());
   std::copy_n(core.cop0, cop0_.size(), cop0_.begin());
   core_.writeRollback.arm();
@@ -26,6 +27,7 @@ GuestRedraw::~GuestRedraw() {
   core_.hi = hi_;
   core_.lo = lo_;
   core_.pc = pc_;
+  core_.writerLatch = writerLatch_;
 }
 
 void GuestRedraw::writeWord(std::uint32_t address, std::uint32_t word) {

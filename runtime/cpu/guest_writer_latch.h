@@ -54,6 +54,31 @@ public:
   std::uint32_t function() const {
     return depth_ != 0 ? frames_[top()].entry : 0u;
   }
+  // A guest function the host enters at `entry`, returning to `returnPc` (0 for a run to its exit) without a
+  // `jal`: the stack holds it from here until the scope ends, however the call exits.
+  class HostCall {
+  public:
+    HostCall(GuestWriterLatch &latch, std::uint32_t entry, std::uint32_t returnPc)
+        : latch_(latch), depth_(latch.depth_) {
+      ++latch_.depth_;
+      latch_.frames_[latch_.top()] = {entry, returnPc};
+    }
+    ~HostCall() {
+      latch_.depth_ = depth_;
+    }
+    HostCall(const HostCall &) = delete;
+    HostCall &operator=(const HostCall &) = delete;
+    HostCall(HostCall &&) = delete;
+    HostCall &operator=(HostCall &&) = delete;
+
+  private:
+    GuestWriterLatch &latch_;
+    std::size_t depth_;
+  };
+  [[nodiscard]] HostCall hostCall(std::uint32_t entry, std::uint32_t returnPc) {
+    return {*this, entry, returnPc};
+  }
+
   // A machine state was replaced: no call is open.
   void clear() {
     depth_ = 0;

@@ -320,12 +320,14 @@ ExecutionResult dispatchGuest(Core &core, std::uint32_t guestAddress, ExecutionB
     return dispatchGuestHostService(core, guestAddress);
   }
   auto attribution = core.callAttribution.scope(guestAddress);
+  auto writer = core.writerLatch.hostCall(guestAddress, core.r[31]);
   return core.lightrecExecutor().executeFunction(guestAddress, core.r[31], budget);
 }
 
 ExecutionResult dispatchGuestUntilExit(Core &core, std::uint32_t guestAddress, ExecutionBudget budget) {
   NativeCallerContextScope callerContext(core);
   auto attribution = core.callAttribution.scope(guestAddress);
+  auto writer = core.writerLatch.hostCall(guestAddress, 0u);
   return core.lightrecExecutor().executeUntilExit(guestAddress, budget);
 }
 
@@ -363,6 +365,7 @@ namespace {
 ExecutionResult executeOriginal(Core &core, NativeKey key, ExecutionBudget budget) {
   NativeCallerContextScope callerContext(core);
   SuppressionScope suppression(core.nativeDispatcher(), key);
+  auto writer = core.writerLatch.hostCall(key.address, core.r[31]);
   return core.lightrecExecutor().executeFunction(key.address, core.r[31], budget);
 }
 
@@ -373,12 +376,14 @@ resumeOriginal(Core &core, NativeKey key, std::uint32_t resumePc, std::uint32_t 
   NativeCallerContextScope callerContext(core);
   SuppressionScope suppression(core.nativeDispatcher(), key);
   auto attribution = core.callAttribution.scope(key.address);
+  auto writer = core.writerLatch.hostCall(key.address, returnPc);
   return core.lightrecExecutor().executeFunction(resumePc, returnPc, budget);
 }
 
 ExecutionResult resumeGuestToReturn(Core &core, GuestCallSite call, std::uint32_t resumePc, ExecutionBudget budget) {
   NativeCallerContextScope callerContext(core);
   auto attribution = core.callAttribution.scope(call.entry);
+  auto writer = core.writerLatch.hostCall(call.entry, call.returnPc);
   return core.lightrecExecutor().executeFunction(resumePc, call.returnPc, budget);
 }
 
