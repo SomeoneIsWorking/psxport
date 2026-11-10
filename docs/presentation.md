@@ -613,7 +613,8 @@ panel counts as ready).
 A pane's present image is filled, not letterboxed: `present::fitPicture` (`viewport_layout.h`) centre-crops the
 source to the image's shape at its displayed 4:3 aspect, a guest picture at the rendered resolution
 (`PresentInputs::fill`) and a host picture (a native movie) through its sampled uv rectangle; the picture then
-covers the whole image. The
+covers the whole image. The crop's first column joins the display origin in the row's own unit (`planPresent`): a
+halfword per column at 1555, three bytes per column at 24bpp, where `disp.x` is a byte. The
 selector draws each picture 1:1 at its own size, centred on its panel's cover rectangle and cut by the
 seams (`PickerPanes`), so nothing is cropped to fit or magnified.
 

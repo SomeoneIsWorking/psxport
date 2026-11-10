@@ -5,7 +5,7 @@ layout(location = 0) out vec4 o_col;
 // RG8 holds each halfword's low and high byte: SDL_GPU cannot sample an integer format.
 layout(set = 2, binding = 0) uniform sampler2D u_vram;
 layout(set = 3, binding = 0) uniform PC {
-    ivec4 disp;   // x, y, w, h — VRAM display/FB region to sample
+    ivec4 disp;   // x, y, w, h — VRAM display/FB region to sample; x is a byte at 24bpp
     ivec4 fade;   // mode (0 none / 1 additive-white / 2 subtractive-black), r, g, b (0..255)
     ivec4 fmt;    // x = display colour depth: 0 = 15-bit (1555), 1 = 24-bit (packed RGB888)
 } pc;
@@ -19,9 +19,9 @@ void main() {
     t = clamp(t, pc.disp.xy, pc.disp.xy + pc.disp.zw - ivec2(1));
     vec3 rgb;
     if (pc.fmt.x == 1) {
-        // 24bpp column x starts at byte disp.x * 2 + x * 3.
+        // 24bpp column x starts at byte disp.x + x * 3.
         int lx = clamp(int(v_uv.x * float(pc.disp.z)), 0, pc.disp.z - 1);
-        int bx = pc.disp.x * 2 + lx * 3;
+        int bx = pc.disp.x + lx * 3;
         rgb = vec3(vram_byte(bx, t.y), vram_byte(bx + 1, t.y), vram_byte(bx + 2, t.y));
     } else {
     vec2 rg = texelFetch(u_vram, t, 0).rg;

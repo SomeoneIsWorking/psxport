@@ -27,7 +27,7 @@ struct PresentPlan {
   bool build;         // run the composite pass at all
   int sink_w, sink_h; // the sink this plan was computed for; the renderer never re-reads it
   PaneRect viewport;  // where the picture lands inside the sink
-  int disp[4];        // fragment uniform: sampled source rect (scaled when presenting from ires)
+  int disp[4];        // fragment uniform: sampled source rect (scaled when presenting from ires); x in bytes at 24bpp
   int fade[4];        // fragment uniform: mode, r, g, b
   int fmt[4];         // fragment uniform: fmt[0] = 24bpp flag
   int src_ires;       // 0 = sample the native target, >1 = sample the ires target
@@ -76,10 +76,6 @@ inline PresentPlan planPresent(const PresentInputs &in) {
   // A guest-authored picture fills only the columns the guest authored, from the origin; the ires
   // composite is our own raster at the display's width and is never narrowed.
   const int content_w = (p.src_ires > 1 || in.content_w <= 0 || in.content_w >= in.disp_w) ? in.disp_w : in.content_w;
-  p.disp[0] = in.sx * scale;
-  p.disp[1] = in.sy * scale;
-  p.disp[2] = content_w * scale;
-  p.disp[3] = in.disp_h * scale;
   p.fade[0] = in.fade_mode;
   p.fade[1] = in.fade_r;
   p.fade[2] = in.fade_g;
@@ -94,8 +90,9 @@ inline PresentPlan planPresent(const PresentInputs &in) {
   const PictureFit fit =
       fitPicture(4LL * aspect_w, 3LL * aspect_h, content_w, in.disp_h, in.sink_w, in.sink_h, in.fill != 0);
   p.viewport = fit.viewport;
-  p.disp[0] += fit.source.x * scale;
-  p.disp[1] += fit.source.y * scale;
+  // A 24bpp row is addressed in bytes, three per column; a 1555 row in halfwords, one per column.
+  p.disp[0] = p.fmt[0] == 1 ? in.sx * 2 + fit.source.x * 3 : (in.sx + fit.source.x) * scale;
+  p.disp[1] = (in.sy + fit.source.y) * scale;
   p.disp[2] = fit.source.w * scale;
   p.disp[3] = fit.source.h * scale;
   return p;
