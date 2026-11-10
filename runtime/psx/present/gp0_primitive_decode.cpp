@@ -15,20 +15,25 @@ bool placesWhole(int whole, float place) {
 
 // The vertex decoded from the word at `word` takes the place stored there.
 void place(present::RecordVertex &vertex, const PacketView &packet, std::size_t word) {
-  if (word >= packet.places.size() || !packet.places[word]) {
+  if (word >= packet.places.size()) {
     return;
   }
-  const GtePlace &at = *packet.places[word];
-  vertex.depth = at.z;
-  vertex.back = at.back;
-  if (!placesWhole(vertex.x, at.x) || !placesWhole(vertex.y, at.y)) {
-    return;
+  if (const gte::WordPlace &at = packet.places[word]) {
+    applyPlace(vertex, *at);
   }
-  vertex.subX = at.x - static_cast<float>(vertex.x);
-  vertex.subY = at.y - static_cast<float>(vertex.y);
 }
 
 } // namespace
+
+void applyPlace(present::RecordVertex &vertex, const GtePlace &place) {
+  vertex.depth = place.z;
+  vertex.back = place.back;
+  if (!placesWhole(vertex.x, place.x) || !placesWhole(vertex.y, place.y)) {
+    return;
+  }
+  vertex.subX = place.x - static_cast<float>(vertex.x);
+  vertex.subY = place.y - static_cast<float>(vertex.y);
+}
 
 present::RecordVertex colourVertex(std::uint32_t colourWord) {
   const Gp0Colour colour = Gp0Command(colourWord).colour();

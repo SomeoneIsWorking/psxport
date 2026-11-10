@@ -49,8 +49,8 @@ void RenderState::presentRecord(present::PresentInputs &inputs) {
   const bool advances = game_.presentation.composedAdvances();
   const bool deviceAhead = core.gpuDevice().hasUnsealedWork();
   const bool depth = game_.mods.depth != 0;
-  // Vertex depths are kept only while presents test them.
-  core.vertexDepths.track(depth);
+  // Vertex places are kept only while presents draw them: above native scale or testing depth.
+  core.vertexPlaces.track(depth || scale > 1);
   SDL_GPUCommandBuffer *cmd = device_.acquire();
   presentsRecord_ = true;
   recordFade_[0] = inputs.fade_mode;

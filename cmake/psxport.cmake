@@ -81,7 +81,7 @@ set(PSXPORT_FRAMEWORK_SRC
   ${PSXPORT_ROOT}/runtime/psx/core/guest_memory.cpp
   ${PSXPORT_ROOT}/runtime/psx/platform/dma_callbacks.cpp # direct-runtime per-Game DMACallback registration state
   ${PSXPORT_ROOT}/runtime/psx/cpu/cpu_divide.cpp     # R3000 DIV/DIVU quotient/remainder semantics
-  ${PSXPORT_ROOT}/runtime/psx/cpu/vertex_depths.cpp  # view depth of projected vertices stored to guest words
+  ${PSXPORT_ROOT}/runtime/psx/cpu/vertex_places.cpp  # places of projected vertices stored to guest words
   ${PSXPORT_ROOT}/runtime/psx/hle/bios_interrupt.cpp
   ${PSXPORT_ROOT}/runtime/psx/hle/bios_pad_work_area.cpp
   ${PSXPORT_ROOT}/runtime/psx/hle/bios_libc_string.cpp

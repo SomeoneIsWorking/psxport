@@ -19,7 +19,7 @@ constexpr std::uint32_t kSpriteFlipYBit = 1u << 13;
 // gpu.c keeps TexMode 3 and draws it as 15-bit.
 constexpr int kDirectTexMode = 2;
 
-bool decodePacket(std::uint32_t address,
+bool decodePacket(const CapturedPacket &packet,
                   std::span<const std::uint32_t> words,
                   std::span<const gte::WordPlace> places,
                   Gp0DrawState &state,
@@ -29,11 +29,12 @@ bool decodePacket(std::uint32_t address,
     const Gp0Command head(words[at]);
     const std::span<const std::uint32_t> rest = words.subspan(at);
     const std::span<const gte::WordPlace> restPlaces = places.size() > at ? places.subspan(at) : places.last(0);
-    const auto source = static_cast<std::uint32_t>(address + 4u * (at + 1u));
+    const auto source = static_cast<std::uint32_t>(packet.address + 4u * (at + 1u));
     if (head.isPolyLine()) {
       return decodePolyLine({.words = rest, .places = restPlaces}, [&](present::DrawPrimitive segment) {
         state.apply(segment);
         segment.sourceAddress = source;
+        segment.site = packet.site;
         into.emplace_back(segment);
       });
     }
@@ -53,6 +54,7 @@ bool decodePacket(std::uint32_t address,
       state.execute(command);
       state.apply(*primitive);
       primitive->sourceAddress = source;
+      primitive->site = packet.site;
       into.emplace_back(*primitive);
     } else if (head.opcode() == Gp0Opcode::FillRect) {
       into.emplace_back(decodeFill(command, state.state()));
@@ -211,7 +213,7 @@ bool decodePackets(std::span<const std::uint32_t> words,
   for (const CapturedPacket &packet : packets) {
     const std::span<const gte::WordPlace> packetPlaces =
         places.empty() ? places : places.subspan(packet.offset, packet.count);
-    if (!decodePacket(packet.address, words.subspan(packet.offset, packet.count), packetPlaces, state, into)) {
+    if (!decodePacket(packet, words.subspan(packet.offset, packet.count), packetPlaces, state, into)) {
       return false;
     }
   }

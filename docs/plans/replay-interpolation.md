@@ -41,7 +41,7 @@ interpolation in its Tomba 2, Ape Escape and Vigilante 8 ports with `docs/RENDER
    `PacketChainWalker` read places for guest packets as they do for producer packets. A title names
    its world draw functions and their depth unit (`DepthUnit` scale and `DepthMark`) by guest
    function; the mark travels with the place, so `DepthTest` no longer needs a producer key. Cost: one
-   table write per `SWC2`, one lookup per `LW`/`SW` while depth or fps60 is on; nothing scales with ires.
+   table write per `SWC2`, one lookup per `LW`/`SW` while depth is on or ires is above 1; nothing scales with ires.
 2. **Motion set.** `present/motion_set` holds the kinds above, pairs by address and title identity
    (address plus generation, as `StateProducer` identity does), and applies blends through
    `GuestRedraw::writeWord`. Cuts stay the title's declared cuts; the move/turn limits only catch
@@ -97,8 +97,11 @@ draw, with `g_Camera` position and rotation set at t = 0, 0.5 and 1. Stone Hill 
   replay still runs the producers' saves.
 - Spyro's section is built and linked inside the draw call; nothing straddles logic frames.
 
-Spyro 2's horn fold under step 1 is not a mixed-site primitive (gating places to single-site primitives
-leaves it) and not the depth test (`PSXPORT_DEPTH=0` leaves it); it comes from the sub-pixel positions.
+Spyro 2's horn fold is retail's sort, not the places: the same present with no place applied shows it. Spyro's
+drawer 0x80041DBC buckets each face by its summed SZ, and a far face of the horn (the third of the tip's three
+packets) lands in a bucket drawn after the near quad it covers. Nothing tested it because no draw was marked. Spyro 2
+now marks the drawer `Polygon` with its bucket as the bin, and the fold and a far face over his hip are gone on real
+presents and in-betweens alike (`psx-spyro` `scratch/depth/h5_tip7.png`, `h4_seq.png` against `h5_seq.png`).
 
 ## State (2026-11-10)
 
@@ -108,9 +111,8 @@ rects, particles, sparkles, the flame and the section's counters. Its gameplay p
 inventory band and shaded line producers stay for their widescreen extension. Stone Hill and Dry Canyon unpaced:
 197 of 197 and 184 of 184 moby records pair, gems, Sparx and Spyro land halfway. Not tracked: texture scroll
 (Open 6 of the motion-tracks plan) and the Stone Hill ram, whose in-between shows the later pose although its
-moby record blends (`psx-spyro` issue 0236). Paced judgement is pending a quiet host. Deleting the producers drops
-Spyro 1's keyed depth test on real presents until step 1 returns; step 1 (vertex places) is stashed with the
-Spyro 2 horn fold open.
+moby record blends (`psx-spyro` issue 0236). Paced judgement is pending a quiet host. Step 1 (vertex places) is in: `DepthTest`
+marks draw functions by entry, guest or native, and Spyro 1's native world draws are marked again.
 
 Spyro 2 and 3 (2026-11-10, `psx-spyro` `docs/plans/spyro23-replay.md`): the per-field draw body is the section, every
 state of its switch replayed but the loading screen; the moby array is a track with field_redraw's record blend as its

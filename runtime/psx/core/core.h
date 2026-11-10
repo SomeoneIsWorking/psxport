@@ -30,7 +30,7 @@
 #include "guest_writer_latch.h"
 #include "ordering_table.h"
 #include "owner_ledger.h"
-#include "vertex_depths.h"
+#include "vertex_places.h"
 #include <array>
 #include <lucent/log.h>
 #include <memory>
@@ -96,8 +96,6 @@ public:
   psx::present::EmissionScope emission{owners};
   // The ordering tables the title named; the walk tags each recorded primitive with its bucket.
   psx::gpu::OtTables otTables;
-  // The view depth of projected vertices native draw sites stored into guest words.
-  psx::cpu::VertexDepths vertexDepths;
   // The producers whose opaque polygons test depth against each other.
   psx::present::DepthTest depthTest;
   // Producer object states saved this logic frame.
@@ -115,6 +113,8 @@ public:
   psx::cpu::SideEffectJournal *sideEffectJournal = nullptr;
   // Armed while a run whose stores are put back afterwards executes (present/guest_redraw.h).
   psx::WriteRollback writeRollback;
+  // The places of projected vertices the guest and native draw sites stored into guest words.
+  psx::cpu::VertexPlaces vertexPlaces{writeRollback};
 
   // Deferred work checked at guest-service points: PW_IRQ an interrupt may be deliverable, PW_HOST
   // the host field clock owes a turn.

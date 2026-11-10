@@ -405,28 +405,35 @@ trim over Spyro's feet, a wall seam over the floor), and leaves everything else 
   (`sortedBack`, bins of 32 view units). Only the depth the polygon leaves for later draws lies back by it;
   the polygon itself tests at its true depth (How it draws).
 - **Who keeps it.** Over host memory the place travels with the word (`HostMemory`). Over guest
-  memory `EmitMemory::storeVertex` notes (address, word, depth, back) in `Core::vertexDepths`
-  (`psx::cpu::VertexDepths`, one flat table over main RAM and the scratchpad, allocated by the first
-  known depth) and `loadVertex` reads it back while the address still holds that word. Every guest
-  store (`Core::bookStore`) forgets the words it touches, so a later writer of the same word, a reused
-  packet buffer included, never inherits a stale depth; only `storeVertex` sets one. The table
-  tracks only while the setting is on (`RenderState::recordPresents` calls `track` each present); off it is
-  released, `note` returns at once and the store check is an inline range test over an empty range. The OT walk passes
-  each command word's depth in `Gp0Origin.depth`, and the tap sets `RecordVertex.depth` for each polygon
-  position word, and `RecordVertex.back` with it. Guest code's own SWC2 stores are not tracked: an unported 3D draw keeps depth 0 and
-  draws in slot order.
-- **Which primitives test.** `Core::depthTest` (`psx::present::DepthTest`) holds the producer entries
-  a title marks, each with its `DepthMark` (order and bin): opaque world 3D (terrain, mobys, the player model), and a
-  2D fill whose producer gives each vertex the depth of the world plane it covers (a portal opening: the plane through
-  its projected outline, psx-spyro issue 0224); never HUD, sky, translucent, decal or shadow producers. A primitive tests when it is a polygon,
-  opaque, keyed to a marked producer and every vertex has depth > 0; a draw site that projects with no
-  view depth (a HUD model, `DepthUnit` scale 0) leaves its vertices at 0 and draws in slot order. `Polygon` (a
-  terrain mesh the guest sorts per polygon) tests and writes per polygon, with the mark's `bin`: the depth one
-  slot of the guest's sort spans (Spyro 1 terrain: 32 view units). `Object` (a model the guest sorts into one
-  slot, its parts painter-ordered: a horn base over a crest) follows the guest's own rule for a model:
-  nothing the slot order drew before it covers it, so it draws over that scene in its own order without
-  testing, and writes its depth, so what the slot order puts after it (a ledge trim in a nearer bin) is
-  tested against it.
+  memory `psx::cpu::VertexPlaces` (`Core::vertexPlaces`, PGXP's memory shadow: one flat table over main RAM and
+  the scratchpad, allocated by the first note) keeps each vertex word's place (sub-pixel x and y, view depth,
+  sort-back) and the function that placed it, while the address still holds that word. A guest `SWC2` of an SXY
+  entry notes the GTE's place under the enclosing guest function (`GuestWriterLatch`); `MFC2` of an SXY entry and
+  `LW` of a placed word carry the place in the GPR, and `SW` of that GPR while it still holds the word notes it at
+  the new address (`LightrecExecutor` feeds all four from Lightrec's opcode-carrying callbacks). A native
+  override's `EmitMemory::storeVertex` notes its place under the override's entry (`Core::active_native_address`).
+  Every guest store (`Core::bookStore`) forgets the words it touches, so a later writer of the same word, a reused
+  packet buffer included, never inherits a stale place. Notes made inside a replay go back with its stores
+  (`WriteRollback`). The table tracks while presents draw places (ires above 1 or the depth setting on,
+  `RenderState::presentRecord`); off it is released. The OT walk passes each command word's place in
+  `Gp0Origin.place`, and the tap gives each polygon vertex its place (`applyPlace`: depth, `back`, and the
+  sub-pixel offset when within two pixels of its word) and the primitive the `site` that placed every vertex. A
+  replay's capture reads the same places through `EmitMemory::readPlaces` and each packet's site through
+  `EmitMemory::placingSite`, so in-betweens carry sub-pixel places, depth and site as real frames do. A vertex the
+  guest computes on the CPU from SXY words has no place and draws on its whole pixel, as under PGXP.
+- **Which primitives test.** `Core::depthTest` (`psx::present::DepthTest`) holds the draw functions a title
+  marks by guest entry (a guest function, or a native override's entry), each with its `DepthMark` (order and bin):
+  opaque world 3D (terrain, mobys, the player model), and a 2D fill placed at the depth of the world plane it
+  covers (a portal opening: the plane through its projected outline, psx-spyro issue 0224); never HUD, sky,
+  translucent, decal or shadow draws. A primitive tests when it is a polygon, opaque, its `site` is a marked
+  function and every vertex has depth > 0; a draw site that projects with no view depth (a HUD model, `DepthUnit`
+  scale 0) leaves its vertices at 0 and draws in slot order. `Polygon` (a mesh the guest sorts per polygon: Spyro 1
+  terrain, Spyro 2's player drawer, which buckets each face by its summed SZ) tests and writes per polygon, with the
+  mark's `bin`: the depth one slot of the guest's sort spans (Spyro 1 terrain: 32 view units; Spyro 2's player
+  buckets: 16 SZ). `Object` (a model the guest sorts into one slot, its parts painter-ordered: a horn base over a
+  crest) follows the guest's own rule for a model: nothing the slot order drew before it covers it, so it draws
+  over that scene in its own order without testing, and writes its depth, so what the slot order puts after it (a
+  ledge trim in a nearer bin) is tested against it.
 - **Contact within the sort's resolution.** Surfaces that touch within one bin are ordered by the slot
   order, as retail orders them: a later `Polygon` loses only where its true depth lies farther than the
   depth there, and the depth a `Polygon` leaves is its own moved back by its `bin` and its `back`. So the
@@ -452,11 +459,11 @@ trim over Spyro's feet, a wall seam over the floor), and leaves everything else 
   exactly as the slot order says. A pass with none uses the pipeline with no depth target. Overlap is
   judged on native pixels, as batches are; where two group members share only a scaled pixel, the later one
   keeps it, as slot order does.
-- **Interpolation.** In-betweens re-run the producer body at `t`, so depth is re-projected with the
-  vertex; there is no separate depth lerp.
+- **Interpolation.** In-betweens re-run the title's draw (a replay), so depth is re-projected with the
+  vertex and captured with its word; there is no separate depth lerp.
 - **Off.** The `depth` setting (default on, `PSXPORT_DEPTH`, menu "Native Depth") off passes no policy: no
   op tests, so no plane is written and the planner and rasterizer take the slot-order path unchanged.
-  The menu row shows only for a title that marks a producer (`Mods::nativeDepthOffered`). Off is the
+  The menu row shows only for a title that marks a draw (`Mods::nativeDepthOffered`). Off is the
   slot-order record picture, which is not the device picture: at 4:3, ires 1, one Toasty portal frame's
   record and device VRAM (same run, same frame) differ in 1,252 of 122,880 pixels by more than 8
   levels, scattered along edges, none in the portal sky (psx-spyro issue 0224).

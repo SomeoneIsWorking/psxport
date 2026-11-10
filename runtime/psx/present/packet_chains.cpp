@@ -89,11 +89,10 @@ void PacketChainWalker::capture(std::uint32_t link,
   (void)follow(link, OtSlot{}, [&](std::uint32_t packet, gpu::PacketView view) {
     packets.push_back({.address = packet,
                        .offset = static_cast<std::uint32_t>(words.size()),
-                       .count = static_cast<std::uint32_t>(view.words.size())});
+                       .count = static_cast<std::uint32_t>(view.words.size()),
+                       .site = memory_.placingSite(packet + 4u, view.words)});
     words.insert(words.end(), view.words.begin(), view.words.end());
-    for (std::size_t i = 0; i < view.words.size(); ++i) {
-      places.push_back(memory_.capturedPlace(packet + 4u * static_cast<std::uint32_t>(i + 1), view.places[i]));
-    }
+    places.insert(places.end(), view.places.begin(), view.places.end());
     return true;
   });
 }

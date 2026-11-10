@@ -31,6 +31,9 @@ namespace {
 
 static_assert(kMaxObservedStoreTargets == LIGHTREC_STORE_OBSERVER_TARGETS);
 
+// Lightrec's fused LWL/LWR pair (disassembler.h OP_META_LWU), a GPR load.
+constexpr std::uint32_t kLightrecMetaLwu = 0x1Bu;
+
 // Budgets and deadlines are guest clock ticks, one per instruction; Lightrec counts its own cycles per instruction.
 std::uint32_t targetCycle(std::uint64_t ticks) {
   constexpr std::uint64_t kMaxTicks = std::numeric_limits<std::uint32_t>::max() / kLightrecCyclesPerInstruction;
@@ -55,7 +58,7 @@ std::uint64_t executedInstructionCount(const lightrec_execution_stats &stats) {
 struct LightrecExecutor::Impl {
   explicit Impl(Core &owner, FallbackPolicyProvider provider) : core(owner), fallbackPolicyProvider(provider) {
     operations = {
-        .cop2_notify = nullptr,
+        .cop2_notify = cop2Transfer,
         .cop2_op = cop2Operation,
         .enable_ram = enableRam,
         .hw_direct = nullptr,
@@ -107,6 +110,71 @@ struct LightrecExecutor::Impl {
     return *static_cast<Impl *>(lightrec_get_context(lightrec));
   }
 
+  // A store's vertex place: a SWC2 of an SXY entry takes the GTE's, a SW the one its register carries.
+  void storedPlace(std::uint32_t opcode, std::uint32_t address, std::uint32_t value) {
+    VertexPlaces &places = core.vertexPlaces;
+    if (!places.tracking()) {
+      return;
+    }
+    const std::uint32_t reg = rtField(opcode);
+    if (primaryOpcode(opcode) == kOpSw) {
+      places.stored(reg, address, value);
+      return;
+    }
+    if (primaryOpcode(opcode) != kOpSwc2) {
+      return;
+    }
+    if (const std::optional<NotedPlace> noted = screenPlace(reg, value)) {
+      places.note(address, value, *noted);
+    }
+  }
+
+  // The place of `value` read from GTE data register `reg`, when that is an SXY entry still holding it.
+  std::optional<NotedPlace> screenPlace(std::uint32_t reg, std::uint32_t value) {
+    if (reg < gte::kSxy0 || reg > gte::kSxyP) {
+      return std::nullopt;
+    }
+    const gte::ProjectedVertex vertex = core.gte().projected(std::min(reg, gte::kSxy2) - gte::kSxy0);
+    if (vertex.word() != value) {
+      return std::nullopt;
+    }
+    return NotedPlace{.place = vertex.place(), .site = core.writerLatch.function()};
+  }
+
+  // MFC2 of an SXY entry carries its place in the GPR it loads; any other transfer into a GPR ends what it carried.
+  static void cop2Transfer(lightrec_state *lightrec, std::uint32_t opcode, std::uint32_t value) {
+    Impl &impl = owner(lightrec);
+    VertexPlaces &places = impl.core.vertexPlaces;
+    if (!places.tracking() || primaryOpcode(opcode) != kOpCop2) {
+      return;
+    }
+    const std::uint32_t reg = rtField(opcode);
+    const std::uint32_t move = (opcode >> 21) & 0x1Fu;
+    if (move == kCop2Mfc2) {
+      if (const std::optional<NotedPlace> noted = impl.screenPlace(rdField(opcode), value)) {
+        places.carry(reg, value, *noted);
+        return;
+      }
+    }
+    if (move == kCop2Mfc2 || move == kCop2Cfc2) {
+      places.overwrote(reg);
+    }
+  }
+
+  // A load into a GPR: a whole word carries the place stored with it, anything else ends what the GPR carried.
+  void loadedPlace(std::uint32_t opcode, std::uint32_t address, std::uint32_t value) {
+    VertexPlaces &places = core.vertexPlaces;
+    if (!places.tracking()) {
+      return;
+    }
+    const std::uint32_t op = primaryOpcode(opcode);
+    if (op == kOpLw) {
+      places.loaded(rtField(opcode), address, value);
+    } else if ((op >= kOpLb && op <= kOpLwr) || op == kLightrecMetaLwu) {
+      places.overwrote(rtField(opcode));
+    }
+  }
+
   static void storeByte(lightrec_state *lightrec, std::uint32_t, void *, std::uint32_t address, std::uint32_t value) {
     Impl &impl = owner(lightrec);
     impl.commitDeviceClock(lightrec, address);
@@ -119,10 +187,12 @@ struct LightrecExecutor::Impl {
     impl.core.mem_w16(address, static_cast<std::uint16_t>(value), ExecutableWriteSource::Cpu);
   }
 
-  static void storeWord(lightrec_state *lightrec, std::uint32_t, void *, std::uint32_t address, std::uint32_t value) {
+  static void
+  storeWord(lightrec_state *lightrec, std::uint32_t opcode, void *, std::uint32_t address, std::uint32_t value) {
     Impl &impl = owner(lightrec);
     impl.commitDeviceClock(lightrec, address);
     impl.core.mem_w32(address, value, ExecutableWriteSource::Cpu);
+    impl.storedPlace(opcode, address, value);
   }
 
   static void
@@ -132,22 +202,28 @@ struct LightrecExecutor::Impl {
     impl.core.mem_w32(address, value, ExecutableWriteSource::Cpu);
   }
 
-  static std::uint8_t loadByte(lightrec_state *lightrec, std::uint32_t, void *, std::uint32_t address) {
+  static std::uint8_t loadByte(lightrec_state *lightrec, std::uint32_t opcode, void *, std::uint32_t address) {
     Impl &impl = owner(lightrec);
     impl.commitDeviceClock(lightrec, address);
-    return impl.core.mem_r8(address);
+    const std::uint8_t value = impl.core.mem_r8(address);
+    impl.loadedPlace(opcode, address, value);
+    return value;
   }
 
-  static std::uint16_t loadHalf(lightrec_state *lightrec, std::uint32_t, void *, std::uint32_t address) {
+  static std::uint16_t loadHalf(lightrec_state *lightrec, std::uint32_t opcode, void *, std::uint32_t address) {
     Impl &impl = owner(lightrec);
     impl.commitDeviceClock(lightrec, address);
-    return impl.core.mem_r16(address);
+    const std::uint16_t value = impl.core.mem_r16(address);
+    impl.loadedPlace(opcode, address, value);
+    return value;
   }
 
-  static std::uint32_t loadWord(lightrec_state *lightrec, std::uint32_t, void *, std::uint32_t address) {
+  static std::uint32_t loadWord(lightrec_state *lightrec, std::uint32_t opcode, void *, std::uint32_t address) {
     Impl &impl = owner(lightrec);
     impl.commitDeviceClock(lightrec, address);
-    return impl.core.mem_r32(address);
+    const std::uint32_t value = impl.core.mem_r32(address);
+    impl.loadedPlace(opcode, address, value);
+    return value;
   }
 
   static void cop2Operation(lightrec_state *lightrec, std::uint32_t opcode) {

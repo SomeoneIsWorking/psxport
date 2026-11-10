@@ -64,16 +64,19 @@ private:
   Gp0DrawRegisters registers_;
 };
 
-// One packet of a captured chain: its tag's guest address and its `count` GP0 words from `offset` in the capture.
+// One packet of a captured chain: its tag's guest address, its `count` GP0 words from `offset` in the capture and the
+// function that placed its vertex words (EmitMemory::placingSite).
 struct CapturedPacket {
   std::uint32_t address = 0;
   std::uint32_t offset = 0;
   std::uint32_t count = 0;
+  std::uint32_t site = 0;
 };
 
 // Each command of each packet as the device runs it from `start`: environment commands set the state, and every
 // polygon, line, sprite, fill and copy goes into `into` under the state then in effect, vertices past the draw
-// offset, `sourceAddress` its first word's guest address, no slot, key or owner, and its CLUT unresolved
+// offset, `sourceAddress` its first word's guest address, `site` its packet's, no slot, key or owner, and its CLUT
+// unresolved
 // (`clutWord` only). `places`, one per word or empty, gives each vertex the place stored with its word. A poly-line
 // ends its packet. False, having decoded the commands before it, at any other command or one its packet ends inside.
 bool decodePackets(std::span<const std::uint32_t> words,

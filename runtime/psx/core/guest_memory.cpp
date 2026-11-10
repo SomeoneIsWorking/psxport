@@ -100,7 +100,7 @@ bool Core::bookStore(uint8_t *p, GuestSpan store) {
   }
   pkt_track(this, store.address, store.bytes);
   emission.noteStore(store);
-  vertexDepths.forget(store.address, store.bytes);
+  vertexPlaces.forget(store.address, store.bytes);
   return true;
 }
 

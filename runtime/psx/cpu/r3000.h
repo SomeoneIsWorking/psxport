@@ -53,6 +53,30 @@ inline constexpr std::array<const char *, kGprCount> kGprNames = {
     "zero", "at", "v0", "v1", "a0", "a1", "a2", "a3", "t0", "t1", "t2", "t3", "t4", "t5", "t6", "t7",
     "s0",   "s1", "s2", "s3", "s4", "s5", "s6", "s7", "t8", "t9", "k0", "k1", "gp", "sp", "fp", "ra"};
 
+// Primary opcodes of the memory accesses whose register a vertex place follows. GPR loads are LB..LWR.
+inline constexpr std::uint32_t kOpLb = 0x20u;
+inline constexpr std::uint32_t kOpLw = 0x23u;
+inline constexpr std::uint32_t kOpLwr = 0x26u;
+inline constexpr std::uint32_t kOpSw = 0x2Bu;
+inline constexpr std::uint32_t kOpSwc2 = 0x3Au;
+// COP2 and its rs field for a move from a data or control register into a GPR.
+inline constexpr std::uint32_t kOpCop2 = 0x12u;
+inline constexpr std::uint32_t kCop2Mfc2 = 0x00u;
+inline constexpr std::uint32_t kCop2Cfc2 = 0x02u;
+
+constexpr std::uint32_t primaryOpcode(std::uint32_t instruction) {
+  return instruction >> 26;
+}
+// The rt field: the GPR a load or store moves, or the GTE data register of LWC2/SWC2.
+constexpr std::uint32_t rtField(std::uint32_t instruction) {
+  return (instruction >> 16) & 0x1Fu;
+}
+
+// The rd field: the coprocessor register a COP2 move names.
+constexpr std::uint32_t rdField(std::uint32_t instruction) {
+  return (instruction >> 11) & 0x1Fu;
+}
+
 // The o32 name of a register number; "?" past r31.
 constexpr const char *gprName(std::uint32_t index) {
   return index < kGprCount ? kGprNames[index] : "?";

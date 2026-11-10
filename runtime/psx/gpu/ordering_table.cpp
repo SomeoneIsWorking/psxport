@@ -182,7 +182,7 @@ void submitOrderingTable(Core &core, GpuDevice &device, std::uint32_t rootGuestA
                     .packetKey = key,
                     .owner = owner,
                     .mixedOwner = mixed,
-                    .depth = core.vertexDepths.at(address, word)});
+                    .place = core.vertexPlaces.at(address, word)});
       }
     }
     if (const std::optional<present::OtSlot> empty = tables.emptyAfter(node.guestAddress())) {

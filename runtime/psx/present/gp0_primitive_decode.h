@@ -120,6 +120,9 @@ template <class Segment> bool decodePolyLine(PacketView packet, Segment &&segmen
 present::VramFill decodeFill(std::span<const std::uint32_t> words, const present::RecordDrawState &state);
 // GP0(80) drawn under `state`; no key, slot or owner.
 present::VramCopy decodeCopy(std::span<const std::uint32_t> words, const present::RecordDrawState &state);
+// `vertex`, decoded before the draw offset from a word stored with `place`, takes its depth and, within two pixels of
+// its whole pixel, its offset past it; farther, the GPU wrapped the word and the vertex keeps its pixel.
+void applyPlace(present::RecordVertex &vertex, const GtePlace &place);
 
 // One polygon or sprite packet as written, before the draw offset: positions, colours, UVs, and for a
 // textured polygon its texpage and CLUT attributes. A sprite's or line's texture page and blend mode are the

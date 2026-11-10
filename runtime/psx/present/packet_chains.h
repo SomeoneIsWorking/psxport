@@ -59,7 +59,7 @@ public:
   // Every bucket's chain under one draw mode.
   void emitBuckets(const BucketHeads &heads, DrawModeTracker &drawMode, PrimitiveSink &sink);
   // Every packet of the chain from `link` that carries words, as it lies in memory now, appended to `packets`, its
-  // words to `words` and each word's place to `places` (EmitMemory::capturedPlace).
+  // words to `words` and each word's place to `places`.
   void capture(std::uint32_t link,
                std::vector<gpu::CapturedPacket> &packets,
                std::vector<std::uint32_t> &words,

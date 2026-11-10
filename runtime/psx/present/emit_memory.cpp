@@ -374,11 +374,34 @@ void EmitMemory::readWords(std::uint32_t address, std::span<std::uint32_t> out) 
   }
 }
 
+std::uint32_t EmitMemory::placingSite(std::uint32_t address, std::span<const std::uint32_t> words) const {
+  if (host_ != nullptr) {
+    return 0;
+  }
+  std::optional<std::uint32_t> site;
+  for (std::size_t i = 0; i < words.size(); i++) {
+    const std::optional<cpu::NotedPlace> noted =
+        core_->vertexPlaces.at(address + static_cast<std::uint32_t>(i * 4u), words[i]);
+    if (!noted) {
+      continue;
+    }
+    if (site && *site != noted->site) {
+      return 0;
+    }
+    site = noted->site;
+  }
+  return site.value_or(0u);
+}
+
 void EmitMemory::readPlaces(std::uint32_t address, std::span<gte::WordPlace> out) const {
   if (host_ != nullptr) {
     host_->readPlaces(address, out);
-  } else {
-    std::fill(out.begin(), out.end(), std::nullopt);
+    return;
+  }
+  for (std::size_t i = 0; i < out.size(); i++) {
+    const std::uint32_t word = address + static_cast<std::uint32_t>(i * 4u);
+    const std::optional<cpu::NotedPlace> noted = core_->vertexPlaces.at(word, core_->mem_r32(word));
+    out[i] = noted ? gte::WordPlace(noted->place) : std::nullopt;
   }
 }
 

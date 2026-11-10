@@ -205,7 +205,7 @@ public:
   }
   // Consecutive words from `address`; one copy when a host range holds the first, which must then hold all.
   void readWords(std::uint32_t address, std::span<std::uint32_t> out) const;
-  // The places of the words from `address` (none over the guest, which keeps no place).
+  // The places of the words from `address`: host memory's, or over the guest those `VertexPlaces` keeps.
   void readPlaces(std::uint32_t address, std::span<gte::WordPlace> out) const;
   void mem_w8(std::uint32_t address, std::uint8_t value) const {
     write(address, value);
@@ -217,31 +217,18 @@ public:
     write(address, value);
   }
 
-  // A vertex into the word at `address`; host memory keeps its place, the guest its word and depth.
+  // A vertex into the word at `address`, its place kept by host memory or `VertexPlaces` under the running override.
   void storeVertex(std::uint32_t address, const gte::ProjectedVertex &vertex) const {
     if (host_ != nullptr) {
       host_->writeVertex(address, vertex);
     } else {
       mem_w32(address, vertex.word());
-      core_->vertexDepths.note(address, vertex.word(), {vertex.place().z, vertex.place().back});
+      core_->vertexPlaces.note(address, vertex.word(), {.place = vertex.place(), .site = core_->active_native_address});
     }
   }
-  // The place of the word at `address` as a walk captures it: `kept`, else the depth a draw site stored with the
-  // word into the guest, on its pixel; none where neither is known.
-  [[nodiscard]] gte::WordPlace capturedPlace(std::uint32_t address, gte::WordPlace kept) const {
-    if (kept || host_ != nullptr) {
-      return kept;
-    }
-    const std::uint32_t word = mem_r32(address);
-    const cpu::NotedDepth noted = core_->vertexDepths.at(address, word);
-    if (noted.depth <= 0.0f) {
-      return std::nullopt;
-    }
-    GtePlace at = gte::ProjectedVertex::whole(word).place();
-    at.z = noted.depth;
-    at.back = noted.back;
-    return at;
-  }
+  // The function that placed every placed one of `words`, read from `address` on (VertexPlaces); 0 over host memory,
+  // where none is placed or where two functions placed them.
+  [[nodiscard]] std::uint32_t placingSite(std::uint32_t address, std::span<const std::uint32_t> words) const;
   // The vertex a body stored at `address`, on its word's pixel where no place was kept.
   [[nodiscard]] gte::ProjectedVertex loadVertex(std::uint32_t address) const {
     return loadVertex(address, gte::VertexWord{mem_r32(address)});
@@ -251,15 +238,7 @@ public:
   [[nodiscard]] gte::ProjectedVertex loadVertex(std::uint32_t address, gte::VertexWord word) const {
     gte::WordPlace place;
     readPlaces(address, std::span(&place, 1));
-    if (place) {
-      return {word.value, *place};
-    }
-    // A word with no place keeps the depth a draw site stored with it into the guest, while it holds that word.
-    GtePlace at = gte::ProjectedVertex::whole(word.value).place();
-    const cpu::NotedDepth noted = core_->vertexDepths.at(address, mem_r32(address));
-    at.z = noted.depth;
-    at.back = noted.back;
-    return {word.value, at};
+    return place ? gte::ProjectedVertex(word.value, *place) : gte::ProjectedVertex::whole(word.value);
   }
 
 private:

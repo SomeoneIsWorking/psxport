@@ -112,6 +112,7 @@ struct DrawPrimitive {
   std::uint16_t clutWord = 0; // the command's raw CLUT attribute, when a CLUT was sampled
   RecordDrawState state;
   std::uint32_t sourceAddress = 0; // guest address of the packet's first word, 0 when not from RAM
+  std::uint32_t site = 0;          // the guest function whose SWC2 stored every vertex, 0 when not one
   std::optional<RecordKey> key;
   std::optional<OtSlot> slot; // the bucket the OT walk was in when it reached the packet
   // OwnerLedger handles: who owns the packet's first command word (or the port it came through), and an owner of
