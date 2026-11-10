@@ -32,6 +32,14 @@ void GuestRedraw::writeWord(std::uint32_t address, std::uint32_t word) {
   core_.mem_w32(address, word);
 }
 
+void GuestRedraw::writeByte(std::uint32_t address, std::uint8_t byte) {
+  core_.mem_w8(address, byte);
+}
+
+void GuestRedraw::writeHalf(std::uint32_t address, std::uint16_t half) {
+  core_.mem_w16(address, half);
+}
+
 bool GuestRedraw::run(std::uint32_t entry, std::span<const std::uint32_t> arguments) {
   return call(entry, arguments, false);
 }

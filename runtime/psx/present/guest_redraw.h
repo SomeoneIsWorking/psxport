@@ -29,6 +29,9 @@ public:
 
   // `word` at `address` through the guest's memory, put back with the rest.
   void writeWord(std::uint32_t address, std::uint32_t word);
+  // A byte or an aligned halfword at `address`; the rest of its word is kept.
+  void writeByte(std::uint32_t address, std::uint8_t byte);
+  void writeHalf(std::uint32_t address, std::uint16_t half);
 
   // The original routine at `entry` (its override suppressed) with `arguments` in a0..a3. False, logged, when
   // it did not return or reached a device or a syscall: its packets then do not describe the in-between.
