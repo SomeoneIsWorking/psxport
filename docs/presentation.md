@@ -387,8 +387,9 @@ trim over Spyro's feet, a wall seam over the floor), and leaves everything else 
   position word, and `RecordVertex.back` with it. Guest code's own SWC2 stores are not tracked: an unported 3D draw keeps depth 0 and
   draws in slot order.
 - **Which primitives test.** `Core::depthTest` (`psx::present::DepthTest`) holds the producer entries
-  a title marks, each with its `DepthMark` (order and bin): opaque world 3D only (terrain, mobys, the player model),
-  never 2D, HUD, sky, translucent, decal or shadow producers. A primitive tests when it is a polygon,
+  a title marks, each with its `DepthMark` (order and bin): opaque world 3D (terrain, mobys, the player model), and a
+  2D fill whose producer gives each vertex the depth of the world plane it covers (a portal opening: the plane through
+  its projected outline, psx-spyro issue 0224); never HUD, sky, translucent, decal or shadow producers. A primitive tests when it is a polygon,
   opaque, keyed to a marked producer and every vertex has depth > 0; a draw site that projects with no
   view depth (a HUD model, `DepthUnit` scale 0) leaves its vertices at 0 and draws in slot order. `Polygon` (a
   terrain mesh the guest sorts per polygon) tests and writes per polygon, with the mark's `bin`: the depth one

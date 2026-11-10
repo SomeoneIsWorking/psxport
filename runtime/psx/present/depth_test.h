@@ -29,7 +29,8 @@ struct DepthMark {
 
 class DepthTest {
 public:
-  // `producer`'s opaque world geometry: never 2D, HUD, sky, translucent, decal or shadow draws. `bin` is the depth
+  // `producer`'s opaque world geometry, or a 2D fill its producer places at a world plane's depth (a portal opening);
+  // never HUD, sky, translucent, decal or shadow draws. `bin` is the depth
   // (title view units) one slot of the guest's sort spans for a Polygon producer.
   void mark(std::uint32_t producer, DepthOrder order, float bin = 0.0f) {
     if (!markOf(producer)) {
