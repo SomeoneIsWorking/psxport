@@ -199,12 +199,12 @@ asks whether two packets belong to the same object compares `RecordKey::identity
 draw code, and the composer below is not used for it. Before each real run of the draw section the frame
 driver calls `beforeDraw`: the `MotionSet` samples the title's tracks (guest words with a `Motion` each, or a
 `MotionRule` for words that move as a unit, such as a keyframe pose). A track is one record or a run of them
-(`MotionRecords`: a stride, an optional pointer to the first, an end byte and a live byte); two samples of a
-record pair at the same address only while its `MotionKey` words hold and, for a pool no guest word names, the
-title's `MotionIdentity` generation is the same; an unpaired record is replayed as drawn. A PsyQ MATRIX moves by
-`TransformRule` (rotation along the shorter arc, translation straight); a 12-bit angle keeps the later sample's whole
-turns above it. Inputs that pair by the title's own rule (pools whose entries name lists of their own) are a
-`MotionSource`, sampled and written with the tracks. The title calls `forget` at a cut so the next sample pairs with nothing. Once two samples pair the section is
+(`MotionRecords`: a stride, an optional pointer to the first, an end byte, and a live byte or, for a pool whose
+records carry no such byte, the title's `MotionLiveness`); two samples of a record pair at the same address only
+while both are live and its `MotionKey` words hold; an unpaired record is replayed as drawn. A PsyQ MATRIX moves by
+`TransformRule` (rotation along the shorter arc, translation straight); a 12-bit angle moves the short way round and
+carries into the whole turns above it. Inputs that pair by the title's own rule (pools whose entries name lists of their own) are a
+`MotionSource`, sampled and written with the tracks. The title calls `forget` at a cut it sees before the draw so the next sample pairs with nothing; a cut it declares after the draw holds the interval in the presenter. Once two samples pair the section is
 re-run in a `GuestRedraw` for each k/n of the interval with the tracks written k/n of the way. The chain head the
 section returns is captured (`PacketChainWalker::capture`). At seal the captures belong to S; in-between k is S
 with the one chain run the section names (`ReplaySection::linked`) replaced by the capture decoded under S's draw

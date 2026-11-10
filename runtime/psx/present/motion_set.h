@@ -19,8 +19,8 @@ enum class Motion : std::uint8_t {
   Linear,     // signed 32-bit
   Halves,     // two signed 16-bit values
   Countdown,  // signed 32-bit while it does not rise; a rise steps
-  Angle12x2,  // two 12-bit angles, one per halfword, each keeping the later sample's whole turns above it
-  Angle12Low, // a 12-bit angle in the low bits, the rest of the word the later sample's
+  Angle12x2,  // two halfwords, each a 12-bit angle with whole turns above it
+  Angle12Low, // the low halfword a 12-bit angle with whole turns above it; the high halfword steps
   Angle8x3,   // three 8-bit angles in the low bytes; the top byte steps
   Step,       // the later sample, never blended
 };
@@ -62,14 +62,6 @@ public:
   return fields;
 }
 
-// The title's generation of the object a record holds (a pool's count of its reuses), for records no guest word
-// names: two samples of a record pair only within one generation.
-class MotionIdentity {
-public:
-  virtual ~MotionIdentity() = default;
-  [[nodiscard]] virtual std::uint32_t generation(std::uint32_t record) const = 0;
-};
-
 // A word of a record that names the object it holds: two samples of one address pair only while every key
 // word, under its mask, is unchanged.
 struct MotionKey {
@@ -84,6 +76,15 @@ struct RecordByte {
   std::uint8_t high = 0xFF;
 };
 
+// Which of a run's records hold an object when no byte of the record says so (a pool's free list).
+class MotionLiveness {
+public:
+  virtual ~MotionLiveness() = default;
+  // Before the run's records are read.
+  virtual void sample(Core &core) = 0;
+  [[nodiscard]] virtual bool live(std::uint32_t record) const = 0;
+};
+
 // Where a track's records lie: one at the track's address, or a run of them `stride` bytes apart.
 struct MotionRecords {
   bool throughPointer = false; // the track's address holds the first record's address
@@ -91,6 +92,7 @@ struct MotionRecords {
   std::uint32_t count = 1;        // records at most
   std::optional<RecordByte> end;  // a record whose byte is in range ends the run
   std::optional<RecordByte> live; // a record whose byte is out of range holds no object
+  MotionLiveness *liveness = nullptr;
 };
 
 // Guest records and the fields of each that move; a ruled track's fields are blended by its rule and their own
@@ -103,7 +105,6 @@ struct MotionTrack {
   const MotionRule *rule = nullptr;
   std::span<const MotionKey> keys;
   MotionRecords records;
-  const MotionIdentity *identity = nullptr;
 };
 
 // Inputs a title moves by its own pairing rule where records are not one stride apart or pair by more than

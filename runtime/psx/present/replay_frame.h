@@ -90,7 +90,8 @@ private:
   std::optional<std::uint64_t> lastDrawing_;
   std::array<Set, 3> sets_;
   std::size_t nextSet_ = 0;
-  FrameRecord assembled_;
+  // One per k: the presenter holds the last present's in-between while it assembles the earlier ones.
+  std::array<FrameRecord, kMaxInBetweens> assembled_;
   RecordCluts cluts_;
   std::vector<RecordEntry> decoded_;
 };

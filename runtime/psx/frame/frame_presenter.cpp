@@ -308,6 +308,8 @@ void FramePresenter::presentRecords(Core &core, const present::StateProducers *p
   // The interval S'→S is drawn one way at every t: composed whole, or S held as the guest drew it.
   bool held = producers == nullptr;
   if (cut) {
+    // A replay blends its tracks whatever the title declared afterwards, so across a cut S is shown as drawn.
+    held = held || replay != nullptr;
     journal.record(core, {.reason = present::OwnerReason::IntervalHeld, .cause = present::HeldCause::Cut}, false);
   } else if (replay != nullptr) {
     if (!replay->covers({.shown = base.sequence(), .from = from->record->sequence(), .fields = fields})) {

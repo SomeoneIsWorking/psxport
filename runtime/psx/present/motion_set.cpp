@@ -12,17 +12,22 @@
 namespace psx::present {
 namespace {
 
-// The bits of a halfword above its 12-bit angle: whole turns the guest keeps in it, taken from the later sample.
 constexpr std::uint32_t kAngle12 = 0xFFFu;
-constexpr std::uint32_t kTurns12x2 = 0xF000F000u;
+constexpr std::uint32_t kHalfword = 0xFFFFu;
+
+// A halfword holding a 12-bit angle and the whole turns above it: the short way round, carried into the turns.
+std::uint32_t turnedHalf(std::uint32_t from, std::uint32_t to, float t) {
+  const auto start = static_cast<std::int32_t>(from & kHalfword);
+  const std::int32_t step = ringStep(from & kAngle12, to & kAngle12, kAngle12 + 1);
+  return static_cast<std::uint32_t>(lerpInt(start, start + step, t)) & kHalfword;
+}
 
 bool holds(const RecordByte &byte, std::uint8_t value) {
   return value >= byte.low && value <= byte.high;
 }
 
-// A record's key words: its keys, then its generation when the title names one.
 std::size_t keyWords(const MotionTrack &track) {
-  return track.keys.size() + (track.identity != nullptr ? 1u : 0u);
+  return track.keys.size();
 }
 
 std::size_t recordWords(const MotionTrack &track) {
@@ -40,9 +45,9 @@ std::uint32_t blendedWord(Motion motion, std::uint32_t from, std::uint32_t to, f
   case Motion::Countdown:
     return static_cast<std::int32_t>(to) <= static_cast<std::int32_t>(from) ? lerpWord(from, to, t) : to;
   case Motion::Angle12x2:
-    return (to & kTurns12x2) | lerpTurn(from, to, 12, t) | lerpTurn(from >> 16, to >> 16, 12, t) << 16;
+    return turnedHalf(from, to, t) | turnedHalf(from >> 16, to >> 16, t) << 16;
   case Motion::Angle12Low:
-    return (to & ~kAngle12) | lerpTurn(from, to, 12, t);
+    return (to & ~kHalfword) | turnedHalf(from, to, t);
   case Motion::Angle8x3: {
     std::uint32_t word = to & 0xFF000000u;
     for (unsigned shift = 0; shift < 24; shift += 8) {
@@ -74,6 +79,9 @@ MotionSet::MotionSet(std::span<const MotionTrack> tracks, std::span<MotionSource
 void MotionSet::sampleTrack(Core &core, const MotionTrack &track, Sample &into) const {
   const MotionRecords &records = track.records;
   const std::uint32_t first = records.throughPointer ? core.mem_r32(track.address) : track.address;
+  if (records.liveness != nullptr) {
+    records.liveness->sample(core);
+  }
   for (std::uint32_t index = 0; index < records.count; ++index) {
     const std::uint32_t record = first + index * records.stride;
     if (!core.isGuestStorage(record, std::max<std::uint32_t>(records.stride, 4u))) {
@@ -85,13 +93,13 @@ void MotionSet::sampleTrack(Core &core, const MotionTrack &track, Sample &into) 
     if (records.live && !holds(*records.live, core.mem_r8(record + records.live->offset))) {
       continue;
     }
+    if (records.liveness != nullptr && !records.liveness->live(record)) {
+      continue;
+    }
     into.addresses.push_back(record);
     into.starts.push_back(into.words.size());
     for (const MotionKey &key : track.keys) {
       into.words.push_back(core.mem_r32(record + key.offset) & key.mask);
-    }
-    if (track.identity != nullptr) {
-      into.words.push_back(track.identity->generation(record));
     }
     for (const MotionField &field : track.fields) {
       into.words.push_back(core.mem_r32(record + field.offset));

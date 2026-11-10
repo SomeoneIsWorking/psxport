@@ -122,17 +122,18 @@ const FrameRecord *ReplayFrame::at(const FrameRecord &shown, int k, std::span<co
     lucent::warn("replay", "record {}'s in-between {} links a packet that does not draw", shown.sequence(), k);
     return nullptr;
   }
-  assembled_.splice(shown, run, decoded_);
+  FrameRecord &assembled = assembled_[static_cast<std::size_t>(k - 1)];
+  assembled.splice(shown, run, decoded_);
   cluts_.index(shown);
-  const std::span<RecordEntry> spliced = assembled_.entries().subspan(run.firstEntry, decoded_.size());
+  const std::span<RecordEntry> spliced = assembled.entries().subspan(run.firstEntry, decoded_.size());
   for (RecordEntry &entry : spliced) {
     auto *primitive = std::get_if<DrawPrimitive>(&entry);
-    if (primitive != nullptr && !cluts_.resolve(assembled_, *primitive, vram)) {
+    if (primitive != nullptr && !cluts_.resolve(assembled, *primitive, vram)) {
       lucent::warn("replay", "record {}'s in-between {} filled the CLUT pool", shown.sequence(), k);
       return nullptr;
     }
   }
-  return &assembled_;
+  return &assembled;
 }
 
 } // namespace psx::present
