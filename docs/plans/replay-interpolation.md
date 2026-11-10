@@ -99,8 +99,12 @@ leaves it) and not the depth test (`PSXPORT_DEPTH=0` leaves it); it comes from t
 
 ## State (2026-11-10)
 
-Step 3 runs on Spyro 1 gameplay (`titles/spyro1/core/frame/draw_section.*`): camera, Spyro's position, angles
-and part poses are tracked; mobys, particles, HUD and texture scroll still step per logic frame
-(`psx-spyro/docs/plans/spyro1-motion-tracks.md` lists their fields). Paced Stone Hill walk: 696 of 701 simulated
-vblanks advance half a logic frame, the rest are the 59.82/60.00 Hz beat. Step 1 (vertex places) is stashed with
-the Spyro 2 horn fold open.
+Steps 3 and 4 run on Spyro 1 gameplay (`titles/spyro1/core/frame/draw_section.*`, tracks in `draw_motion.*`):
+camera, Spyro, his poses and shadow, every moby slot (keyed by props, class and screen space), HUD mobys and
+rects, particles, sparkles, the flame and the section's counters. Its gameplay producers are deleted; the
+inventory band and shaded line producers stay for their widescreen extension. Stone Hill and Dry Canyon unpaced:
+197 of 197 and 184 of 184 moby records pair, gems, Sparx and Spyro land halfway. Not tracked: texture scroll
+(Open 6 of the motion-tracks plan) and the Stone Hill ram, whose in-between shows the later pose although its
+moby record blends (`psx-spyro` issue 0236). Paced judgement is pending a quiet host. Deleting the producers drops
+Spyro 1's keyed depth test on real presents until step 1 returns; step 1 (vertex places) is stashed with the
+Spyro 2 horn fold open.

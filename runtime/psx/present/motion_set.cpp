@@ -3,15 +3,32 @@
 #include "blend.h"
 #include "core.h"
 
+#include <lucent/log.h>
+
+#include <algorithm>
 #include <utility>
 
 namespace psx::present {
 namespace {
 
-std::uint32_t blended(Motion motion, std::uint32_t from, std::uint32_t to, float t) {
+bool holds(const RecordByte &byte, std::uint8_t value) {
+  return value >= byte.low && value <= byte.high;
+}
+
+std::size_t recordWords(const MotionTrack &track) {
+  return track.keys.size() + track.fields.size();
+}
+
+} // namespace
+
+std::uint32_t blendedWord(Motion motion, std::uint32_t from, std::uint32_t to, float t) {
   switch (motion) {
   case Motion::Linear:
     return lerpWord(from, to, t);
+  case Motion::Halves:
+    return lerpHalves(from, to, t);
+  case Motion::Countdown:
+    return static_cast<std::int32_t>(to) <= static_cast<std::int32_t>(from) ? lerpWord(from, to, t) : to;
   case Motion::Angle12x2:
     return lerpTurn(from, to, 12, t) | lerpTurn(from >> 16, to >> 16, 12, t) << 16;
   case Motion::Angle12Low:
@@ -29,24 +46,42 @@ std::uint32_t blended(Motion motion, std::uint32_t from, std::uint32_t to, float
   return to;
 }
 
-} // namespace
+MotionSet::MotionSet(std::span<const MotionTrack> tracks) : tracks_(tracks) {}
 
-MotionSet::MotionSet(std::span<const MotionTrack> tracks) : tracks_(tracks) {
-  std::size_t fields = 0;
-  for (const MotionTrack &track : tracks_) {
-    fields += track.fields.size();
+void MotionSet::sampleTrack(Core &core, const MotionTrack &track, Sample &into) const {
+  const MotionRecords &records = track.records;
+  const std::uint32_t first = records.throughPointer ? core.mem_r32(track.address) : track.address;
+  for (std::uint32_t index = 0; index < records.count; ++index) {
+    const std::uint32_t record = first + index * records.stride;
+    if (!core.isGuestStorage(record, std::max<std::uint32_t>(records.stride, 4u))) {
+      return;
+    }
+    if (records.end && holds(*records.end, core.mem_r8(record + records.end->offset))) {
+      return;
+    }
+    if (records.live && !holds(*records.live, core.mem_r8(record + records.live->offset))) {
+      continue;
+    }
+    into.addresses.push_back(record);
+    into.starts.push_back(into.words.size());
+    for (const MotionKey &key : track.keys) {
+      into.words.push_back(core.mem_r32(record + key.offset) & key.mask);
+    }
+    for (const MotionField &field : track.fields) {
+      into.words.push_back(core.mem_r32(record + field.offset));
+    }
   }
-  from_.resize(fields);
-  to_.resize(fields);
 }
 
 void MotionSet::sample(Core &core) {
   std::swap(from_, to_);
-  std::size_t at = 0;
+  to_.addresses.clear();
+  to_.starts.clear();
+  to_.words.clear();
+  to_.trackEnds.clear();
   for (const MotionTrack &track : tracks_) {
-    for (const MotionField &field : track.fields) {
-      to_[at++] = core.mem_r32(track.address + field.offset);
-    }
+    sampleTrack(core, track, to_);
+    to_.trackEnds.push_back(to_.addresses.size());
   }
   samples_ = samples_ < 2 ? samples_ + 1 : 2;
 }
@@ -55,24 +90,62 @@ void MotionSet::forget() {
   samples_ = 0;
 }
 
+void MotionSet::writeRecord(GuestRedraw &redraw,
+                            const MotionTrack &track,
+                            std::uint32_t address,
+                            std::span<const std::uint32_t> from,
+                            std::span<const std::uint32_t> to,
+                            float t) const {
+  const std::size_t count = track.fields.size();
+  if (track.rule != nullptr) {
+    ruled_.resize(count);
+    track.rule->blend({.address = address, .from = from, .to = to}, t, ruled_);
+    for (std::size_t i = 0; i < count; ++i) {
+      redraw.writeWord(address + track.fields[i].offset, ruled_[i]);
+    }
+    return;
+  }
+  for (std::size_t i = 0; i < count; ++i) {
+    const MotionField &field = track.fields[i];
+    redraw.writeWord(address + field.offset, blendedWord(field.motion, from[i], to[i], t));
+  }
+}
+
 void MotionSet::write(GuestRedraw &redraw, float t) const {
-  std::size_t at = 0;
-  for (const MotionTrack &track : tracks_) {
-    if (track.rule != nullptr) {
-      const std::size_t count = track.fields.size();
-      ruled_.resize(count);
-      track.rule->blend(
-          {.from = std::span(from_).subspan(at, count), .to = std::span(to_).subspan(at, count)}, t, ruled_);
-      for (std::size_t i = 0; i < count; ++i) {
-        redraw.writeWord(track.address + track.fields[i].offset, ruled_[i]);
+  std::size_t fromRecord = 0;
+  std::size_t toRecord = 0;
+  for (std::size_t track = 0; track < tracks_.size(); ++track) {
+    const MotionTrack &motion = tracks_[track];
+    const std::size_t words = recordWords(motion);
+    const std::size_t keys = motion.keys.size();
+    const std::size_t fromEnd = from_.trackEnds[track];
+    const std::size_t toEnd = to_.trackEnds[track];
+    std::size_t paired = 0;
+    const std::size_t shown = toEnd - toRecord;
+    // Both runs are in address order.
+    while (fromRecord < fromEnd && toRecord < toEnd) {
+      const std::uint32_t before = from_.addresses[fromRecord];
+      const std::uint32_t after = to_.addresses[toRecord];
+      if (before < after) {
+        ++fromRecord;
+        continue;
       }
-      at += count;
-      continue;
+      if (after < before) {
+        ++toRecord;
+        continue;
+      }
+      const auto earlier = std::span(from_.words).subspan(from_.starts[fromRecord], words);
+      const auto later = std::span(to_.words).subspan(to_.starts[toRecord], words);
+      if (std::equal(earlier.begin(), earlier.begin() + static_cast<std::ptrdiff_t>(keys), later.begin())) {
+        writeRecord(redraw, motion, after, earlier.subspan(keys), later.subspan(keys), t);
+        ++paired;
+      }
+      ++fromRecord;
+      ++toRecord;
     }
-    for (const MotionField &field : track.fields) {
-      redraw.writeWord(track.address + field.offset, blended(field.motion, from_[at], to_[at], t));
-      ++at;
-    }
+    fromRecord = fromEnd;
+    toRecord = toEnd;
+    lucent::debug("motion", "{}: {} of {} records paired at t={:.2f}", motion.name, paired, shown, t);
   }
 }
 
