@@ -140,6 +140,7 @@ void submitOrderingTable(Core &core, GpuDevice &device, std::uint32_t rootGuestA
   core.otTables.beginWalk();
   const OtTables &tables = core.otTables;
   device.enterSlot(std::nullopt, true);
+  device.beginChain(rootGuestAddress);
   do {
     // A walk is milliseconds of host work inside one executor segment; a present due meanwhile lands now.
     core.game->display.showIfDue();
@@ -188,6 +189,7 @@ void submitOrderingTable(Core &core, GpuDevice &device, std::uint32_t rootGuestA
       device.enterSlot(empty, tables.descending(empty->table));
     }
   } while (walk.advance());
+  device.endChain();
   device.enterSlot(std::nullopt, true);
   core.otTables.endWalk();
   core.owners.drawListSubmitted();

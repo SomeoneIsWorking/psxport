@@ -5,6 +5,9 @@
 #include "gp0_primitive_decode.h"
 #include "vram_pixel.h"
 
+#include <lucent/log.h>
+
+#include <cstdlib>
 #include <utility>
 
 namespace psx::gpu {
@@ -25,6 +28,25 @@ unsigned firstDispatchWords(std::uint32_t word) {
     return full - vertexWords(command);
   }
   return full;
+}
+
+[[noreturn]] void
+refuseDrawStateDivergence(std::uint32_t command, const Gp0DrawRegisters &tap, const Gp0DrawRegisters &device) {
+  lucent::error("record-tap",
+                "draw state after GP0 0x{:08X} decodes as [{}] but the device holds [{}]",
+                command,
+                describe(tap),
+                describe(device));
+  std::abort();
+}
+
+[[noreturn]] void refuseClutDivergence(std::uint16_t clutWord, int texMode, std::uint32_t deviceTag) {
+  lucent::error("record-tap",
+                "CLUT 0x{:04X} at texture mode {} decoded but the device cached 0x{:08X}",
+                clutWord,
+                texMode,
+                deviceTag);
+  std::abort();
 }
 
 } // namespace
@@ -50,6 +72,8 @@ void Gp0RecordTap::resyncIfIdle(const DeviceProbe &probe) {
   if (probe.command == DeviceCommandState::None && probe.fifoDepth == 0) {
     synced_ = true;
     resetFraming();
+    // The words skipped while unsynced may have set the environment.
+    drawState_ = Gp0DrawState(probe.draw);
   }
 }
 
@@ -104,13 +128,16 @@ void Gp0RecordTap::onDeviceStep(const DeviceProbe &probe) {
   if (mode_ == Mode::Read && probe.command != DeviceCommandState::Read) {
     mode_ = Mode::Command;
   }
+  drawState_.setControl(probe.draw.texDisableAllowed, probe.draw.displaySkipParity);
   expectedDispatches_ = 0;
   verify(probe);
 }
 
 void Gp0RecordTap::onSoftReset(const DeviceProbe &probe) {
   feedback_.invalidate();
-  feedback_.texturePage(probe.state, probe.texDisable);
+  drawState_.softReset();
+  feedback_.texturePage(drawState_.state(), drawState_.registers().texDisable);
+  checkDrawState(probe);
 }
 
 void Gp0RecordTap::onCommandReset(const DeviceProbe &probe) {
@@ -128,7 +155,8 @@ void Gp0RecordTap::onCommandReset(const DeviceProbe &probe) {
 void Gp0RecordTap::onStateReplaced(const DeviceProbe &probe) {
   record_.markIncomplete();
   feedback_.invalidateAll();
-  feedback_.texturePage(probe.state, probe.texDisable);
+  drawState_ = Gp0DrawState(probe.draw);
+  feedback_.texturePage(drawState_.state(), drawState_.registers().texDisable);
   resetFraming();
   clutTag_ = kInvalidClutTag;
   synced_ = false;
@@ -224,16 +252,30 @@ void Gp0RecordTap::verify(const DeviceProbe &probe) {
   if (!agrees) {
     desync();
     resyncIfIdle(probe);
+    return;
+  }
+  checkDrawState(probe);
+}
+
+void Gp0RecordTap::checkDrawState(const DeviceProbe &probe) const {
+  if (drawState_.registers() != probe.draw) {
+    refuseDrawStateDivergence(lastCommand_, drawState_.registers(), probe.draw);
   }
 }
 
-std::uint32_t Gp0RecordTap::captureClut(const DeviceProbe &probe) {
-  if (probe.state.texMode >= 2) {
+std::uint32_t Gp0RecordTap::captureClut(std::uint16_t clutWord, const DeviceProbe &probe) {
+  const int texMode = drawState_.state().texMode;
+  if (texMode >= 2) {
     return present::kNoClut;
   }
-  if (probe.clutTag != clutTag_ || clutOffset_ == present::kNoClut) {
-    clutOffset_ = record_.appendClut(probe.clut.first(clutEntryCount(static_cast<TexDepth>(probe.state.texMode))));
-    clutTag_ = probe.clutTag;
+  // gpu.c Update_CLUT_Cache's tag.
+  const std::uint32_t tag = clutWord | (static_cast<std::uint32_t>(texMode) << 16);
+  if (probe.clutTag != tag) {
+    refuseClutDivergence(clutWord, texMode, probe.clutTag);
+  }
+  if (tag != clutTag_ || clutOffset_ == present::kNoClut) {
+    clutOffset_ = record_.appendClut(probe.clut.first(clutEntryCount(static_cast<TexDepth>(texMode))));
+    clutTag_ = tag;
   }
   return clutOffset_;
 }
@@ -241,7 +283,9 @@ std::uint32_t Gp0RecordTap::captureClut(const DeviceProbe &probe) {
 void Gp0RecordTap::executeCommand(const DeviceProbe &probe) {
   const Gp0Command command(words_[0]);
   expectedDispatches_ = 1;
-  feedback_.texturePage(probe.state, probe.texDisable);
+  lastCommand_ = words_[0];
+  drawState_.execute(words_);
+  feedback_.texturePage(drawState_.state(), drawState_.registers().texDisable);
   if (command.isPolygon()) {
     recordPolygon(probe);
     if (command.polygonVertexCount() == 4) {
@@ -259,10 +303,8 @@ void Gp0RecordTap::executeCommand(const DeviceProbe &probe) {
     present::RecordVertex from;
     present::RecordVertex to;
     decodeLineEnds(words_, from, to);
-    from.x += probe.state.offsetX;
-    from.y += probe.state.offsetY;
-    to.x += probe.state.offsetX;
-    to.y += probe.state.offsetY;
+    drawState_.offset(from);
+    drawState_.offset(to);
     recordLineSegment(from, to, gouraud, command.flags().semiTransparent, probe);
     if (command.isPolyLine()) {
       mode_ = Mode::PolyLine;
@@ -283,32 +325,14 @@ void Gp0RecordTap::executeCommand(const DeviceProbe &probe) {
     return;
   }
   if (command.opcodeByte() == static_cast<std::uint8_t>(Gp0Opcode::FillRect)) {
-    const Gp0VramRect rect = Gp0Command::fillRectRegion({words_[1], words_[2]});
-    const Gp0Colour colour = command.colour();
-    present::VramFill fill;
-    fill.x = rect.x;
-    fill.y = rect.y;
-    fill.width = rect.width;
-    fill.height = rect.height;
-    fill.value = toVram555(colour.red, colour.green, colour.blue);
-    fill.skipRowParity = probe.state.skipRowParity;
+    const present::VramFill fill = decodeFill(words_, drawState_.state());
     feedback_.written({fill.x, fill.y, fill.x + fill.width, fill.y + fill.height});
     record_.append(fill);
     words_.clear();
     return;
   }
   if (command.isVramCopy()) {
-    const Gp0VramPos source = Gp0Command(words_[1]).rectCorner();
-    const Gp0VramRect target = Gp0Command::transferRegion({words_[2], words_[3]});
-    present::VramCopy copy;
-    copy.srcX = source.x;
-    copy.srcY = source.y;
-    copy.dstX = target.x;
-    copy.dstY = target.y;
-    copy.width = target.width;
-    copy.height = target.height;
-    copy.maskSet = probe.state.maskSet;
-    copy.maskCheck = probe.state.maskCheck;
+    present::VramCopy copy = decodeCopy(words_, drawState_.state());
     copy.key = nextPrimitiveKey();
     copy.slot = slot_;
     copy.owner = packetOwner_;
@@ -324,8 +348,8 @@ void Gp0RecordTap::executeCommand(const DeviceProbe &probe) {
     upload_.y = target.y;
     upload_.width = target.width;
     upload_.height = target.height;
-    upload_.maskSet = probe.state.maskSet;
-    upload_.maskCheck = probe.state.maskCheck;
+    upload_.maskSet = drawState_.state().maskSet;
+    upload_.maskCheck = drawState_.state().maskCheck;
     upload_.sourceAddress = packetSource_;
     upload_.owner = packetOwner_;
     uploadRemaining_ = static_cast<std::uint32_t>(target.width) * static_cast<std::uint32_t>(target.height);
@@ -358,7 +382,6 @@ void Gp0RecordTap::recordPolygon(const DeviceProbe &probe) {
   primitive.gouraud = flags.gouraud;
   primitive.semiTransparent = flags.semiTransparent;
   primitive.modulate = flags.textured && !flags.rawTexel;
-  primitive.state = probe.state;
   primitive.sourceAddress = packetSource_;
   std::size_t index = 0;
   for (int v = 0; v < 3; v++) {
@@ -367,13 +390,12 @@ void Gp0RecordTap::recordPolygon(const DeviceProbe &probe) {
     const cpu::NotedDepth noted = wordDepth(position);
     vertex.depth = noted.depth;
     vertex.back = noted.back;
-    vertex.x += probe.state.offsetX;
-    vertex.y += probe.state.offsetY;
     primitive.vertices[static_cast<std::size_t>(v)] = vertex;
   }
+  drawState_.apply(primitive);
   if (flags.textured) {
-    primitive.clutOffset = captureClut(probe);
-    primitive.clutWord = static_cast<std::uint16_t>(probe.clutTag & 0x7FFFu);
+    primitive.clutWord = polygonTexture(words_).clut;
+    primitive.clutOffset = captureClut(primitive.clutWord, probe);
   }
   stampPacket(primitive);
   record_.append(primitive);
@@ -392,8 +414,7 @@ void Gp0RecordTap::finishQuad(const DeviceProbe &probe) {
     const cpu::NotedDepth noted = wordDepth(position);
     vertex.depth = noted.depth;
     vertex.back = noted.back;
-    vertex.x += probe.state.offsetX;
-    vertex.y += probe.state.offsetY;
+    drawState_.offset(vertex);
     primitive->vertices[3] = vertex;
     primitive->vertexCount = 4;
     settleLast(probe);
@@ -414,7 +435,7 @@ void Gp0RecordTap::recordLineSegment(const present::RecordVertex &from,
   primitive.semiTransparent = semi;
   primitive.vertices[0] = from;
   primitive.vertices[1] = to;
-  primitive.state = probe.state;
+  primitive.state = drawState_.state();
   primitive.sourceAddress = packetSource_;
   stampPacket(primitive);
   record_.append(primitive);
@@ -434,8 +455,9 @@ void Gp0RecordTap::consumePolyLineWord(std::uint32_t word, const DeviceProbe &pr
   const bool gouraud = command.flags().gouraud;
   present::RecordVertex to = gouraud ? colourVertex(words_[0]) : polyLinePoint_;
   const Gp0VertexPos position = Gp0Command(words_[gouraud ? 1 : 0]).vertexPos();
-  to.x = position.x + probe.state.offsetX;
-  to.y = position.y + probe.state.offsetY;
+  to.x = position.x;
+  to.y = position.y;
+  drawState_.offset(to);
   expectedDispatches_ = 1;
   packetSource_ = polyLineSource_;
   packetKey_ = polyLineKey_;
@@ -454,16 +476,10 @@ void Gp0RecordTap::recordSprite(const DeviceProbe &probe) {
     return;
   }
   present::DrawPrimitive &primitive = *decoded;
-  primitive.state = probe.state;
   primitive.sourceAddress = packetSource_;
-  present::RecordVertex &vertex = primitive.vertices[0];
-  vertex.x = Gp0Command::signedAxis(static_cast<std::uint32_t>(vertex.x + probe.state.offsetX));
-  vertex.y = Gp0Command::signedAxis(static_cast<std::uint32_t>(vertex.y + probe.state.offsetY));
+  drawState_.apply(primitive);
   if (primitive.textured) {
-    primitive.flipX = probe.spriteFlipX;
-    primitive.flipY = probe.spriteFlipY;
-    primitive.clutOffset = captureClut(probe);
-    primitive.clutWord = static_cast<std::uint16_t>(probe.clutTag & 0x7FFFu);
+    primitive.clutOffset = captureClut(primitive.clutWord, probe);
   }
   stampPacket(primitive);
   record_.append(primitive);

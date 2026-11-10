@@ -83,7 +83,15 @@ name is refused with a warning and the Core stays on `record`.
 - **Tap.** `GpuDevice::gp0` reports each consumed word to `Gp0RecordTap`, which frames packets as
   `gpu.c` ProcessFIFO does and checks after every word that the device agrees (dispatch count, FIFO
   depth, `InCmd`, no dropped word). A disagreement marks the record incomplete until both are idle.
-  Draw state, CLUT and sprite flip are read from the device after the command ran.
+  Draw state and sprite flip come from the tap's own `Gp0DrawState` (E1-E6 and a textured polygon's texpage
+  decoded from the words; GP1(09) and the interlaced field are taken at GP1 and status steps), and every word
+  checks it against the device's registers: a difference is a named fault. The CLUT attribute comes from the
+  packet words and is checked against the device's CLUT cache tag; the CLUT entries are still copied from the
+  device's cache. After a desync or a state load the tap reseeds from the device.
+- **Chain decode.** `gpu::decodePackets` decodes captured chain packets (`PacketChainWalker::capture`) with the
+  same `Gp0DrawState`, so a chain that never reached the device yields the entries the tap would have recorded,
+  with the CLUT left unresolved (`clutWord` only). Seeded from a `RecordDrawState`, it starts with E1's flip,
+  texture-disable and dfe bits clear.
 - **Seal.** `FramePresenter::commit` seals one record per logic frame. It keeps N, which is replayed, and
   the last three records that drew a primitive; a record that drew nothing is no picture. A record
   sealed inside an upload is incomplete; one that starts between a quad's two triangles is too.
@@ -186,6 +194,18 @@ The serial names a state, not an object, and differs on every scope: `RecordKey 
 asks whether two packets belong to the same object compares `RecordKey::identity()`, the key without the serial.
 
 ## Interpolation
+
+**Replay.** A title whose `GameRuntime::replayFrame` returns a `ReplayFrame` draws its in-betweens with its own
+draw code, and the composer below is not used for it. Before each real run of the draw section the frame
+driver calls `beforeDraw`: the `MotionSet` samples the title's tracks (guest words with a `Motion` each, or a
+`MotionRule` for words that move as a unit, such as a keyframe pose), and once two samples pair the section is
+re-run in a `GuestRedraw` for each k/n of the interval with the tracks written k/n of the way. The chain head the
+section returns is captured (`PacketChainWalker::capture`). At seal the captures belong to S; in-between k is S
+with the one chain run the section names (`ReplaySection::linked`) replaced by the capture decoded under S's draw
+state at that run (`FrameRecord::splice`, `gpu::decodePackets`), CLUTs resolved from VRAM (`RecordCluts`). A run
+that bakes an upload, a capture that does not decode, or no single matching run gives no in-between, and an
+interval with no replayed set is held (`not-replayed`). Check: Spyro 1 Stone Hill walking, `presentseq` advances
+0.5 logic frames per simulated 60.00 Hz vblank and Spyro's pose moves between real presents.
 
 The composer builds the frame at `t` from S's record:
 

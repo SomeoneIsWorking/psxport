@@ -54,6 +54,7 @@ void FrameRecord::reset(std::uint64_t sequence, bool complete) {
   uploadPixels_.clear();
   slotStarts_.clear();
   tableExits_.clear();
+  chainRuns_.clear();
   drawEntryField_.reset();
 }
 
@@ -140,6 +141,8 @@ void FrameRecord::markIncomplete() {
   slotStarts_.shrink_to_fit();
   tableExits_.clear();
   tableExits_.shrink_to_fit();
+  chainRuns_.clear();
+  chainRuns_.shrink_to_fit();
 }
 
 void FrameRecord::beginSlot(OtSlot slot, bool descending, const RecordDrawState &state) {
@@ -156,6 +159,29 @@ void FrameRecord::exitTable(std::uint16_t table, const RecordDrawState &state) {
   tableExits_.push_back({table, entries_.size(), state});
 }
 
+void FrameRecord::beginChain(std::uint32_t head, const RecordDrawState &atStart) {
+  if (!complete_) {
+    return;
+  }
+  chainRuns_.push_back({head, entries_.size(), entries_.size(), atStart});
+}
+
+void FrameRecord::endChain() {
+  if (!complete_ || chainRuns_.empty()) {
+    return;
+  }
+  chainRuns_.back().endEntry = entries_.size();
+}
+
+void FrameRecord::splice(const FrameRecord &base, const ChainRun &run, std::span<const RecordEntry> walked) {
+  assignPools(base);
+  drawEntryField_ = base.drawEntryField_;
+  const std::span<const RecordEntry> from = base.entries();
+  entries_.assign(from.begin(), from.begin() + static_cast<std::ptrdiff_t>(run.firstEntry));
+  entries_.insert(entries_.end(), walked.begin(), walked.end());
+  entries_.insert(entries_.end(), from.begin() + static_cast<std::ptrdiff_t>(run.endEntry), from.end());
+}
+
 void FrameRecord::replaceEntries(std::span<const RecordEntry> entries) {
   if (!complete_) {
     return;
@@ -163,6 +189,7 @@ void FrameRecord::replaceEntries(std::span<const RecordEntry> entries) {
   entries_.assign(entries.begin(), entries.end());
   slotStarts_.clear();
   tableExits_.clear();
+  chainRuns_.clear();
 }
 
 void FrameRecord::assignPools(const FrameRecord &other) {
@@ -173,6 +200,7 @@ void FrameRecord::assignPools(const FrameRecord &other) {
   uploadPixels_.assign(other.uploadPixels_.begin(), other.uploadPixels_.end());
   slotStarts_.clear();
   tableExits_.clear();
+  chainRuns_.clear();
 }
 
 } // namespace psx::present

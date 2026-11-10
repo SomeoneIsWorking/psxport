@@ -11,8 +11,8 @@
 
 namespace psx::present {
 
-std::optional<std::uint32_t>
-PacketChainWalker::walk(std::uint32_t link, OtSlot slot, DrawModeTracker &drawMode, PrimitiveSink &sink) {
+template <class Visit>
+std::optional<std::uint32_t> PacketChainWalker::follow(std::uint32_t link, OtSlot slot, Visit &&visit) {
   gpu::LinkCycleCheck cycle;
   for (gpu::OtNode tag(0, gpu::OtHeaderWord{link}); !tag.endsChain();) {
     const std::uint32_t packet = gpu::guestAddressOf(tag.nextRamOffset());
@@ -20,7 +20,7 @@ PacketChainWalker::walk(std::uint32_t link, OtSlot slot, DrawModeTracker &drawMo
       gpu::refuseDrawListCycle(
           memory_.core(),
           packet,
-          "present/packet_chains.cpp:PacketChainWalker::walk",
+          "present/packet_chains.cpp:PacketChainWalker::follow",
           lucent::format("the chain from link 0x{:08X} into slot {}:{} returns to it after {} packets",
                          link,
                          slot.table,
@@ -50,30 +50,48 @@ PacketChainWalker::walk(std::uint32_t link, OtSlot slot, DrawModeTracker &drawMo
     const std::span<gte::WordPlace> commandPlaces(places_.data(), count);
     memory_.readWords(packet + 4u, command);
     memory_.readPlaces(packet + 4u, commandPlaces);
-    const gpu::Gp0Command head(words_[0]);
-    if (drawMode.take(command) || head.isDrawEnvironmentCommand() || head.isDiscardedNoOp()) {
-      continue;
+    if (!visit(packet, gpu::PacketView{command, commandPlaces})) {
+      return packet;
+    }
+  }
+  return std::nullopt;
+}
+
+std::optional<std::uint32_t>
+PacketChainWalker::walk(std::uint32_t link, OtSlot slot, DrawModeTracker &drawMode, PrimitiveSink &sink) {
+  return follow(link, slot, [&](std::uint32_t packet, gpu::PacketView view) {
+    const gpu::Gp0Command head(view.words[0]);
+    if (drawMode.take(view.words) || head.isDrawEnvironmentCommand() || head.isDiscardedNoOp()) {
+      return true;
     }
     if (head.isPolyLine()) {
-      const bool terminated = gpu::decodePolyLine({command, commandPlaces}, [&](DrawPrimitive segment) {
+      return gpu::decodePolyLine(view, [&](DrawPrimitive segment) {
         drawMode.apply(segment);
         segment.sourceAddress = packet;
         sink.emit(slot, segment);
       });
-      if (!terminated) {
-        return packet;
-      }
-      continue;
     }
-    std::optional<DrawPrimitive> primitive = gpu::decodePacketPrimitive({command, commandPlaces});
+    std::optional<DrawPrimitive> primitive = gpu::decodePacketPrimitive(view);
     if (!primitive) {
-      return packet;
+      return false;
     }
     drawMode.apply(*primitive);
     primitive->sourceAddress = packet;
     sink.emit(slot, *primitive);
-  }
-  return std::nullopt;
+    return true;
+  });
+}
+
+void PacketChainWalker::capture(std::uint32_t link,
+                                std::vector<gpu::CapturedPacket> &packets,
+                                std::vector<std::uint32_t> &words) {
+  (void)follow(link, OtSlot{}, [&](std::uint32_t packet, gpu::PacketView view) {
+    packets.push_back({.address = packet,
+                       .offset = static_cast<std::uint32_t>(words.size()),
+                       .count = static_cast<std::uint32_t>(view.words.size())});
+    words.insert(words.end(), view.words.begin(), view.words.end());
+    return true;
+  });
 }
 
 void PacketChainWalker::emitChain(std::uint32_t link, OtSlot slot, DrawModeTracker &drawMode, PrimitiveSink &sink) {

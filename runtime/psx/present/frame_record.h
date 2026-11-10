@@ -229,6 +229,17 @@ struct TableExit {
   bool operator==(const TableExit &) const = default;
 };
 
+// One DrawOTag walk from the chain whose first node is `head`: entries [firstEntry, endEntry), begun with the
+// device under `atStart`. A replayed in-between replaces exactly these entries.
+struct ChainRun {
+  std::uint32_t head = 0;
+  std::size_t firstEntry = 0;
+  std::size_t endEntry = 0;
+  RecordDrawState atStart;
+
+  bool operator==(const ChainRun &) const = default;
+};
+
 class FrameRecord {
 public:
   // The record's storage; past either the record is marked incomplete and never replayed.
@@ -267,6 +278,10 @@ public:
   std::span<const TableExit> tableExits() const {
     return tableExits_;
   }
+  // DrawOTag walks in submit order.
+  std::span<const ChainRun> chainRuns() const {
+    return chainRuns_;
+  }
   std::span<const std::uint16_t> clut(const DrawPrimitive &primitive) const;
   std::span<const std::uint16_t> pixels(const VramUpload &upload) const;
   bool empty() const {
@@ -300,6 +315,10 @@ public:
   void markIncomplete();
   void beginSlot(OtSlot slot, bool descending, const RecordDrawState &state);
   void exitTable(std::uint16_t table, const RecordDrawState &state);
+  void beginChain(std::uint32_t head, const RecordDrawState &atStart);
+  void endChain();
+  // `base` with its chain run `run` replaced by `walked`, in this record's storage, keeping base's pools.
+  void splice(const FrameRecord &base, const ChainRun &run, std::span<const RecordEntry> walked);
   // Keeps the pools, which `entries` index as this record's did; drops the slot starts and table exits.
   void replaceEntries(std::span<const RecordEntry> entries);
   // Becomes `other` without its entries, slot starts and table exits, in this record's storage.
@@ -315,6 +334,7 @@ private:
   std::vector<std::uint16_t> uploadPixels_;
   std::vector<SlotStart> slotStarts_;
   std::vector<TableExit> tableExits_;
+  std::vector<ChainRun> chainRuns_;
   std::optional<std::uint32_t> drawEntryField_;
 };
 

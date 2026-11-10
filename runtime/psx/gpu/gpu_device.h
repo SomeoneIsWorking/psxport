@@ -45,6 +45,9 @@ public:
   }
   // The OT walk reached a named bucket, or left the named tables (nullopt).
   void enterSlot(const std::optional<present::OtSlot> &slot, bool descending);
+  // A DrawOTag walk of the chain at `head` begins and ends: the record notes its entries as one chain run.
+  void beginChain(std::uint32_t head);
+  void endChain();
   // The device's scanline clock runs from `now`.
   void gp1(uint32_t word, frame::CpuTicks now);
   uint32_t read();

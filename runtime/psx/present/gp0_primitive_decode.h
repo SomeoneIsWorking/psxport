@@ -31,6 +31,14 @@ void decodeLineEnds(std::span<const std::uint32_t> words, present::RecordVertex 
 // A texpage attribute into texture page, texture mode and blend mode.
 void applyTexPageAttribute(present::RecordDrawState &state, std::uint16_t attribute);
 
+// A textured polygon's attributes: the CLUT (high bit dropped, as the GPU does) with vertex 0's UV, the texpage with
+// vertex 1's.
+struct PolygonTexture {
+  std::uint16_t clut = 0;
+  std::uint16_t texPage = 0;
+};
+PolygonTexture polygonTexture(std::span<const std::uint32_t> words);
+
 // A packet's words, and the place of the vertex stored into each: one per word, or none at all for words that
 // carry no place (the guest's GP0 stream).
 struct PacketView {
@@ -107,6 +115,11 @@ template <class Segment> bool decodePolyLine(PacketView packet, Segment &&segmen
   }
   return false;
 }
+
+// GP0(02) at its 16-pixel-aligned rect, drawn under `state`.
+present::VramFill decodeFill(std::span<const std::uint32_t> words, const present::RecordDrawState &state);
+// GP0(80) drawn under `state`; no key, slot or owner.
+present::VramCopy decodeCopy(std::span<const std::uint32_t> words, const present::RecordDrawState &state);
 
 // One polygon or sprite packet as written, before the draw offset: positions, colours, UVs, and for a
 // textured polygon its texpage and CLUT attributes. A sprite's or line's texture page and blend mode are the

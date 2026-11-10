@@ -117,6 +117,42 @@ void applyTexPageAttribute(present::RecordDrawState &state, std::uint16_t attrib
   state.texMode = static_cast<int>(page.depth);
 }
 
+present::VramFill decodeFill(std::span<const std::uint32_t> words, const present::RecordDrawState &state) {
+  const Gp0VramRect rect = Gp0Command::fillRectRegion({words[1], words[2]});
+  const Gp0Colour colour = Gp0Command(words[0]).colour();
+  present::VramFill fill;
+  fill.x = rect.x;
+  fill.y = rect.y;
+  fill.width = rect.width;
+  fill.height = rect.height;
+  fill.value = toVram555(colour.red, colour.green, colour.blue);
+  fill.skipRowParity = state.skipRowParity;
+  return fill;
+}
+
+present::VramCopy decodeCopy(std::span<const std::uint32_t> words, const present::RecordDrawState &state) {
+  const Gp0VramPos source = Gp0Command(words[1]).rectCorner();
+  const Gp0VramRect target = Gp0Command::transferRegion({words[2], words[3]});
+  present::VramCopy copy;
+  copy.srcX = source.x;
+  copy.srcY = source.y;
+  copy.dstX = target.x;
+  copy.dstY = target.y;
+  copy.width = target.width;
+  copy.height = target.height;
+  copy.maskSet = state.maskSet;
+  copy.maskCheck = state.maskCheck;
+  return copy;
+}
+
+PolygonTexture polygonTexture(std::span<const std::uint32_t> words) {
+  // Words: command, xy0, uv0 + CLUT, [colour1], xy1, uv1 + texpage.
+  constexpr std::size_t uv0 = 2u;
+  const std::size_t stride = Gp0Command(words[0]).flags().gouraud ? 3u : 2u;
+  return {static_cast<std::uint16_t>(Gp0Command(words[uv0]).textureCoord().selector & 0x7FFFu),
+          Gp0Command(words[uv0 + stride]).textureCoord().selector};
+}
+
 std::optional<present::DrawPrimitive> decodePacketPrimitive(PacketView packet) {
   const std::span<const std::uint32_t> words = packet.words;
   if (words.empty() || words.size() < Gp0Command::packetWordCount(words[0])) {
@@ -140,11 +176,9 @@ std::optional<present::DrawPrimitive> decodePacketPrimitive(PacketView packet) {
       place(vertex, packet, position);
     }
     if (flags.textured) {
-      // Words: command, xy0, uv0 + CLUT, [colour1], xy1, uv1 + texpage.
-      const std::size_t uv0 = 2u;
-      const std::size_t stride = flags.gouraud ? 3u : 2u;
-      primitive.clutWord = Gp0Command(words[uv0]).textureCoord().selector & 0x7FFFu;
-      applyTexPageAttribute(primitive.state, Gp0Command(words[uv0 + stride]).textureCoord().selector);
+      const PolygonTexture texture = polygonTexture(words);
+      primitive.clutWord = texture.clut;
+      applyTexPageAttribute(primitive.state, texture.texPage);
     }
     return primitive;
   }

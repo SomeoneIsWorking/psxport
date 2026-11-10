@@ -209,10 +209,10 @@ public:
     return static_cast<std::uint16_t>(word_ & 0xFFFFu);
   }
 
-  // E3/E4: X in bits 0..9, Y in bits 10..18.
+  // E3/E4: X in bits 0..9, Y in bits 10..19 (gpu.c keeps all ten).
   constexpr Gp0VramPos drawAreaCorner() const {
     return Gp0VramPos{static_cast<int>(word_ & kSpriteWidthMask),
-                      static_cast<int>((word_ >> kDrawAreaAxisShift) & kFillRectHeightMask)};
+                      static_cast<int>((word_ >> kDrawAreaAxisShift) & kSpriteWidthMask)};
   }
 
   // A fill, copy or transfer corner: X in bits 0..9, Y in bits 16..24.
@@ -231,12 +231,12 @@ public:
     return Gp0MaskBits{(word_ & kMaskSetBit) != 0, (word_ & kMaskCheckBit) != 0};
   }
 
+  // E2: four 5-bit fields in bits 0..19.
   constexpr Gp0TextureWindow textureWindow() const {
-    const std::uint32_t payload = word_ & 0xFFFFu;
-    return Gp0TextureWindow{static_cast<int>(payload & 0x1Fu),
-                            static_cast<int>((payload >> 5) & 0x1Fu),
-                            static_cast<int>((payload >> 10) & 0x1Fu),
-                            static_cast<int>((payload >> 15) & 0x1Fu)};
+    return Gp0TextureWindow{static_cast<int>(word_ & 0x1Fu),
+                            static_cast<int>((word_ >> 5) & 0x1Fu),
+                            static_cast<int>((word_ >> 10) & 0x1Fu),
+                            static_cast<int>((word_ >> 15) & 0x1Fu)};
   }
 
   // The command's words including the command word; a poly-line's minimum, a transfer's header only.

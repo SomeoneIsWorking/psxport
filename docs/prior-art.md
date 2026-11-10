@@ -8,6 +8,7 @@ measurement disagree, the measurement wins.
 |---|---|---|---|---|---|
 | OpenDriver2/PsyCross | https://github.com/OpenDriver2/PsyCross | native reimplementation of the Psy-Q SDK (`libgte`, `libgpu`, `libspu`, `libcd`) | MIT | behaviour reference for SDK semantics | Submodule `external/psycross`, never built. Different architecture from our SDK layer. |
 | sozud/psy-q-decomp | https://github.com/sozud/psy-q-decomp | matching decomp of the PS1 Psy-Q libraries | not checked | names for identifying stock library functions | Check the license before taking anything. |
+| RetroPortingToolKit/psxrecomp | https://github.com/RetroPortingToolKit/psxrecomp | static-recompilation PSX port framework (Tomba 2, Ape Escape, Vigilante 8 ports) | PolyForm Noncommercial 1.0.0 | design of interpolation: sandboxed replay of the guest draw section with blended tracked state (`docs/RENDER_PASSES.md`, `runtime/include/render_pass_motion.h`), PGXP places for depth | Design only, never code. Our route: `docs/plans/replay-interpolation.md`. |
 | decomp.dev | https://decomp.dev | progress tracker for matching decomps | — | discovery | Lists Tomba! 1 (`hansbonini/psx_tomba`) and Vagrant Story. psxport measures RAM parity, not object identity, so it has nothing for `objdiff` to report. |
 
 ## Per-title docs

@@ -33,6 +33,7 @@ enum class HeldCause : std::uint8_t {
   ProducerRefused, // a producer's composition refused t
   Unplaceable,     // a render named a slot S never walked, or the CLUT pool was full
   Unpaired,        // an owned object S' drew with no single state (ambiguous)
+  NotReplayed,     // the title's replay frame made no in-betweens for this interval
 };
 
 const char *ownerReasonName(OwnerReason reason);

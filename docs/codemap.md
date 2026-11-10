@@ -60,6 +60,7 @@ Dependency direction: title repo → `runtime/psx/game/` (the title interface) �
 - `runtime/psx/gpu/gpu_device.*`, `gpu_display_mode.h`, `gpu_ports.*` — GPU device (Beetle gpu.c): VRAM, GP0 / GP1, display area and mode, DMA2 blocks and ordering-table walk
 - `runtime/psx/gpu/ordering_table.*` — ordering table / OT / DrawOTag node decode and walk
 - `runtime/psx/gpu/draw_list_cycle.*` — a draw list that revisits a node, refused before the GPU (latches the presentation fault); the linked-walk cycle check
+- `runtime/psx/gpu/gp0_draw_state.*` — GP0 draw environment (E1-E6, polygon texpage) decoded from command words as gpu.c keeps it; captured chain packets decoded under it
 - `runtime/psx/gpu/gp0_record_tap.*`, `texture_feedback.*` — GP0 work recorded per logic frame, texture cache feedback / stale VRAM reads
 - `runtime/psx/gpu/record_geometry.*`, `record_raster_*`, `vram_bitmap.h` — record raster plan: entry write rects, gpu.c coverage per primitive at internal resolution, canvas margins, read-back textures, written-region bitmaps
 - `runtime/psx/render/record_rasterizer.*`, `record_present.cpp` — record raster on the GPU: ops into VRAM image and canvases, read-back capture, Record-path present, recordcheck, record shot
@@ -71,6 +72,7 @@ Dependency direction: title repo → `runtime/psx/game/` (the title interface) �
 - `runtime/psx/present/render_mode.h`, `render_substrate.*` — render path (Record, Device), display-pass guard, per-Core host render state
 - `runtime/psx/present/drawn_logo.*` — a title's logo rebuilt from its title screen's draws: the frame record's primitives on the wordmark's texture page, rasterized from VRAM
 - `runtime/psx/present/frame_composer.*`, `frame_record.*`, `frame_state.*`, `state_producer.*`, `state_bytes.h`, `emission_scope.*`, `emit_memory.*`, `blend.h` — 60 fps interpolation / in-betweens: frame record, producer keys on primitives and VRAM copies and object state, state producers and their composition, emission scope (and a packet's own key reopened for an in-place rewrite, `amend`), guest or host emit memory and the scratch a title keeps for it (`Kept`), lerp blends, sub-pixel vertex places stored with their words (`storeVertex`/`loadVertex`)
+- `runtime/psx/present/replay_frame.*`, `motion_set.*`, `record_cluts.*` — replay in-betweens: a title's draw section re-run in a `GuestRedraw` with motion tracks blended into guest RAM, its captured chain spliced over S's chain run; CLUT pool shared with the composer
 - `runtime/psx/present/depth_test.h` — native depth policy: the producers a title marks as opaque world 3D, which record polygons test and write depth
 - `runtime/psx/present/owner_ledger.*` — owner ledger: one owner handle per RAM word, scope instances, unowned writers, port owners (block DMA, MMIO GP0, LoadImage), overwrite pairs
 - `runtime/psx/present/ownership_verdict.*` — interval verdict at seal: unowned draw groups by writer, picture hash, moving / port / overwrote findings

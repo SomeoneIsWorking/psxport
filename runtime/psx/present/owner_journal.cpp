@@ -87,6 +87,8 @@ const char *heldCauseName(HeldCause cause) {
     return "unplaceable";
   case HeldCause::Unpaired:
     return "unpaired";
+  case HeldCause::NotReplayed:
+    return "not-replayed";
   }
   return "?";
 }

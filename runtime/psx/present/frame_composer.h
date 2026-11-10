@@ -4,6 +4,7 @@
 #include "frame_record.h"
 #include "frame_state.h"
 #include "owner_journal.h"
+#include "record_cluts.h"
 #include "state_producer.h"
 
 #include <cstddef>
@@ -97,12 +98,11 @@ private:
   };
   // Nothing when `shown` never walked the slot's table.
   std::optional<SlotLanding> slotLanding(const FrameRecord &shown, OtSlot slot) const;
-  std::uint32_t *clutOffset(std::uint32_t key);
   // The output, holding `shown`'s pools.
   FrameRecord &output(const FrameRecord &shown);
 
   std::vector<std::uint64_t> baked_;
-  std::vector<std::pair<std::uint32_t, std::uint32_t>> clutOffsets_; // sorted by CLUT key
+  RecordCluts cluts_;
   std::vector<Keyed> keyed_;
   std::vector<Covered> covered_;
   std::vector<std::pair<std::uint64_t, std::size_t>> heads_; // slot key, slot start index

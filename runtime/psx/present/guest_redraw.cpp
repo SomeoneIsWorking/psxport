@@ -33,11 +33,20 @@ void GuestRedraw::writeWord(std::uint32_t address, std::uint32_t word) {
 }
 
 bool GuestRedraw::run(std::uint32_t entry, std::span<const std::uint32_t> arguments) {
+  return call(entry, arguments, false);
+}
+
+bool GuestRedraw::dispatch(std::uint32_t entry, std::span<const std::uint32_t> arguments) {
+  return call(entry, arguments, true);
+}
+
+bool GuestRedraw::call(std::uint32_t entry, std::span<const std::uint32_t> arguments, bool dispatched) {
   std::copy(arguments.begin(), arguments.end(), core_.r + cpu::kA0);
   // No call inside it can suspend at a turn's end; a second of guest time only stops a runaway.
   const cpu::ExecutionBudget runaway = cpu::ExecutionBudget::fromCycles(frame::kNominalPsxCpuHz);
   const cpu::ExecutionControl::Unsuspendable unsuspendable(core_.executionControl(), runaway);
-  const cpu::ExecutionResult result = cpu::callOriginal(core_, entry, runaway);
+  const cpu::ExecutionResult result =
+      dispatched ? cpu::dispatchGuest(core_, entry, runaway, "redraw") : cpu::callOriginal(core_, entry, runaway);
   if (!result.returned()) {
     lucent::warn("redraw",
                  "the redraw of 0x{:08X} stopped: {} at 0x{:08X}",

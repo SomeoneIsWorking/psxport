@@ -28,26 +28,6 @@ std::uint64_t objectKey(ObjectId id) {
   return (std::uint64_t{id.producer} << 32) | id.object;
 }
 
-std::uint32_t clutKey(const DrawPrimitive &primitive) {
-  return (static_cast<std::uint32_t>(primitive.state.texMode) << 16) | primitive.clutWord;
-}
-
-bool samplesClut(const DrawPrimitive &primitive) {
-  return primitive.textured && primitive.state.texMode < 2;
-}
-
-// The CLUT a primitive samples, read from `vram` into `record`'s pool; kNoClut when the pool is full.
-std::uint32_t
-appendClutFromVram(FrameRecord &record, const DrawPrimitive &primitive, std::span<const std::uint16_t> vram) {
-  const gpu::VramPoint at = gpu::decodeClut(primitive.clutWord);
-  std::array<std::uint16_t, 256> entries{};
-  const std::size_t count = gpu::clutEntryCount(static_cast<gpu::TexDepth>(primitive.state.texMode));
-  for (std::size_t i = 0; i < count; i++) {
-    entries[i] = gpu::vramHalfWord(vram, {at.x + static_cast<int>(i), at.y});
-  }
-  return record.appendClut(std::span<const std::uint16_t>(entries.data(), count));
-}
-
 // The draw environment in effect where a rendered primitive lands, onto it.
 void applyEnvironment(DrawPrimitive &primitive, const RecordDrawState &environment) {
   RecordDrawState &state = primitive.state;
@@ -87,13 +67,9 @@ bool FrameComposer::index(const FrameRecord &shown,
     }
   }
   std::sort(baked_.begin(), baked_.end());
-  clutOffsets_.clear();
+  cluts_.index(shown);
   keyed_.clear();
   for (std::size_t i = 0; i < entries.size(); i++) {
-    if (const auto *primitive = std::get_if<DrawPrimitive>(&entries[i]);
-        primitive != nullptr && samplesClut(*primitive) && primitive->clutOffset != kNoClut) {
-      clutOffsets_.emplace_back(clutKey(*primitive), primitive->clutOffset);
-    }
     const RecordKey *key = entryKey(entries[i]);
     if (key == nullptr) {
       continue;
@@ -114,15 +90,6 @@ bool FrameComposer::index(const FrameRecord &shown,
     const std::optional<OtSlot> slot = entrySlot(entries[i]);
     keyed_.push_back({object, slot ? slotKey(*slot) : kNoSlot, i});
   }
-  // The first offset pooled for a CLUT, the lowest, is the one the composed frame samples.
-  std::sort(clutOffsets_.begin(), clutOffsets_.end());
-  clutOffsets_.erase(std::unique(clutOffsets_.begin(),
-                                 clutOffsets_.end(),
-                                 [](const auto &a, const auto &b) {
-                                   return a.first == b.first;
-                                 }),
-                     clutOffsets_.end());
-
   std::sort(keyed_.begin(), keyed_.end(), [](const Keyed &a, const Keyed &b) {
     return std::tie(a.object, a.slot, a.entry) < std::tie(b.object, b.slot, b.entry);
   });
@@ -190,14 +157,6 @@ std::optional<FrameComposer::SlotLanding> FrameComposer::slotLanding(const Frame
     return std::nullopt;
   }
   return SlotLanding{exit->entry, &exit->state};
-}
-
-std::uint32_t *FrameComposer::clutOffset(std::uint32_t key) {
-  const auto at =
-      std::lower_bound(clutOffsets_.begin(), clutOffsets_.end(), key, [](const auto &entry, std::uint32_t k) {
-        return entry.first < k;
-      });
-  return at != clutOffsets_.end() && at->first == key ? &at->second : nullptr;
 }
 
 FrameRecord &FrameComposer::output(const FrameRecord &shown) {
@@ -294,23 +253,8 @@ FrameComposer::Placement FrameComposer::place(const FrameRecord &shown,
       return Placement::Kept;
     }
     DrawPrimitive &primitive = std::get<DrawPrimitive>(emitted);
-    if (drawable && samplesClut(primitive)) {
-      std::uint32_t *offset = clutOffset(clutKey(primitive));
-      if (offset == nullptr) {
-        const std::uint32_t appended = appendClutFromVram(output(shown), primitive, vram);
-        if (appended == kNoClut) {
-          drawable = false;
-        } else {
-          const auto at = std::lower_bound(
-              clutOffsets_.begin(), clutOffsets_.end(), clutKey(primitive), [](const auto &entry, std::uint32_t k) {
-                return entry.first < k;
-              });
-          offset = &clutOffsets_.insert(at, {clutKey(primitive), appended})->second;
-        }
-      }
-      if (offset != nullptr) {
-        primitive.clutOffset = *offset;
-      }
+    if (drawable) {
+      drawable = cluts_.resolve(output(shown), primitive, vram);
     }
     if (!drawable) {
       if (refuses) {

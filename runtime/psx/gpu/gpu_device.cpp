@@ -231,10 +231,15 @@ DeviceProbe GpuDevice::probe(CensusMark before) const {
   probe.fifoDepth = static_cast<unsigned>(psxport_gpu_fifo_depth());
   probe.dispatched = static_cast<unsigned>(psxport_gpu_census[PGC_CMDS_DISPATCHED] - before.dispatched);
   probe.wordDropped = psxport_gpu_census[PGC_WORDS_DROPPED] != before.dropped;
-  probe.state = drawState();
-  probe.texDisable = GPU.TexDisable;
-  probe.spriteFlipX = (GPU.SpriteFlip & 0x1000) != 0;
-  probe.spriteFlipY = (GPU.SpriteFlip & 0x2000) != 0;
+  probe.draw.state = drawState();
+  probe.draw.texDisable = GPU.TexDisable;
+  probe.draw.texDisableAllowed = GPU.TexDisableAllowChange;
+  probe.draw.spriteFlipX = (GPU.SpriteFlip & 0x1000) != 0;
+  probe.draw.spriteFlipY = (GPU.SpriteFlip & 0x2000) != 0;
+  probe.draw.drawToDisplay = GPU.dfe;
+  if ((GPU.DisplayMode & 0x24) == 0x24 && !psx_gpu_rasterize_both_fields) {
+    probe.draw.displaySkipParity = static_cast<int>((GPU.DisplayFB_YStart + (GPU.field_ram_readout ? 1u : 0u)) & 1u);
+  }
   probe.clutTag = GPU.CLUT_Cache_VB;
   probe.clut = std::span<const uint16_t>(GPU.CLUT_Cache, 256);
   probe.vram = std::span<const uint16_t>(GPU_get_vram(), static_cast<size_t>(kVramWidth) * kVramHeight);
@@ -272,6 +277,14 @@ void GpuDevice::beginPacket() {
 
 void GpuDevice::noteDrawEntry(std::uint32_t field) {
   mTap.noteDrawEntry(field);
+}
+
+void GpuDevice::beginChain(std::uint32_t head) {
+  mTap.beginChain(head, drawState());
+}
+
+void GpuDevice::endChain() {
+  mTap.endChain();
 }
 
 void GpuDevice::enterSlot(const std::optional<present::OtSlot> &slot, bool descending) {

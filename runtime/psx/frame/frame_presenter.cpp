@@ -10,6 +10,7 @@
 #include "gpu_device.h"
 #include "producer_census.h"
 #include "render_mode.h"
+#include "replay_frame.h"
 #include "texture_feedback.h"
 #include "title_debug_menu.h"
 
@@ -124,6 +125,9 @@ void FramePresenter::commitSealed(Core &core, const RecordSlot &sealed, int gues
     history_.back() = {current_, &sealed.state, pendingCut_, !pendingBreak_, core.runtime.debugMenu().screenKey(core)};
     pendingCut_ = false;
     pendingBreak_ = false;
+  }
+  if (present::ReplayFrame *replay = core.runtime.replayFrame(core)) {
+    replay->sealed(current_->sequence(), drawsAnything(*current_));
   }
   holdUndrawnWrites(*current_);
   ++fence_;
@@ -292,10 +296,21 @@ void FramePresenter::presentRecords(Core &core, const present::StateProducers *p
   ++stability_.inBetweens;
   const bool cut = cutBetween(from->record->sequence(), shown->record->sequence());
   const present::FrameRecord &base = *shown->record;
+  // Present j shows the guest moment L fields before its own field: t = (j + d + n - L) / n, n the fields between
+  // S' and S's draw entries and d those from S's draw entry to this commit.
+  const int fields = intervalFields(*from->record, base, guestFields);
+  // A title that replays its draw section brings whole in-betweens; no producer state is composed or judged.
+  present::ReplayFrame *replay = core.runtime.replayFrame(core);
   // The interval S'→S is drawn one way at every t: composed whole, or S held as the guest drew it.
   bool held = producers == nullptr;
   if (cut) {
     journal.record(core, {.reason = present::OwnerReason::IntervalHeld, .cause = present::HeldCause::Cut}, false);
+  } else if (replay != nullptr) {
+    if (!replay->covers({.shown = base.sequence(), .from = from->record->sequence(), .fields = fields})) {
+      held = true;
+      journal.record(
+          core, {.reason = present::OwnerReason::IntervalHeld, .cause = present::HeldCause::NotReplayed}, true);
+    }
   } else {
     const bool still = verdict_.judge(*from->record, base, core.owners);
     held = held || !still;
@@ -303,9 +318,6 @@ void FramePresenter::presentRecords(Core &core, const present::StateProducers *p
       journal.record(core, finding, !still);
     }
   }
-  // Present j shows the guest moment L fields before its own field: t = (j + d + n - L) / n, n the fields between
-  // S' and S's draw entries and d those from S's draw entry to this commit.
-  const int fields = intervalFields(*from->record, base, guestFields);
   // A cut or a held interval shows no motion, so the latency returns to its least there.
   latency_ = held || cut ? lead + guestFields - 1
                          : intervalLatency(entry, {.lead = lead, .presents = guestFields, .fields = fields});
@@ -317,6 +329,15 @@ void FramePresenter::presentRecords(Core &core, const present::StateProducers *p
   const auto composeAt = [&](present::FrameComposer &composer, int present) -> const present::FrameRecord * {
     if (held) {
       return nullptr;
+    }
+    if (replay != nullptr) {
+      const int k = present + lead + fields - latency_;
+      if (k < 1 || k >= fields) {
+        return nullptr;
+      }
+      const present::FrameRecord *replayed = replay->at(base, k, core.gpuDevice().vram());
+      held = replayed == nullptr;
+      return replayed;
     }
     const float t = tAt(present);
     const present::FrameRecord *composedFrame =

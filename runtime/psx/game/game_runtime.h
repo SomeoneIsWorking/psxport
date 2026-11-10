@@ -8,12 +8,12 @@
 #include <string>
 #include <string_view>
 
+#include "drawn_logo.h"
 #include "execution_exit.h"
 #include "field_cadence.h"
 #include "guest_address_range.h"
 #include "guest_packet_pool_windows.h"
 #include "input_phase.h"
-#include "drawn_logo.h"
 #include "logo_image.h"
 #include "pad_delivery.h"
 #include "psx_exe_image.h"
@@ -26,6 +26,7 @@ struct StockReadLanding;
 }
 namespace psx::present {
 class GuestWidescreenProjection;
+class ReplayFrame;
 class StateProducer;
 } // namespace psx::present
 namespace psx::state {
@@ -151,6 +152,11 @@ public:
   virtual const psx::present::StateProducer *stateProducer(Core &core, std::uint32_t producer) const {
     (void)core;
     (void)producer;
+    return nullptr;
+  }
+  // The title's replayed in-betweens; null when its in-betweens are composed from producer states.
+  virtual psx::present::ReplayFrame *replayFrame(Core &core) {
+    (void)core;
     return nullptr;
   }
   // The sealed logic frame is a cut (camera cut, scene change, teleport); its in-between is the frame.

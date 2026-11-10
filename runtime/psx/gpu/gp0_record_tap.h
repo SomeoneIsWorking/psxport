@@ -2,6 +2,7 @@
 #pragma once
 
 #include "frame_record.h"
+#include "gp0_draw_state.h"
 #include "owner_ledger.h"
 #include "texture_feedback.h"
 #include "vertex_depths.h"
@@ -21,12 +22,9 @@ enum class DeviceCommandState : std::uint8_t { None, PolyLine, Quad, Upload, Rea
 struct DeviceProbe {
   DeviceCommandState command = DeviceCommandState::None;
   unsigned fifoDepth = 0;
-  unsigned dispatched = 0;  // commands the device dispatched while consuming the word
-  bool wordDropped = false; // the device discarded the word on a full FIFO
-  present::RecordDrawState state;
-  bool texDisable = false; // gpu.c TexDisable
-  bool spriteFlipX = false;
-  bool spriteFlipY = false;
+  unsigned dispatched = 0;             // commands the device dispatched while consuming the word
+  bool wordDropped = false;            // the device discarded the word on a full FIFO
+  Gp0DrawRegisters draw;               // checked against the tap's own decode
   std::uint32_t clutTag = 0;           // gpu.c CLUT_Cache_VB
   std::span<const std::uint16_t> clut; // gpu.c CLUT_Cache, 256 entries
   std::span<const std::uint16_t> vram; // the device's VRAM, 1024x512
@@ -43,8 +41,9 @@ struct Gp0Origin {
 };
 
 // Frames the GP0 word stream exactly as gpu.c's ProcessFIFO does, decodes each command with
-// Gp0Command, and checks after every word that the device agrees. Any disagreement marks the
-// record incomplete until the device and the tap are both idle again.
+// Gp0Command, and checks after every word that the device agrees. A framing disagreement marks the
+// record incomplete until the device and the tap are both idle again; a draw environment that differs
+// from the device's is a fault.
 class Gp0RecordTap {
 public:
   Gp0RecordTap();
@@ -62,6 +61,13 @@ public:
   // The walk reached `slot` of a table walked high to low when `descending`, under `state`, or left
   // every named table (nullopt).
   void enterSlot(const std::optional<present::OtSlot> &slot, bool descending, const present::RecordDrawState &state);
+  // One DrawOTag walk from `head` starts under `state`, or ends.
+  void beginChain(std::uint32_t head, const present::RecordDrawState &state) {
+    record_.beginChain(head, state);
+  }
+  void endChain() {
+    record_.endChain();
+  }
   // A device step that consumed no GP0 word: GP1, GPUREAD, GPUSTAT.
   void onDeviceStep(const DeviceProbe &probe);
   // GP1(00): gpu.c GPU_SoftReset, which also invalidates the texture cache.
@@ -94,8 +100,10 @@ private:
   void consumeUploadWord(std::uint32_t word);
   void consumePolyLineWord(std::uint32_t word, const DeviceProbe &probe);
   void resyncIfIdle(const DeviceProbe &probe);
-  std::uint32_t captureClut(const DeviceProbe &probe);
+  // The CLUT `clutWord` selects, as the device sampled it.
+  std::uint32_t captureClut(std::uint16_t clutWord, const DeviceProbe &probe);
   void verify(const DeviceProbe &probe);
+  void checkDrawState(const DeviceProbe &probe) const;
   void desync();
   void resetFraming();
   // The key for the next primitive of the current packet: its packet key with the next part.
@@ -140,6 +148,8 @@ private:
   std::vector<std::uint16_t> settledPixels_;
 
   TextureFeedback feedback_;
+  Gp0DrawState drawState_;
+  std::uint32_t lastCommand_ = 0; // the last command word executed
 
   std::uint32_t clutTag_ = 0xFFFFFFFFu;
   std::uint32_t clutOffset_ = present::kNoClut;

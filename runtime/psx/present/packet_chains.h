@@ -3,12 +3,14 @@
 #pragma once
 
 #include "emit_memory.h"
+#include "gp0_draw_state.h" // CapturedPacket
 #include "gp0_primitive_decode.h"
 #include "state_producer.h"
 
 #include <array>
 #include <cstdint>
 #include <optional>
+#include <vector>
 
 namespace psx::present {
 
@@ -56,8 +58,14 @@ public:
   [[nodiscard]] bool tryEmitChain(std::uint32_t link, OtSlot slot, DrawModeTracker &drawMode, PrimitiveSink &sink);
   // Every bucket's chain under one draw mode.
   void emitBuckets(const BucketHeads &heads, DrawModeTracker &drawMode, PrimitiveSink &sink);
+  // Every packet of the chain from `link` that carries words, as it lies in memory now, appended to `packets` and
+  // its words to `words`.
+  void capture(std::uint32_t link, std::vector<gpu::CapturedPacket> &packets, std::vector<std::uint32_t> &words);
 
 private:
+  // Calls `visit(packet address, PacketView)` for each packet carrying words; the address of the first packet
+  // it refuses, or nullopt when the chain ends.
+  template <class Visit> std::optional<std::uint32_t> follow(std::uint32_t link, OtSlot slot, Visit &&visit);
   // The address of the first packet that is not a polygon, line or sprite, or nullopt when the chain ends.
   std::optional<std::uint32_t> walk(std::uint32_t link, OtSlot slot, DrawModeTracker &drawMode, PrimitiveSink &sink);
 
