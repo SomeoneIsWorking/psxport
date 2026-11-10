@@ -76,7 +76,7 @@ void TransformRule::blend(const Samples &samples, float t, std::span<std::uint32
 }
 
 MotionSet::MotionSet(std::span<const MotionTrack> tracks, std::span<MotionSource *const> sources)
-    : tracks_(tracks), sources_(sources) {}
+    : tracks_(tracks), sources_(sources), tallies_(tracks.size()) {}
 
 void MotionSet::sampleTrack(Core &core, const MotionTrack &track, Sample &into) const {
   const MotionRecords &records = track.records;
@@ -185,9 +185,21 @@ void MotionSet::write(GuestRedraw &redraw, float t) const {
     fromRecord = fromEnd;
     toRecord = toEnd;
     lucent::debug("motion", "{}: {} of {} records paired at t={:.2f}", motion.name, paired, shown, t);
+    tallies_[track].drawn += shown;
+    tallies_[track].unpaired += shown - paired;
   }
   for (const MotionSource *source : sources_) {
     source->write(redraw, t);
+  }
+}
+
+void MotionSet::report() const {
+  for (std::size_t track = 0; track < tracks_.size(); ++track) {
+    lucent::info("motion",
+                 "run-end: {}: {} of {} record draw(s) unpaired",
+                 tracks_[track].name,
+                 tallies_[track].unpaired,
+                 tallies_[track].drawn);
   }
 }
 

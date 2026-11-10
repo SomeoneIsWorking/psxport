@@ -52,7 +52,8 @@ interpolation in its Tomba 2, Ape Escape and Vigilante 8 ports with `docs/RENDER
    instead of the device, and that record is the in-between, rastered onto the VRAM before S as a
    composed record is today. A replay that reaches a device, uploads, or does not return refuses that
    in-between only; the present shows S. Per-pass cost (thread CPU time) is measured and passes shed
-   above budget.
+   above budget. At run end `ReplayFrame::report` logs in-betweens replayed, refused by the section and
+   held at assembly, and `MotionSet::report` each track's unpaired record draws (`RunEndReport`).
 4. **Titles.** Spyro 1 first (its draw section and motion tracks; the producers it replaces deleted
    once frames show the same picture), then Spyro 2/3's `field_redraw` onto the same owner, then
    Tomba 2.

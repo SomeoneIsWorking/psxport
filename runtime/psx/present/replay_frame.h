@@ -60,6 +60,8 @@ public:
   [[nodiscard]] bool covers(const Interval &interval);
   // In-between `k` of S, assembled; null when S's chain run cannot take it.
   [[nodiscard]] const FrameRecord *at(const FrameRecord &shown, int k, std::span<const std::uint16_t> vram);
+  // Run end: in-betweens replayed, refused by the section and held at assembly, then each track's unpaired records.
+  void report() const;
 
 private:
   struct Capture {
@@ -76,6 +78,9 @@ private:
   };
   // One replay at `t`; false when the section refused or its chain could not be read.
   bool replay(Core &core, float t, Capture &capture);
+  // In-between `k` of S from its capture; null, logged, when S's chain run cannot take it.
+  [[nodiscard]] const FrameRecord *
+  assemble(const FrameRecord &shown, const Capture &capture, int k, std::span<const std::uint16_t> vram);
   // The set that S = `shown` took, or null.
   [[nodiscard]] const Set *setFor(std::uint64_t shown) const;
 
@@ -94,6 +99,9 @@ private:
   std::array<FrameRecord, kMaxInBetweens> assembled_;
   RecordCluts cluts_;
   std::vector<RecordEntry> decoded_;
+  std::uint64_t replayed_ = 0;
+  std::uint64_t refused_ = 0;
+  std::uint64_t held_ = 0;
 };
 
 } // namespace psx::present

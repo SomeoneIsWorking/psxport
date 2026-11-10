@@ -134,6 +134,8 @@ public:
   // Every paired record's fields `t` of the way from the earlier sample to the later, into the replay's
   // guest memory.
   void write(GuestRedraw &redraw, float t) const;
+  // Run end: per track, the records its in-betweens drew and how many of them were unpaired (drawn as now).
+  void report() const;
 
 private:
   // One sample: per record its address and where its keys' then fields' words start; per track the end of its
@@ -157,6 +159,12 @@ private:
   Sample from_;
   Sample to_;
   mutable std::vector<std::uint32_t> ruled_;
+  // Per track, over every in-between written.
+  struct Tally {
+    std::uint64_t drawn = 0;
+    std::uint64_t unpaired = 0;
+  };
+  mutable std::vector<Tally> tallies_;
   int samples_ = 0;
 };
 

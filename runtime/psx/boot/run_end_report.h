@@ -7,7 +7,8 @@ class Game;
 
 namespace psx {
 
-// Executor ledger, guest-call census, play-check counters, the PSXPORT_RAMDUMP capture, then the title's lines.
+// Executor ledger, guest-call census, play-check counters, the title's replay and motion tracks, the
+// PSXPORT_RAMDUMP capture, then the title's lines.
 class RunEndReport {
 public:
   explicit RunEndReport(Game &game) : game_(game) {}

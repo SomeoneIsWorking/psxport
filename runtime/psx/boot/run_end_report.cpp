@@ -6,6 +6,7 @@
 #include "game.h"
 #include "game_runtime.h"
 #include "lightrec_executor.h"
+#include "replay_frame.h"
 #include "snapshot.h"
 
 #include <lucent/log.h>
@@ -16,14 +17,15 @@ namespace psx {
 
 void RunEndReport::emit(std::uint64_t productSteps) const {
   Core &core = game_.core;
-  lucent::info("runtime",
-               "run complete: product_steps={} presentation_fences={}",
-               productSteps,
-               game_.presentation.fence());
+  lucent::info(
+      "runtime", "run complete: product_steps={} presentation_fences={}", productSteps, game_.presentation.fence());
   psx::cpu::logLedger(core.lightrecExecutor().counters(), "run-end", lucent::Level::Info);
   core.guestCallCensus().log("product loop ended");
   game_.perf.reportPresents();
   game_.presentation.reportStability();
+  if (const psx::present::ReplayFrame *replay = core.runtime.replayFrame(core)) {
+    replay->report();
+  }
   game_.ownerJournal.flush(core);
   game_.spu_audio.reportQueue();
   if (const std::string &path = psx::config::ramdump_path(); !path.empty()) {

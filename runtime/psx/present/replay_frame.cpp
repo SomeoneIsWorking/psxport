@@ -30,9 +30,11 @@ void ReplayFrame::beforeDraw(Core &core) {
   for (int k = 1; k < fields_; ++k) {
     const float t = static_cast<float>(k) / static_cast<float>(fields_);
     if (!replay(core, t, pending_.captures[static_cast<std::size_t>(k - 1)])) {
+      ++refused_;
       lucent::warn("replay", "the draw section's replay at {}/{} refused; the interval is shown as drawn", k, fields_);
       return;
     }
+    ++replayed_;
   }
   pendingReady_ = true;
 }
@@ -98,7 +100,13 @@ const FrameRecord *ReplayFrame::at(const FrameRecord &shown, int k, std::span<co
   if (set == nullptr || k < 1 || k >= set->fields) {
     return nullptr;
   }
-  const Capture &capture = set->captures[static_cast<std::size_t>(k - 1)];
+  const FrameRecord *assembled = assemble(shown, set->captures[static_cast<std::size_t>(k - 1)], k, vram);
+  held_ += assembled == nullptr ? 1 : 0;
+  return assembled;
+}
+
+const FrameRecord *
+ReplayFrame::assemble(const FrameRecord &shown, const Capture &capture, int k, std::span<const std::uint16_t> vram) {
   const std::span<const ChainRun> runs = shown.chainRuns();
   const auto drawn_by_section = [this](const ChainRun &run) {
     return section_.linked(run.head);
@@ -134,6 +142,15 @@ const FrameRecord *ReplayFrame::at(const FrameRecord &shown, int k, std::span<co
     }
   }
   return &assembled;
+}
+
+void ReplayFrame::report() const {
+  lucent::info("replay",
+               "run-end: {} in-between(s) replayed, {} refused by the section, {} held at assembly",
+               replayed_,
+               refused_,
+               held_);
+  motion_.report();
 }
 
 } // namespace psx::present
