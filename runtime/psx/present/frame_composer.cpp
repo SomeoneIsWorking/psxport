@@ -183,19 +183,6 @@ FrameComposer::Placement FrameComposer::place(const FrameRecord &shown,
   if (composition == StateProducer::Composition::Recorded) {
     return Placement::Kept;
   }
-  if (composition == StateProducer::Composition::Refused) {
-    if (refuses) {
-      lucent::debug(composeChannel,
-                    "record={} in-between shown whole: object {:#010x}/{:#010x} refused t={}",
-                    shown.sequence(),
-                    id.producer,
-                    id.object,
-                    states.t);
-      refusal_ = {HeldCause::ProducerRefused, id.producer, false, run.empty() ? SIZE_MAX : run.front().entry};
-      return Placement::Refused;
-    }
-    return Placement::Kept;
-  }
   sink_.clear();
   render.render(states, sink_);
   placed_.clear();

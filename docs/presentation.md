@@ -259,10 +259,8 @@ The composer builds the frame at `t` from S's record:
   places' difference (`kOpShiftX/Y`). One that wraps VRAM or overlaps its source is drawn at its whole pixels; at
   1x every copy is.
 - **Composition.** `StateProducer::composition(states)` says what the object's entries become at `t`:
-  `Render` (replaced by `render`, the default), `Recorded` (kept as the guest drew them, which is the
-  object at `t`) or `Refused` (the object cannot be drawn at `t`; an in-between is then S whole). A
-  producer that saves its in-betweens rather than two states answers `Render` only at the `t` it saved
-  (`inBetweenAt`, the presenter's points), and refuses a frame whose length it did not save them for.
+  `Render` (replaced by `render`, the default) or `Recorded` (kept as the guest drew them, which is the
+  object at `t`).
 - **Guest redraw.** A title whose objects are drawn by guest code it does not port can run that code
   again inside the logic frame for the in-between: `GuestRedraw` saves the CPU and GTE, arms
   `Core::writeRollback` so every guest store is noted and put back newest first (such a store binds
@@ -722,7 +720,7 @@ no-source, span-miss or span-no-fn.
 
 `OwnerJournal` (`game.ownerJournal`) turns each interval's findings and refusals into rows, one per reason,
 writer or producer and screen: `UnownedMoving`, `Port`, `Baked`, `Overwrote`, `ReplayRefused` and
-`IntervalHeld` with its cause (`Cut`, `StaleShown`, `NoPrevious`, `ChainBreak`, `NoState`, `ProducerRefused`,
+`IntervalHeld` with its cause (`Cut`, `StaleShown`, `NoPrevious`, `ChainBreak`, `NoState`,
 `Unplaceable`, `Unpaired`). A row carries the guest function, block PC, dispatched entry, image and
 generation, the OT span, a sample packet address and GP0 command, intervals seen and lost, primitives, the
 screen's title-owned key and warp route (`TitleDebugMenu::screen`) and the `decomp_pipeline.py` command for

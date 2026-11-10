@@ -120,3 +120,10 @@ world MATRIX and part angles, paired by the title's record life) and the effect 
 `ReplayFrame::replays` (an S without a section run composes from producers), the depth half of hazard 2 by captured
 word depths. Village, Area 1 cave, A04 snow and A08 temple unpaced: Tomba, the pig and the scene land halfway; a
 paced village run shows 698 of 702 vblanks at 0.5. No A04 CLUT-upload refusal was seen (hazard 4 open until one is).
+
+Step 5 (2026-11-10) is blocked: producers still compose. Tomba! 2's pause screen and boot (issue 0055 there),
+Spyro's shaded line, inventory band, tint and letterbox, every Crash Bash and Toy Story 2 in-between, and the test
+program's square producer go through `StateProducer`, `EmissionScope` keying and `FrameComposer`, judged by
+`OwnershipVerdict` over the ledger's booking. Crash 1/2/3, CTR, Spider-Man, Vagrant Story, Mega Man X4, Tekken 3 and
+C-12 consume none of it. Only the unused parts went: `Composition::Refused` with `HeldCause::ProducerRefused`, and
+`inBetweenAt`.

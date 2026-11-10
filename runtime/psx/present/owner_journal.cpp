@@ -81,8 +81,6 @@ const char *heldCauseName(HeldCause cause) {
     return "chain-break";
   case HeldCause::NoState:
     return "no-state";
-  case HeldCause::ProducerRefused:
-    return "producer-refused";
   case HeldCause::Unplaceable:
     return "unplaceable";
   case HeldCause::Unpaired:

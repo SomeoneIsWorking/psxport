@@ -25,15 +25,14 @@ enum class OwnerReason : std::uint8_t {
 
 enum class HeldCause : std::uint8_t {
   None,
-  Cut,             // the title declared a cut
-  StaleShown,      // no drawing record holds the displayed buffer, or a later write replaced it
-  NoPrevious,      // the record shown before is gone from the history or was never shown
-  ChainBreak,      // a sequence gap or an incomplete record between S' and S
-  NoState,         // an owned object with no render or no saved state
-  ProducerRefused, // a producer's composition refused t
-  Unplaceable,     // a render named a slot S never walked, or the CLUT pool was full
-  Unpaired,        // an owned object S' drew with no single state (ambiguous)
-  NotReplayed,     // the title's replay frame made no in-betweens for this interval
+  Cut,         // the title declared a cut
+  StaleShown,  // no drawing record holds the displayed buffer, or a later write replaced it
+  NoPrevious,  // the record shown before is gone from the history or was never shown
+  ChainBreak,  // a sequence gap or an incomplete record between S' and S
+  NoState,     // an owned object with no render or no saved state
+  Unplaceable, // a render named a slot S never walked, or the CLUT pool was full
+  Unpaired,    // an owned object S' drew with no single state (ambiguous)
+  NotReplayed, // the title's replay frame made no in-betweens for this interval
 };
 
 const char *ownerReasonName(OwnerReason reason);
