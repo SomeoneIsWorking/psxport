@@ -7,7 +7,6 @@ A map. The workspace directory is not a repo; `AGENTS.md`/`CLAUDE.md` here are s
 | `psxport/AGENTS.md` | how a game consumes the framework (Lightrec/native seam, overrides, invalidation) |
 | `psxport/docs/codemap.md` | where framework code lives |
 | `<game>/AGENTS.md`, `<game>/docs/codemap.md` | that game's specifics and layout |
-| `psxport/docs/workspace/RESTRUCTURE.md` | the ordered restructure: one product loop, one title interface, one renderer, classes over C APIs |
 | `psxport/docs/workspace/GHIDRA.md` | Ghidra queries: `external/psxport/tools/decomp_pipeline.py --image <exe> --target/--callers/--refs/--function-at 0xADDR` |
 
 ## Repos
@@ -41,6 +40,7 @@ title that needed it, plus Tomba 2 and Spyro when it touches presentation, audio
 updates and builds its callers in the same change. Other titles are not run for it.
 
 Agents and workflows run only when the user asks for them in that request. When a task lands, report and stop.
+Time goes to reading and writing code: build once a change is complete, run only to reproduce or to show a fix.
 
 ## Title scope
 
@@ -85,14 +85,11 @@ Products: `spyro_port`, `toystory2_port`, `crashbash_port`, `crash_port`, `ctr_p
 
 ## Rules
 
-- Never commit disc images, extracted executables, or `/home/<user>/…` paths.
-- Never write run artifacts to `/tmp`; use the repo's gitignored `scratch/`.
 - Some `scratch/` dirs are provisioned disc inputs: `psx-spyro/scratch/assets/`, `psx-tomba/scratch/bin/`,
   `psx-toy-story-2/scratch/{bin,flat,raw}`, `psx-crash-bash/scratch/bin/`. Each holds a `.scratch-keep` marker, which
   `scratch_gc.py` honours for the whole subtree; a provisioner that creates such a dir writes the marker.
   Sweep only your own `scratch/<activity>/`.
 - Disc images live under `/mnt/Boy/ROM/PSX CHD/`; each repo's `.env` points at its disc.
-- One game instance at a time unless isolated; kill by PID, never `pkill`.
 - Agent runs keep the product's window unmapped: `PSXPORT_SHOW_WINDOW` unset or 0 (`agent_environment` sets 0), never
   1. It is the player's window, presented at real speed, so a run without `PSXPORT_NOPACE` measures pacing
   (`[playcheck] presents:`); it needs the user's Wayland session (`psxport/docs/presentation.md`).
@@ -103,11 +100,7 @@ Products: `spyro_port`, `toystory2_port`, `crashbash_port`, `crash_port`, `ctr_p
   never scans out, so simulate the player's 60.00 Hz display from the `presentseq` times (each vblank shows the
   newest present before it) and judge the motion across the shown sequence.
 - Only pacing needs real time on a quiet host. Composition, identity and halfway motion are judged unpaced
-  (`PSXPORT_NOPACE=1`, same ires and sink) at any load. Walk from boot once to find the earliest defect, then
-  iterate on that screen through its warp; one real-time walk from boot closes the pass. A reviewer reads the
-  diff and runs only what a claim needs.
-- Numbers do not close a defect. Look at the frames on the defect's screen and judge them as the player would; a
-  check that would pass with the defect present is not evidence. A filed issue, a trace or a decision is not a fix.
+  (`PSXPORT_NOPACE=1`, same ires and sink) at any load.
 - Weak hardware is met by having no needlessly expensive operations, never by generating host load: measure a
   present's cost in load-independent units (thread CPU time, `perf stat` instructions, GPU timestamps, allocations)
   on a quiet host and remove work that is redundant, repeated or scales with ires/sink on the CPU.
