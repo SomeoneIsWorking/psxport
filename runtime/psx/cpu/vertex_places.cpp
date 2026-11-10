@@ -1,44 +1,17 @@
 #include "vertex_places.h"
 
-#include <algorithm>
-
 namespace psx::cpu {
-namespace {
-
-constexpr std::uint32_t kRamWords = kMainRamBytes / 4u;
-constexpr std::uint32_t kSlots = kRamWords + kScratchpadBytes / 4u;
-constexpr std::uint32_t kNoSlot = kSlots;
-
-} // namespace
-
-std::uint32_t VertexPlaces::slot(std::uint32_t address) {
-  if (const std::optional<std::uint32_t> offset = mainRamOffset(address)) {
-    return *offset / 4u;
-  }
-  const std::uint32_t p = physical(address);
-  if (p >= kScratchpadPhysicalBase && p < kScratchpadPhysicalBase + kScratchpadBytes) {
-    return kRamWords + (p - kScratchpadPhysicalBase) / 4u;
-  }
-  return kNoSlot;
-}
 
 void VertexPlaces::track(bool on) {
   if (on == tracking_) {
     return;
   }
   tracking_ = on;
-  carried_ = {};
+  carriedMask_ = 0;
   if (!on) {
-    std::vector<Entry>().swap(entries_);
-    ramFirst_ = kRamWords;
-    ramEnd_ = 0;
-    scratchpadNoted_ = false;
-  }
-}
-
-void VertexPlaces::keep(Entry &entry) {
-  if (rollback_.armed()) {
-    rollback_.note(reinterpret_cast<std::uint8_t *>(&entry), sizeof entry);
+    std::vector<std::uint64_t>().swap(placed_);
+    std::vector<Stored>().swap(stored_);
+    std::vector<std::uint32_t>().swap(keptRun_);
   }
 }
 
@@ -47,73 +20,76 @@ void VertexPlaces::note(std::uint32_t address, std::uint32_t word, const NotedPl
   if (!tracking_ || at == kNoSlot) {
     return;
   }
-  if (entries_.empty()) {
-    entries_.resize(kSlots);
+  if (placed_.empty()) {
+    placed_.resize((kSlots + 63u) / 64u);
+    keptRun_.resize(placed_.size());
+    stored_.resize(kSlots);
   }
-  keep(entries_[at]);
-  entries_[at] = {.word = word, .placed = true, .noted = noted};
-  if (at < kRamWords) {
-    ramFirst_ = std::min(ramFirst_, at);
-    ramEnd_ = std::max(ramEnd_, at + 1u);
-  } else {
-    scratchpadNoted_ = true;
+  keep(stored_[at]);
+  stored_[at] = {.word = word, .noted = noted};
+  keepBits(at / 64u);
+  placed_[at / 64u] |= std::uint64_t{1} << (at % 64u);
+}
+
+void VertexPlaces::keepBits(std::uint32_t index) {
+  if (rollback_.armed() && keptRun_[index] != rollback_.run()) {
+    keep(placed_[index]);
+    keptRun_[index] = rollback_.run();
   }
 }
 
-void VertexPlaces::forgetNoted(std::uint32_t address, std::uint32_t bytes) {
+void VertexPlaces::keepCarried() {
+  if (rollback_.armed() && carriedKeptRun_ != rollback_.run()) {
+    keep(carried_);
+    keep(carriedMask_);
+    carriedKeptRun_ = rollback_.run();
+  }
+}
+
+void VertexPlaces::unplace(std::uint32_t at) {
+  keepBits(at / 64u);
+  placed_[at / 64u] &= ~(std::uint64_t{1} << (at % 64u));
+}
+
+void VertexPlaces::forgetSpan(std::uint32_t address, std::uint32_t bytes) {
   for (std::uint32_t word = address & ~3u; word < address + bytes; word += 4u) {
-    if (const std::uint32_t at = slot(word); at != kNoSlot) {
-      entries_[at].placed = false;
+    if (const std::uint32_t at = slot(word); at != kNoSlot && placed(at)) {
+      unplace(at);
     }
   }
 }
 
 std::optional<NotedPlace> VertexPlaces::at(std::uint32_t address, std::uint32_t word) const {
-  if (entries_.empty() || !mayHoldNote(address, 4u)) {
+  if (!placedAt(address)) {
     return std::nullopt;
   }
-  const std::uint32_t at = slot(address);
-  if (at == kNoSlot) {
-    return std::nullopt;
-  }
-  const Entry &entry = entries_[at];
-  return entry.placed && entry.word == word ? std::optional(entry.noted) : std::nullopt;
+  const Stored &stored = stored_[slot(address)];
+  return stored.word == word ? std::optional(stored.noted) : std::nullopt;
 }
 
-void VertexPlaces::loaded(std::uint32_t reg, std::uint32_t address, std::uint32_t word) {
-  if (!tracking_ || reg == kZero) {
+void VertexPlaces::loadedPlaced(std::uint32_t reg, const std::optional<NotedPlace> &noted, std::uint32_t word) {
+  if (!noted) {
+    drop(reg);
     return;
   }
-  const std::optional<NotedPlace> noted = at(address, word);
-  Entry &carried = carried_[reg];
-  if (!noted && !carried.placed) {
-    return;
-  }
-  keep(carried);
-  carried = noted ? Entry{.word = word, .placed = true, .noted = *noted} : Entry{};
+  carry(reg, word, *noted);
 }
 
 void VertexPlaces::carry(std::uint32_t reg, std::uint32_t word, const NotedPlace &noted) {
   if (!tracking_ || reg == kZero) {
     return;
   }
-  keep(carried_[reg]);
-  carried_[reg] = {.word = word, .placed = true, .noted = noted};
+  keepCarried();
+  carried_[reg] = {.word = word, .noted = noted};
+  carriedMask_ |= 1u << reg;
 }
 
-void VertexPlaces::overwrote(std::uint32_t reg) {
-  if (!tracking_ || !carried_[reg].placed) {
+void VertexPlaces::drop(std::uint32_t reg) {
+  if (!carries(reg)) {
     return;
   }
-  keep(carried_[reg]);
-  carried_[reg].placed = false;
-}
-
-void VertexPlaces::stored(std::uint32_t reg, std::uint32_t address, std::uint32_t word) {
-  const Entry &carried = carried_[reg];
-  if (carried.placed && carried.word == word) {
-    note(address, word, carried.noted);
-  }
+  keepCarried();
+  carriedMask_ &= ~(1u << reg);
 }
 
 } // namespace psx::cpu

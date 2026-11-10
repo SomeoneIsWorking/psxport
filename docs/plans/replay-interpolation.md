@@ -41,7 +41,16 @@ interpolation in its Tomba 2, Ape Escape and Vigilante 8 ports with `docs/RENDER
    `PacketChainWalker` read places for guest packets as they do for producer packets. A title names
    its world draw functions and their depth unit (`DepthUnit` scale and `DepthMark`) by guest
    function; the mark travels with the place, so `DepthTest` no longer needs a producer key. Cost: one
-   table write per `SWC2`, one lookup per `LW`/`SW` while depth is on or ires is above 1; nothing scales with ires.
+   table write per placed store, one bit test per guest load and store while depth is on or ires is above 1
+   (every RAM access reaches a Lightrec callback); nothing scales with ires. Measured on Spyro 1 Stone Hill
+   (ires 0 = 8x, fps60, sink 3840x2160, unpaced, 600 logic frames holding up after the warp, user instructions
+   and task clock of the emulation thread per logic frame, `perf stat --per-thread`, two runs each): places off
+   134.8M / 9.4 ms; on 156.8M / 11.6 ms, +22.0M (+16 %), the same as before the placed-word bitmap replaced
+   the 28-byte entry read on every access in the noted range (155.8M / 11.5 ms with replays not forgetting).
+   `perf record` of the two attributes about 30 % of the difference to the table (`VertexPlaces::at`/`note`,
+   `bookStore`'s forget, `loadedPlace`) and about 70 % to the depth-tested present the places feed
+   (`WrittenMap::mark`/`any`, `RecordPlanner::Builder::addTriangle`, the depth pipelines' binds). The depth
+   setting defaults on, so the table tracks at every ires.
 2. **Motion set.** `present/motion_set` holds the kinds above, pairs by address and title identity
    (address plus generation, as `StateProducer` identity does), and applies blends through
    `GuestRedraw::writeWord`. Cuts stay the title's declared cuts; the move/turn limits only catch

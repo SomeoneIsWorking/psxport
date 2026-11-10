@@ -22,9 +22,10 @@ struct NotedPlace {
   std::uint32_t site = 0;
 };
 
+// Every change to the table while `rollback` is armed is put back with the guest's stores, so a replay leaves
+// the places as it found them.
 class VertexPlaces {
 public:
-  // Notes made while `rollback` is armed are put back with the guest's stores.
   explicit VertexPlaces(WriteRollback &rollback) : rollback_(rollback) {}
 
   // Off frees the table, so no store or load pays for it.
@@ -36,51 +37,100 @@ public:
   void note(std::uint32_t address, std::uint32_t word, const NotedPlace &noted);
   // A store of `bytes` at `address` ends the place of every word it touches.
   void forget(std::uint32_t address, std::uint32_t bytes) {
-    if (mayHoldNote(address, bytes)) {
-      forgetNoted(address, bytes);
+    if (placed_.empty()) {
+      return;
+    }
+    if ((address & 3u) + bytes > 4u) {
+      forgetSpan(address, bytes);
+      return;
+    }
+    if (const std::uint32_t at = slot(address); at != kNoSlot && placed(at)) {
+      unplace(at);
     }
   }
   // The place noted at `address` while it still holds `word`.
   [[nodiscard]] std::optional<NotedPlace> at(std::uint32_t address, std::uint32_t word) const;
 
   // GPR `reg` was loaded with `word` from `address`.
-  void loaded(std::uint32_t reg, std::uint32_t address, std::uint32_t word);
+  void loaded(std::uint32_t reg, std::uint32_t address, std::uint32_t word) {
+    if (reg == kZero || (!carries(reg) && !placedAt(address))) {
+      return;
+    }
+    loadedPlaced(reg, at(address, word), word);
+  }
   // GPR `reg` now holds `word`, a vertex at `noted` (an MFC2 of an SXY entry).
   void carry(std::uint32_t reg, std::uint32_t word, const NotedPlace &noted);
   // GPR `reg` was loaded by anything but a whole-word load or a placed MFC2.
-  void overwrote(std::uint32_t reg);
+  void overwrote(std::uint32_t reg) {
+    if (carries(reg)) {
+      drop(reg);
+    }
+  }
   // GPR `reg`, holding `word`, was stored at `address`.
-  void stored(std::uint32_t reg, std::uint32_t address, std::uint32_t word);
+  void stored(std::uint32_t reg, std::uint32_t address, std::uint32_t word) {
+    if (carries(reg) && carried_[reg].word == word) {
+      note(address, word, carried_[reg].noted);
+    }
+  }
 
 private:
-  struct Entry {
+  struct Stored {
     std::uint32_t word = 0;
-    bool placed = false;
     NotedPlace noted;
   };
-  // Whether any of the `bytes` at `address` lie where a note was ever made.
-  [[nodiscard]] bool mayHoldNote(std::uint32_t address, std::uint32_t bytes) const {
-    const std::uint32_t p = physical(address);
-    if (p < kRamMirrorSpan) {
-      const std::uint32_t offset = p & (kMainRamBytes - 1u);
-      return (offset + bytes + 3u) / 4u > ramFirst_ && offset / 4u < ramEnd_;
+  static constexpr std::uint32_t kRamWords = kMainRamBytes / 4u;
+  static constexpr std::uint32_t kSlots = kRamWords + kScratchpadBytes / 4u;
+  static constexpr std::uint32_t kNoSlot = kSlots;
+
+  // Main RAM's words, then the scratchpad's.
+  [[nodiscard]] static constexpr std::uint32_t slot(std::uint32_t address) {
+    if (const std::optional<std::uint32_t> offset = mainRamOffset(address)) {
+      return *offset / 4u;
     }
-    return scratchpadNoted_ && p - kScratchpadPhysicalBase < kScratchpadBytes;
+    const std::uint32_t p = physical(address);
+    if (p >= kScratchpadPhysicalBase && p < kScratchpadPhysicalBase + kScratchpadBytes) {
+      return kRamWords + (p - kScratchpadPhysicalBase) / 4u;
+    }
+    return kNoSlot;
   }
-  // Main RAM's words, then the scratchpad's; allocated on the first note.
-  [[nodiscard]] static std::uint32_t slot(std::uint32_t address);
-  void forgetNoted(std::uint32_t address, std::uint32_t bytes);
-  // Before `entry` changes inside a rolled-back run.
-  void keep(Entry &entry);
+  [[nodiscard]] bool placed(std::uint32_t at) const {
+    return ((placed_[at / 64u] >> (at % 64u)) & 1u) != 0;
+  }
+  [[nodiscard]] bool placedAt(std::uint32_t address) const {
+    if (placed_.empty()) {
+      return false;
+    }
+    const std::uint32_t at = slot(address);
+    return at != kNoSlot && placed(at);
+  }
+  [[nodiscard]] bool carries(std::uint32_t reg) const {
+    return ((carriedMask_ >> reg) & 1u) != 0;
+  }
+  void unplace(std::uint32_t at);
+  void forgetSpan(std::uint32_t address, std::uint32_t bytes);
+  // GPR `reg` was loaded with `word`, placed at `noted` or not at all.
+  void loadedPlaced(std::uint32_t reg, const std::optional<NotedPlace> &noted, std::uint32_t word);
+  void drop(std::uint32_t reg);
+  // Before `value` changes inside a rolled-back run.
+  template <class Value> void keep(Value &value) {
+    if (rollback_.armed()) {
+      rollback_.note(reinterpret_cast<std::uint8_t *>(&value), sizeof value);
+    }
+  }
+  // Before a bit of placed_[index] changes; once per run, as the oldest copy is the one put back.
+  void keepBits(std::uint32_t index);
+  // Before the carried registers change; once per run.
+  void keepCarried();
 
   WriteRollback &rollback_;
   bool tracking_ = false;
-  std::vector<Entry> entries_;
-  std::array<Entry, kGprCount> carried_{};
-  // The RAM words and whether the scratchpad ever held a note, so a store elsewhere checks nothing.
-  std::uint32_t ramFirst_ = kMainRamBytes / 4u;
-  std::uint32_t ramEnd_ = 0;
-  bool scratchpadNoted_ = false;
+  // One bit per slot, so a load or store of an unplaced word tests only its bit; allocated by the first note.
+  std::vector<std::uint64_t> placed_;
+  std::vector<Stored> stored_;
+  std::vector<std::uint32_t> keptRun_; // per placed_ word, the rollback run that last kept it
+  std::uint32_t carriedMask_ = 0;      // the GPRs carrying a place
+  std::array<Stored, kGprCount> carried_{};
+  std::uint32_t carriedKeptRun_ = 0;
 };
 
 } // namespace psx::cpu

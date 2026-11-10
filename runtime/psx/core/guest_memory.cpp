@@ -94,13 +94,14 @@ void display_pass_write_guard(Core *c, GuestStore store) {
 // The bookkeeping of one store into guest storage at `p` (null for a device); false when the write rollback will put
 // it back, so it binds no packet and changes no code.
 bool Core::bookStore(uint8_t *p, GuestSpan store) {
+  // Inside a replay the forget goes back with the store.
+  vertexPlaces.forget(store.address, store.bytes);
   if (p && writeRollback.armed()) {
     writeRollback.note(p, store.bytes);
     return false;
   }
   pkt_track(this, store.address, store.bytes);
   emission.noteStore(store);
-  vertexPlaces.forget(store.address, store.bytes);
   return true;
 }
 
