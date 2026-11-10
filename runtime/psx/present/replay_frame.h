@@ -54,6 +54,8 @@ public:
     std::uint64_t from = 0;
     int fields = 0;
   };
+  // Whether S = `shown`'s draw ran the section; an S that did not is composed from producer states, if any.
+  [[nodiscard]] bool replays(std::uint64_t shown) const;
   // Whether the interval's in-betweens were replayed. The next set is replayed for its `fields`.
   [[nodiscard]] bool covers(const Interval &interval);
   // In-between `k` of S, assembled; null when S's chain run cannot take it.
@@ -63,11 +65,13 @@ private:
   struct Capture {
     std::vector<gpu::CapturedPacket> packets;
     std::vector<std::uint32_t> words;
+    std::vector<gte::WordPlace> places;
   };
   struct Set {
     std::optional<std::uint64_t> shown;
     std::optional<std::uint64_t> from;
     int fields = 0;
+    bool ran = false;
     std::vector<Capture> captures; // k = 1..fields-1
   };
   // One replay at `t`; false when the section refused or its chain could not be read.
@@ -81,6 +85,8 @@ private:
   int fields_ = 2;
   Set pending_;
   bool pendingReady_ = false;
+  // The section ran since the last drawing seal.
+  bool ran_ = false;
   std::optional<std::uint64_t> lastDrawing_;
   std::array<Set, 3> sets_;
   std::size_t nextSet_ = 0;

@@ -226,6 +226,22 @@ public:
       core_->vertexDepths.note(address, vertex.word(), {vertex.place().z, vertex.place().back});
     }
   }
+  // The place of the word at `address` as a walk captures it: `kept`, else the depth a draw site stored with the
+  // word into the guest, on its pixel; none where neither is known.
+  [[nodiscard]] gte::WordPlace capturedPlace(std::uint32_t address, gte::WordPlace kept) const {
+    if (kept || host_ != nullptr) {
+      return kept;
+    }
+    const std::uint32_t word = mem_r32(address);
+    const cpu::NotedDepth noted = core_->vertexDepths.at(address, word);
+    if (noted.depth <= 0.0f) {
+      return std::nullopt;
+    }
+    GtePlace at = gte::ProjectedVertex::whole(word).place();
+    at.z = noted.depth;
+    at.back = noted.back;
+    return at;
+  }
   // The vertex a body stored at `address`, on its word's pixel where no place was kept.
   [[nodiscard]] gte::ProjectedVertex loadVertex(std::uint32_t address) const {
     return loadVertex(address, gte::VertexWord{mem_r32(address)});

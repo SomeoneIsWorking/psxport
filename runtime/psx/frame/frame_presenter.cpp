@@ -299,8 +299,12 @@ void FramePresenter::presentRecords(Core &core, const present::StateProducers *p
   // Present j shows the guest moment L fields before its own field: t = (j + d + n - L) / n, n the fields between
   // S' and S's draw entries and d those from S's draw entry to this commit.
   const int fields = intervalFields(*from->record, base, guestFields);
-  // A title that replays its draw section brings whole in-betweens; no producer state is composed or judged.
+  // A title that replays its draw section brings whole in-betweens; no producer state is composed or judged. An S
+  // whose draw ran no section (a menu, a load) is composed from producer states as before.
   present::ReplayFrame *replay = core.runtime.replayFrame(core);
+  if (replay != nullptr && !replay->replays(base.sequence())) {
+    replay = nullptr;
+  }
   // The interval S'→S is drawn one way at every t: composed whole, or S held as the guest drew it.
   bool held = producers == nullptr;
   if (cut) {

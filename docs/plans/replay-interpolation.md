@@ -113,3 +113,10 @@ Spyro 2 and 3 (2026-11-10, `psx-spyro` `docs/plans/spyro23-replay.md`): the per-
 state of its switch replayed but the loading screen; the moby array is a track with field_redraw's record blend as its
 rule, the effects pools a `MotionSource`. field_redraw and the S2/S3 producers are deleted. Glimmer and Sunrise
 Spring unpaced pan evenly at every present and pair every moby record; open items in `psx-spyro` issue 0237.
+
+Tomba! 2 (2026-11-10, `psx-tomba` `docs/plans/replay-interpolation.md`): the field draw M:8003F9A8 and the room draw
+M:8003FA44 are the section; tracks are the view MATRIX, Tomba's node, the node pools, the 520 render records (their
+world MATRIX and part angles, paired by the title's record life) and the effect table. Hazard 3 is closed by
+`ReplayFrame::replays` (an S without a section run composes from producers), the depth half of hazard 2 by captured
+word depths. Village, Area 1 cave, A04 snow and A08 temple unpaced: Tomba, the pig and the scene land halfway; a
+paced village run shows 698 of 702 vblanks at 0.5. No A04 CLUT-upload refusal was seen (hazard 4 open until one is).

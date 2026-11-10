@@ -19,6 +19,7 @@ ReplayFrame::ReplayFrame(const ReplaySection &section,
     : section_(section), motion_(tracks, sources) {}
 
 void ReplayFrame::beforeDraw(Core &core) {
+  ran_ = true;
   motion_.sample(core);
   pendingReady_ = false;
   if (!motion_.paired() || fields_ < 2 || fields_ - 1 > kMaxInBetweens) {
@@ -52,7 +53,9 @@ bool ReplayFrame::replay(Core &core, float t, Capture &capture) {
   }
   capture.packets.clear();
   capture.words.clear();
-  PacketChainWalker(EmitMemory(core), PacketBound::anywhere()).capture(*head, capture.packets, capture.words);
+  capture.places.clear();
+  PacketChainWalker(EmitMemory(core), PacketBound::anywhere())
+      .capture(*head, capture.packets, capture.words, capture.places);
   return true;
 }
 
@@ -65,8 +68,10 @@ void ReplayFrame::sealed(std::uint64_t sequence, bool draws) {
   set.shown = sequence;
   set.from = pendingReady_ ? lastDrawing_ : std::nullopt;
   set.fields = pendingReady_ ? pending_.fields : 0;
+  set.ran = ran_;
   std::swap(set.captures, pending_.captures);
   pendingReady_ = false;
+  ran_ = false;
   lastDrawing_ = sequence;
 }
 
@@ -75,6 +80,11 @@ const ReplayFrame::Set *ReplayFrame::setFor(std::uint64_t shown) const {
     return candidate.shown == shown;
   });
   return set != sets_.end() ? &*set : nullptr;
+}
+
+bool ReplayFrame::replays(std::uint64_t shown) const {
+  const Set *set = setFor(shown);
+  return set != nullptr && set->ran;
 }
 
 bool ReplayFrame::covers(const Interval &interval) {
@@ -108,7 +118,7 @@ const FrameRecord *ReplayFrame::at(const FrameRecord &shown, int k, std::span<co
     return nullptr;
   }
   decoded_.clear();
-  if (!gpu::decodePackets(capture.words, capture.packets, run.atStart, decoded_)) {
+  if (!gpu::decodePackets(capture.words, capture.places, capture.packets, run.atStart, decoded_)) {
     lucent::warn("replay", "record {}'s in-between {} links a packet that does not draw", shown.sequence(), k);
     return nullptr;
   }

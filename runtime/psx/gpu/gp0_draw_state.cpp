@@ -21,15 +21,17 @@ constexpr int kDirectTexMode = 2;
 
 bool decodePacket(std::uint32_t address,
                   std::span<const std::uint32_t> words,
+                  std::span<const gte::WordPlace> places,
                   Gp0DrawState &state,
                   std::vector<present::RecordEntry> &into) {
   std::size_t at = 0;
   while (at < words.size()) {
     const Gp0Command head(words[at]);
     const std::span<const std::uint32_t> rest = words.subspan(at);
+    const std::span<const gte::WordPlace> restPlaces = places.size() > at ? places.subspan(at) : places.last(0);
     const auto source = static_cast<std::uint32_t>(address + 4u * (at + 1u));
     if (head.isPolyLine()) {
-      return decodePolyLine({.words = rest, .places = {}}, [&](present::DrawPrimitive segment) {
+      return decodePolyLine({.words = rest, .places = restPlaces}, [&](present::DrawPrimitive segment) {
         state.apply(segment);
         segment.sourceAddress = source;
         into.emplace_back(segment);
@@ -43,7 +45,8 @@ bool decodePacket(std::uint32_t address,
     if (head.isDrawEnvironmentCommand()) {
       state.execute(command);
     } else if (head.isDrawable()) {
-      std::optional<present::DrawPrimitive> primitive = decodePacketPrimitive({.words = command, .places = {}});
+      std::optional<present::DrawPrimitive> primitive =
+          decodePacketPrimitive({.words = command, .places = restPlaces.first(std::min(count, restPlaces.size()))});
       if (!primitive) {
         return false;
       }
@@ -200,12 +203,15 @@ void Gp0DrawState::updateSkipParity() {
 }
 
 bool decodePackets(std::span<const std::uint32_t> words,
+                   std::span<const gte::WordPlace> places,
                    std::span<const CapturedPacket> packets,
                    const present::RecordDrawState &start,
                    std::vector<present::RecordEntry> &into) {
   Gp0DrawState state(start);
   for (const CapturedPacket &packet : packets) {
-    if (!decodePacket(packet.address, words.subspan(packet.offset, packet.count), state, into)) {
+    const std::span<const gte::WordPlace> packetPlaces =
+        places.empty() ? places : places.subspan(packet.offset, packet.count);
+    if (!decodePacket(packet.address, words.subspan(packet.offset, packet.count), packetPlaces, state, into)) {
       return false;
     }
   }

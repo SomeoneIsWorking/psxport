@@ -2,6 +2,7 @@
 
 #include "blend.h"
 #include "core.h"
+#include "gte_control.h"
 
 #include <lucent/log.h>
 
@@ -11,12 +12,21 @@
 namespace psx::present {
 namespace {
 
+// The bits of a halfword above its 12-bit angle: whole turns the guest keeps in it, taken from the later sample.
+constexpr std::uint32_t kAngle12 = 0xFFFu;
+constexpr std::uint32_t kTurns12x2 = 0xF000F000u;
+
 bool holds(const RecordByte &byte, std::uint8_t value) {
   return value >= byte.low && value <= byte.high;
 }
 
+// A record's key words: its keys, then its generation when the title names one.
+std::size_t keyWords(const MotionTrack &track) {
+  return track.keys.size() + (track.identity != nullptr ? 1u : 0u);
+}
+
 std::size_t recordWords(const MotionTrack &track) {
-  return track.keys.size() + track.fields.size();
+  return keyWords(track) + track.fields.size();
 }
 
 } // namespace
@@ -30,9 +40,9 @@ std::uint32_t blendedWord(Motion motion, std::uint32_t from, std::uint32_t to, f
   case Motion::Countdown:
     return static_cast<std::int32_t>(to) <= static_cast<std::int32_t>(from) ? lerpWord(from, to, t) : to;
   case Motion::Angle12x2:
-    return lerpTurn(from, to, 12, t) | lerpTurn(from >> 16, to >> 16, 12, t) << 16;
+    return (to & kTurns12x2) | lerpTurn(from, to, 12, t) | lerpTurn(from >> 16, to >> 16, 12, t) << 16;
   case Motion::Angle12Low:
-    return (to & 0xFFFF0000u) | lerpTurn(from, to, 12, t);
+    return (to & ~kAngle12) | lerpTurn(from, to, 12, t);
   case Motion::Angle8x3: {
     std::uint32_t word = to & 0xFF000000u;
     for (unsigned shift = 0; shift < 24; shift += 8) {
@@ -44,6 +54,18 @@ std::uint32_t blendedWord(Motion motion, std::uint32_t from, std::uint32_t to, f
     return to;
   }
   return to;
+}
+
+void TransformRule::blend(const Samples &samples, float t, std::span<std::uint32_t> out) const {
+  gte::RotationWords from{};
+  gte::RotationWords to{};
+  std::copy_n(samples.from.begin(), from.size(), from.begin());
+  std::copy_n(samples.to.begin(), to.size(), to.begin());
+  const gte::RotationWords rotation = rotationBetween(from, to, t);
+  std::copy(rotation.begin(), rotation.end(), out.begin());
+  for (std::size_t i = rotation.size(); i < kWords; ++i) {
+    out[i] = lerpWord(samples.from[i], samples.to[i], t);
+  }
 }
 
 MotionSet::MotionSet(std::span<const MotionTrack> tracks, std::span<MotionSource *const> sources)
@@ -67,6 +89,9 @@ void MotionSet::sampleTrack(Core &core, const MotionTrack &track, Sample &into) 
     into.starts.push_back(into.words.size());
     for (const MotionKey &key : track.keys) {
       into.words.push_back(core.mem_r32(record + key.offset) & key.mask);
+    }
+    if (track.identity != nullptr) {
+      into.words.push_back(track.identity->generation(record));
     }
     for (const MotionField &field : track.fields) {
       into.words.push_back(core.mem_r32(record + field.offset));
@@ -121,7 +146,7 @@ void MotionSet::write(GuestRedraw &redraw, float t) const {
   for (std::size_t track = 0; track < tracks_.size(); ++track) {
     const MotionTrack &motion = tracks_[track];
     const std::size_t words = recordWords(motion);
-    const std::size_t keys = motion.keys.size();
+    const std::size_t keys = keyWords(motion);
     const std::size_t fromEnd = from_.trackEnds[track];
     const std::size_t toEnd = to_.trackEnds[track];
     std::size_t paired = 0;

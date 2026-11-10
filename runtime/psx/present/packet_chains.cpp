@@ -84,12 +84,16 @@ PacketChainWalker::walk(std::uint32_t link, OtSlot slot, DrawModeTracker &drawMo
 
 void PacketChainWalker::capture(std::uint32_t link,
                                 std::vector<gpu::CapturedPacket> &packets,
-                                std::vector<std::uint32_t> &words) {
+                                std::vector<std::uint32_t> &words,
+                                std::vector<gte::WordPlace> &places) {
   (void)follow(link, OtSlot{}, [&](std::uint32_t packet, gpu::PacketView view) {
     packets.push_back({.address = packet,
                        .offset = static_cast<std::uint32_t>(words.size()),
                        .count = static_cast<std::uint32_t>(view.words.size())});
     words.insert(words.end(), view.words.begin(), view.words.end());
+    for (std::size_t i = 0; i < view.words.size(); ++i) {
+      places.push_back(memory_.capturedPlace(packet + 4u * static_cast<std::uint32_t>(i + 1), view.places[i]));
+    }
     return true;
   });
 }

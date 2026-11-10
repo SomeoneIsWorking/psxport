@@ -58,9 +58,12 @@ public:
   [[nodiscard]] bool tryEmitChain(std::uint32_t link, OtSlot slot, DrawModeTracker &drawMode, PrimitiveSink &sink);
   // Every bucket's chain under one draw mode.
   void emitBuckets(const BucketHeads &heads, DrawModeTracker &drawMode, PrimitiveSink &sink);
-  // Every packet of the chain from `link` that carries words, as it lies in memory now, appended to `packets` and
-  // its words to `words`.
-  void capture(std::uint32_t link, std::vector<gpu::CapturedPacket> &packets, std::vector<std::uint32_t> &words);
+  // Every packet of the chain from `link` that carries words, as it lies in memory now, appended to `packets`, its
+  // words to `words` and each word's place to `places` (EmitMemory::capturedPlace).
+  void capture(std::uint32_t link,
+               std::vector<gpu::CapturedPacket> &packets,
+               std::vector<std::uint32_t> &words,
+               std::vector<gte::WordPlace> &places);
 
 private:
   // Calls `visit(packet address, PacketView)` for each packet carrying words; the address of the first packet

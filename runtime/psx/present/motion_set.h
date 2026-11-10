@@ -4,6 +4,7 @@
 
 #include "guest_redraw.h"
 
+#include <array>
 #include <cstdint>
 #include <optional>
 #include <span>
@@ -18,8 +19,8 @@ enum class Motion : std::uint8_t {
   Linear,     // signed 32-bit
   Halves,     // two signed 16-bit values
   Countdown,  // signed 32-bit while it does not rise; a rise steps
-  Angle12x2,  // two 12-bit angles, one per halfword
-  Angle12Low, // a 12-bit angle in the low halfword; the high halfword steps
+  Angle12x2,  // two 12-bit angles, one per halfword, each keeping the later sample's whole turns above it
+  Angle12Low, // a 12-bit angle in the low bits, the rest of the word the later sample's
   Angle8x3,   // three 8-bit angles in the low bytes; the top byte steps
   Step,       // the later sample, never blended
 };
@@ -44,6 +45,29 @@ public:
   };
   // `out` is the record's words `t` of the way from `samples.from` to `samples.to`.
   virtual void blend(const Samples &samples, float t, std::span<std::uint32_t> out) const = 0;
+};
+
+// A PsyQ MATRIX: five rotation words that turn along the shorter arc (rotationBetween), then three translation
+// words that move straight. Its track's fields are transformFields(at), the matrix `at` bytes into the record.
+class TransformRule final : public MotionRule {
+public:
+  static constexpr std::size_t kWords = 8;
+  void blend(const Samples &samples, float t, std::span<std::uint32_t> out) const override;
+};
+[[nodiscard]] constexpr std::array<MotionField, TransformRule::kWords> transformFields(std::uint32_t at) {
+  std::array<MotionField, TransformRule::kWords> fields{};
+  for (std::uint32_t i = 0; i < TransformRule::kWords; ++i) {
+    fields[i] = {.offset = at + 4u * i, .motion = Motion::Linear};
+  }
+  return fields;
+}
+
+// The title's generation of the object a record holds (a pool's count of its reuses), for records no guest word
+// names: two samples of a record pair only within one generation.
+class MotionIdentity {
+public:
+  virtual ~MotionIdentity() = default;
+  [[nodiscard]] virtual std::uint32_t generation(std::uint32_t record) const = 0;
 };
 
 // A word of a record that names the object it holds: two samples of one address pair only while every key
@@ -79,6 +103,7 @@ struct MotionTrack {
   const MotionRule *rule = nullptr;
   std::span<const MotionKey> keys;
   MotionRecords records;
+  const MotionIdentity *identity = nullptr;
 };
 
 // Inputs a title moves by its own pairing rule where records are not one stride apart or pair by more than
