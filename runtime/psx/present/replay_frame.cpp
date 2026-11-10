@@ -13,8 +13,10 @@
 
 namespace psx::present {
 
-ReplayFrame::ReplayFrame(const ReplaySection &section, std::span<const MotionTrack> tracks)
-    : section_(section), motion_(tracks) {}
+ReplayFrame::ReplayFrame(const ReplaySection &section,
+                         std::span<const MotionTrack> tracks,
+                         std::span<MotionSource *const> sources)
+    : section_(section), motion_(tracks, sources) {}
 
 void ReplayFrame::beforeDraw(Core &core) {
   motion_.sample(core);

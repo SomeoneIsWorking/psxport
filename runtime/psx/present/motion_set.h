@@ -81,9 +81,21 @@ struct MotionTrack {
   MotionRecords records;
 };
 
+// Inputs a title moves by its own pairing rule where records are not one stride apart or pair by more than
+// their keys (pools whose entries name lists of their own). It keeps its last two samples; the set writes it
+// only while its tracks pair, so the two are always consecutive.
+class MotionSource {
+public:
+  virtual ~MotionSource() = default;
+  // What moves now becomes the later sample; the one before becomes the earlier.
+  virtual void sample(Core &core) = 0;
+  // The paired inputs `t` of the way from the earlier sample to the later.
+  virtual void write(GuestRedraw &redraw, float t) const = 0;
+};
+
 class MotionSet {
 public:
-  explicit MotionSet(std::span<const MotionTrack> tracks);
+  MotionSet(std::span<const MotionTrack> tracks, std::span<MotionSource *const> sources);
 
   // The tracks' records now become the later sample; the one before becomes the earlier.
   void sample(Core &core);
@@ -114,6 +126,7 @@ private:
                    float t) const;
 
   std::span<const MotionTrack> tracks_;
+  std::span<MotionSource *const> sources_;
   Sample from_;
   Sample to_;
   mutable std::vector<std::uint32_t> ruled_;

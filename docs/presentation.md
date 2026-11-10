@@ -201,13 +201,14 @@ driver calls `beforeDraw`: the `MotionSet` samples the title's tracks (guest wor
 `MotionRule` for words that move as a unit, such as a keyframe pose). A track is one record or a run of them
 (`MotionRecords`: a stride, an optional pointer to the first, an end byte and a live byte); two samples of a
 record pair at the same address only while its `MotionKey` words hold, and an unpaired record is replayed as
-drawn. The title calls `forget` at a cut so the next sample pairs with nothing. Once two samples pair the section is
+drawn. Inputs that pair by the title's own rule (pools whose entries name lists of their own) are a
+`MotionSource`, sampled and written with the tracks. The title calls `forget` at a cut so the next sample pairs with nothing. Once two samples pair the section is
 re-run in a `GuestRedraw` for each k/n of the interval with the tracks written k/n of the way. The chain head the
 section returns is captured (`PacketChainWalker::capture`). At seal the captures belong to S; in-between k is S
 with the one chain run the section names (`ReplaySection::linked`) replaced by the capture decoded under S's draw
 state at that run (`FrameRecord::splice`, `gpu::decodePackets`), CLUTs resolved from VRAM (`RecordCluts`). A run
 that bakes an upload, a capture that does not decode, or no single matching run gives no in-between, and an
-interval with no replayed set is held (`not-replayed`). Check: Spyro 1 Stone Hill walking, `presentseq` advances
+interval with no replayed set is held (`not-replayed`). Spyro 2 and 3 replay their whole per-field draw body, state switch included. Check: Spyro 1 Stone Hill walking, `presentseq` advances
 0.5 logic frames per simulated 60.00 Hz vblank, Spyro, Sparx and the gems move halfway between real presents, and
 the `motion` debug channel counts each track's paired records.
 

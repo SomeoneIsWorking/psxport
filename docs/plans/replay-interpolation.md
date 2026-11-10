@@ -108,3 +108,8 @@ inventory band and shaded line producers stay for their widescreen extension. St
 moby record blends (`psx-spyro` issue 0236). Paced judgement is pending a quiet host. Deleting the producers drops
 Spyro 1's keyed depth test on real presents until step 1 returns; step 1 (vertex places) is stashed with the
 Spyro 2 horn fold open.
+
+Spyro 2 and 3 (2026-11-10, `psx-spyro` `docs/plans/spyro23-replay.md`): the per-field draw body is the section, every
+state of its switch replayed but the loading screen; the moby array is a track with field_redraw's record blend as its
+rule, the effects pools a `MotionSource`. field_redraw and the S2/S3 producers are deleted. Glimmer and Sunrise
+Spring unpaced pan evenly at every present and pair every moby record; open items in `psx-spyro` issue 0237.

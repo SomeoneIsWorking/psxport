@@ -46,7 +46,8 @@ std::uint32_t blendedWord(Motion motion, std::uint32_t from, std::uint32_t to, f
   return to;
 }
 
-MotionSet::MotionSet(std::span<const MotionTrack> tracks) : tracks_(tracks) {}
+MotionSet::MotionSet(std::span<const MotionTrack> tracks, std::span<MotionSource *const> sources)
+    : tracks_(tracks), sources_(sources) {}
 
 void MotionSet::sampleTrack(Core &core, const MotionTrack &track, Sample &into) const {
   const MotionRecords &records = track.records;
@@ -82,6 +83,9 @@ void MotionSet::sample(Core &core) {
   for (const MotionTrack &track : tracks_) {
     sampleTrack(core, track, to_);
     to_.trackEnds.push_back(to_.addresses.size());
+  }
+  for (MotionSource *source : sources_) {
+    source->sample(core);
   }
   samples_ = samples_ < 2 ? samples_ + 1 : 2;
 }
@@ -146,6 +150,9 @@ void MotionSet::write(GuestRedraw &redraw, float t) const {
     fromRecord = fromEnd;
     toRecord = toEnd;
     lucent::debug("motion", "{}: {} of {} records paired at t={:.2f}", motion.name, paired, shown, t);
+  }
+  for (const MotionSource *source : sources_) {
+    source->write(redraw, t);
   }
 }
 

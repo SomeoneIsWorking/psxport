@@ -37,7 +37,9 @@ public:
   // At most this many in-betweens a logic frame: a longer frame is a stall, shown as drawn.
   static constexpr int kMaxInBetweens = 3;
 
-  ReplayFrame(const ReplaySection &section, std::span<const MotionTrack> tracks);
+  ReplayFrame(const ReplaySection &section,
+              std::span<const MotionTrack> tracks,
+              std::span<MotionSource *const> sources = {});
 
   // The section is about to run for real: samples the inputs and, when they pair, replays the in-betweens.
   void beforeDraw(Core &core);
