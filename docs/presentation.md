@@ -312,7 +312,9 @@ The composer builds the frame at `t` from S's record:
   lerped 2D point with `nearest`) and stores it through the same path; a local packet is a `gpu::PacketBuffer`.
   `PacketChainWalker` reads each packet's places with its words and `decodePacketPrimitive(PacketView)` gives a
   placed polygon, line or sprite vertex its offset from its whole pixel in `subX`/`subY`; that offset lies within
-  two pixels either way, and a place farther off is a word the GPU wrapped, so that vertex keeps its whole pixel.
+  two pixels either way, and a place farther off is a word the GPU wrapped, so that vertex keeps its whole pixel. The
+  record tap (`Gp0RecordTap`) gives a real present's polygons, lines, poly-line points and sprites their places
+  from the same words through the same decode, so a replay at `t = 1` draws the real present exactly.
   No place is matched by value. Every render stores places the same way, so a real (`t = 1`) compose and its
   in-betweens agree and a still object does not shift; a vertex shared by two primitives is one stored word, so
   no seam opens. Above native scale the rasterizer draws a vertex at `whole * scale + floor(offset * scale)`; a

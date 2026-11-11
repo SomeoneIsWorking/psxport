@@ -23,6 +23,19 @@ void place(present::RecordVertex &vertex, const PacketView &packet, std::size_t 
   }
 }
 
+// A line packet's two ends from its words alone; a flat line's ends share the first colour.
+void decodeLineEnds(std::span<const std::uint32_t> words, present::RecordVertex &from, present::RecordVertex &to) {
+  const bool gouraud = Gp0Command(words[0]).flags().gouraud;
+  from = colourVertex(words[0]);
+  const Gp0VertexPos p0 = Gp0Command(words[1]).vertexPos();
+  from.x = p0.x;
+  from.y = p0.y;
+  to = gouraud ? colourVertex(words[2]) : from;
+  const Gp0VertexPos p1 = Gp0Command(words[gouraud ? 3 : 2]).vertexPos();
+  to.x = p1.x;
+  to.y = p1.y;
+}
+
 } // namespace
 
 void applyPlace(present::RecordVertex &vertex, const GtePlace &place) {
@@ -68,18 +81,6 @@ present::RecordVertex polygonVertex(std::span<const std::uint32_t> words,
     vertex.v = static_cast<std::uint8_t>(coord.v);
   }
   return vertex;
-}
-
-void decodeLineEnds(std::span<const std::uint32_t> words, present::RecordVertex &from, present::RecordVertex &to) {
-  const bool gouraud = Gp0Command(words[0]).flags().gouraud;
-  from = colourVertex(words[0]);
-  const Gp0VertexPos p0 = Gp0Command(words[1]).vertexPos();
-  from.x = p0.x;
-  from.y = p0.y;
-  to = gouraud ? colourVertex(words[2]) : from;
-  const Gp0VertexPos p1 = Gp0Command(words[gouraud ? 3 : 2]).vertexPos();
-  to.x = p1.x;
-  to.y = p1.y;
 }
 
 void decodePlacedLineEnds(PacketView packet, present::RecordVertex &from, present::RecordVertex &to) {

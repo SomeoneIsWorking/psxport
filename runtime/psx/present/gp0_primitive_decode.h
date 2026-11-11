@@ -25,9 +25,6 @@ present::RecordVertex polygonVertex(std::span<const std::uint32_t> words,
                                     const Gp0PrimitiveFlags &flags,
                                     const present::RecordVertex &first,
                                     bool isFirst);
-// The two ends of a line packet (not a poly-line), position as written, before the draw offset; a flat line's
-// ends share the first colour.
-void decodeLineEnds(std::span<const std::uint32_t> words, present::RecordVertex &from, present::RecordVertex &to);
 // A texpage attribute into texture page, texture mode and blend mode.
 void applyTexPageAttribute(present::RecordDrawState &state, std::uint16_t attribute);
 
@@ -80,7 +77,8 @@ present::RecordVertex polyLinePoint(PacketView packet,
                                     std::size_t colourWord,
                                     std::size_t positionWord,
                                     const present::RecordVertex &previous);
-// The first two points of a line packet with their places.
+// The first two points of a line packet (not a poly-line), position as written, before the draw offset, with their
+// places; a flat line's ends share the first colour.
 void decodePlacedLineEnds(PacketView packet, present::RecordVertex &from, present::RecordVertex &to);
 // A line primitive of `command` from `from` to `to`, as the record tap records each segment.
 present::DrawPrimitive

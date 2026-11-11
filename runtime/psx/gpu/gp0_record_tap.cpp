@@ -92,6 +92,7 @@ void Gp0RecordTap::onGp0(std::uint32_t word, const Gp0Origin &origin, const Devi
     consumeUploadWord(word);
     break;
   case Mode::PolyLine:
+    notePlace(origin);
     consumePolyLineWord(word, probe);
     break;
   case Mode::QuadTail:
@@ -213,19 +214,38 @@ std::optional<present::RecordKey> Gp0RecordTap::nextPrimitiveKey() {
 
 void Gp0RecordTap::notePlace(const Gp0Origin &origin) {
   if (words_.size() < places_.size()) {
-    places_[words_.size()] = origin.place;
+    places_[words_.size()] = origin.place ? gte::WordPlace(origin.place->place) : std::nullopt;
+    placingSites_[words_.size()] = origin.place ? origin.place->site : 0u;
   }
+}
+
+PacketView Gp0RecordTap::placedWords() const {
+  return {.words = words_, .places = std::span(places_).first(std::min(words_.size(), places_.size()))};
+}
+
+std::uint32_t Gp0RecordTap::placingSite() const {
+  std::optional<std::uint32_t> site;
+  for (std::size_t i = 0; i < std::min(words_.size(), places_.size()); i++) {
+    if (!places_[i]) {
+      continue;
+    }
+    if (site && *site != placingSites_[i]) {
+      return 0;
+    }
+    site = placingSites_[i];
+  }
+  return site.value_or(0u);
 }
 
 void Gp0RecordTap::placeVertex(present::DrawPrimitive &primitive,
                                int v,
                                present::RecordVertex vertex,
                                std::size_t position) const {
-  const std::optional<cpu::NotedPlace> noted = position < places_.size() ? places_[position] : std::nullopt;
+  const gte::WordPlace noted = position < places_.size() ? places_[position] : std::nullopt;
   if (noted) {
-    applyPlace(vertex, noted->place);
+    applyPlace(vertex, *noted);
   }
-  const std::uint32_t site = noted ? noted->site : 0u;
+  const std::uint32_t site = noted ? placingSites_[position] : 0u;
   if (v == 0) {
     primitive.site = site;
   } else if (primitive.site != site) {
@@ -315,9 +335,10 @@ void Gp0RecordTap::executeCommand(const DeviceProbe &probe) {
     const bool gouraud = command.flags().gouraud;
     present::RecordVertex from;
     present::RecordVertex to;
-    decodeLineEnds(words_, from, to);
+    decodePlacedLineEnds(placedWords(), from, to);
     drawState_.offset(from);
     drawState_.offset(to);
+    polyLineSite_ = placingSite();
     recordLineSegment(from, to, gouraud, command.flags().semiTransparent, probe);
     if (command.isPolyLine()) {
       mode_ = Mode::PolyLine;
@@ -442,6 +463,7 @@ void Gp0RecordTap::recordLineSegment(const present::RecordVertex &from,
   primitive.vertices[1] = to;
   primitive.state = drawState_.state();
   primitive.sourceAddress = packetSource_;
+  primitive.site = polyLineSite_;
   stampPacket(primitive);
   record_.append(primitive);
   settleLast(probe);
@@ -458,10 +480,7 @@ void Gp0RecordTap::consumePolyLineWord(std::uint32_t word, const DeviceProbe &pr
   }
   const Gp0Command command(polyLineOpcode_);
   const bool gouraud = command.flags().gouraud;
-  present::RecordVertex to = gouraud ? colourVertex(words_[0]) : polyLinePoint_;
-  const Gp0VertexPos position = Gp0Command(words_[gouraud ? 1 : 0]).vertexPos();
-  to.x = position.x;
-  to.y = position.y;
+  present::RecordVertex to = polyLinePoint(placedWords(), 0, gouraud ? 1 : 0, polyLinePoint_);
   drawState_.offset(to);
   expectedDispatches_ = 1;
   packetSource_ = polyLineSource_;
@@ -475,13 +494,14 @@ void Gp0RecordTap::consumePolyLineWord(std::uint32_t word, const DeviceProbe &pr
 }
 
 void Gp0RecordTap::recordSprite(const DeviceProbe &probe) {
-  std::optional<present::DrawPrimitive> decoded = decodePacketPrimitive({.words = words_, .places = {}});
+  std::optional<present::DrawPrimitive> decoded = decodePacketPrimitive(placedWords());
   if (!decoded) {
     desync();
     return;
   }
   present::DrawPrimitive &primitive = *decoded;
   primitive.sourceAddress = packetSource_;
+  primitive.site = placingSite();
   drawState_.apply(primitive);
   if (primitive.textured) {
     primitive.clutOffset = captureClut(primitive.clutWord, probe);

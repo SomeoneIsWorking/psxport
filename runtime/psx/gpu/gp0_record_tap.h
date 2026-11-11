@@ -3,6 +3,7 @@
 
 #include "frame_record.h"
 #include "gp0_draw_state.h"
+#include "gp0_primitive_decode.h"
 #include "owner_ledger.h"
 #include "texture_feedback.h"
 #include "vertex_places.h"
@@ -114,6 +115,10 @@ private:
   void notePlace(const Gp0Origin &origin);
   // Vertex `v` of `primitive` decoded from words_[position], as written, placed where it was stored.
   void placeVertex(present::DrawPrimitive &primitive, int v, present::RecordVertex vertex, std::size_t position) const;
+  // words_ with the place of each.
+  [[nodiscard]] PacketView placedWords() const;
+  // The draw site that stored every placed word of words_, 0 when they differ or none is placed.
+  [[nodiscard]] std::uint32_t placingSite() const;
 
   std::uint64_t nextSequence_ = 1; // 0 is the presenter's empty record
   present::FrameRecord record_;
@@ -121,7 +126,8 @@ private:
 
   Mode mode_ = Mode::Command;
   std::vector<std::uint32_t> words_;
-  std::array<std::optional<cpu::NotedPlace>, 16> places_{}; // of words_ by index
+  std::array<gte::WordPlace, 16> places_{};      // of words_ by index
+  std::array<std::uint32_t, 16> placingSites_{}; // the draw site that stored each, 0 for none
   unsigned need_ = 0;
   std::uint32_t packetSource_ = 0;
   std::optional<present::RecordKey> packetKey_;
@@ -136,6 +142,7 @@ private:
   std::uint32_t quadOpcode_ = 0;
   // The previous point of a poly-line.
   present::RecordVertex polyLinePoint_{};
+  std::uint32_t polyLineSite_ = 0;
   std::uint32_t polyLineOpcode_ = 0;
   std::uint32_t polyLineSource_ = 0;
   std::optional<present::RecordKey> polyLineKey_;
