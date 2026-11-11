@@ -6,11 +6,14 @@
 
 namespace psx::present {
 
-// `t` of the way from `from` to `to`, rounded to the nearest integer; the span is taken in 64 bits.
-// A tie rounds the blended value to even, so an odd span at t = 0.5 favours neither end.
+// `t` of the way from `from` to `to`, unrounded.
+inline double lerpExact(double from, double to, float t) {
+  return from + (to - from) * static_cast<double>(t);
+}
+
+// lerpExact rounded to the nearest integer. A tie rounds to even, so an odd span at t = 0.5 favours neither end.
 inline std::int32_t lerpInt(std::int32_t from, std::int32_t to, float t) {
-  const double span = static_cast<double>(static_cast<std::int64_t>(to) - from);
-  return static_cast<std::int32_t>(std::nearbyint(static_cast<double>(from) + span * static_cast<double>(t)));
+  return static_cast<std::int32_t>(std::nearbyint(lerpExact(from, to, t)));
 }
 
 // A guest word blended as a signed 32-bit value.
