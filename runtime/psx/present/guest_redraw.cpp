@@ -60,6 +60,16 @@ void GuestRedraw::writeCopy(std::uint32_t command, const VramCopy &copy) {
   memory.storeVertex(command + 12u, field(copy.width, place.width, copy.height, place.height));
 }
 
+void GuestRedraw::applied(std::span<const std::uint32_t> callees) {
+  for (const std::uint32_t callee : callees) {
+    if (core_.nativeDispatcher().classify(callee) == cpu::GuestHostDispatchKind::ExecuteGuest) {
+      lucent::error("redraw", "applied callee 0x{:08X} is guest code, not a host service", callee);
+      std::abort();
+    }
+  }
+  journal_.withhold(callees);
+}
+
 bool GuestRedraw::run(std::uint32_t entry, std::span<const std::uint32_t> arguments) {
   return call(entry, arguments, Call::Original);
 }

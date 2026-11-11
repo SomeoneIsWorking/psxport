@@ -6,6 +6,7 @@
 #include <lucent/log.h>
 
 #include <algorithm>
+#include <cstdlib>
 #include <utility>
 
 namespace psx::cpu {
@@ -144,6 +145,9 @@ bool SideEffectJournal::admitHostService(SideEffectKind kind,
   const std::size_t index = effects_.size();
   append(effect);
   if (mode_ == SideEffectMode::Discard) {
+    if (std::ranges::find(withheldServices_, guestAddress) != withheldServices_.end()) {
+      return false;
+    }
     if (state == HostState::GuestMemoryOnly) {
       return true;
     }
@@ -157,6 +161,14 @@ bool SideEffectJournal::admitHostService(SideEffectKind kind,
   }
   markUnreplayable(lucent::format("{} path performed {}", sideEffectPathName(mode_), describeSideEffect(effect)));
   return mode_ == SideEffectMode::Record;
+}
+
+void SideEffectJournal::withhold(std::span<const std::uint32_t> entries) {
+  if (mode_ != SideEffectMode::Discard) {
+    lucent::error("side-effect-journal", "withheld host services need a Discard journal");
+    std::abort();
+  }
+  withheldServices_.insert(withheldServices_.end(), entries.begin(), entries.end());
 }
 
 bool SideEffectJournal::admitSyscall(std::uint32_t code, std::uint32_t instructionPc) {

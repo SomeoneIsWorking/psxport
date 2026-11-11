@@ -47,6 +47,11 @@ public:
   [[nodiscard]] bool run(std::uint32_t entry, std::span<const std::uint32_t> arguments);
   // The same as a guest call to `entry`: its override, if any, runs. A draw section's steps are called this way.
   [[nodiscard]] bool dispatch(std::uint32_t entry, std::span<const std::uint32_t> arguments);
+  // Calls to `callees`, host services (native overrides, HLE) whose work belongs to the real frame, return to
+  // their caller at once wherever the run reaches them, their registers as the call found them: only for call
+  // sites that read nothing back (PlaySound from a draw that overwrites v0). Aborts at a callee that is guest code.
+  void applied(std::span<const std::uint32_t> callees);
+
   // A stretch of a dispatchTo body the run does not execute: the run stops on reaching `at`, `host` (when set) does
   // the stretch's work, and the run resumes at `resume`. With `resume` 0, `at` is a callee's entry whose device work
   // the real frame already did (a draw's leading PutDrawEnv): the run resumes at the return address the call left,

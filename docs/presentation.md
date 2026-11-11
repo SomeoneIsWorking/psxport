@@ -279,6 +279,9 @@ The composer builds the frame at `t` from S's record:
   outside guest memory (every BIOS call but the libc leaves, the pad work area), is refused: the rollback cannot put
   that state back, and a replayed `TestEvent` would take the card event the real frame waits for. A host body that
   reaches one stops there (`DiscardedRunTouchedDevice`), so a native loop polling a device status cannot spin.
+  A redraw names the host services whose work is the real frame's (`GuestRedraw::applied`, a sound a draw starts):
+  the Discard journal withholds each wherever the run reaches it (`SideEffectJournal::withhold`) and the call
+  returns at its ra with the registers as it found them, so only call sites that read nothing back may name one.
 - **Transform.** A render that moves a GTE transform by t blends it with `blendGteControl` (`gte_control.*`): the
   rotation turns along the shorter arc (`lucent::rotation::between`: polar decomposition, slerp) and its stretch moves element by element, so a
   spinning part keeps its size between frames; translation moves by t, rounded to the nearest integer with ties to

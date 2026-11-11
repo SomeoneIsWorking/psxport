@@ -135,6 +135,8 @@ public:
   // Record lets it run live and marks the call incomparable, Replay withholds it and marks the same.
   // Discard stops at a service that keeps host state and runs the rest.
   bool admitHostService(SideEffectKind kind, std::uint32_t guestAddress, std::uint32_t selector, HostState state);
+  // Discard only: host services at `entries` are the live frame's work, withheld wherever the run reaches them.
+  void withhold(std::span<const std::uint32_t> entries);
   bool admitSyscall(std::uint32_t code, std::uint32_t instructionPc);
   // Pending work is asynchronous to the call. Record services it (and the call becomes incomparable,
   // because an interrupt or host turn ran inside it); Replay withholds it, leaving it pending for the
@@ -202,6 +204,7 @@ private:
   std::optional<std::string> unreplayable_;
   std::optional<std::size_t> firstDivergence_;
   std::uint64_t withheldPendingWork_ = 0;
+  std::vector<std::uint32_t> withheldServices_;
   std::optional<JournalBoundViolation> boundViolation_;
   // How many `TranslatedExecutionScope`s are open. Only a NATIVE body is raiseable, because only it is
   // host code all the way down.
