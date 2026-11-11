@@ -83,6 +83,11 @@ bool psx::platform::readIoPeripheral(Core &core, uint32_t addr, uint32_t &out) {
   return false;
 }
 
+bool psx::platform::readsGuestClock(uint32_t addr) {
+  const uint32_t p = psx::physical(addr);
+  return p == kCounter1Value || p == kCounter2Lo;
+}
+
 bool psx::platform::writeIoPeripheral(Core &core, GuestStore store) {
   Game &game = *core.game;
   const uint32_t value = store.value;
@@ -97,7 +102,8 @@ bool psx::platform::writeIoPeripheral(Core &core, GuestStore store) {
       return true;
     case 0xA:
       game.sio.ctrlWrite((uint16_t)value);
-      lucent::debug("sio", "w CTRL {:04X} (raw {:04X}) ra={:08X}", game.sio.ctrl, value & 0xFFFFu, core.r[psx::cpu::kRa]);
+      lucent::debug(
+          "sio", "w CTRL {:04X} (raw {:04X}) ra={:08X}", game.sio.ctrl, value & 0xFFFFu, core.r[psx::cpu::kRa]);
       return true;
     case 0xE:
       game.sio.baud = static_cast<uint16_t>(value);

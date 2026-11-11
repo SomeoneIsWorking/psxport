@@ -652,6 +652,9 @@ ExecutionResult LightrecExecutor::executeWithBoundary(std::uint32_t guestAddress
     }
     impl.running = enclosing;
     impl.copyLightrecToCore(nextPc);
+    if (impl.core.sideEffectJournal != nullptr) {
+      impl.core.sideEffectJournal->stopDeferredDiscardedRun();
+    }
     const lightrec_execution_stats after = *lightrec_get_execution_stats(impl.state);
     const std::uint64_t segmentInstructions = executedInstructionCount(after) - executedInstructionCount(before);
     consumedCycles += segmentInstructions;

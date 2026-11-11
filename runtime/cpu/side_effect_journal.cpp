@@ -1,6 +1,7 @@
 #include "side_effect_journal.h"
 
 #include "core.h"
+#include "lightrec_executor.h"
 
 #include <lucent/log.h>
 
@@ -88,6 +89,7 @@ SideEffectJournal::SideEffectJournal(SideEffectMode mode, std::span<const SideEf
 SideEffectJournal::Scope::Scope(Core &core, SideEffectJournal &journal)
     : core_(core), previous_(core.sideEffectJournal) {
   core_.sideEffectJournal = &journal;
+  journal.core_ = &core;
 }
 
 SideEffectJournal::Scope::~Scope() {
@@ -212,8 +214,21 @@ std::uint64_t SideEffectJournal::withheldPendingWork() const {
   return withheldPendingWork_;
 }
 
-void SideEffectJournal::stopDiscardedRun() const {
-  if (mode_ == SideEffectMode::Discard && translatedExecutions_ == 0) {
+void SideEffectJournal::stopDiscardedRun() {
+  if (mode_ != SideEffectMode::Discard) {
+    return;
+  }
+  if (translatedExecutions_ == 0) {
+    throw DiscardedRunTouchedDevice{};
+  }
+  if (!stopDeferred_ && core_ != nullptr) {
+    stopDeferred_ = true;
+    core_->lightrecExecutor().requestStop();
+  }
+}
+
+void SideEffectJournal::stopDeferredDiscardedRun() const {
+  if (stopDeferred_ && translatedExecutions_ == 0) {
     throw DiscardedRunTouchedDevice{};
   }
 }

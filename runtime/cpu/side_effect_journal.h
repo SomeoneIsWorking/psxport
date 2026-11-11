@@ -52,8 +52,9 @@ enum class SideEffectMode : std::uint8_t {
   Record, // the live path: accesses reach the devices and are logged
   Replay, // the shadow path: accesses are logged and served from, or checked against, `recorded`
   // A run whose memory the caller puts back (present/guest_redraw.h): services execute, devices are
-  // never reached, guest time and pending work are held. Its first device access or syscall out of host code
-  // raises `DiscardedRunTouchedDevice`; one from translated code is served 0 and logged.
+  // never reached, guest time and pending work are held. Its first device access or syscall raises
+  // `DiscardedRunTouchedDevice`: out of host code at once, from translated code (served 0) when the executor
+  // is next back in host code, so a run polling a device stops instead of spinning out its budget.
   Discard,
 };
 
@@ -148,6 +149,8 @@ public:
   // Set the first time an effect is refused at `kMaxSideEffectsPerCall`, and never cleared. A journal
   // holding one has a TRUNCATED log, so the differential must record a failure rather than compare it.
   const std::optional<JournalBoundViolation> &boundViolation() const;
+  // The executor, back in host code after a translated segment: raises the stop a Discard run deferred there.
+  void stopDeferredDiscardedRun() const;
 
   // THE UNWIND GUARD, and the reason it exists.
   //
@@ -178,8 +181,8 @@ public:
 
 private:
   void markUnreplayable(std::string reason);
-  // A Discard run that reached a device stops here when no translated frame is below.
-  void stopDiscardedRun() const;
+  // A Discard run that reached a device stops here, or at the end of the translated segment it is in.
+  void stopDiscardedRun();
   // Refuses the effect and records the fault when the call is already at `kMaxSideEffectsPerCall`. The
   // entry is NOT stored, so a refused effect can never shift the positions the replay compares by.
   void append(SideEffect effect);
@@ -196,6 +199,9 @@ private:
   // How many `TranslatedExecutionScope`s are open. Only a NATIVE body is raiseable, because only it is
   // host code all the way down.
   std::uint32_t translatedExecutions_ = 0;
+  // The Core the journal was last scoped on, whose executor a deferred stop ends the segment of.
+  Core *core_ = nullptr;
+  bool stopDeferred_ = false;
 };
 
 } // namespace psx::cpu

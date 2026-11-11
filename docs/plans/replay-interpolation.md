@@ -60,8 +60,10 @@ interpolation in its Tomba 2, Ape Escape and Vigilante 8 ports with `docs/RENDER
    `GuestRedraw` of the section; its GP0 stream (the DMA list walk) goes to a device-free record tap
    instead of the device, and that record is the in-between, rastered onto the VRAM before S as a
    composed record is today. A replay that reaches a device, uploads, or does not return refuses that
-   in-between only; the present shows S. Per-pass cost (thread CPU time) is measured and passes shed
-   above budget. At run end `ReplayFrame::report` logs intervals replayed (with their in-betweens) and refused
+   in-between only; the present shows S. It stops at its first device access, out of host code at once
+   and from translated code at the end of that segment, so a guest poll never spins out the runaway
+   budget; a root counter's value reads its held count and is no device access (`SideEffectMode::Discard`).
+   Per-pass cost (thread CPU time) is measured and passes shed above budget. At run end `ReplayFrame::report` logs intervals replayed (with their in-betweens) and refused
    by the section (a refusal at any k drops the whole interval, so none of its in-betweens count), then
    in-betweens shown and held at assembly, each counted once although the presenter asks for it twice; and
    `MotionSet::report` each track's and each `MotionSource`'s unpaired items over the replayed intervals only

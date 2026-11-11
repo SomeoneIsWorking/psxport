@@ -1,6 +1,7 @@
 #include "core.h"
 #include "guest_memory_map.h"
 #include "invalidation.h"
+#include "io_peripherals.h"
 #include "render_substrate.h"
 #include "side_effect_journal.h"
 
@@ -52,6 +53,10 @@ uint32_t Core::mem_r32(uint32_t a) {
 }
 uint32_t Core::deviceRead(uint32_t a, uint32_t bytes) {
   if (sideEffectJournal == nullptr) {
+    return io_read(a, bytes);
+  }
+  // A discarded run holds guest time, so a counter derived from it reads its held value and touches nothing.
+  if (sideEffectJournal->mode() == psx::cpu::SideEffectMode::Discard && psx::platform::readsGuestClock(a)) {
     return io_read(a, bytes);
   }
   if (const auto replayed = sideEffectJournal->replayDeviceRead(a, bytes)) {
