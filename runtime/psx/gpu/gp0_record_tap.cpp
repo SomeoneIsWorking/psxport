@@ -367,7 +367,7 @@ void Gp0RecordTap::executeCommand(const DeviceProbe &probe) {
     return;
   }
   if (command.isVramCopy()) {
-    present::VramCopy copy = decodeCopy(words_, drawState_.state());
+    present::VramCopy copy = decodeCopy(placedWords(), drawState_.state());
     copy.key = nextPrimitiveKey();
     copy.slot = slot_;
     copy.owner = packetOwner_;

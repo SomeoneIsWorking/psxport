@@ -47,6 +47,19 @@ void GuestRedraw::writeVertex(std::uint32_t address, const gte::ProjectedVertex 
   EmitMemory(core_).storeVertex(address, vertex);
 }
 
+void GuestRedraw::writeCopy(std::uint32_t command, const VramCopy &copy) {
+  const auto field = [](int x, float subX, int y, float subY) {
+    const std::uint32_t word =
+        (static_cast<std::uint32_t>(y) & 0xFFFFu) << 16 | (static_cast<std::uint32_t>(x) & 0xFFFFu);
+    return gte::ProjectedVertex(word, GtePlace{.x = static_cast<float>(x) + subX, .y = static_cast<float>(y) + subY});
+  };
+  const CopyPlace &place = copy.place;
+  EmitMemory memory(core_);
+  memory.storeVertex(command + 4u, field(copy.srcX, place.srcX, copy.srcY, place.srcY));
+  memory.storeVertex(command + 8u, field(copy.dstX, place.dstX, copy.dstY, place.dstY));
+  memory.storeVertex(command + 12u, field(copy.width, place.width, copy.height, place.height));
+}
+
 bool GuestRedraw::run(std::uint32_t entry, std::span<const std::uint32_t> arguments) {
   return call(entry, arguments, Call::Original);
 }

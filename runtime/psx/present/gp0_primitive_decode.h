@@ -116,8 +116,8 @@ template <class Segment> bool decodePolyLine(PacketView packet, Segment &&segmen
 
 // GP0(02) at its 16-pixel-aligned rect, drawn under `state`.
 present::VramFill decodeFill(std::span<const std::uint32_t> words, const present::RecordDrawState &state);
-// GP0(80) drawn under `state`; no key, slot or owner.
-present::VramCopy decodeCopy(std::span<const std::uint32_t> words, const present::RecordDrawState &state);
+// GP0(80) drawn under `state`, placed past its whole pixels where its words kept a place; no key, slot or owner.
+present::VramCopy decodeCopy(PacketView packet, const present::RecordDrawState &state);
 // `vertex`, decoded before the draw offset from a word stored with `place`, takes its depth and, within two pixels of
 // its whole pixel, its offset past it; farther, the GPU wrapped the word and the vertex keeps its pixel.
 void applyPlace(present::RecordVertex &vertex, const GtePlace &place);

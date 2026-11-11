@@ -4,6 +4,8 @@
 #include "vram_pixel.h"
 
 #include <cmath>
+#include <tuple>
+#include <utility>
 
 namespace psx::gpu {
 namespace {
@@ -138,7 +140,8 @@ present::VramFill decodeFill(std::span<const std::uint32_t> words, const present
   return fill;
 }
 
-present::VramCopy decodeCopy(std::span<const std::uint32_t> words, const present::RecordDrawState &state) {
+present::VramCopy decodeCopy(PacketView packet, const present::RecordDrawState &state) {
+  const std::span<const std::uint32_t> words = packet.words;
   const Gp0VramPos source = Gp0Command(words[1]).rectCorner();
   const Gp0VramRect target = Gp0Command::transferRegion({words[2], words[3]});
   present::VramCopy copy;
@@ -150,6 +153,18 @@ present::VramCopy decodeCopy(std::span<const std::uint32_t> words, const present
   copy.height = target.height;
   copy.maskSet = state.maskSet;
   copy.maskCheck = state.maskCheck;
+  // Each of words 1-3 may keep the place of its two fields past their whole pixels (GuestRedraw::writeCopy).
+  const auto part = [&](std::size_t word, std::pair<int, int> whole) -> std::pair<float, float> {
+    if (word >= packet.places.size() || !packet.places[word]) {
+      return {0.0f, 0.0f};
+    }
+    const float px = packet.places[word]->x - static_cast<float>(whole.first);
+    const float py = packet.places[word]->y - static_cast<float>(whole.second);
+    return {std::abs(px) < 1.0f ? px : 0.0f, std::abs(py) < 1.0f ? py : 0.0f};
+  };
+  std::tie(copy.place.srcX, copy.place.srcY) = part(1, {copy.srcX, copy.srcY});
+  std::tie(copy.place.dstX, copy.place.dstY) = part(2, {copy.dstX, copy.dstY});
+  std::tie(copy.place.width, copy.place.height) = part(3, {copy.width, copy.height});
   return copy;
 }
 

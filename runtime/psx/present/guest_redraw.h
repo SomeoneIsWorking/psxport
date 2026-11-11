@@ -9,6 +9,7 @@
 #pragma once
 
 #include "core.h"
+#include "frame_record.h"
 #include "gte_control.h"
 #include "projected_vertex.h"
 #include "side_effect_journal.h"
@@ -35,6 +36,9 @@ public:
   void writeHalf(std::uint32_t address, std::uint16_t half);
   // A packet vertex at `address` with its sub-pixel place (EmitMemory::storeVertex).
   void writeVertex(std::uint32_t address, const gte::ProjectedVertex &vertex);
+  // The source, destination and size words after the GP0(80) command word at `command`, each keeping the part of its
+  // fields past their whole pixels that `copy.place` gives (decodeCopy).
+  void writeCopy(std::uint32_t command, const VramCopy &copy);
 
   // The original routine at `entry` (its override suppressed) with `arguments` in a0..a3. False, logged, when
   // it did not return or reached a device or a syscall (a host body stops at it): its packets then do not describe

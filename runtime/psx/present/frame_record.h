@@ -137,6 +137,19 @@ struct VramFill {
   bool operator==(const VramFill &) const = default;
 };
 
+// Where a rendered copy's fields lie past their whole pixels above native scale. Each scales toward zero, so
+// two copies that share an edge (one field +f, the other -f) meet on one scaled row.
+struct CopyPlace {
+  float srcX = 0.0f;
+  float srcY = 0.0f;
+  float dstX = 0.0f;
+  float dstY = 0.0f;
+  float width = 0.0f;
+  float height = 0.0f;
+
+  bool operator==(const CopyPlace &) const = default;
+};
+
 // GP0(80): coordinates wrap at the VRAM edges.
 struct VramCopy {
   int srcX = 0;
@@ -147,6 +160,9 @@ struct VramCopy {
   int height = 0;
   bool maskSet = false;
   bool maskCheck = false;
+  // Set only by a replay (GuestRedraw::writeCopy); a placed copy that wraps or overlaps its source is drawn at its
+  // whole pixels.
+  CopyPlace place;
   std::optional<RecordKey> key;
   std::optional<OtSlot> slot;
   std::uint32_t owner = 0; // OwnerLedger handle of the packet's command word

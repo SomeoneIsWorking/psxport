@@ -113,7 +113,7 @@ name is refused with a warning and the Core stays on `record`.
   S×S blocks; uploads replicate, copies run at full resolution. A texel reads the pixel of its S×S block
   where the fragment's UV falls inside it (a triangle's interpolant fraction, a sprite's pixel within its
   native pixel; `record.frag` `texel`): an uploaded block is uniform and reads as at 1x, while a block a
-  draw or a copy of one wrote at scale shows its detail. 24bpp display keeps the device picture.
+  draw or a placed copy wrote at scale shows its detail. 24bpp display keeps the device picture.
   `record.frag` finds a scaled pixel's native pixel by integer floor division; a float divide is inexact
   at S = 3 and puts each block's first row and column in the block before.
 - **Texture cache.** `gpu.c` fetches texels through a cache that GP0(01), copy, upload, read, soft reset and
@@ -212,7 +212,7 @@ re-run in a `GuestRedraw` for each k/n of the interval with the tracks written k
 fraction (a result each caller reads at its own index, an edge one row per draw) blends it there. A blended word is
 whole; an override that draws from a tracked word reads its two samples (`MotionSet::pairedRecord`, through
 `ReplayFrame::motion`) and the rule's unrounded value (`RingRule::exactHalf`) and places its vertices by the
-difference (`EmitMemory::storeVertex`, or `GuestRedraw::writeVertex` from a motion source's write), so a one-unit step lands halfway rather than on one end. The chain head the
+difference (`EmitMemory::storeVertex`, or `GuestRedraw::writeVertex` from a motion source's write), so a one-unit step lands halfway rather than on one end. A motion source moves a copy packet the same way (`GuestRedraw::writeCopy`): its source, destination and size words each keep the part past their whole pixels, `decodeCopy` reads them into the copy's `CopyPlace`, and `addCopy` draws its rect at scale (`scaledCoordinate`, so two copies sharing an edge meet on one scaled row) and shifts its source read by the places' difference (`kOpShiftX/Y`); one that wraps VRAM or overlaps its source is drawn at its whole pixels. The chain head the
 section returns is captured (`PacketChainWalker::capture`). At seal the captures belong to S; in-between k is S
 with the one chain run the section names (`ReplaySection::linked`) replaced by the capture decoded under S's draw
 state at that run (`FrameRecord::splice`, `gpu::decodePackets`), CLUTs resolved from VRAM (`RecordCluts`). Each

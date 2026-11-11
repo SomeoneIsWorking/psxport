@@ -148,8 +148,9 @@ compose, `OwnershipVerdict`, the `OwnerJournal` producer rows and `Core::bookSto
 `FramePresenter` composes from producers only for an S no replay covers (`ReplayFrame::replays`), so each consumer
 below is what such an S still reaches. Crash Bash and Toy Story 2 now replay their draw sections and consume none
 of it; Crash 1/2/3, CTR, Spider-Man, Vagrant Story, Mega Man X4, Tekken 3 and C-12 never did. Deleted as unused:
-`PrimitiveSink::emitCopy` (no render emitted a copy), the composer's copy placement, `CopyPlace` and the placed-copy
-raster path (`addCopy`'s scaled rect and its `kOpShiftX/Y` source shift in `record.frag`).
+`PrimitiveSink::emitCopy` (no render emitted a copy) and the composer's copy placement. `CopyPlace` and the
+placed-copy raster path stay, fed by a replay: `GuestRedraw::writeCopy` keeps a part-pixel place on a DR_MOVE's
+words and `decodeCopy` reads it back (Crash Bash's texture scroll, its issue 0047).
 After the deletion (unpaced, ires 0, fps60, sink 3840x2160): Crash Bash hub pan 510 intervals replayed, 0 refused,
 the signs stepping evenly over six presents; Toy Story 2 Andy's House 783 replayed, 0 refused; Spyro 1 Stone Hill
 1318 replayed, 0 refused, every moby record paired.

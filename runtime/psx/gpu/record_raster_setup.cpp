@@ -147,6 +147,10 @@ std::int32_t scaledCoordinate(int whole, float sub, int scale) {
   return whole * scale + placeOffset(sub, scale);
 }
 
+bool insideVram(const RecordRect &rect) {
+  return rect.x0 >= 0 && rect.y0 >= 0 && rect.x1 <= kVramWidth && rect.y1 <= kVramHeight;
+}
+
 TriVertex scaledVertex(const present::RecordVertex &vertex, int scale) {
   return TriVertex{scaledCoordinate(vertex.x, vertex.subX, scale),
                    scaledCoordinate(vertex.y, vertex.subY, scale),
@@ -513,6 +517,7 @@ private:
   // VRAM rects written by a transfer, into VRAM and where they land in each canvas buffer.
   void emitTransferRects(const WrappedRects &rects);
   // A copy placed past its whole pixels, as emitTransferRects for one rect: `quad` scaled, `written` its footprint.
+  void emitPlacedTransfer(const RecordRect &written, const RecordQuad &quad);
   // Keeps the op when its native footprint reached a plane, whatever its quads at this scale.
   // `plane`, when given, is pushed right after `op`: its DepthPlane.
   void commit(const RecordOp &op, bool readsDestination, const RecordOp *plane = nullptr);
@@ -734,6 +739,29 @@ void RecordPlanner::Builder::emitTransferRects(const WrappedRects &rects) {
       if (inside.x0 < inside.x1 && inside.y0 < inside.y1) {
         emit(inside);
       }
+    }
+  }
+  target(0);
+}
+
+void RecordPlanner::Builder::emitPlacedTransfer(const RecordRect &written, const RecordQuad &quad) {
+  const int s = plan_.scale;
+  target(0);
+  emit(written, quad);
+  for (std::size_t i = 0; i < canvases_.size(); i++) {
+    const RecordRect &buffer = canvases_[i].buffer;
+    target(1 + static_cast<int>(i));
+    const RecordRect inside{std::max(written.x0, buffer.x0),
+                            std::max(written.y0, buffer.y0),
+                            std::min(written.x1, buffer.x1),
+                            std::min(written.y1, buffer.y1)};
+    if (inside.x0 < inside.x1 && inside.y0 < inside.y1) {
+      RecordQuad clipped = quad;
+      clipped.x0 = std::max(quad.x0, buffer.x0 * s);
+      clipped.y0 = std::max(quad.y0, buffer.y0 * s);
+      clipped.x1 = std::min(quad.x1, buffer.x1 * s);
+      clipped.y1 = std::min(quad.y1, buffer.y1 * s);
+      emit(inside, clipped);
     }
   }
   target(0);
@@ -1265,6 +1293,35 @@ void RecordPlanner::Builder::addCopy(const present::VramCopy &copy) {
     op[kOpSourceY] = static_cast<std::uint32_t>(positiveMod(src.y, kVramHeight));
     commit(op, copy.maskCheck);
   };
+  const present::CopyPlace &place = copy.place;
+  if (!overlapping && place != present::CopyPlace{}) {
+    const int s = plan_.scale;
+    const RecordQuad quad{.x0 = scaledCoordinate(copy.dstX, place.dstX, s),
+                          .y0 = scaledCoordinate(copy.dstY, place.dstY, s),
+                          .x1 = scaledCoordinate(copy.dstX + copy.width, place.dstX + place.width, s),
+                          .y1 = scaledCoordinate(copy.dstY + copy.height, place.dstY + place.height, s)};
+    if (quad.x1 <= quad.x0 || quad.y1 <= quad.y0) {
+      return;
+    }
+    const RecordRect written = nativeReach({quad.x0, quad.y0, quad.x1, quad.y1}, s);
+    const std::int32_t readX = scaledCoordinate(copy.srcX, place.srcX, s);
+    const std::int32_t readY = scaledCoordinate(copy.srcY, place.srcY, s);
+    const RecordRect read = nativeReach({readX, readY, readX + quad.x1 - quad.x0, readY + quad.y1 - quad.y0}, s);
+    if (!insideVram(written) || !insideVram(read)) {
+      copyPart({copy.srcX, copy.srcY}, {copy.dstX, copy.dstY, copy.width, copy.height});
+      return;
+    }
+    emitPlacedTransfer(written, quad);
+    opReads_.push_back(read);
+    op[kOpOriginX] = static_cast<std::uint32_t>(copy.dstX);
+    op[kOpOriginY] = static_cast<std::uint32_t>(copy.dstY);
+    op[kOpSourceX] = static_cast<std::uint32_t>(copy.srcX);
+    op[kOpSourceY] = static_cast<std::uint32_t>(copy.srcY);
+    op[kOpShiftX] = static_cast<std::uint32_t>(placeOffset(place.srcX, s) - placeOffset(place.dstX, s));
+    op[kOpShiftY] = static_cast<std::uint32_t>(placeOffset(place.srcY, s) - placeOffset(place.dstY, s));
+    commit(op, copy.maskCheck);
+    return;
+  }
   if (!overlapping) {
     copyPart({copy.srcX, copy.srcY}, {copy.dstX, copy.dstY, copy.width, copy.height});
     return;

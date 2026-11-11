@@ -59,7 +59,8 @@ bool decodePacket(const CapturedPacket &packet,
     } else if (head.opcode() == Gp0Opcode::FillRect) {
       into.emplace_back(decodeFill(command, state.state()));
     } else if (head.isVramCopy()) {
-      into.emplace_back(decodeCopy(command, state.state()));
+      into.emplace_back(decodeCopy({.words = command, .places = restPlaces.first(std::min(count, restPlaces.size()))},
+                                   state.state()));
     } else if (!head.isDiscardedNoOp()) {
       return false;
     }
