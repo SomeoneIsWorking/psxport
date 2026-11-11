@@ -100,6 +100,7 @@ std::optional<std::uint32_t> SideEffectJournal::replayDeviceRead(std::uint32_t a
   }
   if (mode_ == SideEffectMode::Discard) {
     append({SideEffectKind::DeviceRead, address, width, 0});
+    stopDiscardedRun();
     return 0u;
   }
   const std::size_t index = effects_.size();
@@ -127,6 +128,7 @@ void SideEffectJournal::recordDeviceRead(std::uint32_t address, std::uint32_t wi
 
 bool SideEffectJournal::admitDeviceWrite(std::uint32_t address, std::uint32_t width, std::uint32_t value) {
   append({SideEffectKind::DeviceWrite, address, width, value});
+  stopDiscardedRun();
   return mode_ == SideEffectMode::Record;
 }
 
@@ -149,6 +151,7 @@ bool SideEffectJournal::admitHostService(SideEffectKind kind, std::uint32_t gues
 bool SideEffectJournal::admitSyscall(std::uint32_t code, std::uint32_t instructionPc) {
   const SideEffect effect{SideEffectKind::Syscall, instructionPc, 0, code};
   append(effect);
+  stopDiscardedRun();
   markUnreplayable(lucent::format("{} path performed {}", sideEffectPathName(mode_), describeSideEffect(effect)));
   return mode_ == SideEffectMode::Record;
 }
@@ -207,6 +210,12 @@ std::optional<std::size_t> SideEffectJournal::firstDivergence() const {
 
 std::uint64_t SideEffectJournal::withheldPendingWork() const {
   return withheldPendingWork_;
+}
+
+void SideEffectJournal::stopDiscardedRun() const {
+  if (mode_ == SideEffectMode::Discard && translatedExecutions_ == 0) {
+    throw DiscardedRunTouchedDevice{};
+  }
 }
 
 void SideEffectJournal::markUnreplayable(std::string reason) {

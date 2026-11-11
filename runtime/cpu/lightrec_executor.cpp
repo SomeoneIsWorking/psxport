@@ -610,8 +610,6 @@ ExecutionResult LightrecExecutor::executeWithBoundary(std::uint32_t guestAddress
 
   Impl::BoundaryContext boundary{
       .returnAddress = returnAddress, .dispatchHostServices = dispatchHostServices, .fallbackPolicy = fallbackPolicy};
-  // Translated frames are on the stack from here; the journal must not raise its bound fault through them.
-  const SideEffectJournal::TranslatedExecutionScope translated(impl.core);
   std::uint64_t consumedCycles = 0;
   std::uint64_t hostDispatches = 0;
   std::uint32_t nextPc = guestAddress;
@@ -639,7 +637,11 @@ ExecutionResult LightrecExecutor::executeWithBoundary(std::uint32_t guestAddress
     // lightrec_execute overwrites nextPc with the exit pc; the start names the block behind a wild target.
     const std::uint32_t blockStart = nextPc;
     Impl::BoundaryContext *const enclosing = std::exchange(impl.running, &boundary);
-    nextPc = lightrec_execute(impl.state, nextPc, targetCycle(segmentCycleBudget));
+    {
+      // Translated frames are on the stack only in here; the journal must not raise through them.
+      const SideEffectJournal::TranslatedExecutionScope translated(impl.core);
+      nextPc = lightrec_execute(impl.state, nextPc, targetCycle(segmentCycleBudget));
+    }
     impl.running = enclosing;
     impl.copyLightrecToCore(nextPc);
     const lightrec_execution_stats after = *lightrec_get_execution_stats(impl.state);

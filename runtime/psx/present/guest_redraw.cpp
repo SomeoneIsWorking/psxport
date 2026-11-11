@@ -64,31 +64,40 @@ bool GuestRedraw::call(std::uint32_t entry, std::span<const std::uint32_t> argum
   // No call inside it can suspend at a turn's end; a second of guest time only stops a runaway.
   const cpu::ExecutionBudget runaway = cpu::ExecutionBudget::fromCycles(frame::kNominalPsxCpuHz);
   const cpu::ExecutionControl::Unsuspendable unsuspendable(core_.executionControl(), runaway);
-  const cpu::ExecutionResult result =
-      kind == Call::Dispatched ? cpu::dispatchGuest(core_, entry, runaway, "redraw")
-      : kind == Call::ToEnd    ? cpu::resumeGuestToReturn(core_, cpu::GuestCallSite{entry, end}, entry, runaway)
-                               : cpu::callOriginal(core_, entry, runaway);
-  if (!result.returned()) {
-    lucent::warn("redraw",
-                 "the redraw of 0x{:08X} stopped: {} at 0x{:08X}",
-                 entry,
-                 cpu::executionExitName(result.reason),
-                 result.guestPc);
-    core_.game->ownerJournal.record(
-        core_, {.reason = OwnerReason::ReplayRefused, .producer = entry, .sampleAddress = result.guestPc}, false);
-    return false;
+  try {
+    const cpu::ExecutionResult result =
+        kind == Call::Dispatched ? cpu::dispatchGuest(core_, entry, runaway, "redraw")
+        : kind == Call::ToEnd    ? cpu::resumeGuestToReturn(core_, cpu::GuestCallSite{entry, end}, entry, runaway)
+                                 : cpu::callOriginal(core_, entry, runaway);
+    if (!result.returned()) {
+      lucent::warn("redraw",
+                   "the redraw of 0x{:08X} stopped: {} at 0x{:08X}",
+                   entry,
+                   cpu::executionExitName(result.reason),
+                   result.guestPc);
+      core_.game->ownerJournal.record(
+          core_, {.reason = OwnerReason::ReplayRefused, .producer = entry, .sampleAddress = result.guestPc}, false);
+      return false;
+    }
+  } catch (const cpu::DiscardedRunTouchedDevice &) {
+    // A host body reached a device; the destructor puts the run's state back.
+    return reachedNoDevice(entry);
   }
+  return reachedNoDevice(entry);
+}
+
+bool GuestRedraw::reachedNoDevice(std::uint32_t entry) {
   const auto touched = std::ranges::find_if(journal_.effects(), [](const cpu::SideEffect &effect) {
     return effect.kind == cpu::SideEffectKind::DeviceRead || effect.kind == cpu::SideEffectKind::DeviceWrite ||
            effect.kind == cpu::SideEffectKind::Syscall;
   });
-  if (touched != journal_.effects().end()) {
-    lucent::warn("redraw", "the redraw of 0x{:08X} reached {}", entry, cpu::describeSideEffect(*touched));
-    core_.game->ownerJournal.record(
-        core_, {.reason = OwnerReason::ReplayRefused, .producer = entry, .sampleAddress = touched->address}, false);
-    return false;
+  if (touched == journal_.effects().end()) {
+    return true;
   }
-  return true;
+  lucent::warn("redraw", "the redraw of 0x{:08X} reached {}", entry, cpu::describeSideEffect(*touched));
+  core_.game->ownerJournal.record(
+      core_, {.reason = OwnerReason::ReplayRefused, .producer = entry, .sampleAddress = touched->address}, false);
+  return false;
 }
 
 } // namespace psx::present

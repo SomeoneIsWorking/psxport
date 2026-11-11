@@ -52,7 +52,8 @@ enum class SideEffectMode : std::uint8_t {
   Record, // the live path: accesses reach the devices and are logged
   Replay, // the shadow path: accesses are logged and served from, or checked against, `recorded`
   // A run whose memory the caller puts back (present/guest_redraw.h): services execute, devices are
-  // never reached (a read is served 0), guest time and pending work are held; the log says what it touched.
+  // never reached, guest time and pending work are held. Its first device access or syscall out of host code
+  // raises `DiscardedRunTouchedDevice`; one from translated code is served 0 and logged.
   Discard,
 };
 
@@ -93,6 +94,10 @@ struct JournalBoundViolation {
 
 // Raised at the bound, and ONLY where a `throw` is legal. See `append`'s comment in the .cpp.
 class JournalBoundExceeded {};
+
+// Raised by a Discard journal at a device access or syscall where a `throw` is legal: a host body polling a device
+// would never see it answer.
+class DiscardedRunTouchedDevice {};
 
 class SideEffectJournal {
 public:
@@ -150,8 +155,9 @@ public:
   // boundary is HOST code, and the journal cannot see that from inside itself: a translated Lightrec
   // frame sits directly below the device callback (`Core::mem_w*` is reached from generated code), so
   // "am I in host code" is a fact about the CALLER, not about this frame. The executor is the only
-  // thing that knows, so it marks the one place translated code runs — `executeWithBoundary`, which
-  // `execute`/`executeUntilExit`/`executeFunction` all funnel through — and the journal then refuses to
+  // thing that knows, so it marks the one place translated code runs — the `lightrec_execute` call in
+  // `executeWithBoundary`, which `execute`/`executeUntilExit`/`executeFunction` all funnel through; host
+  // services it dispatches between segments run unmarked — and the journal then refuses to
   // raise while the mark is set. It records the violation either way, so the fault is reported whether
   // or not the call could be stopped.
   //
@@ -172,6 +178,8 @@ public:
 
 private:
   void markUnreplayable(std::string reason);
+  // A Discard run that reached a device stops here when no translated frame is below.
+  void stopDiscardedRun() const;
   // Refuses the effect and records the fault when the call is already at `kMaxSideEffectsPerCall`. The
   // entry is NOT stored, so a refused effect can never shift the positions the replay compares by.
   void append(SideEffect effect);

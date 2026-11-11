@@ -270,7 +270,8 @@ The composer builds the frame at `t` from S's record:
   no packet and notifies no code write), and runs the routine with devices unreached, interrupts and
   guest time held. The title writes the in-between's inputs through `writeWord`, reads the packets the
   routine linked with `PacketChainWalker::tryEmitChain` before the redraw ends, and saves them as the
-  object's state; a run that does not return, or reaches a device or a syscall, is refused.
+  object's state; a run that does not return, or reaches a device or a syscall, is refused. A host body that
+  reaches one stops there (`DiscardedRunTouchedDevice`), so a native loop polling a device status cannot spin.
 - **Transform.** A render that moves a GTE transform by t blends it with `blendGteControl` (`gte_control.*`): the
   rotation turns along the shorter arc (`lucent::rotation::between`: polar decomposition, slerp) and its stretch moves element by element, so a
   spinning part keeps its size between frames; translation moves by t, rounded to the nearest integer with ties to

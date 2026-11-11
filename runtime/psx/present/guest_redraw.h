@@ -34,7 +34,8 @@ public:
   void writeHalf(std::uint32_t address, std::uint16_t half);
 
   // The original routine at `entry` (its override suppressed) with `arguments` in a0..a3. False, logged, when
-  // it did not return or reached a device or a syscall: its packets then do not describe the in-between.
+  // it did not return or reached a device or a syscall (a host body stops at it): its packets then do not describe
+  // the in-between.
   [[nodiscard]] bool run(std::uint32_t entry, std::span<const std::uint32_t> arguments);
   // The same as a guest call to `entry`: its override, if any, runs. A draw section's steps are called this way.
   [[nodiscard]] bool dispatch(std::uint32_t entry, std::span<const std::uint32_t> arguments);
@@ -46,6 +47,8 @@ private:
   enum class Call : std::uint8_t { Original, Dispatched, ToEnd };
   [[nodiscard]] bool
   call(std::uint32_t entry, std::span<const std::uint32_t> arguments, Call kind, std::uint32_t end = 0);
+  // Whether the run reached no device or syscall; the first it reached is logged and reported as a refusal.
+  [[nodiscard]] bool reachedNoDevice(std::uint32_t entry);
 
   Core &core_;
   GteGuard gte_;
