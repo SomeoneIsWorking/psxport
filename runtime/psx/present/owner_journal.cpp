@@ -55,8 +55,6 @@ const char *ownerReasonName(OwnerReason reason) {
     return "UnownedMoving";
   case OwnerReason::Port:
     return "Port";
-  case OwnerReason::Baked:
-    return "Baked";
   case OwnerReason::Overwrote:
     return "Overwrote";
   case OwnerReason::ReplayRefused:
@@ -79,12 +77,6 @@ const char *heldCauseName(HeldCause cause) {
     return "no-previous";
   case HeldCause::ChainBreak:
     return "chain-break";
-  case HeldCause::NoState:
-    return "no-state";
-  case HeldCause::Unplaceable:
-    return "unplaceable";
-  case HeldCause::Unpaired:
-    return "unpaired";
   case HeldCause::NotReplayed:
     return "not-replayed";
   }

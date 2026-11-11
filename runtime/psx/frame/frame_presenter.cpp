@@ -4,11 +4,9 @@
 #include "core.h"
 #include "diagnostic_config.h"
 #include "display_presenter.h"
-#include "frame_composer.h"
 #include "fs_util.h"
 #include "game.h"
 #include "gpu_device.h"
-#include "producer_census.h"
 #include "render_mode.h"
 #include "replay_frame.h"
 #include "texture_feedback.h"
@@ -39,18 +37,6 @@ bool drawsAnything(const present::FrameRecord &record) {
 constexpr int kDumpMax = 600;
 constexpr lucent::Channel presentDumpChannel{"fps60dump"};
 
-// A producer render reads saved state only; the armed display pass aborts any guest store it makes.
-const present::FrameRecord *composeGuarded(Core &core,
-                                           present::FrameComposer &composer,
-                                           const present::FrameRecord &shown,
-                                           const present::FrameState *from,
-                                           const present::FrameState &to,
-                                           float t,
-                                           const present::StateProducers &producers) {
-  const present::DisplayPassGuard guard(core.rsub.mode);
-  return composer.compose(shown, from, to, t, producers, core.gpuDevice().vram());
-}
-
 gpu::RecordRect displayedBuffer(Core &core) {
   return gpu::clampedVramRect(present::DisplayPresenter::presentedRect(core));
 }
@@ -69,10 +55,6 @@ void schedule(Core &core, FieldCadence cadence, present::PresentNote note) {
 
 } // namespace
 
-const present::StateProducer *RuntimeStateProducers::find(std::uint32_t producer) const {
-  return core_.runtime.stateProducer(core_, producer);
-}
-
 void FramePresenter::commit(Core *core, int guestFields) {
   if (!core || !core->game) {
     lucent::error("presentation", "FramePresenter::commit requires a bound Core/Game");
@@ -80,20 +62,17 @@ void FramePresenter::commit(Core *core, int guestFields) {
   }
   // The last frame's present lands on its deadline before this frame's composition starts.
   core->game->display.finishShow();
-  RecordSlot &slot = freeSlot();
-  core->gpuDevice().sealRecord(slot.record);
-  core->game->bugReport.frameSealed(*core, slot.record.sequence());
-  core->frameStates.collect(slot.record, slot.state);
-  psx::debug::censusRecord(*core, slot.record, slot.state);
-  core->frameStates.endFrame();
+  present::FrameRecord &slot = freeSlot();
+  core->gpuDevice().sealRecord(slot);
+  core->game->bugReport.frameSealed(*core, slot.sequence());
   commitSealed(*core, slot, guestFields);
 }
 
-FramePresenter::RecordSlot &FramePresenter::freeSlot() {
-  for (RecordSlot &slot : slots_) {
+present::FrameRecord &FramePresenter::freeSlot() {
+  for (present::FrameRecord &slot : slots_) {
     const bool held =
-        &slot.record == current_ || std::any_of(history_.begin(), history_.end(), [&slot](const SealedRecord &entry) {
-          return entry.record == &slot.record;
+        &slot == current_ || std::any_of(history_.begin(), history_.end(), [&slot](const SealedRecord &entry) {
+          return entry.record == &slot;
         });
     if (!held) {
       return slot;
@@ -107,22 +86,18 @@ void FramePresenter::commitUnpresented() {
   ++fence_;
 }
 
-void FramePresenter::commitSealed(Core &core, const RecordSlot &sealed, int guestFields) {
+void FramePresenter::commitSealed(Core &core, const present::FrameRecord &sealed, int guestFields) {
   const bool recordPath = core.rsub.mode.path() == present::RenderPath::Record;
   const bool interpolates = recordPath && core.game->mods.fps60 != 0;
   const bool cut = interpolates && core.runtime.sealedFrameIsCut(core);
-  const RuntimeStateProducers runtimeProducers(core);
-  const present::StateProducers *producers = recordPath ? &runtimeProducers : nullptr;
-  // Only a title with state producers saves state, so an empty state has nothing to compose.
-  const bool savedState = !sealed.state.empty();
-  const bool gap = !lastSequence_ || sealed.record.sequence() != *lastSequence_ + 1u;
-  lastSequence_ = sealed.record.sequence();
-  current_ = &sealed.record;
+  const bool gap = !lastSequence_ || sealed.sequence() != *lastSequence_ + 1u;
+  lastSequence_ = sealed.sequence();
+  current_ = &sealed;
   pendingCut_ = pendingCut_ || cut;
   pendingBreak_ = pendingBreak_ || gap || !current_->complete();
   if (drawsAnything(*current_)) {
     std::move(history_.begin() + 1, history_.end(), history_.begin());
-    history_.back() = {current_, &sealed.state, pendingCut_, !pendingBreak_, core.runtime.debugMenu().screenKey(core)};
+    history_.back() = {current_, pendingCut_, !pendingBreak_, core.runtime.debugMenu().screenKey(core)};
     pendingCut_ = false;
     pendingBreak_ = false;
   }
@@ -132,14 +107,11 @@ void FramePresenter::commitSealed(Core &core, const RecordSlot &sealed, int gues
   holdUndrawnWrites(*current_);
   ++fence_;
   if (interpolates) {
-    presentRecords(core, producers, guestFields);
+    presentRecords(core, guestFields);
   } else {
     shownSequence_.reset();
     shownMoment_.reset();
-    const SealedRecord *shown = savedState ? shownRecord(displayedBuffer(core)) : nullptr;
-    const present::FrameRecord *composedFrame =
-        shown != nullptr ? composeShown(core, endComposer_, producers, *shown, nullptr, 1.0f) : nullptr;
-    presentCurrent(core, {guestFields, 1}, shown, composedFrame);
+    presentCurrent(core, {guestFields, 1}, nullptr, nullptr);
   }
 }
 
@@ -242,7 +214,7 @@ bool FramePresenter::cutBetween(std::uint64_t from, std::uint64_t to) const {
   return false;
 }
 
-void FramePresenter::presentRecords(Core &core, const present::StateProducers *producers, int guestFields) {
+void FramePresenter::presentRecords(Core &core, int guestFields) {
   const SealedRecord *shown = shownRecord(displayedBuffer(core));
   const SealedRecord *from = shownSequence_ ? sealed(*shownSequence_) : nullptr;
   const std::optional<std::uint64_t> previous = shownSequence_;
@@ -274,10 +246,7 @@ void FramePresenter::presentRecords(Core &core, const present::StateProducers *p
   const std::int64_t entry = static_cast<std::int64_t>(core.game->timing.displayField()) - lead;
   // A logic frame held for one field is one present: the next field already shows the next frame.
   if (guestFields < 2) {
-    presentCurrent(core,
-                   {guestFields, 1},
-                   shown,
-                   shown != nullptr ? composeShown(core, endComposer_, producers, *shown, nullptr, 1.0f) : nullptr);
+    presentCurrent(core, {guestFields, 1}, shown, nullptr);
     shownMoment_ = entry;
     return;
   }
@@ -299,17 +268,17 @@ void FramePresenter::presentRecords(Core &core, const present::StateProducers *p
   // Present j shows the guest moment L fields before its own field: t = (j + d + n - L) / n, n the fields between
   // S' and S's draw entries and d those from S's draw entry to this commit.
   const int fields = intervalFields(*from->record, base, guestFields);
-  // A title that replays its draw section brings whole in-betweens; no producer state is composed or judged. An S
-  // whose draw ran no section (a menu, a load) is composed from producer states as before.
+  // A title that replays its draw section brings whole in-betweens. An S whose draw ran no section (a menu, a load)
+  // shows S as the guest drew it at every in-between.
   present::ReplayFrame *replay = core.runtime.replayFrame(core);
   if (replay != nullptr && !replay->replays(base.sequence())) {
     replay = nullptr;
   }
-  // The interval S'→S is drawn one way at every t: composed whole, or S held as the guest drew it.
-  bool held = producers == nullptr;
+  // The interval S'→S is drawn one way at every t: replayed whole, or S held as the guest drew it.
+  bool held = false;
   if (cut) {
     // A replay blends its tracks whatever the title declared afterwards, so across a cut S is shown as drawn.
-    held = held || replay != nullptr;
+    held = replay != nullptr;
     journal.record(core, {.reason = present::OwnerReason::IntervalHeld, .cause = present::HeldCause::Cut}, false);
   } else if (replay != nullptr) {
     if (!replay->covers({.shown = base.sequence(), .from = from->record->sequence(), .fields = fields})) {
@@ -319,7 +288,7 @@ void FramePresenter::presentRecords(Core &core, const present::StateProducers *p
     }
   } else {
     const bool still = verdict_.judge(*from->record, base, core.owners);
-    held = held || !still;
+    held = !still;
     for (const present::OwnerFinding &finding : verdict_.findings()) {
       journal.record(core, finding, !still);
     }
@@ -330,36 +299,29 @@ void FramePresenter::presentRecords(Core &core, const present::StateProducers *p
   const auto tAt = [&](int present) {
     return std::clamp(static_cast<float>(present + lead + fields - latency_) / static_cast<float>(fields), 0.0f, 1.0f);
   };
-  // The last present is composed first: a refusal at any t holds the whole interval, so every t is tried before any
+  // The last present is replayed first: a refusal at any t holds the whole interval, so every t is tried before any
   // present is shown.
-  const auto composeAt = [&](present::FrameComposer &composer, int present) -> const present::FrameRecord * {
-    if (held) {
+  const auto replayAt = [&](int present) -> const present::FrameRecord * {
+    if (held || replay == nullptr) {
       return nullptr;
     }
-    if (replay != nullptr) {
-      const int k = present + lead + fields - latency_;
-      if (k < 1 || k >= fields) {
-        return nullptr;
-      }
-      const present::FrameRecord *replayed = replay->at(base, *from->record, k, core.gpuDevice().vram());
-      held = replayed == nullptr;
-      return replayed;
+    const int k = present + lead + fields - latency_;
+    if (k < 1 || k >= fields) {
+      return nullptr;
     }
-    const float t = tAt(present);
-    const present::FrameRecord *composedFrame =
-        composeShown(core, composer, producers, *shown, cut || t >= 1.0f ? nullptr : from->state, t);
-    held = composedFrame == nullptr && (composer.refusal().refused());
-    return composedFrame;
+    const present::FrameRecord *replayed = replay->at(base, *from->record, k, core.gpuDevice().vram());
+    held = replayed == nullptr;
+    return replayed;
   };
-  const present::FrameRecord *last = composeAt(endComposer_, guestFields - 1);
+  const present::FrameRecord *last = replayAt(guestFields - 1);
   for (int present = guestFields - 2; present > 0 && !held; --present) {
-    composeAt(composer_, present);
+    replayAt(present);
   }
   // One present per field, so each vblank of a display at the field rate shows the frame a field further on.
   const FieldCadence cadence{guestFields, guestFields};
   float shownT = -1.0f;
   for (int present = 0; present + 1 < guestFields; ++present) {
-    const present::FrameRecord *composedFrame = composeAt(composer_, present);
+    const present::FrameRecord *composedFrame = replayAt(present);
     const bool composed = composedFrame != nullptr;
     const float t = tAt(present);
     stability_.stalled += composed && t <= shownT ? 1u : 0u;
@@ -414,39 +376,6 @@ int FramePresenter::intervalFields(const present::FrameRecord &from, const prese
   return static_cast<int>(*end - *begin);
 }
 
-const present::FrameRecord *FramePresenter::composeShown(Core &core,
-                                                         present::FrameComposer &composer,
-                                                         const present::StateProducers *producers,
-                                                         const SealedRecord &shown,
-                                                         const present::FrameState *from,
-                                                         float t) {
-  if (producers == nullptr) {
-    return nullptr;
-  }
-  const present::FrameRecord *composedFrame =
-      composeGuarded(core, composer, *shown.record, from, *shown.state, from != nullptr ? t : 1.0f, *producers);
-  const present::FrameComposer::Refusal &refusal = composer.refusal();
-  if (composedFrame == nullptr && refusal.refused()) {
-    present::OwnerFinding finding{.reason =
-                                      refusal.baked ? present::OwnerReason::Baked : present::OwnerReason::IntervalHeld,
-                                  .cause = refusal.cause,
-                                  .producer = refusal.producer};
-    const std::span<const present::RecordEntry> entries = shown.record->entries();
-    if (refusal.entry < entries.size()) {
-      if (const auto *primitive = std::get_if<present::DrawPrimitive>(&entries[refusal.entry])) {
-        finding.table = primitive->slot ? primitive->slot->table : present::kNoTable;
-        finding.bucketLo = primitive->slot ? primitive->slot->index : 0u;
-        finding.bucketHi = finding.bucketLo;
-        finding.primitives = 1;
-        finding.sampleAddress = primitive->sourceAddress;
-        finding.sampleCommand = primitive->command;
-      }
-    }
-    core.game->ownerJournal.record(core, finding, true);
-  }
-  return composedFrame;
-}
-
 // A present is build, then a show scheduled for its deadline: only the show waits, so it lands on time whatever
 // the build cost, and the next logic frame's guest work runs while it waits.
 void FramePresenter::presentCurrent(Core &core,
@@ -457,9 +386,6 @@ void FramePresenter::presentCurrent(Core &core,
                                     float t,
                                     int interval) {
   const bool between = composedFrame != nullptr && from != nullptr && t < 1.0f;
-  if (composedFrame != nullptr && !between) {
-    ledger_.reconcile(*shown->record, *composedFrame, fence_, psx::config::gate_presentation());
-  }
   composed_ = composedFrame;
   composedAdvances_ = composed_ != nullptr;
   buildReal(core);
@@ -516,7 +442,6 @@ void FramePresenter::reportStability() const {
                stability_.repeats,
                stability_.backwards,
                stability_.stalled);
-  ledger_.report();
 }
 
 } // namespace psx::frame

@@ -78,22 +78,6 @@ inline void pkt_track(Core *c, uint32_t a, uint32_t bytes) {
   c->rsub.otAttr.trackStore(c, {a, bytes});
 }
 
-// The native display pass reads guest state and draws to host memory only; a guest store inside it aborts.
-void display_pass_write_guard(Core *c, GuestStore store) {
-  if (!c->rsub.mode.displayPassArmed() || !c->isGuestStorage(store.address, store.width)) {
-    return;
-  }
-  lucent::error("mem",
-                "display-pass guard: guest write to 0x{:08X} (val 0x{:X}, width {}) inside the native display "
-                "pass, which must not write guest memory. pc={:08X} sp={:08X}",
-                psx::kseg0Address(store.address),
-                store.value,
-                store.width,
-                c->pc,
-                c->r[psx::cpu::kSp]);
-  abort();
-}
-
 } // namespace
 
 // The bookkeeping of one store into guest storage at `p` (null for a device); false when the write rollback will put
@@ -114,7 +98,6 @@ template <class Value, bool NotifyExecutable>
 void Core::writeGuestMemory(uint32_t a, Value v, psx::cpu::ExecutableWriteSource source) {
   constexpr auto width = static_cast<uint32_t>(sizeof(Value));
   uint8_t *p = host_ptr({a, width});
-  display_pass_write_guard(this, {a, static_cast<uint32_t>(v), width});
   if (storeWatch.armed()) {
     storeWatch.observe(*this, {a, static_cast<uint32_t>(v), width});
   }
@@ -160,7 +143,6 @@ void Core::mem_write(uint32_t a, std::span<const uint8_t> bytes, psx::cpu::Execu
     psx::cpu::notifyExecutableWrite(*this, {a, a + size}, source);
     return;
   }
-  display_pass_write_guard(this, {a, bytes[0], size});
   if (storeWatch.armed()) {
     for (uint32_t i = 0; i < size; i++) {
       storeWatch.observe(*this, {a + i, bytes[i], 1});

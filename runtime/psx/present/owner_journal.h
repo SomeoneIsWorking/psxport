@@ -17,7 +17,6 @@ namespace psx::present {
 enum class OwnerReason : std::uint8_t {
   UnownedMoving, // guest-written draws with no owner that S' did not draw the same
   Port,          // draws that reached GP0 through block DMA, MMIO or LoadImage and moved
-  Baked,         // an owned object whose pixels a texture-feedback upload baked
   Overwrote,     // a writer stored over a word a declared owner wrote
   ReplayRefused, // a guest redraw that reached a device or a syscall
   IntervalHeld,  // the interval was shown at the logic rate for `HeldCause`
@@ -29,9 +28,6 @@ enum class HeldCause : std::uint8_t {
   StaleShown,  // no drawing record holds the displayed buffer, or a later write replaced it
   NoPrevious,  // the record shown before is gone from the history or was never shown
   ChainBreak,  // a sequence gap or an incomplete record between S' and S
-  NoState,     // an owned object with no render or no saved state
-  Unplaceable, // a render named a slot S never walked, or the CLUT pool was full
-  Unpaired,    // an owned object S' drew with no single state (ambiguous)
   NotReplayed, // the title's replay frame made no in-betweens for this interval
 };
 

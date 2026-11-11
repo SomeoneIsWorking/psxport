@@ -10,11 +10,9 @@ widescreen and how each part is tested.
 1. **Match Beetle.** The guest runs as it does on Beetle: same devices, same GP0 stream, same frames.
    A real frame is proven by oracle compare (`oracle.md`, `tools/oracle/compare.py` and
    `picture.py`), never by eye or by a counter.
-2. **Add native producers** only where a feature needs real geometry: interpolation, widescreen
-   margins, depth. A producer is a native override of the guest function that writes the primitives,
-   plus a native render of the same geometry from the state it saved.
-3. **Verify each producer by oracle compare.** At 4:3 with depth testing off, its render at `t = 1`
-   draws what its guest packets drew, so the frame matches Beetle's.
+2. **Replay the title's draw section** for each in-between (Interpolation): the guest's own draw code
+   at blended inputs, inside a redraw that puts every store back. A native override stays only where a
+   feature needs what no guest word holds (a depth, a widened cull, a place between pixels).
 
 ## Structure
 
@@ -26,8 +24,8 @@ GpuDevice (Beetle gpu.c)                      the only VRAM, GPUSTAT/GPUREAD, di
 FrameRecord N                                 primitives and VRAM ops; a primitive may carry a key
    │
 FramePresenter                                seals N, keeps the last 3 drawing records, owns cadence
-   │  every present: FrameComposer(S, producer states S' and S, t)
-RecordRasterizer (VK)                         replays N into the VRAM image; draws the composed frame
+   │  every in-between: S with the title's draw section replayed at t (ReplayFrame)
+RecordRasterizer (VK)                         replays N into the VRAM image; draws the replayed frame
    │
 DisplayPresenter → RenderState          one present per frame or in-between; captures, counters
    │
@@ -43,13 +41,10 @@ present plan / sink                           viewport, letterbox, window
 | `gpu/gp0_record_tap.*` | executed GP0 command to `FrameRecord` entry, with its key |
 | `present/emission_scope.*` | the `(P, obj, k)` scope stack and packet-address to key map |
 | `runtime/cpu/native_dispatch.*` | `Producer{Arg}` registration; opens the emission scope around the call |
-| `present/frame_state.*` | producer states by the scope serial that saved them; per record, the states its packets came from |
-| `present/state_producer.*` | `StateProducer` (render at `t`, and its `Composition` there), `PrimitiveSink` (the primitives and copies a render emits), `PrimitiveList`, the `StateProducers` registry on `Core` |
 | `present/guest_redraw.*`, `core/write_rollback.h` | `GuestRedraw`: a guest draw routine run again for an in-between, every store put back, registers and GTE restored, devices and guest time held (`SideEffectMode::Discard`) |
-| `present/frame_composer.*` | the frame at `t`: S's unproduced entries plus each producer's render, by OT slot |
 | `gpu/ordering_table.*` | OT node decode and the OT walk; `OtTables`, the title-named tables whose bucket heads tag each entry's slot |
 | `gpu/draw_list_cycle.*` | the refusal of a draw list that revisits a node, which a console's walk never leaves: the walk stops at the revisit and latches the presentation device off (`FaultCause::DrawListCycle`, one error line naming the node, the refusing walk and the writer of the edge into it), so nothing of that frame reaches the GPU and the session ends with the player told; `LinkCycleCheck`, the cycle check of every linked draw-list walk (OT walk, `PacketChainWalker`, title bin walks). A record past `FrameRecord::kMaxEntries` or its pools is port storage, not a console limit: it warns and is marked incomplete |
-| `present/packet_chains.*` | a body's packet chains (one chain, or a bucket table of any stride and head offset) read back as primitives under the one E1 rule; other environment packets and no-ops skipped; `tryEmitChain` reports a packet that is not a primitive instead of aborting |
+| `present/packet_chains.*` | the packets of a chain a replayed section linked, captured with their words' places |
 | `frame/frame_presenter.*` | N and the last three records that drew, which record each present shows, cadence, both presents through the backend |
 | `present/display_presenter.*` | `DisplayPresenter` on `Game`: each present and in-between through its `RenderState`, the present counters, `PSXPORT_SHOT_AT`/`PRESENT_SHOT_AT`/`GPU_DUMP` captures |
 | `gpu/record_geometry.*` | the VRAM rect an entry writes; a flat rectangle's extent |
@@ -125,9 +120,8 @@ name is refused with a warning and the Core stays on `record`.
   cannot reproduce. `TextureFeedback` (`gpu/texture_feedback.*`) follows those invalidation points and tracks the
   VRAM pixels drawn (draw bounds) or filled since; a textured primitive whose sampled texels (its UV box, or the
   whole page axis through a texture window or an 8-bit wrap) overlap one is recorded by the tap as a `VramUpload`
-  of the device's pixels over its draw bounds (not interpolated or widened, upload resolution at S > 1). The upload
-  keeps the primitive's `RecordKey`; an object with a keyed upload is left as drawn by the composer, since its render
-  would draw the baked faces again over their own pixels.
+  of the device's pixels over its draw bounds (not interpolated or widened, upload resolution at S > 1). A replay
+  whose run bakes an upload gives no in-between.
 - **Known differences from `gpu.c`.** A draw area below row 511 is clipped at 511 (the device wraps it). Texel
   rows are fetched `& 511`.
 - **Interlace.** With 480-line interlace and E1 bit 10 clear the device rasterizes one field per frame: the rows of the
@@ -141,56 +135,17 @@ name is refused with a warning and the Core stays on `record`.
   through `record_shot`, which downloads it and applies the present fade; nothing else reads it.
 - **Check.** On a title,
   `PSXPORT_DEBUG=recordcheck` logs per present the display-area pixels that differ from the device
-  (at S > 1, each block's top-left pixel), and the replay/resync counts; a composed `t = 1` present at
-  4:3 is checked as drawn (`composed=1`), which is a title producer's proof on real frames.
+  (at S > 1, each block's top-left pixel), and the replay/resync counts.
 
 ## Frame model
 
-There is no real/in-between distinction. Every present draws the frame at a state `t` between the
-record shown before (S', `t = 0`) and the record shown now (S, `t = 1`), through the same code at
-every `t`.
+Every present draws the record shown now (S, `t = 1`) or, at 60 fps, an in-between at `t` from the record
+shown before (S', `t = 0`): S with the title's draw section replayed at `t` (Interpolation), or S as the guest
+drew it. The VRAM image advances by the guest's own records only, so textures stay device-exact.
 
-```
-logic frame N
-  guest GP0 packets          -> executed by the device, recorded in N as now
-  producer P(obj) runs       -> writes its guest packets (bound to (P, obj), scope serial s), saves state under s
-  frame end                  -> FrameRecord N sealed; the states its packets' serials name are collected with it
-present at t
-  VRAM image                 -> advanced by the guest's own records only (textures stay device-exact)
-  picture                    -> FrameComposer(S, State S', State S, t) drawn on the image as before S
-```
-
-A producer is registered like any override, with the argument register that names its object
-(`Arg::None` when each call draws one object and its arguments are parameters, which must then not
-split its identity), and has two halves: the override saves what its render needs, and the render draws from it. The title's
-session holds its renders in a `StateProducerTable`, and `GameRuntime::stateProducer` answers from it.
-
-```cpp
-dispatcher.install({key(0x8001F798), "drawActor", &drawActor, Producer{Arg::A0}});
-session.renders.install(0x8001F798, std::make_unique<ActorRender>());
-
-void drawActor(Core *core) {   // the logic frame: writes the guest's packets, then
-  core->frameStates.save(core->emission.current(), ActorState{...});
-}
-class ActorRender final : public psx::present::StateProducer {
-  // At present time, from host memory only: the object at t, into its OT slots.
-  void render(const StateInterval &states, PrimitiveSink &) const override;
-};
-```
-
-The override still writes the guest packets the original writes, so guest-visible memory, the device
-and its VRAM are Beetle's. `render` never writes guest memory. It reads the interval's two saved states
-(`stateAs<T>`), and guest memory only for data the guest does not change while the object lives (level
-geometry); anything that changes per frame is in the state. It owns its own interpolation rules (angle
-wrap, which fields step rather than lerp).
-A producer that walks a list saves one state per object under `scope.instance(address)`.
-
-Every object scope gets a serial that its packets' keys carry, and a state is saved under the serial
-of the scope that saved it. A guest often builds a frame's packets and walks them in the next logic
-frame; the record collects the states named by the serials it actually drew (`FrameStates::collect`),
-so a picture is always drawn from the state its own packets came from. States are kept for
-`kRetainedFrames` logic frames. An object drawn from two scopes, or a scope that saved twice, is
-ambiguous and keeps its entries.
+A native override registered with `Producer{Arg}` opens an object scope around its call, the argument register
+naming its object (`Arg::None` when each call draws one object). Every object scope gets a serial that its
+packets' keys carry, so the verdict and the owner journal know which packets a declared owner wrote.
 
 The serial names a state, not an object, and differs on every scope: `RecordKey ==` compares it, so code that
 asks whether two packets belong to the same object compares `RecordKey::identity()`, the key without the serial.
@@ -198,7 +153,7 @@ asks whether two packets belong to the same object compares `RecordKey::identity
 ## Interpolation
 
 **Replay.** A title whose `GameRuntime::replayFrame` returns a `ReplayFrame` draws its in-betweens with its own
-draw code, and the composer below is not used for it. Before each real run of the draw section the frame
+draw code. Before each real run of the draw section the frame
 driver calls `beforeDraw`: the `MotionSet` samples the title's tracks (guest words with a `Motion` each, or a
 `MotionRule` for words that move as a unit, such as a keyframe pose). A track is one record or a run of them
 (`MotionRecords`: a stride, an optional pointer to the first, an end byte, and a live byte or, for a pool whose
@@ -223,98 +178,61 @@ keeps its entries; one S never sampled is read from VRAM. A palette cycle is the
 table of frames it uploads from. A declared row S' and S both sampled (same attribute, 4-bit) as two different frames
 of its table is blended k/n of the way from S''s frame to S's (each 5-bit channel by `lerpInt`, the STP bit S's, the
 transparent 0x0000 never blended into, out of or landed on); any other CLUT change between ticks lands on S. A
-composed in-between keeps S's entries. Each captured word keeps the depth a draw site noted with it (`EmitMemory::capturedPlace`), so replayed primitives test
+replayed in-between keeps S's entries. Each captured word keeps the depth a draw site noted with it (`EmitMemory::capturedPlace`), so replayed primitives test
 depth as the real present's do. A run that bakes an upload, a capture that does not decode, or no single matching
 run gives no in-between, and an interval with no replayed set is held (`not-replayed`). An S whose draw never ran
-the section (`ReplayFrame::replays`: a menu, a pause, a load) is composed from producer states as for a title with no
-replay. Spyro 2 and 3 replay their whole per-field draw body, state switch included; Tomba! 2 its field and room
+the section (`ReplayFrame::replays`: a menu, a pause, a load) shows S as the guest drew it at every in-between. Spyro 2 and 3 replay their whole per-field draw body, state switch included; Tomba! 2 its field and room
 draws. Check: Spyro 1 Stone Hill walking, `presentseq` advances
 0.5 logic frames per simulated 60.00 Hz vblank, Spyro, Sparx and the gems move halfway between real presents, and
 the `motion` debug channel counts each track's paired records.
 
-The composer builds the frame at `t` from S's record:
-
-- **Unproduced entries** (no binding, or bound to a producer without a render) are kept as S drew
-  them, at every `t`, only in an interval the verdict found still (below); otherwise the interval is held.
-- **Produced entries** (bound to `(P, obj)` of a producer with a render) are removed; `P.render` of
-  that object at `t` is emitted instead.
-- **Identity.** An object renders interpolated when S' and S both saved state under the same
-  `(P, obj)`; saved only in S (born at S), it is left out of the in-betweens and appears at `t = 1`, as it
-  was absent in S'; saved only in S', it is not drawn (it is not in the frame). A producer whose skipped
-  draw is itself a state (a fade at zero) names it with `StateProducer::rests`: the object saved only in S
-  then moves from that state, and one saved only in S' moves toward it, placed by slot. An object S' drew
-  with no single state (ambiguous) did not skip its draw, so the interval is held (`Unpaired`). An object S'
-  drew without a key is an unowned group of S' that vanished, which the verdict holds. Identity is the producer, the object's guest address and the title's generation for that
-  address (Crash Bash's `ComponentIncarnation`), never draw order, position or nearest match.
 - **Cut.** A title declares a cut from the guest's own state (camera cut, scene change, teleport);
-  across a cut every object renders at `t = 1`. No distance threshold.
+  across a cut S is shown as drawn. No distance threshold.
 - **OT slot.** Every record entry carries the slot it was walked in: the OT table and bucket index of
   the last bucket head the walk passed. A title names its tables (address and length from the guest's
   own OT variables, `core.otTables.name`, with its bucket stride and walk order); a table per display
   buffer shares one id. A title that flattens its buckets into one chain before the walk (Spyro) assigns
   each packet its bucket instead (`OtTables::assign`), good for one walk; a bucket it flattened empty
   is placed after the packet linked before it (`OtTables::placeEmpty`), so the walk still passes its
-  head. `render` emits each
-  primitive with the slot the guest function would have inserted it into at that state, from the same
-  depth-to-bucket rule the original uses. The record keeps where the walk passed each bucket head.
-  A producer's primitives go where its entries were in that slot in S (the n-th at the object's n-th
-  entry there, so guest draw-mode changes between them stay where the guest put them), or, in a slot it
-  did not use in S, at the slot's head, where the last `AddPrim` into it lands; in a bucket S left empty, where the
-  table's walk order puts it. A render naming a table S never walked leaves that object as S drew it.
-  An in-between (`from` set, `t < 1`) with any object whose render cannot be placed is not composed: the
-  interval is held, never a mix of two moments. The `compose` debug channel names the baked, unrendered or
-  unpaired object.
-- **Keyed copy.** A VRAM-to-VRAM copy (GP0 0x80) carries its packet's key and slot like a primitive, so the
-  composer removes a covered object's copies with its entries. A render emits primitives only; the object's
-  copies are gone from its in-between.
-- **Composition.** `StateProducer::composition(states)` says what the object's entries become at `t`:
-  `Render` (replaced by `render`, the default) or `Recorded` (kept as the guest drew them, which is the
-  object at `t`).
+  head. The record keeps where the walk passed each bucket head.
 - **Guest redraw.** A title whose objects are drawn by guest code it does not port can run that code
   again inside the logic frame for the in-between: `GuestRedraw` saves the CPU and GTE, arms
   `Core::writeRollback` so every guest store is noted and put back newest first (such a store binds
   no packet and notifies no code write), and runs the routine with devices unreached, interrupts and
-  guest time held. The title writes the in-between's inputs through `writeWord`, reads the packets the
-  routine linked with `PacketChainWalker::tryEmitChain` before the redraw ends, and saves them as the
-  object's state; a run that does not return, or reaches a device, a syscall or a host service whose state lives
+  guest time held. The title writes the in-between's inputs through `writeWord` and the
+  packets the routine linked are captured before the redraw ends (`PacketChainWalker::capture`); a run that does not return, or reaches a device, a syscall or a host service whose state lives
   outside guest memory (every BIOS call but the libc leaves, the pad work area), is refused: the rollback cannot put
   that state back, and a replayed `TestEvent` would take the card event the real frame waits for. A host body that
   reaches one stops there (`DiscardedRunTouchedDevice`), so a native loop polling a device status cannot spin.
   A redraw names the host services whose work is the real frame's (`GuestRedraw::applied`, a sound a draw starts):
   the Discard journal withholds each wherever the run reaches it (`SideEffectJournal::withhold`) and the call
   returns at its ra with the registers as it found them, so only call sites that read nothing back may name one.
-- **Transform.** A render that moves a GTE transform by t blends it with `blendGteControl` (`gte_control.*`): the
+- **Transform.** A track that moves a GTE transform by t blends it with `blendGteControl` (`gte_control.*`): the
   rotation turns along the shorter arc (`lucent::rotation::between`: polar decomposition, slerp) and its stretch moves element by element, so a
   spinning part keeps its size between frames; translation moves by t, rounded to the nearest integer with ties to
   even (`blend.h:lerpInt`), so an odd step at t = 0.5 favours neither frame. A singular matrix, or a mirror paired with a
   rotation, has no turn between them and blends element by element.
-- **Environment.** A render sets texture page, texture mode and blend mode; draw area, offset,
-  mask, texture window and interlace are those in effect where the primitive lands in S (the
-  first recorded primitive at or after its position; at a bucket head, the device state the walk had
-  on entering that bucket, kept in its `SlotStart`; past the table's last bucket head, the device state the
-  walk had on leaving the table, kept in its `TableExit`), and the CLUT from S's sample of the same CLUT
-  attribute (`clutWord`), or from the device VRAM when S never sampled it.
-- **In-place rewrite.** A title whose producer rewrites an already-written packet (a tint, a palette
+- **In-place rewrite.** A title whose override rewrites an already-written packet (a tint, a palette
   swap, a blend bit) must do it under the packet's own key: `EmissionScope::amend(keyFor(packet))` opens
   the binding the packet already carries, so the rewritten colour word re-binds the command word it
   shares with (`PacketAmendScope`) instead of unbinding it. An out-of-scope rewrite leaves the packet
   unkeyed and its record is shown whole.
 - **Line and poly-line packets.** A GP0 line packet decodes to one primitive per segment
-  (`decodePolyLine`, first point to last through the terminator), each carrying its place, so a producer
-  that keys a node's strip interpolates every line of it.
+  (`decodePolyLine`, first point to last through the terminator), each carrying its place, so a replayed
+  strip places every line of it.
 - **Sub-pixel place.** A screen vertex is a `gte::ProjectedVertex`: the SXY word the GPU reads and its place,
   where it lay before the word rounded it. The GTE hands SXY FIFO entries out only as that type
   (`Gte::projected`, the place from Beetle's projection push); `readData` of SXY0..SXYP aborts, and `writeData` to
   the FIFO places the entry on its word's pixel. `saveRaw`/`restoreRaw` (`GteGuard`, `MachineSnapshot`) carry the
   places; a Lightrec register import or a save-state load puts each entry whose word it replaces on that word's
   pixel (`placeReplacedScreenEntries`), so a direct guest write never pairs with an old place. A body stores a vertex with `EmitMemory::storeVertex` and reads
-  one back with `loadVertex`; over a render's `HostMemory` the destination word keeps the place until another
+  one back with `loadVertex`; over a `HostMemory` the destination word keeps the place until another
   write covers it, so scratch slots, queued pieces and packets carry it as long as each copy goes through
   `loadVertex`/`storeVertex`. A plain `mem_r32`/`mem_w32` copy, or a word carried through a local, drops the place
   without a report and the vertex draws on its word's pixel; nothing enforces the path. `loadVertex(address,
   word)` reads a vertex whose word the guest re-encoded (an outcode `SXY << 5 | bits`) at the place kept with it.
   Over guest memory only the word is stored: the guest's own arithmetic on SXY words cannot carry places, and the
-  GP0 record draws the guest's words. A producer computes a place only for a vertex it makes itself (a clip
+  GP0 record draws the guest's words. An override computes a place only for a vertex it makes itself (a clip
   crossing, a split midpoint, a pull, a corner offset by a scaled size, a whole-pixel step with `steppedTo`, a
   lerped 2D point with `nearest`) and stores it through the same path; a local packet is a `gpu::PacketBuffer`.
   `PacketChainWalker` reads each packet's places with its words and `decodePacketPrimitive(PacketView)` gives a
@@ -322,18 +240,15 @@ The composer builds the frame at `t` from S's record:
   two pixels either way, and a place farther off is a word the GPU wrapped, so that vertex keeps its whole pixel. The
   record tap (`Gp0RecordTap`) gives a real present's polygons, lines, poly-line points and sprites their places
   from the same words through the same decode, so a replay at `t = 1` draws the real present exactly.
-  No place is matched by value. Every render stores places the same way, so a real (`t = 1`) compose and its
+  No place is matched by value. Every replay stores places the same way, so a real present and its
   in-betweens agree and a still object does not shift; a vertex shared by two primitives is one stored word, so
   no seam opens. Above native scale the rasterizer draws a vertex at `whole * scale + floor(offset * scale)`; a
   line's pixels take the offset interpolated along it. At native scale every vertex keeps the guest's pixel. A
   sprite (GP0 0x60-0x7F) takes its origin's place the same way: above native scale its quad and the texel lookup
   move by `floor(offset * scale)` together, so the image slides without resampling (`addSprite`, `record.frag`).
-- **Exactness.** At `t = 1`, 4:3, depth testing off, a render must reproduce the entries it replaces;
-  the title's oracle compare covers the frame (at 1x; above it, placed vertices keep their offset).
-
 `EmissionScope` binds each packet to `(P, obj)` at store time through the owner ledger and the OT walk stamps the key on its
-entries, so the composer knows what a producer replaces. `element` and `part` are not pairing keys;
-there are no per-vertex keys. An in-between with nothing produced is the shown record as drawn.
+entries, so the verdict knows which packets a declared owner wrote. `element` and `part` are not pairing keys;
+there are no per-vertex keys.
 
 - **Owner ledger.** `OwnerLedger` (`core.owners`) holds one `u32` handle per main-RAM word. A handle names
   a scope instance (`RecordKey` `(P, obj, element, part)`, opened by the dispatcher as `(P, object register,
@@ -350,19 +265,16 @@ there are no per-vertex keys. An in-between with nothing produced is the shown r
   each group's picture relative to the draw offset (so a double-buffered still draw matches). A group that
   moved, appeared or vanished makes a finding (`UnownedMoving`, `Port`, `Overwrote`) and holds the interval.
   A keyed packet a writer stored into (`mixedOwner`) is an `Overwrote` finding too and holds the interval:
-  its render cannot know what the writer changed. Only a word the packet's own scope wrote counts: a word
+  its owner did not draw what the writer changed. Only a word the packet's own scope wrote counts: a word
   another scope left past its cursor (a drawer's store at a primitive it then rejected) is free pool memory
   the next drawer's packet reuses, not an amendment. S's groups are kept, so the next interval's S' is not
   collected again.
-- **One mode per interval.** The interval is composed whole at every present or held at every present,
-  including `t = 1`: the presenter composes every later present first, and a refusal at any of them holds
-  all. A held present shows S as the guest drew it: a held in-between builds N's own present (no composed
-  record), so the record is planned and rastered once per interval and the `t = 1` present finds it applied.
+- **One mode per interval.** The interval is replayed at every in-between or held at every present: the
+  presenter replays the last present first, and a refusal at any of them holds all. A held present shows S
+  as the guest drew it: a held in-between builds N's own present (no replayed record), so the record is planned and rastered once per interval and the `t = 1` present finds it applied.
   Where S is not N (a double-buffered title shows N-1 while N draws the other buffer), the displayed buffer's
   rect of N's image is still S's picture: S is the latest record that draws that buffer, and an undrawn write
   over it after S leaves no shown record.
-  The last present is composed by its own composer (`endComposer_`) before the in-betweens and kept for its
-  own present, so a 2-field interval composes twice.
 
 - **Shown record.** A present shows the latest held drawing record with a primitive whose draw area is
   the displayed buffer (`drawAreaSpansBuffer`, the canvas rule): the newest drawing record on a
@@ -750,8 +662,7 @@ channel is on (`PSXPORT_DEBUG=perf`, REPL `debug perf`); off, each hook is a cac
   shows is `from + t (shown - from)` in records (logic ticks). A simulated 60.00 Hz display shows at each vblank the
   newest present due by it; `cadence:` counts the logic ticks each vblank advances. A 30 Hz title at fps60 reads
   almost all `0.50`, with a `0.00` about every 5.5 s from the 59.817 Hz field on 60.00 Hz; `unknown` counts vblanks
-  across a present that names no record: a movie, a load, and every present with fps60 off on a title without
-  state producers (`FramePresenter::commitSealed` names the shown record only when it composes). The pacer's real
+  across a present that names no record: a movie, a load, and every present with fps60 off (`FramePresenter::commitSealed` names no shown record there). The pacer's real
   deadlines do not enter it, so it reads the same unpaced and on a loaded host.
 
 Lines. At run end, always: `[playcheck] cadence: vblanks=… planned_presents=… unknown=… logic ticks advanced per
@@ -803,33 +714,15 @@ card) reports watchdog progress only.
 reads it before loading settings: a title that does not interpolate refuses a saved or environment
 `fps60`, omits `fps60=` on save and has no fps60 row.
 
-## Producer DB
-
-Each title tracks which guest functions draw and which of them have a producer. The row key is the
-guest submitter address, the same key the override table uses, so "has a producer" is derived from
-the registrations. A run records per row the primitives drawn, how many were keyed, and how many
-carried a key another primitive of the same record also carried (ambiguous, so drawn unblended), with
-the first such key, and how many keyed primitives had no render (no `StateProducer` at the key's producer, or no state saved for its object, so they show as drawn); the unkeyed rows ranked by primitive count are the producer work queue. Owners: `debug/producer_census.*` (the
-per-run table, fed from each sealed record) and `debug/ot_attr.*` (guest packet to submitter). The census is a
-diagnostic: it books every guest store, so it runs only with `PSXPORT_PRODUCERS=1` and the player's product never
-pays it; nothing a composed frame needs reads it. Armed, the REPL `census` command prints the table so far, and the
-run logs its report (the keyed, unkeyed, without-render and duplicated totals, then the ranked rows) at shutdown.
-
-A keyed primitive counts under its key's producer. An unkeyed one counts under the first frame of the
-storing call chain that is a registered producer, else the span's emitter; with none it is counted as
-no-source, span-miss or span-no-fn.
-
 ## Owner journal
 
 `OwnerJournal` (`game.ownerJournal`) turns each interval's findings and refusals into rows, one per reason,
-writer or producer and screen: `UnownedMoving`, `Port`, `Baked`, `Overwrote`, `ReplayRefused` and
-`IntervalHeld` with its cause (`Cut`, `StaleShown`, `NoPrevious`, `ChainBreak`, `NoState`,
-`Unplaceable`, `Unpaired`). A row carries the guest function, block PC, dispatched entry, image and
+writer or producer and screen: `UnownedMoving`, `Port`, `Overwrote`, `ReplayRefused` and
+`IntervalHeld` with its cause (`Cut`, `StaleShown`, `NoPrevious`, `ChainBreak`, `NotReplayed`). A row carries the guest function, block PC, dispatched entry, image and
 generation, the OT span, a sample packet address and GP0 command, intervals seen and lost, primitives, the
 screen's title-owned key and warp route (`TitleDebugMenu::screen`) and the `decomp_pipeline.py` command for
-the writer. A finding with no writer (a composer refusal, `Baked`) names the declared producer as the function
-and resolves its image; a refusal also carries the object's first entry, so its row has an OT span, sample
-packet and GP0 command. The screen of an interval is the key `TitleDebugMenu::screenKey` read when S was
+the writer. A finding with no writer (a replay refusal) names the declared producer or the section entry as the
+function and resolves its image. The screen of an interval is the key `TitleDebugMenu::screenKey` read when S was
 sealed, so rows land on the screen S shows. The decomp command (`OwnerJournal::decompCommand`) names the
 image through `TitleDebugMenu::decompImage`: the booted executable by default, each overlay's manifest entry
 and extracted file where a title declares them (Tomba 2, Toy Story 2); `--target` decompiles the function and
@@ -867,6 +760,6 @@ state names it through `GameRuntime::nativeState`, and a state carries the activ
 ## Status
 
 The native and GTE draw paths, the render queue, painter, keyed blend and every title's
-`RenderCapabilities` are deleted; `record` and `device` are the only paths. Remaining work:
-`StateProducer` renders for each title's keyed producers by census rank; depth for every title but
-Spyro 1, and depth for guest-code SWC2 stores.
+`RenderCapabilities` are deleted, and so are the state producers and the frame composer: an in-between is a
+replay of the title's draw section or S as drawn. `record` and `device` are the only paths. Remaining work:
+depth for every title but Spyro 1, and depth for guest-code SWC2 stores.

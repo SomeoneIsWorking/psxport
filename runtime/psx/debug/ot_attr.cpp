@@ -341,11 +341,10 @@ void OtAttr::trackStoreSlow(Core *c, GuestSpan store) {
   const uint32_t fn = c->callAttribution.top();
   const uint32_t caller = c->callAttribution.caller();
   // Physical form: mask off the segment bits (KUSEG/KSEG0/KSEG1 mirror main RAM at 0x000xxxxx/0x800xxxxx/
-  // 0xA00xxxxx — masking with 0x1FFFFFFF collapses all three to the same physical offset) — this is the
-  // SAME normalization display_pass_write_guard (mem.cpp) uses, and unlike the pool-only `k = addr |
-  // 0x80000000u` below, it also gives scratchpad (0x1F800000-0x1F8003FF) its own correct, un-mangled
-  // address instead of folding it into a bogus main-RAM address. Needed here because watched regions
-  // (LAST-WRITER PROVENANCE, ot_attr.h) can cover scratchpad, not just the packet pool.
+  // 0xA00xxxxx — masking with 0x1FFFFFFF collapses all three to the same physical offset) — and unlike the pool-only `k
+  // = addr | 0x80000000u` below, it also gives scratchpad (0x1F800000-0x1F8003FF) its own correct, un-mangled address
+  // instead of folding it into a bogus main-RAM address. Needed here because watched regions (LAST-WRITER PROVENANCE,
+  // ot_attr.h) can cover scratchpad, not just the packet pool.
   const uint32_t phys = addr & 0x1FFFFFFFu;
 
   // GATED ON THE CHANNEL, and the gate is LOAD-BEARING — shipping the direct-call push without it costs
@@ -443,23 +442,6 @@ uint32_t OtAttr::resolveClaimedFrame(Core *c) {
   }
   slot.result = found;
   return found;
-}
-
-psx::debug::ProducerAttribution OtAttr::submitterOf(Core *c, uint32_t packetAddress) const {
-  if (packetAddress == 0) {
-    return {0, psx::debug::Unattributed::NoSource};
-  }
-  Span span{};
-  if (!lookupStore(packetAddress & 0x1FFFFCu, &span)) {
-    return {0, psx::debug::Unattributed::SpanMiss};
-  }
-  if (span.claimed) {
-    return {span.claimed, psx::debug::Unattributed::NoSource};
-  }
-  if (span.fn) {
-    return {span.fn, psx::debug::Unattributed::NoSource};
-  }
-  return {0, psx::debug::Unattributed::SpanNoFn};
 }
 
 void OtAttr::trackGte(Core *c) {

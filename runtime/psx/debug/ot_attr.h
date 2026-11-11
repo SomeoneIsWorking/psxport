@@ -51,7 +51,6 @@
 #include "command_args.h"
 #include "guest_address_range.h"
 #include "guest_packet_pool_windows.h"
-#include "producer_census.h"
 #include <functional>
 #include <lucent/log.h> // lucent::Channel — the inline armed test below
 
@@ -67,10 +66,6 @@ class Core;
 // replaces existed to provide. Measured in lucent: 0.66 ns/gate against 19.4 ns for the
 // channel-name-lookup form.
 inline constexpr lucent::Channel g_otattr_channel{"otattr"};
-
-// The producer census also opens the store gate. It is a diagnostic: PSXPORT_PRODUCERS (off by default) arms it per
-// Game (game.cpp), and armed it costs about 18% of an unpaced 3D field (resolveClaimedFrame, trackStoreSlow).
-inline bool g_producer_census_armed = false;
 
 class OtAttr {
 public:
@@ -108,7 +103,7 @@ public:
   void trackStoreSlow(Core *c, GuestSpan store);
   inline void trackStore(Core *c, GuestSpan store) {
     // A registered watch keeps the gate open with both off.
-    if (!g_otattr_channel && !g_producer_census_armed && mWatchCount == 0) {
+    if (!g_otattr_channel && mWatchCount == 0) {
       return;
     }
     trackStoreSlow(c, store);
@@ -119,8 +114,6 @@ public:
 
   // REPL/diagnostic readback — NOT hot path, may scan linearly.
   bool lookupStore(uint32_t addr, Span *out) const;
-  // The submitter of the packet whose first GP0 word is at `packetAddress`, from this frame's spans.
-  psx::debug::ProducerAttribution submitterOf(Core *c, uint32_t packetAddress) const;
   int spanCount() const {
     return mSpanCount;
   }

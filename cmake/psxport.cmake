@@ -129,12 +129,9 @@ set(PSXPORT_FRAMEWORK_SRC
   ${PSXPORT_ROOT}/runtime/psx/present/owner_ledger.cpp # owner of every RAM word: scope instance or unowned writer
   ${PSXPORT_ROOT}/runtime/psx/present/ownership_verdict.cpp # unowned draws still or moving across an interval
   ${PSXPORT_ROOT}/runtime/psx/present/owner_journal.cpp # rows of unowned draws and held intervals
-  ${PSXPORT_ROOT}/runtime/psx/present/frame_state.cpp # producer states by scope serial, collected per record
-  ${PSXPORT_ROOT}/runtime/psx/present/state_producer.cpp # the registry of producer renders
   ${PSXPORT_ROOT}/runtime/psx/present/emit_memory.cpp # guest or host bytes a packet-emitting body runs over
   ${PSXPORT_ROOT}/runtime/psx/present/gte_control.cpp # the GTE control registers a render runs under
   ${PSXPORT_ROOT}/runtime/psx/present/packet_chains.cpp # packets a body linked into tag chains, as primitives
-  ${PSXPORT_ROOT}/runtime/psx/present/frame_composer.cpp # the frame at t from a record and producer renders
   ${PSXPORT_ROOT}/runtime/psx/present/palette_cycle.cpp # the CLUT rows a title cycles, cross-faded between ticks
   ${PSXPORT_ROOT}/runtime/psx/present/record_cluts.cpp # the CLUTs a record sampled, for primitives drawn into a copy of it
   ${PSXPORT_ROOT}/runtime/psx/present/motion_set.cpp # the guest words an in-between moves, sampled and blended into a replay
@@ -226,7 +223,6 @@ set(PSXPORT_FRAMEWORK_SRC
   ${PSXPORT_ROOT}/runtime/psx/cpu/beetle/gte_vendor_hooks.cpp
   ${PSXPORT_ROOT}/runtime/psx/present/proj_params.cpp
   ${PSXPORT_ROOT}/runtime/psx/debug/ot_attr.cpp
-  ${PSXPORT_ROOT}/runtime/psx/debug/producer_census.cpp
   ${PSXPORT_ROOT}/runtime/psx/game/guest_packet_pool_windows.cpp
   ${PSXPORT_ROOT}/runtime/psx/core/guest_code_module.cpp
   ${PSXPORT_ROOT}/runtime/psx/audio/spu_device.cpp
@@ -257,7 +253,6 @@ set(PSXPORT_FRAMEWORK_SRC
   ${PSXPORT_ROOT}/runtime/ui/menu_tab_bar.cpp       # the <tab> row and which one is selected
   ${PSXPORT_ROOT}/runtime/ui/menu_readouts.cpp      # the live video, debug status and title readout lines
   ${PSXPORT_ROOT}/runtime/ui/menu_document.cpp      # the tree over assets/rml/menu.rml
-  ${PSXPORT_ROOT}/runtime/psx/present/present_ledger.cpp # recorded vs composed producers of a t = 1 present
   ${PSXPORT_ROOT}/vendor/rmlui/Backends/RmlUi_Platform_SDL.cpp)
 
 add_library(psxport STATIC ${PSXPORT_FRAMEWORK_SRC})

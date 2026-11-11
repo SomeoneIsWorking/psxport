@@ -30,7 +30,6 @@ struct SnapshotSchedule {
 SnapshotSchedule snapshot_schedule();
 
 long present_dump_first_fence();                  // PSXPORT_FPS60_DUMP_FROM
-bool gate_presentation();                         // PSXPORT_GATE_PRESENTATION
 std::vector<std::uint32_t> present_shot_frames(); // PSXPORT_PRESENT_SHOT_AT: present indices
 
 std::string gpu_dump_dir();                   // PSXPORT_GPU_DUMP

@@ -40,8 +40,6 @@ Game::Game(psx::game::GameRuntime &runtime,
 }
 
 void Game::wireRuntimeMembers() {
-  // PSXPORT_PRODUCERS is armed per Game, before any guest store.
-  g_producer_census_armed = psx::config::producer_census();
   core.game = this;
   core.dispatchEpoch.advance(); // verdicts now read this Game's service tables
   timing.game = this;
@@ -86,7 +84,6 @@ void Game::releaseHardwareBindings() {
 
 Game::~Game() {
   hostInput.detachOverlay(&rml_overlay);
-  core.rsub.census.report("producer census at shutdown");
   releaseHardwareBindings();
   // Unconditional, because the interesting answer is often "nothing was ever read". A run that
   // stalled three seconds in one chd_read and a run that never touched the disc are different

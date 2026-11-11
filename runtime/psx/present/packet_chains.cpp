@@ -57,31 +57,6 @@ std::optional<std::uint32_t> PacketChainWalker::follow(std::uint32_t link, OtSlo
   return std::nullopt;
 }
 
-std::optional<std::uint32_t>
-PacketChainWalker::walk(std::uint32_t link, OtSlot slot, DrawModeTracker &drawMode, PrimitiveSink &sink) {
-  return follow(link, slot, [&](std::uint32_t packet, gpu::PacketView view) {
-    const gpu::Gp0Command head(view.words[0]);
-    if (drawMode.take(view.words) || head.isDrawEnvironmentCommand() || head.isDiscardedNoOp()) {
-      return true;
-    }
-    if (head.isPolyLine()) {
-      return gpu::decodePolyLine(view, [&](DrawPrimitive segment) {
-        drawMode.apply(segment);
-        segment.sourceAddress = packet;
-        sink.emit(slot, segment);
-      });
-    }
-    std::optional<DrawPrimitive> primitive = gpu::decodePacketPrimitive(view);
-    if (!primitive) {
-      return false;
-    }
-    drawMode.apply(*primitive);
-    primitive->sourceAddress = packet;
-    sink.emit(slot, *primitive);
-    return true;
-  });
-}
-
 void PacketChainWalker::capture(std::uint32_t link,
                                 std::vector<gpu::CapturedPacket> &packets,
                                 std::vector<std::uint32_t> &words,
@@ -95,29 +70,6 @@ void PacketChainWalker::capture(std::uint32_t link,
     places.insert(places.end(), view.places.begin(), view.places.end());
     return true;
   });
-}
-
-void PacketChainWalker::emitChain(std::uint32_t link, OtSlot slot, DrawModeTracker &drawMode, PrimitiveSink &sink) {
-  if (const std::optional<std::uint32_t> packet = walk(link, slot, drawMode, sink)) {
-    lucent::error("packet-chain",
-                  "the packet 0x{:08X} at 0x{:08X} is not a polygon, line or sprite",
-                  memory_.mem_r32(*packet + 4u),
-                  *packet);
-    std::abort();
-  }
-}
-
-bool PacketChainWalker::tryEmitChain(std::uint32_t link, OtSlot slot, DrawModeTracker &drawMode, PrimitiveSink &sink) {
-  return !walk(link, slot, drawMode, sink);
-}
-
-void PacketChainWalker::emitBuckets(const BucketHeads &heads, DrawModeTracker &drawMode, PrimitiveSink &sink) {
-  for (std::uint32_t bucket = heads.buckets; bucket-- > 0;) {
-    emitChain(memory_.mem_r32(heads.base + bucket * heads.stride + heads.headOffset),
-              OtSlot{heads.first.table, heads.first.index + bucket},
-              drawMode,
-              sink);
-  }
 }
 
 } // namespace psx::present

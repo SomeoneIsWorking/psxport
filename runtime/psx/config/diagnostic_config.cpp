@@ -16,7 +16,6 @@ Var<std::string> cv_snapshot_at("PSXPORT_SNAP_AT", "", kRunOnly);
 Var<long> cv_snapshot_every("PSXPORT_SNAP_EVERY", 0, kRunOnly);
 Var<long> cv_snapshot_max("PSXPORT_SNAP_MAX", 8, kRunOnly);
 Var<long> cv_present_dump_first_fence("PSXPORT_FPS60_DUMP_FROM", 0, kRunOnly);
-Var<bool> cv_gate_presentation("PSXPORT_GATE_PRESENTATION", false, kRunOnly);
 Var<std::string> cv_present_shot_frames("PSXPORT_PRESENT_SHOT_AT", "", kRunOnly);
 Var<std::string> cv_gpu_dump_dir("PSXPORT_GPU_DUMP", "", kRunOnly);
 Var<std::string> cv_gpu_shot_frames("PSXPORT_SHOT_AT", "", kRunOnly);
@@ -49,7 +48,6 @@ const Registration kRegistration{
     cv_snapshot_every,
     cv_snapshot_max,
     cv_present_dump_first_fence,
-    cv_gate_presentation,
     cv_present_shot_frames,
     cv_gpu_dump_dir,
     cv_gpu_shot_frames,
@@ -134,10 +132,6 @@ SnapshotSchedule snapshot_schedule() {
 
 long present_dump_first_fence() {
   return cv_present_dump_first_fence.get();
-}
-
-bool gate_presentation() {
-  return cv_gate_presentation.get();
 }
 
 std::vector<std::uint32_t> present_shot_frames() {

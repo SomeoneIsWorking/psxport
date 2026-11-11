@@ -19,7 +19,7 @@ by DMA6 and submitted by DMA2, and calls VSync once per field. Each scene runs 2
 
 | scene | drawer | expected rows |
 |---|---|---|
-| `owned-square` | `square_draw`, the producer's object; frames alternate 2 and 3 fields | none; presents at thirds and halves |
+| `owned-square` | `square_draw`, an owned object; frames alternate 2 and 3 fields | none; presents at thirds and halves, each showing S as drawn |
 | `unowned-moving` | `drifter_draw`, a TILE no producer declares | `UnownedMoving` for `drifter_draw` |
 | `mmio-port` | `mmio_bar_draw`, a TILE written to GP0 | `Port mmio-gp0` for `mmio_bar_draw` |
 | `block-dma-port` | `dma_bar_draw`, a TILE sent by block DMA2 | `Port block-dma` for `dma_bar_draw` |
@@ -56,16 +56,16 @@ above the journal holds, by design:
   cycles the scenes k times has about k such intervals per scene change.
 
 The planted cases cover the stage 2 reasons the framework can raise today (`UnownedMoving`, `Port`,
-`Overwrote`). `Baked`, `ReplayRefused`, `PlacelessVertex`, `ClosureFailed` and `BranchChange` have no case: the
-first two need a texture-feedback upload and a guest redraw the program does not yet make, the last three are
+`Overwrote`). `ReplayRefused`, `PlacelessVertex`, `ClosureFailed` and `BranchChange` have no case: the
+first needs a guest redraw the program does not yet make, the last three are
 reasons of stages 3 and 4 that the framework does not raise yet. The reused slot is pinned only by
 incarnations (stage 4).
 
 ## Host
 
-`testprog/host/` is the title: `Runtime` binds VSync and the square's producer from the facts, `FrameDriver`
-runs fields until the frame counter moves and commits once with the guest's field count, `SquareProducer`
-renders the square at any t from its saved fields and the guest sine table, and `DebugMenu` names the scene
+`testprog/host/` is the title: `Runtime` binds VSync and declares `square_draw` the owner of its square from the
+facts, `FrameDriver` runs fields until the frame counter moves and commits once with the guest's field count, and
+`DebugMenu` names the scene
 as the journal's screen with `planted <name>` as its route.
 
 ## Check

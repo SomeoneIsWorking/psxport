@@ -27,7 +27,6 @@ struct StockReadLanding;
 namespace psx::present {
 class GuestWidescreenProjection;
 class ReplayFrame;
-class StateProducer;
 } // namespace psx::present
 namespace psx::state {
 class NativeStatePort;
@@ -151,13 +150,6 @@ public:
   // Whether Record presents get 60 fps in-betweens.
   virtual bool interpolates() const {
     return false;
-  }
-  // The render of producer `producer`'s saved states, owned by the title's session; null keeps its
-  // recorded entries.
-  virtual const psx::present::StateProducer *stateProducer(Core &core, std::uint32_t producer) const {
-    (void)core;
-    (void)producer;
-    return nullptr;
   }
   // The title's replayed in-betweens; null when its in-betweens are composed from producer states.
   virtual psx::present::ReplayFrame *replayFrame(Core &core) {

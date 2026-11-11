@@ -10,7 +10,6 @@
 #include "r3000.h"
 #include "render_substrate.h" // Core owns a RenderSubstrate (host-only per-Core render substrate)
 #include "spin_detector.h"
-#include "state_producer.h"
 #include "store_watch.h"
 #include "write_rollback.h"
 #include <stddef.h>
@@ -23,7 +22,6 @@
 #include "dispatch_epoch.h"
 #include "emission_scope.h"
 #include "frame_pacer.h"
-#include "frame_state.h"
 #include "gte.h"
 #include "guest_call_attribution.h"
 #include "guest_call_census.h"
@@ -98,8 +96,6 @@ public:
   psx::gpu::OtTables otTables;
   // The producers whose opaque polygons test depth against each other.
   psx::present::DepthTest depthTest;
-  // Producer object states saved this logic frame.
-  psx::present::FrameStates frameStates;
 
   // Transient continuation used by the cooperative task owner at an executor boundary.
   uint32_t pending_guest_redirect = 0;

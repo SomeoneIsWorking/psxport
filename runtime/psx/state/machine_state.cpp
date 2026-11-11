@@ -69,7 +69,6 @@ constexpr SectionCodec kSections[] = {
        }
        // The scratchpad is already restored; both spans are executable writes once visible.
        g.core.owners.clear();
-       g.core.frameStates.clear();
        notifyExecutableWrite(g.core, {0x00000000u, psx::kMainRamBytes}, psx::cpu::ExecutableWriteSource::Savestate);
        notifyExecutableWrite(g.core,
                              {psx::kScratchpadPhysicalBase, psx::kScratchpadPhysicalBase + psx::kScratchpadBytes},

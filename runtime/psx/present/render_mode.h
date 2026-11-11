@@ -49,34 +49,8 @@ public:
     mPath = p;
   }
 
-  // While armed, a guest-memory write aborts (mem.cpp): a host display pass reads guest state only.
-  bool displayPassArmed() const {
-    return mDisplayPassArmed;
-  }
-  void setDisplayPassArmed(bool on) {
-    mDisplayPassArmed = on;
-  }
-
 private:
   RenderPath mPath = RenderPath::Record;
-  bool mDisplayPassArmed = false;
-};
-
-// Arms RenderMode::displayPassArmed() for its lifetime and restores the prior value.
-class DisplayPassGuard {
-public:
-  explicit DisplayPassGuard(RenderMode &mode) : mMode(mode), mPrev(mode.displayPassArmed()) {
-    mMode.setDisplayPassArmed(true);
-  }
-  ~DisplayPassGuard() {
-    mMode.setDisplayPassArmed(mPrev);
-  }
-  DisplayPassGuard(const DisplayPassGuard &) = delete;
-  DisplayPassGuard &operator=(const DisplayPassGuard &) = delete;
-
-private:
-  RenderMode &mMode;
-  bool mPrev;
 };
 
 } // namespace psx::present

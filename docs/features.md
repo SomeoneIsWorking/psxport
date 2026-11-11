@@ -48,7 +48,7 @@ title answers there. A hop with no title entry runs on the framework alone.
 | hop | owner | title |
 |---|---|---|
 | 1 | `psx/present/render_mode.h:RenderMode`, `psx/config/config_vars.h:render_path` — `record` (default) or `device`, installed by `Game::wireRuntimeMembers` | |
-| 2 | `psx/debug/ot_attr.cpp:OtAttr::refreshPool` → `GameRuntime::packetPool` — the packet pool the census attributes | `packetPool` |
+| 2 | `psx/debug/ot_attr.cpp:OtAttr::refreshPool` → `GameRuntime::packetPool` — the packet pool `otattr` attributes | `packetPool` |
 | 3 | `psx/present/display_presenter.cpp:DisplayPresenter::presentedRect` → `GameRuntime::displayHeight` | `displayHeight` |
 | 4 | `psx/render/render_present.cpp:RenderState::presentInputs` → `GameRuntime::guestPictureIsNativeWidth` | `guestPictureIsNativeWidth` |
 | 5 | `psx/gpu/gp0_record_tap.h:Gp0RecordTap`, `psx/present/frame_record.h:FrameRecord` — the device's GP0 work recorded per logic frame | |
@@ -61,13 +61,12 @@ title answers there. A hop with no title entry runs on the framework alone.
 | 1 | `psx/present/guest_widescreen_projection.cpp:requestedAspect` → `GameRuntime::guestWidescreenProjection` — the canvas aspect and margins | `guestWidescreenProjection` |
 | 2 | `psx/present/guest_widescreen_projection.h:GuestProjectionPlan` — the margin a title widens its own guest culls by | title render code |
 
-## F-FPS60 — 60 fps from saved state
+## F-FPS60 — 60 fps from a replayed draw
 
 | hop | owner | title |
 |---|---|---|
-| 1 | `psx/frame/frame_presenter.cpp:composeGuarded` → `GameRuntime::stateProducer` — the render for a producer key | `stateProducer` |
+| 1 | `psx/frame/frame_presenter.cpp:FramePresenter::presentRecords` → `GameRuntime::replayFrame` — the title's draw section replayed for each in-between (`present/replay_frame.h:ReplayFrame::at`) | `replayFrame` |
 | 2 | `psx/frame/frame_presenter.cpp:FramePresenter::commitSealed` → `GameRuntime::sealedFrameIsCut` — no in-between across a cut | `sealedFrameIsCut` |
-| 3 | `psx/present/frame_composer.h:FrameComposer::compose` — the in-between: producer renders at `t` on the shown record, into storage kept across presents | |
 | 4 | `psx/game/game.cpp:Game::wireRuntimeMembers` → `GameRuntime::interpolates`; `psx/debug/mods.h:Mods::fps60` | `interpolates` |
 
 ## F-FMV — movies
@@ -116,6 +115,5 @@ title answers there. A hop with no title entry runs on the framework alone.
 | 2 | `ui/title_debug_rows.cpp:TitleDebugRows` — the Debug tab's sections, readouts, parameter and run rows and the About lines, generated from the same `TitleDebugMenu`; a run row sends the line its selections spell through hop 1 | |
 | 3 | `psx/game/title_debug_menu.cpp:TitleDebugMenu::soundTest` — `music <track>`, `music-stop` and the now-playing readout over `TitleAudio` track names | `TitleAudio::trackName` |
 | 3a | `psx/game/title_debug_menu.cpp:TitleDebugMenu::warp` — the title's `WarpCatalogue`: picker labels (`homeworld`, `level`, `arrival`) and a tree of `WarpPlace`s whose leaves are arrivals at one depth, built once from guest data when the title's builder first returns places. `warp <path>` takes names (any case) or indices joined by `/` (`warp Artisans/Stone Hill/portal`, `warp 0/1/1`); `warp ?` or a path ending in `?` lists the tree under it; a refusal names the valid children. An arrival only arms the title's frame-boundary request, which goes through the game's own load/transition owner; the `[warp] <path>: <reply>` log line carries the title's own reply (a refusal included), so an arrival is proven by the title's apply line, not by it. The verb sits in no section: the verbs and readouts a title registers after `warp(...)` stay in the section open before it. The Debug tab shows one cascading picker per level and Go (`TitleDebugRows::warpGo`, which sends the numeric path through hop 1) | `debugMenu` (`warp(...)`) |
-| 4 | `psx/debug/producer_census.h:ProducerCensus` — primitives per producer, keyed and rendered | |
 | 5 | `psx/debug/bug_report_session.h:BugReportSession` — the in-app bug report: the reference frame sealed at `FramePresenter::commit`, the last second of presents from `render/present_clip.h:PresentClip`; only the Game holding player input takes P / '.' / B (`input/pad_input.cpp:Pad::pollHostInput`) from the process's one `HostInput` | |
 | 6 | `psx/debug/debug_commands.cpp` `key`/`text`/`mouse`/`gamepad`/`touch` → `input/input_injection.cpp:InputInjection` — SDL events pushed into the window's queue on the main thread; a modifier key sets SDL's modifier state, so a chord is the modifier `down`, the key, the modifier `up`; `key`/`mouse`/`touch`/`gamepad` taps last the player Game's input turns (`Pad::pollHostInput`), the pause loop's included; the guest-pad verbs `tap`/`press`/`release`/`hold` press the virtual gamepad through `Pad::injectButtons`, the one press entry for the channel and title drivers alike, a `tap` lasting pad frames the guest is served (`Pad::serviceFrame`), so a paused run holds it; a press is refused while a pad replay owns input or another Game (a picker preview panel) holds the player's input, and `PSXPORT_PAD_NOPAD` leaves the virtual pad open | |

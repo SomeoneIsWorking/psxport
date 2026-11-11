@@ -29,8 +29,7 @@ psxport_add_product(
           testprog/host/debug_menu.cpp
           testprog/host/facts.cpp
           testprog/host/frame_driver.cpp
-          testprog/host/runtime.cpp
-          testprog/host/square_producer.cpp)
+          testprog/host/runtime.cpp)
 add_dependencies(psxtest_port psxtest_exe gen_gpu_shaders)
 target_include_directories(psxtest_port PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/testprog/host"
                                                 "${PSXPORT_TESTPROG_ROOT}/include")

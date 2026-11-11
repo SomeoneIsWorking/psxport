@@ -14,55 +14,6 @@
 
 namespace psx::present {
 
-void LevelReads::note(std::uint32_t wordAddress, std::uint32_t value) {
-  if ((words_.size() + 1) * 2 > slots_.size()) {
-    grow();
-  }
-  const std::size_t mask = slots_.size() - 1;
-  for (std::size_t at = startSlot(wordAddress);; at = (at + 1) & mask) {
-    Slot &slot = slots_[at];
-    if (slot.stamp != stamp_) {
-      slot = {stamp_, static_cast<std::uint32_t>(words_.size())};
-      words_.push_back({wordAddress, value});
-      return;
-    }
-    if (words_[slot.word].address == wordAddress) {
-      return;
-    }
-  }
-}
-
-void LevelReads::clear() {
-  words_.clear();
-  if (++stamp_ == 0) {
-    std::fill(slots_.begin(), slots_.end(), Slot{});
-    stamp_ = 1;
-  }
-}
-
-std::size_t LevelReads::startSlot(std::uint32_t wordAddress) const {
-  // The product's high bits, which every address bit reaches; word addresses keep their low two zero.
-  return (wordAddress * 0x9E3779B1u) >> (32 - std::countr_zero(slots_.size()));
-}
-
-void LevelReads::grow() {
-  slots_.assign(std::max<std::size_t>(64, slots_.size() * 2), Slot{});
-  stamp_ = 1;
-  const std::size_t mask = slots_.size() - 1;
-  for (std::uint32_t word = 0; word < words_.size(); ++word) {
-    std::size_t at = startSlot(words_[word].address);
-    while (slots_[at].stamp == stamp_) {
-      at = (at + 1) & mask;
-    }
-    slots_[at] = {stamp_, word};
-  }
-}
-
-void abortKeptScratchInUse() {
-  lucent::error("emit-memory", "a kept scratch object was taken while another use held it");
-  std::abort();
-}
-
 namespace {
 
 std::uint32_t wordOf(std::uint32_t kseg0) {
@@ -90,9 +41,6 @@ void HostMemory::clear() {
   }
   ranges_.clear();
   lastRange_ = nullptr;
-  overlay_.clear();
-  keepsLevelReads_ = false;
-  levelReads_.clear();
 }
 
 HostMemory::Range HostMemory::takeBuffer(std::size_t size) {
@@ -206,81 +154,6 @@ void HostMemory::zero(std::uint32_t address, std::uint32_t size) {
   forgetPlaces(*find(address), kseg0Address(address), size);
 }
 
-void HostMemory::mapGuest(Core &guest, std::uint32_t address, std::uint32_t size) {
-  const std::uint32_t base = kseg0Address(address);
-  const std::uint32_t end = base + size;
-  // The parts no range holds yet, found before the merge hides them.
-  gaps_.clear();
-  std::uint32_t at = base;
-  auto held = std::upper_bound(ranges_.begin(), ranges_.end(), base, [](std::uint32_t a, const Held &h) {
-    return a < h.base;
-  });
-  if (held != ranges_.begin()) {
-    held = std::prev(held);
-  }
-  for (; held != ranges_.end() && held->base < end && at < end; ++held) {
-    const std::uint32_t heldEnd = held->base + static_cast<std::uint32_t>(held->bytes.size());
-    if (heldEnd <= at) {
-      continue;
-    }
-    if (held->base > at) {
-      gaps_.push_back({at, held->base - at});
-    }
-    at = std::max(at, heldEnd);
-  }
-  if (at < end) {
-    gaps_.push_back({at, end - at});
-  }
-  std::byte *bytes = place(base, size);
-  for (const GuestSpan &gap : gaps_) {
-    std::byte *out = bytes + (gap.address - base);
-    if (const std::optional<GuestAddressRange> ram = guest.mappedMainRamRange(gap.address, gap.bytes)) {
-      std::memcpy(out, guest.ram + ram->begin, gap.bytes);
-    } else {
-      for (std::uint32_t i = 0; i < gap.bytes; ++i) {
-        out[i] = static_cast<std::byte>(guest.mem_r8(gap.address + i));
-      }
-    }
-    const std::uint32_t gapEnd = gap.address + gap.bytes;
-    auto word = std::ranges::lower_bound(overlay_, gap.address & ~3u, {}, &LevelWord::address);
-    for (; word != overlay_.end() && word->address < gapEnd; ++word) {
-      for (std::uint32_t byte = 0; byte < 4u; ++byte) {
-        const std::uint32_t target = word->address + byte;
-        if (target >= gap.address && target < gapEnd) {
-          out[target - gap.address] = static_cast<std::byte>(word->value >> (8u * byte));
-        }
-      }
-    }
-  }
-}
-
-void HostMemory::overlay(std::span<const std::byte> packedWords) {
-  overlayNotes_.clear();
-  for (const LevelWord &word : overlay_) {
-    overlayNotes_.push_back({word.address, static_cast<std::uint32_t>(overlayNotes_.size()), word.value});
-  }
-  for (std::size_t at = 0; at + sizeof(LevelWord) <= packedWords.size(); at += sizeof(LevelWord)) {
-    LevelWord word;
-    std::memcpy(&word, packedWords.data() + at, sizeof(LevelWord));
-    overlayNotes_.push_back(
-        {kseg0Address(word.address) & ~3u, static_cast<std::uint32_t>(overlayNotes_.size()), word.value});
-  }
-  std::sort(overlayNotes_.begin(), overlayNotes_.end(), [](const OverlayNote &a, const OverlayNote &b) {
-    return std::tie(a.address, a.order) < std::tie(b.address, b.order);
-  });
-  overlay_.clear();
-  for (std::size_t i = 0; i < overlayNotes_.size(); ++i) {
-    if (i + 1 == overlayNotes_.size() || overlayNotes_[i + 1].address != overlayNotes_[i].address) {
-      overlay_.push_back({overlayNotes_[i].address, overlayNotes_[i].value});
-    }
-  }
-}
-
-const std::uint32_t *HostMemory::overlaid(std::uint32_t wordAddress) const {
-  const auto found = std::ranges::lower_bound(overlay_, wordAddress, {}, &LevelWord::address);
-  return found == overlay_.end() || found->address != wordAddress ? nullptr : &found->value;
-}
-
 bool HostMemory::read(std::uint32_t address, void *out, std::uint32_t size) const {
   const Held *held = find(address);
   if (held == nullptr) {
@@ -308,14 +181,7 @@ void HostMemory::readPlaces(std::uint32_t address, std::span<gte::WordPlace> out
 }
 
 void HostMemory::fallThrough(Core &guest, std::uint32_t address, void *out, std::uint32_t size) const {
-  const std::uint32_t word = kseg0Address(address) & ~3u;
-  const std::uint32_t *overlay = overlaid(word);
-  if (keepsLevelReads_) {
-    levelReads_.note(word, overlay != nullptr ? *overlay : guest.mem_r32(word));
-  }
-  if (overlay != nullptr) {
-    std::memcpy(out, reinterpret_cast<const std::byte *>(overlay) + (address & 3u), size);
-  } else if (size == 1) {
+  if (size == 1) {
     const std::uint8_t value = guest.mem_r8(address);
     std::memcpy(out, &value, size);
   } else if (size == 2) {
@@ -403,16 +269,6 @@ void EmitMemory::readPlaces(std::uint32_t address, std::span<gte::WordPlace> out
     const std::optional<cpu::NotedPlace> noted = core_->vertexPlaces.at(word, core_->mem_r32(word));
     out[i] = noted ? gte::WordPlace(noted->place) : std::nullopt;
   }
-}
-
-void EmitMemory::noteRead(std::uint32_t address) const {
-  const std::uint32_t word = kseg0Address(address) & ~3u;
-  for (const GuestSpan &range : working_) {
-    if (word - kseg0Address(range.address) < range.bytes) {
-      return;
-    }
-  }
-  reads_->note(word, core_->mem_r32(word));
 }
 
 } // namespace psx::present

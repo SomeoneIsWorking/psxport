@@ -2,7 +2,6 @@
 #pragma once
 #include "ot_attr.h"
 #include "picture_announce.h"
-#include "producer_census.h"
 #include "proj_params.h"
 #include "render_mode.h"
 
@@ -13,9 +12,7 @@ namespace psx::present {
 class RenderSubstrate {
 public:
   RenderMode mode;
-  OtAttr otAttr; // OT/GTE submission attribution (`debug otattr`; ot_attr.h)
-  // The per-run producer table, fed from each sealed frame record.
-  psx::debug::ProducerCensus census;
+  OtAttr otAttr;         // OT/GTE submission attribution (`debug otattr`; ot_attr.h)
   ProjParams projParams; // the projection the game stated through libgte
   // The picture geometry last announced for this Core (picture_announce.h).
   psx::picture::Geometry announcedPicture;

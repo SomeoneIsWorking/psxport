@@ -76,9 +76,10 @@ interpolation in its Tomba 2, Ape Escape and Vigilante 8 ports with `docs/RENDER
 4. **Titles.** Spyro 1 first (its draw section and motion tracks; the producers it replaces deleted
    once frames show the same picture), then Spyro 2/3's `field_redraw` onto the same owner, then
    Tomba 2.
-5. **Delete.** Once no title composes producers, `OwnerLedger`, `OwnershipVerdict`, the per-object
-   paths of `FrameComposer` and `EmissionScope` keying go; the ledger's booking on every guest store
-   goes with them.
+5. **Delete.** No title registers a state producer: `StateProducer`, `FrameStates`, `FrameComposer`, the
+   present ledger and the producer census are gone (2026-11-12), and an S no replay covers is shown as drawn.
+   `OwnerLedger`, `OwnershipVerdict` and `EmissionScope` keying go once no title declares a `Producer{Arg}`
+   owner (Tomba! 2 still does); the ledger's booking on every guest store goes with them.
 
 ## Not covered by a replay
 

@@ -1,14 +1,10 @@
-// frame_presenter.h — the logic frame's sealed record, its presents, the present ledger and the cadence fence.
+// frame_presenter.h — the logic frame's sealed record, its presents and the cadence fence.
 #pragma once
 
 #include "field_cadence.h"
-#include "frame_composer.h"
 #include "frame_record.h"
-#include "frame_state.h"
 #include "ownership_verdict.h"
-#include "present_ledger.h"
 #include "record_geometry.h"
-#include "state_producer.h"
 
 #include <array>
 #include <cstddef>
@@ -20,16 +16,6 @@ class Core;
 
 namespace psx::frame {
 
-// The renders a Core's title answers from GameRuntime::stateProducer.
-class RuntimeStateProducers final : public present::StateProducers {
-public:
-  explicit RuntimeStateProducers(Core &core) : core_(core) {}
-  const present::StateProducer *find(std::uint32_t producer) const override;
-
-private:
-  Core &core_;
-};
-
 // What the record path showed, for the play check: the shown record never repeats or goes backwards,
 // and every record present at 60 fps brings its in-between.
 struct PresentStability {
@@ -38,7 +24,7 @@ struct PresentStability {
   std::uint64_t withoutInBetween = 0;
   std::uint64_t repeats = 0;
   std::uint64_t backwards = 0;
-  // Composed presents whose guest moment did not advance: the interval had fewer fields than presents.
+  // Replayed presents whose guest moment did not advance: the interval had fewer fields than presents.
   std::uint64_t stalled = 0;
 };
 
@@ -77,10 +63,7 @@ public:
   const PresentStability &stability() const {
     return stability_;
   }
-  const present::PresentLedger &ledger() const {
-    return ledger_;
-  }
-  // The stability counts and the ledger, once, at run end.
+  // The stability counts, once, at run end.
   void reportStability() const;
 
 private:
@@ -89,22 +72,16 @@ private:
   static constexpr std::size_t kRecordHistory = 3;
   // A longer gap between two draw entries is a pause or a load, not a logic frame.
   static constexpr std::uint32_t kMaxIntervalFields = 8;
-  // A sealed record and the producer states its packets were drawn from, in storage kept across frames.
-  struct RecordSlot {
-    present::FrameRecord record;
-    present::FrameState state;
-  };
   struct SealedRecord {
     const present::FrameRecord *record = nullptr;
-    const present::FrameState *state = nullptr;
     bool cut = false;         // a cut was sealed since the drawing record before it
     bool follows = false;     // every record since the drawing record before it was committed and complete
     std::uint64_t screen = 0; // the title's screen key when the record was sealed
   };
 
   // A slot neither the current record nor the history holds.
-  RecordSlot &freeSlot();
-  void commitSealed(Core &core, const RecordSlot &sealed, int guestFields);
+  present::FrameRecord &freeSlot();
+  void commitSealed(Core &core, const present::FrameRecord &sealed, int guestFields);
 
   // Records `record`'s VRAM writes when it drew nothing, and drops writes older than the oldest held drawing record.
   void holdUndrawnWrites(const present::FrameRecord &record);
@@ -119,16 +96,8 @@ private:
   bool cutBetween(std::uint64_t from, std::uint64_t to) const;
   // The record path at 60 fps: a frame of n fields is n presents, the shown record at t = k / n from the one
   // shown before.
-  void presentRecords(Core &core, const present::StateProducers *producers, int guestFields);
-  // `shown` composed by `composer` at `t` from `from` (a whole frame at t = 1 when null); null when it is drawn as
-  // the guest drew it. A refusal is journaled and holds the interval.
-  const present::FrameRecord *composeShown(Core &core,
-                                           present::FrameComposer &composer,
-                                           const present::StateProducers *producers,
-                                           const SealedRecord &shown,
-                                           const present::FrameState *from,
-                                           float t);
-  // N's present: `composedFrame` when one was composed, else the shown record as the guest drew it.
+  void presentRecords(Core &core, int guestFields);
+  // N's present: `composedFrame` when one was replayed, else the shown record as the guest drew it.
   void presentCurrent(Core &core,
                       FieldCadence cadence,
                       const SealedRecord *shown,
@@ -158,9 +127,9 @@ private:
   int latency_ = 1;
   // The guest moment, in display fields, the last record present showed; unknown after a present off the record path.
   std::optional<std::int64_t> shownMoment_;
-  // The history, the current record and the one being sealed.
-  std::array<RecordSlot, kRecordHistory + 2> slots_;
-  const present::FrameRecord *current_ = &slots_.front().record;
+  // The history, the current record and the one being sealed, in storage kept across frames.
+  std::array<present::FrameRecord, kRecordHistory + 2> slots_;
+  const present::FrameRecord *current_ = &slots_.front();
   std::array<SealedRecord, kRecordHistory> history_; // drawing records, oldest first
   // VRAM written by records that drew nothing, since the oldest held drawing record: the latest sequence per rect.
   struct UndrawnWrite {
@@ -173,13 +142,9 @@ private:
   bool pendingBreak_ = false;
   // The record whose picture the last present showed.
   std::optional<std::uint64_t> shownSequence_;
-  present::FrameComposer composer_;
-  // The interval's last present, composed before its in-betweens are shown and kept for its own present.
-  present::FrameComposer endComposer_;
   present::OwnershipVerdict verdict_;
   const present::FrameRecord *composed_ = nullptr;
   bool composedAdvances_ = false;
   PresentStability stability_;
-  present::PresentLedger ledger_;
 };
 } // namespace psx::frame

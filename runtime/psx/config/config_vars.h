@@ -12,8 +12,7 @@
 
 namespace psx::config {
 
-bool no_audio();        // PSXPORT_NOAUDIO: open no audio device
-bool producer_census(); // PSXPORT_PRODUCERS: arm the producer census (ot_attr.h)
+bool no_audio(); // PSXPORT_NOAUDIO: open no audio device
 
 // PSXPORT_DEBUG_SERVER: the loopback debug port, 1 meaning 5959; 0 when off or not a port.
 int debug_server_port();

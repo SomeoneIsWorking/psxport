@@ -45,7 +45,6 @@ Var<bool> cv_show_window("PSXPORT_SHOW_WINDOW", false, kRunOnly);
 // Empty is the player's own file in the user-data directory; tools name a file of their own.
 Var<std::string> cv_settings_path("PSXPORT_SETTINGS", "", kRunOnly);
 // Arms the producer census, a diagnostic the player's product never pays for (ot_attr.h).
-Var<bool> cv_producers("PSXPORT_PRODUCERS", false, kRunOnly);
 Var<std::string> cv_render_path("PSXPORT_RENDER_PATH", "record", kSaved);
 Var<long> cv_lightrec_fallback_block_limit("PSXPORT_LIGHTREC_FALLBACK_BLOCK_LIMIT",
                                            static_cast<long>(psx::cpu::kDefaultMaxFallbackBlocksPerExecution),
@@ -95,7 +94,6 @@ const Registration kRegistration{
     cv_asset_dir,
     cv_show_window,
     cv_settings_path,
-    cv_producers,
     cv_render_path,
     cv_lightrec_fallback_block_limit,
     cv_override_diff,
@@ -231,10 +229,6 @@ std::string owners_dir() {
 
 bool no_audio() {
   return cv_noaudio.get();
-}
-
-bool producer_census() {
-  return cv_producers.get();
 }
 
 int debug_server_port() {

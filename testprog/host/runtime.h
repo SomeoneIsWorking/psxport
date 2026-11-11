@@ -1,10 +1,9 @@
-// runtime.h — the test program as a title: its session, its VSync, its producer and its debug menu.
+// runtime.h — the test program as a title: its session, its VSync, its square's owner and its debug menu.
 #pragma once
 
 #include "debug_menu.h"
 #include "facts.h"
 #include "game_runtime.h"
-#include "state_producer.h"
 #include "stock_vsync.h"
 
 #include <optional>
@@ -14,7 +13,6 @@ namespace psx::testprog {
 class Session final : public psx::game::TitleSessionState {
 public:
   Facts facts;
-  psx::present::StateProducerTable producers;
 };
 
 Session &session(Core &core);
@@ -27,7 +25,6 @@ public:
   bool interpolates() const override {
     return true;
   }
-  const psx::present::StateProducer *stateProducer(Core &core, std::uint32_t producer) const override;
   const psx::game::TitleDebugMenu &debugMenu() const override {
     return debugMenu_;
   }

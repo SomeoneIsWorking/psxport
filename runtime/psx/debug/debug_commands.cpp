@@ -334,11 +334,6 @@ void owners(const Call &call) {
   replyLines(call.reply, journal.describe(limit));
 }
 
-void census(const Call &call) {
-  call.core.rsub.census.report("census");
-  call.reply(g_producer_census_armed ? "census reported to the log" : "the census is off; PSXPORT_PRODUCERS=1 arms it");
-}
-
 void renderPath(const Call &call) {
   const std::string name = call.args.text(1);
   if (!name.empty()) {
@@ -776,7 +771,6 @@ inline constexpr std::array kVerbs{
     Verb{"cvar", "cvar <name> [value]", "set a knob for this run; bare clears it", &cvar, Reach::Host},
     Verb{"guest", "guest", "the executor's counters now", &guestLedger},
     Verb{"owners", "owners [n|write]", "the owner journal: draws with no owner, held intervals", &owners},
-    Verb{"census", "census", "the producer census so far, to the log", &census},
     Verb{"renderpath",
          "renderpath [record|device]",
          "switch the live render path; bare prints it",
