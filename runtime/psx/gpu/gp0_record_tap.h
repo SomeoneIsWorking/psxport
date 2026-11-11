@@ -119,6 +119,10 @@ private:
   [[nodiscard]] PacketView placedWords() const;
   // The draw site that stored every placed word of words_, 0 when they differ or none is placed.
   [[nodiscard]] std::uint32_t placingSite() const;
+  // The draw site that stored words_[i], 0 when it is not placed.
+  [[nodiscard]] std::uint32_t wordSite(std::size_t i) const {
+    return i < places_.size() && places_[i] ? placingSites_[i] : 0u;
+  }
 
   std::uint64_t nextSequence_ = 1; // 0 is the presenter's empty record
   present::FrameRecord record_;
@@ -142,7 +146,8 @@ private:
   std::uint32_t quadOpcode_ = 0;
   // The previous point of a poly-line.
   present::RecordVertex polyLinePoint_{};
-  std::uint32_t polyLineSite_ = 0;
+  std::uint32_t polyLineSite_ = 0;      // the segment being recorded's
+  std::uint32_t polyLinePointSite_ = 0; // the last point's
   std::uint32_t polyLineOpcode_ = 0;
   std::uint32_t polyLineSource_ = 0;
   std::optional<present::RecordKey> polyLineKey_;

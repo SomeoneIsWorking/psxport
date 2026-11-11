@@ -339,6 +339,7 @@ void Gp0RecordTap::executeCommand(const DeviceProbe &probe) {
     drawState_.offset(from);
     drawState_.offset(to);
     polyLineSite_ = placingSite();
+    polyLinePointSite_ = wordSite(words_.size() - 1);
     recordLineSegment(from, to, gouraud, command.flags().semiTransparent, probe);
     if (command.isPolyLine()) {
       mode_ = Mode::PolyLine;
@@ -482,6 +483,10 @@ void Gp0RecordTap::consumePolyLineWord(std::uint32_t word, const DeviceProbe &pr
   const bool gouraud = command.flags().gouraud;
   present::RecordVertex to = polyLinePoint(placedWords(), 0, gouraud ? 1 : 0, polyLinePoint_);
   drawState_.offset(to);
+  // A later segment has a site only when the same one placed both its ends.
+  const std::uint32_t pointSite = wordSite(gouraud ? 1 : 0);
+  polyLineSite_ = pointSite == polyLinePointSite_ ? pointSite : 0u;
+  polyLinePointSite_ = pointSite;
   expectedDispatches_ = 1;
   packetSource_ = polyLineSource_;
   packetKey_ = polyLineKey_;
