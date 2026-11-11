@@ -68,16 +68,24 @@ bool GuestRedraw::dispatch(std::uint32_t entry, std::span<const std::uint32_t> a
   return call(entry, arguments, Call::Dispatched);
 }
 
-bool GuestRedraw::dispatchTo(std::uint32_t entry, std::uint32_t end, std::span<const std::uint32_t> arguments) {
+bool GuestRedraw::dispatchTo(std::uint32_t entry,
+                             std::uint32_t end,
+                             std::span<const std::uint32_t> arguments,
+                             std::span<const std::uint32_t> appliedCalls) {
   const std::uint32_t sp = core_.r[cpu::kSp];
   const std::uint32_t ra = core_.r[cpu::kRa];
-  const bool reached = call(entry, arguments, Call::ToEnd, end);
+  bool reached = call(entry, arguments, Call::ToEnd, appliedCalls.empty() ? end : appliedCalls.front());
+  for (std::size_t next = 1; reached && next <= appliedCalls.size(); ++next) {
+    const std::uint32_t stop = next < appliedCalls.size() ? appliedCalls[next] : end;
+    reached = call(entry, {}, Call::ToEnd, stop, core_.r[cpu::kRa]);
+  }
   core_.r[cpu::kSp] = sp;
   core_.r[cpu::kRa] = ra;
   return reached;
 }
 
-bool GuestRedraw::call(std::uint32_t entry, std::span<const std::uint32_t> arguments, Call kind, std::uint32_t end) {
+bool GuestRedraw::call(
+    std::uint32_t entry, std::span<const std::uint32_t> arguments, Call kind, std::uint32_t end, std::uint32_t from) {
   std::copy(arguments.begin(), arguments.end(), core_.r + cpu::kA0);
   // No call inside it can suspend at a turn's end; a second of guest time only stops a runaway.
   const cpu::ExecutionBudget runaway = cpu::ExecutionBudget::fromCycles(frame::kNominalPsxCpuHz);
@@ -85,8 +93,9 @@ bool GuestRedraw::call(std::uint32_t entry, std::span<const std::uint32_t> argum
   try {
     const cpu::ExecutionResult result =
         kind == Call::Dispatched ? cpu::dispatchGuest(core_, entry, runaway, "redraw")
-        : kind == Call::ToEnd    ? cpu::resumeGuestToReturn(core_, cpu::GuestCallSite{entry, end}, entry, runaway)
-                                 : cpu::callOriginal(core_, entry, runaway);
+        : kind == Call::ToEnd
+            ? cpu::resumeGuestToReturn(core_, cpu::GuestCallSite{entry, end}, from != 0 ? from : entry, runaway)
+            : cpu::callOriginal(core_, entry, runaway);
     if (!result.returned()) {
       lucent::warn("redraw",
                    "the redraw of 0x{:08X} stopped: {} at 0x{:08X}",

@@ -47,13 +47,23 @@ public:
   // The same as a guest call to `entry`: its override, if any, runs. A draw section's steps are called this way.
   [[nodiscard]] bool dispatch(std::uint32_t entry, std::span<const std::uint32_t> arguments);
   // The routine at `entry` (no override of its own) from its start until execution reaches `end`, a block start of
-  // its body where its device tail begins; the run then continues from the section's sp and ra.
-  [[nodiscard]] bool dispatchTo(std::uint32_t entry, std::uint32_t end, std::span<const std::uint32_t> arguments);
+  // its body where its device tail begins; the run then continues from the section's sp and ra. `appliedCalls` are
+  // callees whose device work the real frame already did (a draw's leading PutDrawEnv), in the order the body calls
+  // them: the run stops as it enters each, once, and resumes at the return address the call left, so the callee
+  // does not run and its delay slot did.
+  [[nodiscard]] bool dispatchTo(std::uint32_t entry,
+                                std::uint32_t end,
+                                std::span<const std::uint32_t> arguments,
+                                std::span<const std::uint32_t> appliedCalls = {});
 
 private:
   enum class Call : std::uint8_t { Original, Dispatched, ToEnd };
-  [[nodiscard]] bool
-  call(std::uint32_t entry, std::span<const std::uint32_t> arguments, Call kind, std::uint32_t end = 0);
+  // A ToEnd call resumes `entry`'s body at `from` (its start when 0).
+  [[nodiscard]] bool call(std::uint32_t entry,
+                          std::span<const std::uint32_t> arguments,
+                          Call kind,
+                          std::uint32_t end = 0,
+                          std::uint32_t from = 0);
   // Whether the run reached no device or syscall; the first it reached is logged and reported as a refusal.
   [[nodiscard]] bool reachedNoDevice(std::uint32_t entry);
 
