@@ -21,6 +21,9 @@ GteControl readGteControl(const psx::cpu::Gte &gte);
 void writeGteControl(psx::cpu::Gte &gte, const GteControl &control);
 // A rotation matrix `t` of the way from `from` to `to`: its turn along the shorter arc, its stretch blended.
 gte::RotationWords rotationBetween(const gte::RotationWords &from, const gte::RotationWords &to, float t);
+// A rotation whose rows carry a scale (a widened axis, a shake) `t` of the way: the unscaled turn along the shorter
+// arc, then scaled by `to`'s rows.
+gte::RotationWords scaledRowsBetween(const gte::RotationWords &from, const gte::RotationWords &to, float t);
 // The control registers `t` of the way from `from` to `to`: rotation turns and translation moves, every
 // other register is `to`'s.
 GteControl blendGteControl(const GteControl &from, const GteControl &to, float t);

@@ -97,7 +97,8 @@ void TransformRule::blend(const Samples &samples, float t, std::span<std::uint32
   gte::RotationWords to{};
   std::copy_n(samples.from.begin(), from.size(), from.begin());
   std::copy_n(samples.to.begin(), to.size(), to.begin());
-  const gte::RotationWords rotation = rotationBetween(from, to, t);
+  const gte::RotationWords rotation =
+      rows_ == Rows::Scaled ? scaledRowsBetween(from, to, t) : rotationBetween(from, to, t);
   std::copy(rotation.begin(), rotation.end(), out.begin());
   for (std::size_t i = rotation.size(); i < kWords; ++i) {
     out[i] = lerpWord(samples.from[i], samples.to[i], t);

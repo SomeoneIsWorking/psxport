@@ -84,6 +84,42 @@ gte::RotationWords rotationBetween(const gte::RotationWords &from, const gte::Ro
   return shown ? encode(*shown) : elementsBetween(from, to, t);
 }
 
+gte::RotationWords scaledRowsBetween(const gte::RotationWords &from, const gte::RotationWords &to, float t) {
+  if (t <= 0.0f) {
+    return from;
+  }
+  if (t >= 1.0f || from == to) {
+    return to;
+  }
+  Matrix3 earlier = decode(from);
+  Matrix3 later = decode(to);
+  std::array<double, 3> scales{};
+  for (std::size_t row = 0; row < scales.size(); ++row) {
+    const auto length = [&](const Matrix3 &m) {
+      return std::hypot(m[row][0], m[row][1], m[row][2]);
+    };
+    const double before = length(earlier);
+    scales[row] = length(later);
+    if (before == 0.0 || scales[row] == 0.0) {
+      return elementsBetween(from, to, t);
+    }
+    for (std::size_t column = 0; column < 3; ++column) {
+      earlier[row][column] /= before;
+      later[row][column] /= scales[row];
+    }
+  }
+  std::optional<Matrix3> shown = lucent::rotation::between(earlier, later, t);
+  if (!shown) {
+    return elementsBetween(from, to, t);
+  }
+  for (std::size_t row = 0; row < scales.size(); ++row) {
+    for (double &value : (*shown)[row]) {
+      value *= scales[row];
+    }
+  }
+  return encode(*shown);
+}
+
 GteControl blendGteControl(const GteControl &from, const GteControl &to, float t) {
   GteControl blended = to;
   const auto rotationOf = [](const GteControl &control) {

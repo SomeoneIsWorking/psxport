@@ -54,7 +54,9 @@ interpolation in its Tomba 2, Ape Escape and Vigilante 8 ports with `docs/RENDER
 2. **Motion set.** `present/motion_set` holds the kinds above, pairs by address and title identity
    (address plus generation, as `StateProducer` identity does), and applies blends through
    `GuestRedraw::writeWord`. Cuts stay the title's declared cuts; the move/turn limits only catch
-   what a cut missed. `blendGteControl`'s slerp is the one rotation blend.
+   what a cut missed. `blendGteControl`'s slerp is the one rotation blend; `TransformRule::Rows::Scaled`
+   slerps a matrix whose rows carry a per-tick scale (a widened axis, a shake) unscaled and applies the
+   later tick's scales.
 3. **Replay frame.** A title declares its draw section (entry, the arguments captured at the real
    call, and its motion tracks). Inside the logic frame the presenter's planned in-betweens are each a
    `GuestRedraw` of the section; its GP0 stream (the DMA list walk) goes to a device-free record tap
@@ -63,7 +65,8 @@ interpolation in its Tomba 2, Ape Escape and Vigilante 8 ports with `docs/RENDER
    in-between only; the present shows S. It stops at its first device access, out of host code at once
    and from translated code at the end of that segment, so a guest poll never spins out the runaway
    budget; a root counter's value reads its held count and is no device access (`SideEffectMode::Discard`).
-   Per-pass cost (thread CPU time) is measured and passes shed above budget. At run end `ReplayFrame::report` logs intervals replayed (with their in-betweens) and refused
+   Per-pass cost (thread CPU time) is measured and passes shed above budget. At run end
+   `ReplayFrame::report` logs intervals replayed (with their in-betweens) and refused
    by the section (a refusal at any k drops the whole interval, so none of its in-betweens count), then
    in-betweens shown and held at assembly, each counted once although the presenter asks for it twice; and
    `MotionSet::report` each track's and each `MotionSource`'s unpaired items over the replayed intervals only

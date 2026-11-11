@@ -54,7 +54,13 @@ public:
 class TransformRule final : public MotionRule {
 public:
   static constexpr std::size_t kWords = 8;
+  // Scaled rows: the rotation's rows carry a per-tick scale (a widened axis, a shake), which steps (scaledRowsBetween).
+  enum class Rows : std::uint8_t { Rotation, Scaled };
+  explicit constexpr TransformRule(Rows rows = Rows::Rotation) : rows_(rows) {}
   void blend(const Samples &samples, float t, std::span<std::uint32_t> out) const override;
+
+private:
+  Rows rows_;
 };
 [[nodiscard]] constexpr std::array<MotionField, TransformRule::kWords> transformFields(std::uint32_t at) {
   std::array<MotionField, TransformRule::kWords> fields{};
