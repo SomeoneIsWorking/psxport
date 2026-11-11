@@ -9,6 +9,7 @@
 #include "game_runtime.h"
 #include "guest_memory_map.h"
 #include "invalidation.h"
+#include "replay_frame.h"
 #include "timing.h"
 
 #include <lucent/log.h>
@@ -284,6 +285,10 @@ std::optional<StateOutcome> MachineState::restore(std::span<const std::uint8_t> 
   // Every section is in place and nothing below can refuse, so the title adopts what it staged.
   if (port != nullptr) {
     port->restored(core);
+  }
+  // The replay's samples are of the guest the restore replaced.
+  if (present::ReplayFrame *replay = mGame.runtime.replayFrame(core)) {
+    replay->forget();
   }
   outcome.loaded = true;
   return outcome;

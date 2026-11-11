@@ -206,7 +206,7 @@ while both are live and its `MotionKey` words hold; an unpaired record is replay
 carries into the whole turns above it (`blend.h:turnedBetween`, rounded by `lerpTurned`; a title keeping a fraction below the
 unit reads `turnedBetween`). Inputs that pair by the title's own rule (pools whose entries name lists of their own) are a
 `MotionSource`, sampled and written with the tracks; its write returns what it drew and how much of that was
-unpaired, reported at run end beside the tracks. The title calls `forget` at a cut it sees before the draw so the next sample pairs with nothing; a cut it declares after the draw holds the interval in the presenter. Once two samples pair the section is
+unpaired, reported at run end beside the tracks. The title calls `forget` at a cut it sees before the draw so the next sample pairs with nothing (a state restore forgets for it, `MachineState::restore`); a cut it declares after the draw holds the interval in the presenter. Once two samples pair the section is
 re-run in a `GuestRedraw` for each k/n of the interval with the tracks written k/n of the way. While it runs,
 `ReplayFrame::replaying` gives k/n, so a title override that reads or writes what no guest word can hold at a
 fraction (a result each caller reads at its own index, an edge one row per draw) blends it there. A blended word is
