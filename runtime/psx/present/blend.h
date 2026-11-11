@@ -35,11 +35,24 @@ inline std::uint32_t lerpTurn(std::uint32_t from, std::uint32_t to, unsigned bit
   return static_cast<std::uint32_t>(lerpInt(start, start + step, t)) & mask;
 }
 
+// A halfword holding an angle of `bits` bits with whole turns above it, `t` of the way the short way round and
+// carried into the turns, unrounded.
+inline double turnedBetween(std::uint32_t from, std::uint32_t to, unsigned bits, float t) {
+  const std::uint32_t mask = (1u << bits) - 1u;
+  const std::int32_t step = ringStep(from & mask, to & mask, std::int64_t{mask} + 1);
+  return static_cast<double>(from & 0xFFFFu) + static_cast<double>(step) * static_cast<double>(t);
+}
+
+// turnedBetween as the nearest halfword, a tie to even.
+inline std::uint32_t lerpTurned(std::uint32_t from, std::uint32_t to, unsigned bits, float t) {
+  return static_cast<std::uint32_t>(static_cast<std::int32_t>(std::nearbyint(turnedBetween(from, to, bits, t)))) &
+         0xFFFFu;
+}
+
 // `t` of the way from `from` to `to` on a ring of `period`, the short way round, unrounded and wrapped into
 // [0, period).
 inline double lerpRing(std::int32_t from, std::int32_t to, std::int32_t period, float t) {
-  const double at =
-      std::fmod(from + static_cast<double>(ringStep(from, to, period)) * static_cast<double>(t), period);
+  const double at = std::fmod(from + static_cast<double>(ringStep(from, to, period)) * static_cast<double>(t), period);
   return at < 0.0 ? at + period : at;
 }
 

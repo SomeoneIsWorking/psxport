@@ -13,15 +13,8 @@
 namespace psx::present {
 namespace {
 
-constexpr std::uint32_t kAngle12 = 0xFFFu;
+constexpr unsigned kAngle12Bits = 12;
 constexpr std::uint32_t kHalfword = 0xFFFFu;
-
-// A halfword holding a 12-bit angle and the whole turns above it: the short way round, carried into the turns.
-std::uint32_t turnedHalf(std::uint32_t from, std::uint32_t to, float t) {
-  const auto start = static_cast<std::int32_t>(from & kHalfword);
-  const std::int32_t step = ringStep(from & kAngle12, to & kAngle12, kAngle12 + 1);
-  return static_cast<std::uint32_t>(lerpInt(start, start + step, t)) & kHalfword;
-}
 
 // A halfword's two samples and the ring it wraps at; a zero period takes the later sample.
 struct RingHalf {
@@ -83,9 +76,9 @@ std::uint32_t blendedWord(Motion motion, std::uint32_t from, std::uint32_t to, f
   case Motion::Countdown:
     return static_cast<std::int32_t>(to) <= static_cast<std::int32_t>(from) ? lerpWord(from, to, t) : to;
   case Motion::Angle12x2:
-    return turnedHalf(from, to, t) | turnedHalf(from >> 16, to >> 16, t) << 16;
+    return lerpTurned(from, to, kAngle12Bits, t) | lerpTurned(from >> 16, to >> 16, kAngle12Bits, t) << 16;
   case Motion::Angle12Low:
-    return (to & ~kHalfword) | turnedHalf(from, to, t);
+    return (to & ~kHalfword) | lerpTurned(from, to, kAngle12Bits, t);
   case Motion::Angle8x3: {
     std::uint32_t word = to & 0xFF000000u;
     for (unsigned shift = 0; shift < 24; shift += 8) {
