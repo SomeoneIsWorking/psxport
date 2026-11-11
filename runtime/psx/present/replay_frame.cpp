@@ -16,8 +16,9 @@ namespace psx::present {
 
 ReplayFrame::ReplayFrame(const ReplaySection &section,
                          std::span<const MotionTrack> tracks,
-                         std::span<MotionSource *const> sources)
-    : section_(section), motion_(tracks, sources) {}
+                         std::span<MotionSource *const> sources,
+                         const PaletteCycles *cycles)
+    : section_(section), motion_(tracks, sources), cycles_(cycles) {}
 
 void ReplayFrame::beforeDraw(Core &core) {
   // Without fps60 no in-between is presented.
@@ -33,6 +34,7 @@ void ReplayFrame::beforeDraw(Core &core) {
     return;
   }
   pending_.fields = fields_;
+  pending_.cycles.sample(core, cycles_);
   pending_.captures.resize(static_cast<std::size_t>(fields_ - 1));
   for (int k = 1; k < fields_; ++k) {
     const float t = static_cast<float>(k) / static_cast<float>(fields_);
@@ -84,6 +86,7 @@ void ReplayFrame::sealed(std::uint64_t sequence, bool draws) {
   set.fields = pendingReady_ ? pending_.fields : 0;
   set.ran = ran_;
   std::swap(set.captures, pending_.captures);
+  std::swap(set.cycles, pending_.cycles);
   pendingReady_ = false;
   ran_ = false;
   lastDrawing_ = sequence;
@@ -121,7 +124,7 @@ ReplayFrame::at(const FrameRecord &shown, const FrameRecord &from, int k, std::s
   }
   const FrameRecord *assembled =
       assemble(shown,
-               {.earlier = from, .t = static_cast<float>(k) / static_cast<float>(set->fields)},
+               {.earlier = from, .t = static_cast<float>(k) / static_cast<float>(set->fields), .cycles = set->cycles},
                set->captures[index],
                k,
                vram);
@@ -132,7 +135,7 @@ ReplayFrame::at(const FrameRecord &shown, const FrameRecord &from, int k, std::s
 }
 
 const FrameRecord *ReplayFrame::assemble(const FrameRecord &shown,
-                                         RecordCluts::Between between,
+                                         const RecordCluts::Between &between,
                                          const Capture &capture,
                                          int k,
                                          std::span<const std::uint16_t> vram) {

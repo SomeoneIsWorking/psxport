@@ -9,6 +9,7 @@
 #include "frame_record.h"
 #include "gp0_draw_state.h"
 #include "motion_set.h"
+#include "palette_cycle.h"
 #include "record_cluts.h"
 
 #include <array>
@@ -39,7 +40,8 @@ public:
 
   ReplayFrame(const ReplaySection &section,
               std::span<const MotionTrack> tracks,
-              std::span<MotionSource *const> sources = {});
+              std::span<MotionSource *const> sources = {},
+              const PaletteCycles *cycles = nullptr);
 
   // The section is about to run for real: samples the inputs and, when they pair, replays the in-betweens;
   // nothing while fps60 is off.
@@ -87,12 +89,13 @@ private:
     int fields = 0;
     bool ran = false;
     std::vector<Capture> captures; // k = 1..fields-1
+    CycledRows cycles;
   };
   // One replay at `t`; false when the section refused or its chain could not be read.
   bool replay(Core &core, float t, Capture &capture);
   // In-between `k` of S from its capture; null, logged, when S's chain run cannot take it.
   [[nodiscard]] const FrameRecord *assemble(const FrameRecord &shown,
-                                            RecordCluts::Between between,
+                                            const RecordCluts::Between &between,
                                             const Capture &capture,
                                             int k,
                                             std::span<const std::uint16_t> vram);
@@ -101,6 +104,7 @@ private:
 
   const ReplaySection &section_;
   MotionSet motion_;
+  const PaletteCycles *cycles_;
   // The interval length the next set is replayed for: the last one the presenter asked for.
   int fields_ = 2;
   std::optional<float> replaying_;

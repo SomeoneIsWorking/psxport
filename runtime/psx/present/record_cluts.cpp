@@ -80,6 +80,7 @@ void RecordCluts::index(const FrameRecord &shown) {
   collect(shown, offsets_);
   earlierOffsets_.clear();
   earlier_ = nullptr;
+  cycles_ = nullptr;
   t_ = 1.0f;
 }
 
@@ -87,6 +88,7 @@ void RecordCluts::index(const FrameRecord &shown, Between between) {
   collect(shown, offsets_);
   collect(between.earlier, earlierOffsets_);
   earlier_ = &between.earlier;
+  cycles_ = &between.cycles;
   t_ = between.t;
 }
 
@@ -112,7 +114,8 @@ bool RecordCluts::resolve(FrameRecord &into, DrawPrimitive &primitive, std::span
       const std::size_t count = gpu::clutEntryCount(static_cast<gpu::TexDepth>(primitive.state.texMode));
       const std::span<const std::uint16_t> from = earlier_->clutPool().subspan(before->offset, count);
       const std::span<const std::uint16_t> to = into.clutPool().subspan(at->offset, count);
-      if (!std::equal(from.begin(), from.end(), to.begin())) {
+      const gpu::VramPoint row = gpu::decodeClut(primitive.clutWord);
+      if (!std::equal(from.begin(), from.end(), to.begin()) && cycles_->steps(row.x, row.y, from, to)) {
         std::array<std::uint16_t, 256> entries{};
         for (std::size_t i = 0; i < count; i++) {
           entries[i] = blendEntry(from[i], to[i], t_);
@@ -122,11 +125,7 @@ bool RecordCluts::resolve(FrameRecord &into, DrawPrimitive &primitive, std::span
           return false;
         }
         at->offset = blended;
-        lucent::debug("clut",
-                      "in-between at t={:.2f} blends CLUT {:#06x} depth {}",
-                      t_,
-                      primitive.clutWord,
-                      primitive.state.texMode);
+        lucent::debug("clut", "in-between at t={:.2f} cross-fades the cycled CLUT row ({}, {})", t_, row.x, row.y);
       }
     }
   }

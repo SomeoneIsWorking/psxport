@@ -135,6 +135,7 @@ set(PSXPORT_FRAMEWORK_SRC
   ${PSXPORT_ROOT}/runtime/psx/present/gte_control.cpp # the GTE control registers a render runs under
   ${PSXPORT_ROOT}/runtime/psx/present/packet_chains.cpp # packets a body linked into tag chains, as primitives
   ${PSXPORT_ROOT}/runtime/psx/present/frame_composer.cpp # the frame at t from a record and producer renders
+  ${PSXPORT_ROOT}/runtime/psx/present/palette_cycle.cpp # the CLUT rows a title cycles, cross-faded between ticks
   ${PSXPORT_ROOT}/runtime/psx/present/record_cluts.cpp # the CLUTs a record sampled, for primitives drawn into a copy of it
   ${PSXPORT_ROOT}/runtime/psx/present/motion_set.cpp # the guest words an in-between moves, sampled and blended into a replay
   ${PSXPORT_ROOT}/runtime/psx/present/replay_frame.cpp # in-betweens drawn by replaying a title's draw section

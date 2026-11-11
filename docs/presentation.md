@@ -218,11 +218,12 @@ difference (`EmitMemory::storeVertex`, or `GuestRedraw::writeVertex` from a moti
 section returns is captured (`PacketChainWalker::capture`). At seal the captures belong to S; in-between k is S
 with the one chain run the section names (`ReplaySection::linked`) replaced by the capture decoded under S's draw
 state at that run (`FrameRecord::splice`, `gpu::decodePackets`), CLUTs resolved by `RecordCluts`: one S sampled
-keeps its entries, blended k/n of the way from S''s entries when S' sampled the same CLUT (attribute and depth) with
-different ones (each 5-bit channel by `lerpInt`, the STP bit S's, the transparent 0x0000 never blended into, out of or
-landed on), so a palette cycle cross-fades; one S never sampled is read from VRAM. A composed in-between keeps S's
-entries. Each
-captured word keeps the depth a draw site noted with it (`EmitMemory::capturedPlace`), so replayed primitives test
+keeps its entries; one S never sampled is read from VRAM. A palette cycle is the title's to declare
+(`PaletteCycles::declare`, sampled with the set into `CycledRows`): each 16-entry row its owner uploads and the guest
+table of frames it uploads from. A declared row S' and S both sampled (same attribute, 4-bit) as two different frames
+of its table is blended k/n of the way from S''s frame to S's (each 5-bit channel by `lerpInt`, the STP bit S's, the
+transparent 0x0000 never blended into, out of or landed on); any other CLUT change between ticks lands on S. A
+composed in-between keeps S's entries. Each captured word keeps the depth a draw site noted with it (`EmitMemory::capturedPlace`), so replayed primitives test
 depth as the real present's do. A run that bakes an upload, a capture that does not decode, or no single matching
 run gives no in-between, and an interval with no replayed set is held (`not-replayed`). An S whose draw never ran
 the section (`ReplayFrame::replays`: a menu, a pause, a load) is composed from producer states as for a title with no
