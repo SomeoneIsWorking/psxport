@@ -101,10 +101,9 @@ Products: `spyro_port`, `toystory2_port`, `crashbash_port`, `crash_port`, `ctr_p
   newest present before it) and judge the motion across the shown sequence.
 - Only pacing needs real time on a quiet host. Composition, identity and halfway motion are judged unpaced
   (`PSXPORT_NOPACE=1`, same ires and sink) at any load.
-- Weak hardware is met by having no needlessly expensive operations, never by generating host load: measure cost
-  in load-independent units with the product's own meter (`PSXPORT_DEBUG=perf`: instructions per logic frame by
-  phase, GPU draws/pixels/uploads per present, the planned 60 Hz cadence; `psxport/docs/presentation.md` Cost and
-  cadence), at any load, and remove work that is redundant, repeated or scales with ires/sink on the CPU.
+- Cost is measured as the `perf-units` skill says. The meter is `PSXPORT_DEBUG=perf`: the run-end `[perf] cpu …`
+  (instructions per logic frame by phase) and `[perf] gpu …` (work per present) lines, and `[playcheck] cadence:`;
+  `psxport/docs/presentation.md` Cost and cadence.
 - Run captures stay small: dump only the presents a judgement needs, crop or downscale them for comparison,
   and before a pass ends delete its full-size dumps with `scratch_gc.py`, keeping logs, scripts and the reduced
   evidence the issue cites.

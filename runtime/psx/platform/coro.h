@@ -2,7 +2,7 @@
 // Strict ping-pong: exactly one side runs at a time, each handoff a turn on the product's WorkClock.
 #pragma once
 
-#include "work_clock.h"
+#include <lucent/work_clock.h>
 
 #include <condition_variable>
 #include <csetjmp>
@@ -13,7 +13,7 @@
 
 class Coro {
 public:
-  explicit Coro(psx::platform::WorkClock &clock) : clock_(clock) {}
+  explicit Coro(lucent::perf::WorkClock &clock) : clock_(clock) {}
   ~Coro();
   Coro(const Coro &) = delete;
   Coro &operator=(const Coro &) = delete;
@@ -58,8 +58,8 @@ private:
   bool canceling_ = false; // set by cancel(); yield() unwinds instead of returning when seen
   std::jmp_buf exit_jmp_;  // body root, set in thread_main; exit_now()/cancel unwind here
   std::function<void()> body_;
-  psx::platform::WorkClock &clock_;
-  psx::platform::WorkClock::Thread work_; // the fiber thread's place on clock_
+  lucent::perf::WorkClock &clock_;
+  lucent::perf::WorkClock::Thread work_; // the fiber thread's place on clock_
 
   void thread_main();
 };

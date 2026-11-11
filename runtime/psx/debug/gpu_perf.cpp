@@ -41,12 +41,12 @@ constexpr std::array<GpuCount, 8> kGpuCountNames{{
 }};
 
 // Per-frame work is printed in millions of the clock's unit.
-const char *workUnit(psx::platform::WorkUnit unit) {
-  return unit == psx::platform::WorkUnit::Instructions ? "Minsn" : "cpu-ms";
+const char *workUnit(lucent::perf::WorkUnit unit) {
+  return unit == lucent::perf::WorkUnit::instructions ? "Minsn" : "cpu-ms";
 }
 
-const char *workSource(psx::platform::WorkUnit unit) {
-  return unit == psx::platform::WorkUnit::Instructions
+const char *workSource(lucent::perf::WorkUnit unit) {
+  return unit == lucent::perf::WorkUnit::instructions
              ? "user-space instructions retired (perf_event, per product thread)"
              : "thread CPU time (no instruction counter on this host), NOT instructions";
 }
@@ -151,7 +151,7 @@ void GpuPerf::frameEnd() {
   lucent::debug(mFrameChannel,
                 "frame {} {}: pre={} padfence={} audio={} game-logic={} present={} replay={} other={} total={}",
                 mMeteredFrames,
-                mClock.unit() == psx::platform::WorkUnit::Instructions ? "insn" : "cpu-ns",
+                mClock.unit() == lucent::perf::WorkUnit::instructions ? "insn" : "cpu-ns",
                 mFrame[0],
                 mFrame[1],
                 mFrame[2],
@@ -216,9 +216,6 @@ void GpuPerf::showOnVblank(std::optional<double> moment) {
   }
   mHaveShown = true;
   mShownMoment = moment;
-  if (mVblanks % kPresentSummaryEvery == 0) {
-    lucent::debug("playcheck", "cadence so far: {}", cadenceSummary());
-  }
 }
 
 void GpuPerf::restartPresentSeries() {
@@ -252,9 +249,6 @@ void GpuPerf::presented(clk_time_point at, double vsyncPeriodMs) {
   } else {
     mMissRun = 0;
   }
-  if (mPresents.intervals % kPresentSummaryEvery == 0) {
-    lucent::debug("playcheck", "presents so far: {}", presentSummary());
-  }
 }
 
 void GpuPerf::report() const {
@@ -264,14 +258,14 @@ void GpuPerf::report() const {
 }
 
 void GpuPerf::reportCost() const {
-  const psx::platform::WorkUnit unit = mClock.unit();
+  const lucent::perf::WorkUnit unit = mClock.unit();
   const char *unitName = workUnit(unit);
   lucent::debug("perf",
                 "cpu run-end: {} logic frames metered in {}; {} product thread(s) uncounted",
                 mMeteredFrames,
                 workSource(unit),
-                mClock.uncountedThreads());
-  const auto line = [&](const char *name, const psx::debug::CountHistogram &work) {
+                mClock.uncounted_threads());
+  const auto line = [&](const char *name, const lucent::perf::CountHistogram &work) {
     lucent::debug("perf",
                   "cpu {}: p50 {:.3f} p99 {:.3f} max {:.3f} {}/frame, total {:.1f} {}",
                   name,
@@ -289,7 +283,7 @@ void GpuPerf::reportCost() const {
   lucent::debug("perf", "gpu run-end: {} record presents metered", mGpuWork[0].count());
   for (std::size_t count = 0; count < kGpuCounts; ++count) {
     const GpuCount &named = kGpuCountNames[count];
-    const psx::debug::CountHistogram &work = mGpuWork[count];
+    const lucent::perf::CountHistogram &work = mGpuWork[count];
     lucent::debug("perf",
                   "gpu {}: p50 {:.3f} p99 {:.3f} max {:.3f} {}/present, total {:.1f} {}",
                   named.name,

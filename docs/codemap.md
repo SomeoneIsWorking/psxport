@@ -49,8 +49,7 @@ Dependency direction: title repo → `runtime/psx/game/` (the title interface) �
 - `runtime/psx/platform/dma_*` — DMA controller DPCR / DICR, channels, linked-list chain mode, DMA callbacks, DMA IRQ
 - `runtime/psx/platform/io_peripherals.*`, `irq_edge.h` — I_STAT / I_MASK interrupt lines, root counter and SIO decode
 - `runtime/psx/platform/memcard.*`, `card_syscall_log.*` — memory card device and file, card syscall counts
-- `runtime/psx/platform/coro.*` — coroutine / fiber for a guest task scheduler, each handoff a turn on the WorkClock
-- `runtime/psx/platform/thread_work_counter.*`, `work_clock.*` — a thread's own instructions retired (perf_event) or CPU time; the product's work across the emulation thread and its fibers
+- `runtime/psx/platform/coro.*` — coroutine / fiber for a guest task scheduler, each handoff a turn on the product's `lucent::perf::WorkClock`
 - `runtime/psx/platform/watchdog.*`, `spin_detector.*` — frame watchdog, crash and signal reporters, guest spin / hang detection
 - `runtime/psx/platform/host_clock.h`, `fs_util.*`, `blob_codec.h`, `active_low_edges.h` — host monotonic clock, host file I/O, little-endian byte codec, active-low button press and release edges
 - `runtime/psx/platform/beetle_device_instance.h` — one per-Game Beetle device state behind Beetle's process-global bind point (SPU, MDEC)
@@ -102,7 +101,7 @@ Dependency direction: title repo → `runtime/psx/game/` (the title interface) �
 - `runtime/psx/debug/debug_commands.*`, `command_args.*`, `control_surface_limits.h` — debug verbs table shared by transports, command words, reply caps
 - `runtime/psx/debug/dbg_server.*`, `repl.*` — control channel (loopback HTTP `POST /command`), stdin REPL
 - `runtime/psx/debug/producer_census.*`, `ot_attr.*` — primitives per guest submitter, OT / GTE submission attribution
-- `runtime/psx/debug/gpu_debug.*`, `gpu_perf.*`, `count_histogram.*`, `memcensus.*`, `field_digest.*`, `image_writer.*`, `snapshot.*`, `store_watch.*`, `pad_frame_probes.*`, `frame_schedule.*`, `host_backtrace.*` — diagnostics: scene dump, cost and cadence meter (CPU work per phase, GPU work per present, planned 60 Hz cadence, play-check presents; `presentation.md` Cost and cadence), work-count percentiles, memmove census, per-field digest, PNG / APNG / PPM capture, RAM snapshot, store watch, pad-frame probes, host backtrace
+- `runtime/psx/debug/gpu_debug.*`, `gpu_perf.*`, `memcensus.*`, `field_digest.*`, `image_writer.*`, `snapshot.*`, `store_watch.*`, `pad_frame_probes.*`, `frame_schedule.*`, `host_backtrace.*` — diagnostics: scene dump, cost and cadence meter (CPU work per phase, GPU work per present, planned 60 Hz cadence, play-check presents; `presentation.md` Cost and cadence; counters and percentiles from `lucent::perf`), memmove census, per-field digest, PNG / APNG / PPM capture, RAM snapshot, store watch, pad-frame probes, host backtrace
 - `runtime/psx/debug/bug_report_session.*` — in-app bug report: reference frame at the next sealed frame, motion clip, reproduction command
 - `runtime/ui/` — RmlUi overlay menu: library (one Rml::Initialise per device), document, tabs, rows, readouts, toggles, wrapped stepping, Debug and About tabs generated from the title debug menu (`title_debug_rows`), SDL_GPU render interface, assets
 - `assets/rml/` — overlay menu markup, styles, fonts

@@ -33,7 +33,7 @@ void Coro::resume() {
   if (!started_ || finished_) {
     return;
   }
-  psx::platform::WorkClock::Thread *const scheduler = clock_.leave();
+  lucent::perf::WorkClock::Thread *const scheduler = clock_.leave();
   {
     std::lock_guard<std::mutex> lk(m_);
     turn_ = Turn::Fiber;

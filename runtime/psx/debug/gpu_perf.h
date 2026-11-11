@@ -3,12 +3,12 @@
 // (GpuWork), the planned present cadence, and the wall-clock present series of the play check. The name is stale:
 // it meters CPU, GPU and pacing.
 #pragma once
-#include "count_histogram.h"
 #include "frame_time_histogram.h"
 #include "gpu_work.h"
-#include "work_clock.h"
 
+#include <lucent/count_histogram.h>
 #include <lucent/log.h>
+#include <lucent/work_clock.h>
 
 #include <array>
 #include <chrono>
@@ -65,7 +65,7 @@ public:
     return mPerf > 0;
   }
   // The clock every product thread hands off on; a Coro takes it.
-  psx::platform::WorkClock &clock() {
+  lucent::perf::WorkClock &clock() {
     return mClock;
   }
   // The record rasterization of one present.
@@ -103,8 +103,6 @@ public:
   }
 
 private:
-  // A running summary on the `playcheck` channel, for a run that ends without its report.
-  static constexpr std::uint64_t kPresentSummaryEvery = 600;
   std::string presentSummary() const;
   std::string cadenceSummary() const;
   void reportCost() const;
@@ -122,7 +120,7 @@ private:
   long mPerfRecheck = 0;
   lucent::Channel mFrameChannel{"perfframe"};
 
-  psx::platform::WorkClock mClock;
+  lucent::perf::WorkClock mClock;
   std::uint64_t mFrameStart = 0;
   std::uint64_t mLast = 0; // the clock at the last boundary
   std::array<std::uint64_t, kSpans> mFrame{};
@@ -130,12 +128,12 @@ private:
   std::array<Span, kMaxDepth> mOpen{};
   std::size_t mDepth = 0;
   Span mOutside = Span::Pre; // charged while no phase is open
-  std::array<psx::debug::CountHistogram, kSpans> mSpanWork;
-  psx::debug::CountHistogram mFrameWork;
+  std::array<lucent::perf::CountHistogram, kSpans> mSpanWork;
+  lucent::perf::CountHistogram mFrameWork;
   std::uint64_t mMeteredFrames = 0;
 
   static constexpr std::size_t kGpuCounts = 8;
-  std::array<psx::debug::CountHistogram, kGpuCounts> mGpuWork;
+  std::array<lucent::perf::CountHistogram, kGpuCounts> mGpuWork;
 
   // The planned schedule shown on a simulated 60.00 Hz display: each vblank shows the newest present due by it.
   double mPlanHeldFields = 0.0;

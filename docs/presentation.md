@@ -718,10 +718,11 @@ The wall-clock `presents:` line is the one real-time check; it needs a quiet hos
 in units no host load moves, so two builds are compared on any host, paced or unpaced. Counting runs while the `perf`
 channel is on (`PSXPORT_DEBUG=perf`, REPL `debug perf`); off, each hook is a cached branch.
 
-- **CPU, per logic frame.** `platform/work_clock.*` counts user-space instructions retired by the product's threads:
-  the emulation thread and the `Coro` fibers it resumes (Tomba's guest tasks), which never run at once. Each thread
-  reads only its own counter (`platform/thread_work_counter.*`: `perf_event_open(PERF_COUNT_HW_INSTRUCTIONS)`,
-  user space only, one event per PMU on a hybrid CPU); a `Coro` handoff banks the leaving thread's work. Where no
+- **CPU, per logic frame.** `lucent::perf::WorkClock` (Lucent `work_clock.h`) counts user-space instructions retired by
+  the product's threads: the emulation thread and the `Coro` fibers it resumes (Tomba's guest tasks), which never run
+  at once. Each thread reads only its own counter (`lucent::perf::ThreadWorkCounter`:
+  `perf_event_open(PERF_COUNT_HW_INSTRUCTIONS)`, user space only, one event per PMU on a hybrid CPU); a `Coro`
+  handoff banks the leaving thread's work. Where no
   counter opens (`perf_event_paranoid` above 2, a VM without a PMU, macOS, Windows) the unit is thread CPU time, and
   every line says so (`cpu-ms`, "NOT instructions"). One read per boundary. The frame driver's `frameBegin`,
   `markPre`, `phaseBegin`/`phaseEnd` and `frameEnd` split the frame into `pre`, `padfence`, `audio`, `game-logic`,
@@ -745,17 +746,15 @@ Lines. At run end, always: `[playcheck] cadence: vblanks=… planned_presents=�
 60.00 Hz vblank: 0.50x… 0.00x…`. With `perf` on: `[perf] cpu run-end: <frames> logic frames metered in <unit>`, one
 `[perf] cpu <phase>: p50 p99 max Minsn/frame, total Minsn` line per phase and one for the whole `frame`, then
 `[perf] gpu run-end: <n> record presents metered` and one `[perf] gpu <count>: p50 p99 max <unit>/present, total`
-line per count. Percentiles are at most 1.6% high (`debug/count_histogram.*`); max and total are exact. With
+line per count. Percentiles are at most 1.6% high (`lucent::perf::CountHistogram`); max and total are exact. With
 `perfframe` on, one `frame N insn: pre=… total=…` line per logic frame and one `present gpu: …` line per present,
 raw counts, for diffing two runs frame by frame.
 
-Comparing two builds: run the same deterministic recipe (a warp and held buttons, `PSXPORT_NOPACE=1`, the judgement
-ires and sink) on each with `perf` on and compare the totals. On one build the GPU counts repeat exactly and the CPU
-phase totals within about 0.1%, whatever the host load; a difference above that is the change. The meter's own cost
-(the boundary reads and the covered-pixel sums) is about 0.2% of the process's user-space instructions at 8x, from
-`perf stat -e instructions:u` with the channel on and off. The rule "nothing on the CPU scales with ires" is checked
-by running the recipe at two ires: the GPU `pixels` and `copy pixels` scale with ires squared, the CPU phases must
-not.
+Comparing two builds follows the `perf-units` skill: the same deterministic recipe (a warp and held buttons,
+`PSXPORT_NOPACE=1`, the judgement ires and sink) on each with `perf` on, at least two runs a side, and
+`perf_compare.py` over the logs. Measured on Spyro 1: on one build the GPU counts repeat exactly and the CPU phase
+totals within about 0.1%, whatever the host load. The meter's own cost (the boundary reads and the covered-pixel sums)
+is about 0.2% of the process's user-space instructions at 8x. The present phase grows with ires (psxport issue 0199).
 
 ## Movies
 
