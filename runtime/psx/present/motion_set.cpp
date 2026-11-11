@@ -56,7 +56,7 @@ bool holds(const RecordByte &byte, std::uint8_t value) {
 }
 
 std::size_t keyWords(const MotionTrack &track) {
-  return track.keys.size();
+  return track.keys.size() + (track.records.incarnation != nullptr ? 1u : 0u);
 }
 
 std::size_t recordWords(const MotionTrack &track) {
@@ -160,6 +160,9 @@ void MotionSet::sampleTrack(Core &core, const MotionTrack &track, Sample &into) 
     into.starts.push_back(into.words.size());
     for (const MotionKey &key : track.keys) {
       into.words.push_back(core.mem_r32(record + key.offset) & key.mask);
+    }
+    if (records.incarnation != nullptr) {
+      into.words.push_back(records.incarnation->of(core, record));
     }
     for (const MotionField &field : track.fields) {
       into.words.push_back(core.mem_r32(record + field.offset));

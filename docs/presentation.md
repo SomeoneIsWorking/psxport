@@ -158,7 +158,8 @@ driver calls `beforeDraw`: the `MotionSet` samples the title's tracks (guest wor
 `MotionRule` for words that move as a unit, such as a keyframe pose). A track is one record or a run of them
 (`MotionRecords`: a stride, an optional pointer to the first, an end byte, and a live byte or, for a pool whose
 records carry no such byte, the title's `MotionLiveness`); two samples of a record pair at the same address only
-while both are live and its `MotionKey` words hold; an unpaired record is replayed as drawn. A PsyQ MATRIX moves by
+while both are live, its `MotionKey` words hold and, where the title's allocator rather than the record's bytes
+names a new object, its `MotionIncarnation` gives both the same life; an unpaired record is replayed as drawn. A PsyQ MATRIX moves by
 `TransformRule` (rotation along the shorter arc, translation straight; a view matrix, `Translation::View`, moves its camera -RᵀT straight instead, so an object the camera follows holds its place on screen while the view turns: `gte_control.h:viewTranslationBetween`); a scroll by `RingRule` (each halfword the short way round its period, fixed or held in the record's next word); a 12-bit angle moves the short way round and
 carries into the whole turns above it (`blend.h:turnedBetween`, rounded by `lerpTurned`; a title keeping a fraction below the
 unit reads `turnedBetween`). Inputs that pair by the title's own rule (pools whose entries name lists of their own) are a

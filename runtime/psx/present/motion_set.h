@@ -120,6 +120,14 @@ public:
   [[nodiscard]] virtual bool live(std::uint32_t record) const = 0;
 };
 
+// Which life of a record a sample holds, where the title's allocator rather than the record's bytes says so: two
+// samples of a record pair only within one life.
+class MotionIncarnation {
+public:
+  virtual ~MotionIncarnation() = default;
+  [[nodiscard]] virtual std::uint32_t of(Core &core, std::uint32_t record) const = 0;
+};
+
 // Where a track's records lie: one at the track's address, or a run of them `stride` bytes apart.
 struct MotionRecords {
   bool throughPointer = false; // the track's address holds the first record's address
@@ -128,6 +136,7 @@ struct MotionRecords {
   std::optional<RecordByte> end;  // a record whose byte is in range ends the run
   std::optional<RecordByte> live; // a record whose byte is out of range holds no object
   MotionLiveness *liveness = nullptr;
+  const MotionIncarnation *incarnation = nullptr;
 };
 
 // Guest records and the fields of each that move; a ruled track's fields are blended by its rule and their own
