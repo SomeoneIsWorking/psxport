@@ -31,8 +31,11 @@ each player's pad on their own machine, pads exchanged per guest frame, every pe
   component (libzt, built by the xmen2 agent) when it lands, never through hand-rolled NAT traversal. It joins a
   controller-less ad-hoc network with no account or install; a player's code is their 10-hex-digit node ID, and
   ZeroTier's public roots relay when no direct path exists (ZeroTier's infrastructure, not ours). Ad-hoc networks
-  are public and IPv6 unicast only, so the session authenticates its peers itself. libzt's license is checked
-  against MIT distribution before it ships. Mega Man X4's LAN co-op uses the same path.
+  are public and IPv6 unicast only, so the session authenticates its peers itself. License: libzt's `LICENSE.txt`
+  is BSL 1.1 with Change Date 2026-01-01 to Apache 2.0, and its pinned ZeroTierOne (`ext/ZeroTierOne` `c53c6bd9c3`,
+  1.4.4) is BSL 1.1 with Change Date 2025-01-01 to Apache 2.0, so both are Apache 2.0 now; lwIP is BSD. Apache 2.0
+  ships beside MIT with its NOTICE and license text in the distribution. A newer revision can carry a later Change
+  Date, so the pin stays at a revision whose Change Date has passed. Mega Man X4's LAN co-op uses the same path.
 - **Rollback.** Each peer runs ahead on predicted remote pads (the last one received), saves a state per frame and,
   when a late pad differs, loads the state of that frame and re-steps to the present with audio and presentation
   suppressed. The guest's logic rate is untouched (30 Hz titles stay 30 Hz).
