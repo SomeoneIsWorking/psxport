@@ -100,6 +100,15 @@ void TransformRule::blend(const Samples &samples, float t, std::span<std::uint32
   const gte::RotationWords rotation =
       rows_ == Rows::Scaled ? scaledRowsBetween(from, to, t) : rotationBetween(from, to, t);
   std::copy(rotation.begin(), rotation.end(), out.begin());
+  if (translation_ == Translation::View) {
+    ViewTransform earlier{.rotation = from};
+    ViewTransform later{.rotation = to};
+    std::copy_n(samples.from.begin() + rotation.size(), gte::kTranslationWords, earlier.translation.begin());
+    std::copy_n(samples.to.begin() + rotation.size(), gte::kTranslationWords, later.translation.begin());
+    const gte::TranslationWords translation = viewTranslationBetween(earlier, later, rotation, t);
+    std::copy(translation.begin(), translation.end(), out.begin() + rotation.size());
+    return;
+  }
   for (std::size_t i = rotation.size(); i < kWords; ++i) {
     out[i] = lerpWord(samples.from[i], samples.to[i], t);
   }

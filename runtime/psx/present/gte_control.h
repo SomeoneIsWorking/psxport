@@ -24,6 +24,15 @@ gte::RotationWords rotationBetween(const gte::RotationWords &from, const gte::Ro
 // A rotation whose rows carry a scale (a widened axis, a shake) `t` of the way: the unscaled turn along the shorter
 // arc, then scaled by `to`'s rows.
 gte::RotationWords scaledRowsBetween(const gte::RotationWords &from, const gte::RotationWords &to, float t);
+// A world-to-view MATRIX: its rotation and the translation -R*C that puts the camera C at the origin.
+struct ViewTransform {
+  gte::RotationWords rotation{};
+  gte::TranslationWords translation{};
+};
+// The translation of a view `t` of the way, under its blended rotation `shown`: the camera moves straight, so an
+// object that moves with the camera holds its place on screen, which a straight translation does not while it turns.
+gte::TranslationWords
+viewTranslationBetween(const ViewTransform &from, const ViewTransform &to, const gte::RotationWords &shown, float t);
 // The control registers `t` of the way from `from` to `to`: rotation turns and translation moves, every
 // other register is `to`'s.
 GteControl blendGteControl(const GteControl &from, const GteControl &to, float t);

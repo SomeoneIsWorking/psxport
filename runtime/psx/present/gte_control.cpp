@@ -84,6 +84,59 @@ gte::RotationWords rotationBetween(const gte::RotationWords &from, const gte::Ro
   return shown ? encode(*shown) : elementsBetween(from, to, t);
 }
 
+gte::TranslationWords
+viewTranslationBetween(const ViewTransform &from, const ViewTransform &to, const gte::RotationWords &shown, float t) {
+  if (t <= 0.0f) {
+    return from.translation;
+  }
+  if (t >= 1.0f) {
+    return to.translation;
+  }
+  using Vector = std::array<double, 3>;
+  const auto apply = [](const Matrix3 &m, const Vector &v) {
+    Vector out{};
+    for (std::size_t row = 0; row < 3; ++row) {
+      out[row] = m[row][0] * v[0] + m[row][1] * v[1] + m[row][2] * v[2];
+    }
+    return out;
+  };
+  const auto translationOf = [](const ViewTransform &view) {
+    Vector out{};
+    for (std::size_t axis = 0; axis < 3; ++axis) {
+      out[axis] = static_cast<double>(static_cast<std::int32_t>(view.translation[axis]));
+    }
+    return out;
+  };
+  // The camera -R^T*T; the 4.12 rows are not quite unit, so the offset is taken against R*C, not -T.
+  const auto camera = [&](const Matrix3 &m, const Vector &translation) {
+    Vector out{};
+    for (std::size_t axis = 0; axis < 3; ++axis) {
+      out[axis] = -(m[0][axis] * translation[0] + m[1][axis] * translation[1] + m[2][axis] * translation[2]);
+    }
+    return out;
+  };
+  const Matrix3 earlier = decode(from.rotation);
+  const Matrix3 later = decode(to.rotation);
+  const Vector earlierTranslation = translationOf(from);
+  const Vector laterTranslation = translationOf(to);
+  const Vector earlierCamera = camera(earlier, earlierTranslation);
+  const Vector laterCamera = camera(later, laterTranslation);
+  Vector midCamera{};
+  for (std::size_t axis = 0; axis < 3; ++axis) {
+    midCamera[axis] = lerpExact(earlierCamera[axis], laterCamera[axis], t);
+  }
+  const Vector shownCamera = apply(decode(shown), midCamera);
+  const Vector earlierPlaced = apply(earlier, earlierCamera);
+  const Vector laterPlaced = apply(later, laterCamera);
+  gte::TranslationWords out{};
+  for (std::size_t axis = 0; axis < 3; ++axis) {
+    const double straight = lerpExact(earlierTranslation[axis], laterTranslation[axis], t);
+    const double turned = shownCamera[axis] - lerpExact(earlierPlaced[axis], laterPlaced[axis], t);
+    out[axis] = static_cast<std::uint32_t>(static_cast<std::int32_t>(std::nearbyint(straight - turned)));
+  }
+  return out;
+}
+
 gte::RotationWords scaledRowsBetween(const gte::RotationWords &from, const gte::RotationWords &to, float t) {
   if (t <= 0.0f) {
     return from;
