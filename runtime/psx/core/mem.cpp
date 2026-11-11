@@ -9,6 +9,7 @@
 #include "guest_code_module.h"
 #include "guest_memory_map.h"
 #include "mdec_device.h"
+#include "ordering_table.h"
 #include "host_backtrace.h"
 #include "invalidation.h"
 #include "io_peripherals.h"
@@ -796,8 +797,7 @@ void Core::io_write(uint32_t a, uint32_t v, uint32_t bytes) {
       uint32_t madr = dma.of(DmaChannel::Otc).madr & 0x1FFFFC; // highest entry address (&ot[n-1])
       for (uint32_t i = 0; i < n; i++) {
         uint32_t addr = madr - i * 4;
-        uint32_t word = (i == n - 1) ? 0x00FFFFFFu : ((addr - 4) & 0x00FFFFFFu);
-        mem_w32_unnotified(addr, word);
+        mem_w32_unnotified(addr, psx::gpu::reverseClearedLink(addr, i == n - 1));
       }
       psx::cpu::notifyExecutableWrite(*this, {madr - (n - 1) * 4u, madr + 4u}, psx::cpu::ExecutableWriteSource::Dma);
       dma.of(DmaChannel::Otc).chcr &= ~0x01000000u; // clear busy -> ClearOTagR's busy-poll passes

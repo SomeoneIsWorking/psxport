@@ -31,6 +31,11 @@ constexpr std::uint32_t mainRamOffsetOf(std::uint32_t guestAddress) {
   return guestAddress & kMainRamOffsetMask;
 }
 
+// The word an OTC DMA (ClearOTagR) writes at `address`: a link to the bucket below it, or the chain end at the lowest.
+constexpr std::uint32_t reverseClearedLink(std::uint32_t address, bool lowest) {
+  return lowest ? kOtChainEnd : (address - kOtHeaderBytes) & kOtNextAddressMask;
+}
+
 // Header bits 31-24: the node's GP0 word count (0 is a link-only node); 23-0: the next node's offset.
 enum class OtHeaderWord : std::uint32_t {};
 
