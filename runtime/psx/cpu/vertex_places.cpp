@@ -42,6 +42,7 @@ void VertexPlaces::keepCarried() {
   if (rollback_.armed() && carriedKeptRun_ != rollback_.run()) {
     keep(carried_);
     keep(carriedMask_);
+    keep(loadedMask_);
     carriedKeptRun_ = rollback_.run();
   }
 }
@@ -73,6 +74,46 @@ void VertexPlaces::loadedPlaced(std::uint32_t reg, const std::optional<NotedPlac
     return;
   }
   carry(reg, word, *noted);
+  loadedMask_ |= 1u << reg;
+}
+
+void VertexPlaces::sortFaces(const FaceSort &sort) {
+  if (std::ranges::find(faceSorts_, sort.function, &FaceSort::function) != faceSorts_.end()) {
+    return;
+  }
+  faceSorts_.push_back(sort);
+  faceLoadMask_ |= opcodeBit(sort.faceLoad);
+}
+
+void VertexPlaces::faceLoaded(const LoadedWord &load) {
+  const auto sort = std::ranges::find_if(faceSorts_, [&](const FaceSort &each) {
+    return each.function == load.function && each.faceLoad == load.opcode;
+  });
+  if (sort == faceSorts_.end()) {
+    return;
+  }
+  keepFace();
+  face_ = {.function = load.function, .nearerSlots = static_cast<float>(sort->slots(load.word)), .bin = sort->bin};
+}
+
+NotedPlace VertexPlaces::inFace(const NotedPlace &noted) const {
+  NotedPlace moved = noted;
+  if (moved.place.z <= 0.0f) {
+    return moved;
+  }
+  const float nearer = face_.nearerSlots * (face_.bin + moved.place.back);
+  // A face sorted to or behind the eye has no depth, so it draws in slot order.
+  moved.place.z = std::max(moved.place.z - nearer, 0.0f);
+  // What the guest draws after the face meets it at its own depth.
+  moved.place.back += nearer;
+  return moved;
+}
+
+void VertexPlaces::keepFace() {
+  if (rollback_.armed() && faceKeptRun_ != rollback_.run()) {
+    keep(face_);
+    faceKeptRun_ = rollback_.run();
+  }
 }
 
 void VertexPlaces::carry(std::uint32_t reg, std::uint32_t word, const NotedPlace &noted) {
@@ -82,6 +123,7 @@ void VertexPlaces::carry(std::uint32_t reg, std::uint32_t word, const NotedPlace
   keepCarried();
   carried_[reg] = {.word = word, .noted = noted};
   carriedMask_ |= 1u << reg;
+  loadedMask_ &= ~(1u << reg);
 }
 
 void VertexPlaces::drop(std::uint32_t reg) {

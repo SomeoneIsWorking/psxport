@@ -785,7 +785,7 @@ void RecordPlanner::Builder::commit(const RecordOp &op, bool readsDestination, c
   }
   const auto opIndex = static_cast<std::uint32_t>(plan_.ops.size());
   plan_.ops.push_back(op);
-  if ((op[kOpFlags] & (kOpDepthTest | kOpDepthObject)) == kOpDepthTest) {
+  if ((op[kOpFlags] & (kOpDepthTest | kOpDepthObject | kOpDepthModel)) == kOpDepthTest) {
     plan_.ops.back()[kOpFlags] |= depthGroup();
   }
   if (plane != nullptr) {
@@ -999,7 +999,9 @@ void RecordPlanner::Builder::addTriangle(const TriVertex scaled[3],
   std::optional<RecordOp> plane;
   if (depthTest_ != nullptr) {
     if (const std::optional<present::DepthMark> mark = depthTest_->tests(primitive)) {
-      op[kOpFlags] |= kOpDepthTest | (mark->order == present::DepthOrder::Object ? kOpDepthObject : 0u);
+      op[kOpFlags] |= kOpDepthTest | (mark->order == present::DepthOrder::Object  ? kOpDepthObject
+                                      : mark->order == present::DepthOrder::Model ? kOpDepthModel
+                                                                                  : 0u);
       plane = depthPlane(primitive, firstVertex, *mark);
     }
   }

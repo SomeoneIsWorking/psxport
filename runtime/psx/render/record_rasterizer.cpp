@@ -20,7 +20,8 @@ constexpr ShaderCode kRecordFragment{spv_g_record_frag, spv_g_record_frag_len, {
 constexpr ShaderCode kRecordDepthFragment{spv_g_record_depth_frag, spv_g_record_depth_frag_len, {3, 1, 3}};
 constexpr ShaderCode kRecordDepthBackFragment{
     spv_g_record_depth_back_frag, spv_g_record_depth_back_frag_len, {3, 1, 3}};
-constexpr std::uint32_t kDepthRunFlags = gpu::kOpDepthTest | gpu::kOpDepthObject | gpu::kOpDepthGroup;
+constexpr std::uint32_t kDepthRunFlags =
+    gpu::kOpDepthTest | gpu::kOpDepthObject | gpu::kOpDepthModel | gpu::kOpDepthGroup;
 // The stencil value a depth group's test draw leaves where its polygons passed; its write draw clears it again.
 constexpr std::uint8_t kGroupPassed = 1;
 
@@ -93,6 +94,10 @@ RecordRasterizer::RecordRasterizer(RenderDevice &device)
   const RenderDevice::DepthTarget marks = withStencil(
       depthTarget(depthFormat_, SDL_GPU_COMPAREOP_ALWAYS, true), SDL_GPU_COMPAREOP_EQUAL, SDL_GPU_STENCILOP_ZERO);
   const RenderDevice::DepthTarget covers = depthTarget(depthFormat_, SDL_GPU_COMPAREOP_ALWAYS, true);
+  const RenderDevice::DepthTarget leaves = withStencil(
+      depthTarget(depthFormat_, SDL_GPU_COMPAREOP_ALWAYS, true), SDL_GPU_COMPAREOP_EQUAL, SDL_GPU_STENCILOP_KEEP);
+  const RenderDevice::DepthTarget clears = withStencil(
+      depthTarget(depthFormat_, SDL_GPU_COMPAREOP_ALWAYS, false), SDL_GPU_COMPAREOP_ALWAYS, SDL_GPU_STENCILOP_ZERO);
   SDL_GPUColorTargetBlendState noColour = {};
   noColour.enable_color_write_mask = true;
   noColour.color_write_mask = 0;
@@ -101,6 +106,10 @@ RecordRasterizer::RecordRasterizer(RenderDevice &device)
   groupMarkPipeline_ =
       device.makePipeline(kRecordVertex, kRecordDepthBackFragment, kVramFormat, &noColour, nullptr, &marks);
   objectPipeline_ = device.makePipeline(kRecordVertex, kRecordDepthFragment, kVramFormat, nullptr, nullptr, &covers);
+  modelMarkPipeline_ =
+      device.makePipeline(kRecordVertex, kRecordDepthBackFragment, kVramFormat, &noColour, nullptr, &leaves);
+  modelClearPipeline_ =
+      device.makePipeline(kRecordVertex, kRecordDepthFragment, kVramFormat, &noColour, nullptr, &clears);
   canvases_.reserve(gpu::kRecordMaxCanvases);
 }
 
@@ -116,6 +125,8 @@ RecordRasterizer::~RecordRasterizer() {
   device_.release(groupTestPipeline_);
   device_.release(groupMarkPipeline_);
   device_.release(objectPipeline_);
+  device_.release(modelMarkPipeline_);
+  device_.release(modelClearPipeline_);
 }
 
 RecordRasterizer::Plane RecordRasterizer::makePlane(const RecordCanvas &shape) {
@@ -597,6 +608,19 @@ void RecordRasterizer::drawQuads(SDL_GPURenderPass *pass,
     SDL_DrawGPUPrimitives(pass, static_cast<Uint32>(quads.size()) * 6, 1, firstVertexQuad * 6, 0);
     return;
   }
+  // Model runs whose depth is not written yet: what the slot order draws between them leaves no depth, so a model
+  // split by its own untested parts still tests each part only against what came before it.
+  std::vector<std::pair<std::uint32_t, std::uint32_t>> &models = pendingModels_;
+  models.clear();
+  const auto leaveModels = [&] {
+    for (SDL_GPUGraphicsPipeline *pipeline : {modelMarkPipeline_, modelClearPipeline_}) {
+      for (const auto &[first, count] : models) {
+        SDL_BindGPUGraphicsPipeline(pass, pipeline);
+        SDL_DrawGPUPrimitives(pass, count, 1, first, 0);
+      }
+    }
+    models.clear();
+  };
   std::size_t run = 0;
   while (run < quads.size()) {
     const std::uint32_t flags = depthRun(plan, quads[run]);
@@ -606,10 +630,14 @@ void RecordRasterizer::drawQuads(SDL_GPURenderPass *pass,
     }
     const auto count = static_cast<Uint32>(end - run) * 6;
     const Uint32 first = (firstVertexQuad + static_cast<std::uint32_t>(run)) * 6;
-    const bool group = (flags & (gpu::kOpDepthTest | gpu::kOpDepthObject)) == gpu::kOpDepthTest;
+    const bool model = (flags & gpu::kOpDepthModel) != 0u;
+    const bool group = (flags & (gpu::kOpDepthTest | gpu::kOpDepthObject)) == gpu::kOpDepthTest && !model;
+    if (flags != 0u && !model) {
+      leaveModels();
+    }
     SDL_BindGPUGraphicsPipeline(pass,
                                 (flags & gpu::kOpDepthObject) != 0u ? objectPipeline_
-                                : group                             ? groupTestPipeline_
+                                : group || model                    ? groupTestPipeline_
                                                                     : slotPipeline_);
     SDL_DrawGPUPrimitives(pass, count, 1, first, 0);
     if (group) {
@@ -617,8 +645,13 @@ void RecordRasterizer::drawQuads(SDL_GPURenderPass *pass,
       SDL_BindGPUGraphicsPipeline(pass, groupMarkPipeline_);
       SDL_DrawGPUPrimitives(pass, count, 1, first, 0);
     }
+    if (model) {
+      models.emplace_back(first, count);
+    }
     run = end;
   }
+  // The last part over each pixel a model's parts passed leaves its depth there.
+  leaveModels();
 }
 
 MappedTransfer RecordRasterizer::download(const RecordPicture &picture) {

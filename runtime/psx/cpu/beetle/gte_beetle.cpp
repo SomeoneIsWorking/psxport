@@ -76,6 +76,7 @@ gte::ProjectedVertex Gte::projected(std::uint32_t entry) {
   if (const GteTranslationDepth &translation = regs_.translationDepth; translation.carried != 0) {
     scale *= translation.scale;
     nearer += translation.nearer;
+    place.back += translation.slot;
   }
   place.z = std::max(place.z * scale - nearer, 0.0f);
   return {GTE_ReadDR(gte::kSxy0 + entry), place};

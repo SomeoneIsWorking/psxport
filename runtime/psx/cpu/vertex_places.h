@@ -9,6 +9,7 @@
 #include "r3000.h"
 #include "write_rollback.h"
 
+#include <algorithm>
 #include <array>
 #include <cstdint>
 #include <optional>
@@ -24,11 +25,39 @@ struct NotedPlace {
   GteTranslationDepth translation{};
 };
 
+// A guest drawer that buckets each face by its vertices' summed depth less a bias its face word holds. Under
+// `function`, the whole-word load `faceLoad` (an LW opcode) reads each face's word before that face's packet is
+// written; each vertex word it loaded back from where it projected them and stores into the packet then tests
+// `slots(faceWord)` of its sort's slots nearer, a slot being `bin` plus the vertex's `back` view units, and leaves its
+// own depth for later draws.
+struct FaceSort {
+  std::uint32_t function = 0;
+  std::uint32_t faceLoad = 0;
+  float bin = 0.0f;
+  std::int32_t (*slots)(std::uint32_t faceWord) = nullptr;
+};
+
+// One whole-word load: the function that ran it, its opcode and the word it read.
+struct LoadedWord {
+  std::uint32_t function = 0;
+  std::uint32_t opcode = 0;
+  std::uint32_t word = 0;
+};
+
 // Every change to the table while `rollback` is armed is put back with the guest's stores, so a replay leaves
 // the places as it found them.
 class VertexPlaces {
 public:
   explicit VertexPlaces(WriteRollback &rollback) : rollback_(rollback) {}
+
+  // Moves the vertices `sort.function` stores after each face word by that face's bias.
+  void sortFaces(const FaceSort &sort);
+  // False for every load that is no sorted drawer's face load, so only the others look up the enclosing function.
+  [[nodiscard]] bool mayLoadFace(std::uint32_t opcode) const {
+    return (faceLoadMask_ & opcodeBit(opcode)) != 0;
+  }
+  // A sorted drawer's face load opens that face.
+  void faceLoaded(const LoadedWord &load);
 
   // Off frees the table, so no store or load pays for it.
   void track(bool on);
@@ -78,7 +107,7 @@ public:
   // GPR `reg`, holding `word`, was stored at `address`.
   void stored(std::uint32_t reg, std::uint32_t address, std::uint32_t word) {
     if (carries(reg) && carried_[reg].word == word) {
-      note(address, word, carried_[reg].noted);
+      note(address, word, faced(reg) ? inFace(carried_[reg].noted) : carried_[reg].noted);
     }
   }
 
@@ -119,6 +148,17 @@ private:
   void forgetSpan(std::uint32_t address, std::uint32_t bytes);
   // GPR `reg` was loaded with `word`, placed at `noted` or not at all.
   void loadedPlaced(std::uint32_t reg, const std::optional<NotedPlace> &noted, std::uint32_t word);
+  // Whether GPR `reg` holds a vertex its sorted drawer loaded back, so its store belongs to the open face.
+  [[nodiscard]] bool faced(std::uint32_t reg) const {
+    return ((loadedMask_ >> reg) & 1u) != 0 && face_.function != 0 && carried_[reg].noted.site == face_.function;
+  }
+  // `noted` moved by the open face's bias.
+  [[nodiscard]] NotedPlace inFace(const NotedPlace &noted) const;
+  [[nodiscard]] static constexpr std::uint32_t opcodeBit(std::uint32_t opcode) {
+    return 1u << ((opcode ^ (opcode >> 16)) & 31u);
+  }
+  // Before the open face changes; once per run.
+  void keepFace();
   void drop(std::uint32_t reg);
   // Before `value` changes inside a rolled-back run.
   template <class Value> void keep(Value &value) {
@@ -138,8 +178,18 @@ private:
   std::vector<Stored> stored_;
   std::vector<std::uint32_t> keptRun_; // per placed_ word, the rollback run that last kept it
   std::uint32_t carriedMask_ = 0;      // the GPRs carrying a place
+  std::uint32_t loadedMask_ = 0;       // those whose place a whole-word load gave
   std::array<Stored, kGprCount> carried_{};
   std::uint32_t carriedKeptRun_ = 0;
+  std::vector<FaceSort> faceSorts_;
+  std::uint32_t faceLoadMask_ = 0;
+  struct OpenFace {
+    std::uint32_t function = 0;
+    float nearerSlots = 0.0f;
+    float bin = 0.0f;
+  };
+  OpenFace face_;
+  std::uint32_t faceKeptRun_ = 0;
 };
 
 } // namespace psx::cpu

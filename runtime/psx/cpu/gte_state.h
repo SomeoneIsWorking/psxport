@@ -15,10 +15,12 @@ typedef struct GtePlace {
 
 // The depth unit of the translation the guest last loaded: a draw site tagged the TRZ word it was loaded from
 // (VertexPlaces), so projections under it are SZ times `scale`, less `nearer`, in the title's common view units.
+// `slot`: the view units one slot of that draw's own per-face sort spans, which its projections' `back` carries.
 // `carried` is 0 for a translation from anywhere else.
 typedef struct GteTranslationDepth {
   float scale;
   float nearer;
+  float slot;
   uint32_t carried;
 } GteTranslationDepth;
 

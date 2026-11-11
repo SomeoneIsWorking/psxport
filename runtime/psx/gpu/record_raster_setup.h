@@ -103,6 +103,7 @@ enum RecordOpFlag : std::uint32_t {
   // A tested polygon's depth group parity. A group's polygons cover no native pixel twice, so the group tests in one
   // draw and then writes its depth in another; consecutive groups differ in parity.
   kOpDepthGroup = 1u << 27,
+  kOpDepthModel = 1u << 28, // DepthOrder::Model: tests against what came before its run, then writes its depth
 };
 
 // One rectangle of a plane's pixels belonging to an op, scaled, half open. Op origins are in VRAM space,

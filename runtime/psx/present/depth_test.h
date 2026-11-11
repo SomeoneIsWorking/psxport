@@ -19,6 +19,9 @@ enum class DepthOrder : std::uint8_t {
   // A model the guest sorts into one OT slot, its parts painter-ordered: it draws over everything the slot order put
   // before it, as retail does, and writes its depth so what the slot order puts after it is tested against it.
   Object,
+  // A model whose parts the guest paints in its own order: each part tests against what came before the model, never
+  // against the model's other parts, and the model leaves its last-drawn part's depth moved back by its `back`.
+  Model,
 };
 
 // How a marked draw's polygons test: their order, and the view units their written depth lies back by.

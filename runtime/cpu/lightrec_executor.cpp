@@ -179,6 +179,9 @@ struct LightrecExecutor::Impl {
     }
     const std::uint32_t op = primaryOpcode(opcode);
     if (op == kOpLw) {
+      if (places.mayLoadFace(opcode)) {
+        places.faceLoaded({.function = core.writerLatch.function(), .opcode = opcode, .word = value});
+      }
       places.loaded(rtField(opcode), address, value);
     } else if ((op >= kOpLb && op <= kOpLwr) || op == kLightrecMetaLwu) {
       places.overwrote(rtField(opcode));
