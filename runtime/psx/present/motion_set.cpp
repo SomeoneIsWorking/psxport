@@ -7,6 +7,7 @@
 #include <lucent/log.h>
 
 #include <algorithm>
+#include <cmath>
 #include <utility>
 
 namespace psx::present {
@@ -20,6 +21,28 @@ std::uint32_t turnedHalf(std::uint32_t from, std::uint32_t to, float t) {
   const auto start = static_cast<std::int32_t>(from & kHalfword);
   const std::int32_t step = ringStep(from & kAngle12, to & kAngle12, kAngle12 + 1);
   return static_cast<std::uint32_t>(lerpInt(start, start + step, t)) & kHalfword;
+}
+
+// A halfword's two samples and the ring it wraps at; a zero period takes the later sample.
+struct RingHalf {
+  std::uint32_t from = 0;
+  std::uint32_t to = 0;
+  std::uint32_t period = 0;
+};
+
+std::uint32_t ringHalf(const RingHalf &half, float t) {
+  if (half.period == 0u) {
+    return half.to & kHalfword;
+  }
+  const auto ring = static_cast<std::int32_t>(half.period);
+  const auto start = static_cast<std::int32_t>((half.from & kHalfword) % half.period);
+  const auto end = static_cast<std::int32_t>((half.to & kHalfword) % half.period);
+  return static_cast<std::uint32_t>(static_cast<std::int32_t>(std::nearbyint(lerpRing(start, end, ring, t))) % ring);
+}
+
+std::uint32_t ringWord(const RingHalf &word, float t) {
+  return ringHalf({word.from, word.to, word.period & kHalfword}, t) |
+         ringHalf({word.from >> 16, word.to >> 16, word.period >> 16}, t) << 16;
 }
 
 bool holds(const RecordByte &byte, std::uint8_t value) {
@@ -72,6 +95,20 @@ void TransformRule::blend(const Samples &samples, float t, std::span<std::uint32
   std::copy(rotation.begin(), rotation.end(), out.begin());
   for (std::size_t i = rotation.size(); i < kWords; ++i) {
     out[i] = lerpWord(samples.from[i], samples.to[i], t);
+  }
+}
+
+void RingRule::blend(const Samples &samples, float t, std::span<std::uint32_t> out) const {
+  if (periods_) {
+    const std::uint32_t periods = (*periods_)[0] | static_cast<std::uint32_t>((*periods_)[1]) << 16;
+    for (std::size_t i = 0; i < out.size(); ++i) {
+      out[i] = ringWord({samples.from[i], samples.to[i], periods}, t);
+    }
+    return;
+  }
+  for (std::size_t i = 0; i + 1 < out.size(); i += 2) {
+    out[i] = ringWord({samples.from[i], samples.to[i], samples.to[i + 1]}, t);
+    out[i + 1] = samples.to[i + 1];
   }
 }
 

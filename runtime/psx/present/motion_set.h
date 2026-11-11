@@ -63,6 +63,21 @@ public:
   return fields;
 }
 
+// Words of two unsigned halfwords that each wrap at a period (a scroll): the short way round, rounded, wrapped
+// into the period. A zero period steps its halfword.
+class RingRule final : public MotionRule {
+public:
+  using Periods = std::array<std::uint16_t, 2>; // low halfword, high halfword
+  // Every field wraps at `periods`.
+  explicit constexpr RingRule(Periods periods) : periods_(periods) {}
+  // The fields come in pairs, a word and then the word holding its periods, which steps.
+  constexpr RingRule() = default;
+  void blend(const Samples &samples, float t, std::span<std::uint32_t> out) const override;
+
+private:
+  std::optional<Periods> periods_;
+};
+
 // A word of a record that names the object it holds: two samples of one address pair only while every key
 // word, under its mask, is unchanged.
 struct MotionKey {
