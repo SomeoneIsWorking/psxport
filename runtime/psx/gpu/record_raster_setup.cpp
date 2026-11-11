@@ -442,6 +442,7 @@ public:
     batchStart_ = {};
     lines_ = 0;
     depthGroups_ = 0;
+    models_.clear();
     target(0);
   }
 
@@ -523,6 +524,8 @@ private:
   // The depth group parity of a tested polygon writing opWrites_: a new group when it covers a pixel the open one does.
   std::uint32_t depthGroup();
   void closeDepthGroup();
+  // The stencil id of `model` in this record.
+  std::uint32_t modelId(std::uint32_t model);
   void closeBatch();
 
   RecordRasterPlan plan_;
@@ -535,6 +538,7 @@ private:
   std::uint32_t groupParity_ = 0;
   bool groupOpen_ = false;
   int depthGroups_ = 0;
+  std::vector<std::uint32_t> models_; // the record's Model models, by first appearance
   std::array<std::uint32_t, kRecordPlanes> batchStart_{};
   std::vector<PlaneQuad> opQuads_;
   std::vector<PlaneRect> opWrites_;
@@ -828,6 +832,15 @@ std::uint32_t RecordPlanner::Builder::depthGroup() {
   return groupParity_;
 }
 
+std::uint32_t RecordPlanner::Builder::modelId(std::uint32_t model) {
+  auto found = std::ranges::find(models_, model);
+  if (found == models_.end()) {
+    models_.push_back(model);
+    found = models_.end() - 1;
+  }
+  return static_cast<std::uint32_t>(found - models_.begin()) % kModelIds + 1u;
+}
+
 void RecordPlanner::Builder::closeDepthGroup() {
   if (!groupOpen_) {
     return;
@@ -1003,6 +1016,9 @@ void RecordPlanner::Builder::addTriangle(const TriVertex scaled[3],
                                       : mark->order == present::DepthOrder::Model ? kOpDepthModel
                                                                                   : 0u);
       plane = depthPlane(primitive, firstVertex, *mark);
+      if (mark->order == present::DepthOrder::Model) {
+        (*plane)[kDepthModel] = modelId(mark->model);
+      }
     }
   }
   if (primitive.textured && !sampling_) {

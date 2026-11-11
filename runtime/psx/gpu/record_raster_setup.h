@@ -73,7 +73,8 @@ enum RecordPartField : std::uint8_t {
 };
 
 // A DepthPlane op's floats: 1/z at its triangle's first vertex, its x and y slopes per native pixel, that
-// vertex's native VRAM position, and the view units its written depth lies back by (its DepthMark::bin and back).
+// vertex's native VRAM position, and the view units its written depth lies back by (its DepthMark::bin and back);
+// then, a word, a Model part's stencil id (kModelIds).
 enum RecordDepthField : std::uint8_t {
   kDepthInverse = 1,
   kDepthSlopeX = 2,
@@ -81,7 +82,11 @@ enum RecordDepthField : std::uint8_t {
   kDepthOriginX = 4,
   kDepthOriginY = 5,
   kDepthBin = 6,
+  kDepthModel = 7,
 };
+
+// A record's Model parts carry their model as a stencil id, 1..kModelIds by first appearance, repeating after that.
+inline constexpr std::uint32_t kModelIds = 0x7F;
 
 enum RecordOpFlag : std::uint32_t {
   kOpKindMask = 0xFFu,
@@ -103,7 +108,7 @@ enum RecordOpFlag : std::uint32_t {
   // A tested polygon's depth group parity. A group's polygons cover no native pixel twice, so the group tests in one
   // draw and then writes its depth in another; consecutive groups differ in parity.
   kOpDepthGroup = 1u << 27,
-  kOpDepthModel = 1u << 28, // DepthOrder::Model: tests against what came before its run, then writes its depth
+  kOpDepthModel = 1u << 28, // DepthOrder::Model: tests against all but its own model's parts, then writes its depth
 };
 
 // One rectangle of a plane's pixels belonging to an op, scaled, half open. Op origins are in VRAM space,

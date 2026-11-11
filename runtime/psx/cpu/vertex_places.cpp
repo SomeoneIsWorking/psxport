@@ -96,6 +96,13 @@ void VertexPlaces::faceLoaded(const LoadedWord &load) {
   face_ = {.function = load.function, .nearerSlots = static_cast<float>(sort->slots(load.word)), .bin = sort->bin};
 }
 
+void VertexPlaces::endFace() {
+  if (face_.function != 0) {
+    keepFace();
+    face_ = {};
+  }
+}
+
 NotedPlace VertexPlaces::inFace(const NotedPlace &noted) const {
   NotedPlace moved = noted;
   if (moved.place.z <= 0.0f) {

@@ -41,6 +41,7 @@ void decodeLineEnds(std::span<const std::uint32_t> words, present::RecordVertex 
 void applyPlace(present::RecordVertex &vertex, const GtePlace &place) {
   vertex.depth = place.z;
   vertex.back = place.back;
+  vertex.model = place.model;
   if (!placesWhole(vertex.x, place.x) || !placesWhole(vertex.y, place.y)) {
     return;
   }
@@ -75,6 +76,7 @@ present::RecordVertex polygonVertex(std::span<const std::uint32_t> words,
   vertex.subY = 0.0f;
   vertex.depth = 0.0f;
   vertex.back = 0.0f;
+  vertex.model = 0;
   if (flags.textured) {
     const Gp0TextureCoord coord = Gp0Command(words[index++]).textureCoord();
     vertex.u = static_cast<std::uint8_t>(coord.u);

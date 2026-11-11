@@ -413,7 +413,8 @@ trim over Spyro's feet, a wall seam over the floor), and leaves everything else 
   (`Gte::carryTranslation`, fed by `LightrecExecutor::cop2Transfer`), whose projections multiply it into the open
   unit until the next TRZ write; an untagged word or a host write carries nothing. Spyro 2/3's moby walk tags each
   render-list entry's centre z this way for the guest moby drawer, with the `slot` of its per-face buckets, which
-  each projection's `back` gains. A producer's computed vertex (a split midpoint, a resplit) carries `screenBlendDepth`
+  each projection's `back` gains, and the entry's address as its `model`, which each projection's place carries
+  (`GtePlace.model`) into the packet's vertices. A producer's computed vertex (a split midpoint, a resplit) carries `screenBlendDepth`
   of its sources: 1/z is linear on screen.
 - **Sort-back.** A draw site may also say how far back the guest sorts a polygon beyond its depth
   (`GtePlace.back`, view units). Spyro's terrain bins a polygon by its depth sum plus the draw word's bias
@@ -460,9 +461,12 @@ trim over Spyro's feet, a wall seam over the floor), and leaves everything else 
   crest) follows the guest's own rule for a model: nothing the slot order drew before it covers it, so it draws
   over that scene in its own order without testing, and writes its depth, so what the slot order puts after it (a
   ledge trim in a nearer bin) is tested against it. `Model` (a model whose parts the guest paints in its own
-  bucket order, Spyro 2/3's moby drawer) tests each part against what came before the model, never against its
-  other parts, so its own order stands and nearer scenery drawn before it still hides it; it then leaves its
-  last-drawn part's depth moved back by `back`.
+  bucket order, Spyro 2/3's moby drawer, named per polygon by its vertices' one `model`) tests each part against
+  everything drawn before it except its own model's parts, which it paints over in order: its own order stands,
+  nearer scenery and other models drawn before it still hide it, whatever lies between its parts in the record.
+  Each part leaves the nearer of its depth moved back by `back` and the depth already there, so a part that lost
+  to nearer terrain leaves that terrain's depth. A `Model` polygon whose vertices name no model or two draws in
+  slot order.
 - **Contact within the sort's resolution.** Surfaces that touch within one bin are ordered by the slot
   order, as retail orders them: a later `Polygon` loses only where its true depth lies farther than the
   depth there, and the depth a `Polygon` leaves is its own moved back by its `bin` and its `back`. So the
@@ -482,10 +486,14 @@ trim over Spyro's feet, a wall seam over the floor), and leaves everything else 
   groups (`RecordPlanner::Builder::depthGroup`): a group's ops cover no native pixel twice, and the next op
   that would starts a new group (parity bit `kOpDepthGroup`). A group draws twice in its pass: LESS_OR_EQUAL
   with no depth write, its colour where it passes and stencil 1 there; then ALWAYS with depth write and no
-  colour where stencil is 1, writing the moved-back depth and clearing the stencil. A `Model` run
-  (`kOpDepthModel`) draws as a group's test draw and is kept pending across untested runs; before the next
-  tested run and at the pass end every pending run draws again with no colour, ALWAYS with depth write where
-  stencil is 1 (so the last-drawn part's depth stays), then once more clearing the stencil. An `Object` run draws
+  colour where stencil is 1, writing the moved-back depth and clearing the stencil. The stencil's high bit is
+  that pass mark; its low seven bits name the `Model` whose depth a pixel holds, 0 for any other. A `Model` op
+  (`kOpDepthModel`) carries its model as a stencil id in its plane's `kDepthModel` (1..127 by first appearance in
+  the record, `RecordPlanner::Builder::modelId`; the 128th model shares the first's id, which makes their shared
+  pixels paint in slot order). A run of one model's ops draws four times: LESS_OR_EQUAL where the id is not its
+  own and ALWAYS where it is, both with colour, no depth write and the pass mark; then where marked, no colour,
+  LESS_OR_EQUAL with depth write of the moved-back depth, naming its id where the write lands; then clearing the
+  mark. A tested `Polygon` that passes and an `Object` clear the id. An `Object` run draws
   ALWAYS with writes, so its last-drawn part's depth is the one kept, as its colour is; every other run uses
   the plain shader with ALWAYS and no write, in the same OT order, so marked and unmarked draws interleave
   exactly as the slot order says. A pass with none uses the pipeline with no depth target. Overlap is
@@ -508,9 +516,9 @@ trim over Spyro's feet, a wall seam over the floor), and leaves everything else 
   main thread (`perf stat` instructions): 236.7 G on, 213.5 G off (+10.9%; the slot-order pass before depth
   groups measured +2.7%). About 120 depth groups per record there. `perf record` on against off: the group map
   (`WrittenMap::mark`, `any`, `depthGroup`) about 9.6 G, the driver's extra draws and pipeline binds about 6 G,
-  vertex depth tracking under 2 G. Spyro 2 Glimmer (`warp 0/1/0`, Up+Left 1500 fields after a 1500-field
-  arrival, fps60, judgement settings, unpaced, whole process): 303.0 G on, 280.3 G off (+8.1%), terrain,
-  Spyro and `Model` mobys together. GPU time is not measured: SDL_GPU has no timestamp queries.
+  vertex depth tracking under 2 G. Spyro 2 Glimmer (`warp 0/1/0`, Up and Left held 1500 fields after a 1500-field
+  arrival, Spyro running, fps60, judgement settings, unpaced, whole process): 279.2 G on, 259.2 G off (+7.7%),
+  terrain, Spyro and `Model` mobys together. GPU time is not measured: SDL_GPU has no timestamp queries.
 - **Check it.** Spyro 1, Toasty portal (`warp Artisans/Toasty/portal`): the rock wall meets the floor along its
   real intersection with depth on; `PSXPORT_DEPTH=0` shows the wall's slot-order overlap. Spyro,
   his toes, horns and crest draw the same with depth on and off. At the Toasty start (`warp 0/4/0`) the

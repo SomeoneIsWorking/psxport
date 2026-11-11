@@ -22,8 +22,10 @@ constexpr ShaderCode kRecordDepthBackFragment{
     spv_g_record_depth_back_frag, spv_g_record_depth_back_frag_len, {3, 1, 3}};
 constexpr std::uint32_t kDepthRunFlags =
     gpu::kOpDepthTest | gpu::kOpDepthObject | gpu::kOpDepthModel | gpu::kOpDepthGroup;
-// The stencil value a depth group's test draw leaves where its polygons passed; its write draw clears it again.
-constexpr std::uint8_t kGroupPassed = 1;
+// Stencil: the high bit marks where a run's test draw passed, until its write draw clears it; the low bits name the
+// Model whose depth a pixel holds (gpu::kModelIds), 0 for any other.
+constexpr std::uint8_t kPassed = 0x80;
+constexpr std::uint8_t kModelBits = 0x7F;
 
 struct TargetUniform {
   float width = 0;
@@ -57,9 +59,18 @@ RenderDevice::DepthTarget depthTarget(SDL_GPUTextureFormat format, SDL_GPUCompar
   return target;
 }
 
-// Every face runs `compare` against kGroupPassed and on passing both tests applies `passed`.
-RenderDevice::DepthTarget
-withStencil(RenderDevice::DepthTarget target, SDL_GPUCompareOp compare, SDL_GPUStencilOp passed) {
+// The stencil bits a draw compares and the bits it writes.
+struct StencilBits {
+  std::uint8_t compare = 0xFF;
+  std::uint8_t write = 0xFF;
+};
+
+// Every face runs `compare` of the reference against the stencil's `bits.compare`, and on passing both tests applies
+// `passed` to its `bits.write`.
+RenderDevice::DepthTarget withStencil(RenderDevice::DepthTarget target,
+                                      SDL_GPUCompareOp compare,
+                                      SDL_GPUStencilOp passed,
+                                      StencilBits bits = {}) {
   SDL_GPUStencilOpState face = {};
   face.fail_op = SDL_GPU_STENCILOP_KEEP;
   face.depth_fail_op = SDL_GPU_STENCILOP_KEEP;
@@ -68,13 +79,21 @@ withStencil(RenderDevice::DepthTarget target, SDL_GPUCompareOp compare, SDL_GPUS
   target.state.enable_stencil_test = true;
   target.state.front_stencil_state = face;
   target.state.back_stencil_state = face;
-  target.state.compare_mask = 0xFF;
-  target.state.write_mask = 0xFF;
+  target.state.compare_mask = bits.compare;
+  target.state.write_mask = bits.write;
   return target;
 }
 
-std::uint32_t depthRun(const gpu::RecordRasterPlan &plan, const gpu::RecordQuad &quad) {
-  return plan.ops[quad.op][gpu::kOpFlags] & kDepthRunFlags;
+// A quad's depth flags and, for a Model part, its model's stencil id: consecutive quads with the same draw as one run.
+struct DepthRun {
+  std::uint32_t flags = 0;
+  std::uint32_t model = 0;
+  bool operator==(const DepthRun &) const = default;
+};
+
+DepthRun depthRun(const gpu::RecordRasterPlan &plan, const gpu::RecordQuad &quad) {
+  const std::uint32_t flags = plan.ops[quad.op][gpu::kOpFlags] & kDepthRunFlags;
+  return {flags, (flags & gpu::kOpDepthModel) != 0u ? plan.ops[quad.op + 1][gpu::kDepthModel] : 0u};
 }
 
 // Storage buffers are read as whole words, and never sized zero.
@@ -93,11 +112,29 @@ RecordRasterizer::RecordRasterizer(RenderDevice &device)
                                                       SDL_GPU_STENCILOP_REPLACE);
   const RenderDevice::DepthTarget marks = withStencil(
       depthTarget(depthFormat_, SDL_GPU_COMPAREOP_ALWAYS, true), SDL_GPU_COMPAREOP_EQUAL, SDL_GPU_STENCILOP_ZERO);
-  const RenderDevice::DepthTarget covers = depthTarget(depthFormat_, SDL_GPU_COMPAREOP_ALWAYS, true);
-  const RenderDevice::DepthTarget leaves = withStencil(
-      depthTarget(depthFormat_, SDL_GPU_COMPAREOP_ALWAYS, true), SDL_GPU_COMPAREOP_EQUAL, SDL_GPU_STENCILOP_KEEP);
-  const RenderDevice::DepthTarget clears = withStencil(
-      depthTarget(depthFormat_, SDL_GPU_COMPAREOP_ALWAYS, false), SDL_GPU_COMPAREOP_ALWAYS, SDL_GPU_STENCILOP_ZERO);
+  // An Object's depth is no Model's.
+  const RenderDevice::DepthTarget covers = withStencil(
+      depthTarget(depthFormat_, SDL_GPU_COMPAREOP_ALWAYS, true), SDL_GPU_COMPAREOP_ALWAYS, SDL_GPU_STENCILOP_ZERO);
+  // A Model part tests where another's depth lies and paints over its own model's, marking where it drew.
+  const RenderDevice::DepthTarget modelTests =
+      withStencil(depthTarget(depthFormat_, SDL_GPU_COMPAREOP_LESS_OR_EQUAL, false),
+                  SDL_GPU_COMPAREOP_NOT_EQUAL,
+                  SDL_GPU_STENCILOP_REPLACE,
+                  {.compare = kModelBits, .write = kPassed});
+  const RenderDevice::DepthTarget modelPaints = withStencil(depthTarget(depthFormat_, SDL_GPU_COMPAREOP_ALWAYS, false),
+                                                            SDL_GPU_COMPAREOP_EQUAL,
+                                                            SDL_GPU_STENCILOP_REPLACE,
+                                                            {.compare = kModelBits, .write = kPassed});
+  // Where it drew it leaves the nearer of its moved-back depth and the depth there, and names its model where its own
+  // is kept.
+  const RenderDevice::DepthTarget leaves = withStencil(depthTarget(depthFormat_, SDL_GPU_COMPAREOP_LESS_OR_EQUAL, true),
+                                                       SDL_GPU_COMPAREOP_EQUAL,
+                                                       SDL_GPU_STENCILOP_REPLACE,
+                                                       {.compare = kPassed, .write = kModelBits});
+  const RenderDevice::DepthTarget clears = withStencil(depthTarget(depthFormat_, SDL_GPU_COMPAREOP_ALWAYS, false),
+                                                       SDL_GPU_COMPAREOP_EQUAL,
+                                                       SDL_GPU_STENCILOP_ZERO,
+                                                       {.compare = kPassed, .write = kPassed});
   SDL_GPUColorTargetBlendState noColour = {};
   noColour.enable_color_write_mask = true;
   noColour.color_write_mask = 0;
@@ -106,6 +143,10 @@ RecordRasterizer::RecordRasterizer(RenderDevice &device)
   groupMarkPipeline_ =
       device.makePipeline(kRecordVertex, kRecordDepthBackFragment, kVramFormat, &noColour, nullptr, &marks);
   objectPipeline_ = device.makePipeline(kRecordVertex, kRecordDepthFragment, kVramFormat, nullptr, nullptr, &covers);
+  modelTestPipeline_ =
+      device.makePipeline(kRecordVertex, kRecordDepthFragment, kVramFormat, nullptr, nullptr, &modelTests);
+  modelPaintPipeline_ =
+      device.makePipeline(kRecordVertex, kRecordDepthFragment, kVramFormat, nullptr, nullptr, &modelPaints);
   modelMarkPipeline_ =
       device.makePipeline(kRecordVertex, kRecordDepthBackFragment, kVramFormat, &noColour, nullptr, &leaves);
   modelClearPipeline_ =
@@ -125,6 +166,8 @@ RecordRasterizer::~RecordRasterizer() {
   device_.release(groupTestPipeline_);
   device_.release(groupMarkPipeline_);
   device_.release(objectPipeline_);
+  device_.release(modelTestPipeline_);
+  device_.release(modelPaintPipeline_);
   device_.release(modelMarkPipeline_);
   device_.release(modelClearPipeline_);
 }
@@ -523,7 +566,7 @@ void RecordRasterizer::execute(SDL_GPUCommandBuffer *cmd, const gpu::RecordRaste
   for (int p = 0; p < planes; p++) {
     const auto &quads = plan.quads[static_cast<std::size_t>(p)];
     usesDepth[static_cast<std::size_t>(p)] = std::ranges::any_of(quads, [&](const gpu::RecordQuad &quad) {
-      return depthRun(plan, quad) != 0u;
+      return depthRun(plan, quad).flags != 0u;
     });
     Plane &target = plane(p);
     if (usesDepth[static_cast<std::size_t>(p)] && target.depth == nullptr) {
@@ -562,9 +605,6 @@ void RecordRasterizer::execute(SDL_GPUCommandBuffer *cmd, const gpu::RecordRaste
         cleared = true;
       }
       SDL_GPURenderPass *pass = SDL_BeginGPURenderPass(cmd, &colour, 1, depth ? &depthInfo : nullptr);
-      if (depth) {
-        SDL_SetGPUStencilReference(pass, kGroupPassed);
-      }
       SDL_BindGPUGraphicsPipeline(pass, depth ? slotPipeline_ : pipeline_);
       SDL_BindGPUVertexStorageBuffers(pass, 0, &quads_.buffer, 1);
       SDL_GPUSampler *nearest = device_.nearestSampler();
@@ -608,50 +648,38 @@ void RecordRasterizer::drawQuads(SDL_GPURenderPass *pass,
     SDL_DrawGPUPrimitives(pass, static_cast<Uint32>(quads.size()) * 6, 1, firstVertexQuad * 6, 0);
     return;
   }
-  // Model runs whose depth is not written yet: what the slot order draws between them leaves no depth, so a model
-  // split by its own untested parts still tests each part only against what came before it.
-  std::vector<std::pair<std::uint32_t, std::uint32_t>> &models = pendingModels_;
-  models.clear();
-  const auto leaveModels = [&] {
-    for (SDL_GPUGraphicsPipeline *pipeline : {modelMarkPipeline_, modelClearPipeline_}) {
-      for (const auto &[first, count] : models) {
-        SDL_BindGPUGraphicsPipeline(pass, pipeline);
-        SDL_DrawGPUPrimitives(pass, count, 1, first, 0);
-      }
-    }
-    models.clear();
+  const auto draw = [&](SDL_GPUGraphicsPipeline *pipeline, Uint32 first, Uint32 count) {
+    SDL_BindGPUGraphicsPipeline(pass, pipeline);
+    SDL_DrawGPUPrimitives(pass, count, 1, first, 0);
   };
   std::size_t run = 0;
   while (run < quads.size()) {
-    const std::uint32_t flags = depthRun(plan, quads[run]);
+    const DepthRun key = depthRun(plan, quads[run]);
     std::size_t end = run + 1;
-    while (end < quads.size() && depthRun(plan, quads[end]) == flags) {
+    while (end < quads.size() && depthRun(plan, quads[end]) == key) {
       end++;
     }
     const auto count = static_cast<Uint32>(end - run) * 6;
     const Uint32 first = (firstVertexQuad + static_cast<std::uint32_t>(run)) * 6;
-    const bool model = (flags & gpu::kOpDepthModel) != 0u;
-    const bool group = (flags & (gpu::kOpDepthTest | gpu::kOpDepthObject)) == gpu::kOpDepthTest && !model;
-    if (flags != 0u && !model) {
-      leaveModels();
-    }
-    SDL_BindGPUGraphicsPipeline(pass,
-                                (flags & gpu::kOpDepthObject) != 0u ? objectPipeline_
-                                : group || model                    ? groupTestPipeline_
-                                                                    : slotPipeline_);
-    SDL_DrawGPUPrimitives(pass, count, 1, first, 0);
-    if (group) {
+    if ((key.flags & gpu::kOpDepthModel) != 0u) {
+      // Its parts' colour where they pass or cover their own model, then the depth they leave.
+      SDL_SetGPUStencilReference(pass, static_cast<std::uint8_t>(kPassed | key.model));
+      for (SDL_GPUGraphicsPipeline *pipeline :
+           {modelTestPipeline_, modelPaintPipeline_, modelMarkPipeline_, modelClearPipeline_}) {
+        draw(pipeline, first, count);
+      }
+    } else if ((key.flags & gpu::kOpDepthObject) != 0u) {
+      draw(objectPipeline_, first, count);
+    } else if ((key.flags & gpu::kOpDepthTest) != 0u) {
       // Its polygons cover no pixel twice, so each wrote its colour exactly where it passed; now its depth there.
-      SDL_BindGPUGraphicsPipeline(pass, groupMarkPipeline_);
-      SDL_DrawGPUPrimitives(pass, count, 1, first, 0);
-    }
-    if (model) {
-      models.emplace_back(first, count);
+      SDL_SetGPUStencilReference(pass, kPassed);
+      draw(groupTestPipeline_, first, count);
+      draw(groupMarkPipeline_, first, count);
+    } else {
+      draw(slotPipeline_, first, count);
     }
     run = end;
   }
-  // The last part over each pixel a model's parts passed leaves its depth there.
-  leaveModels();
 }
 
 MappedTransfer RecordRasterizer::download(const RecordPicture &picture) {

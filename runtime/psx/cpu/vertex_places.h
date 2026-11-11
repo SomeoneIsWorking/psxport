@@ -25,11 +25,8 @@ struct NotedPlace {
   GteTranslationDepth translation{};
 };
 
-// A guest drawer that buckets each face by its vertices' summed depth less a bias its face word holds. Under
-// `function`, the whole-word load `faceLoad` (an LW opcode) reads each face's word before that face's packet is
-// written; each vertex word it loaded back from where it projected them and stores into the packet then tests
-// `slots(faceWord)` of its sort's slots nearer, a slot being `bin` plus the vertex's `back` view units, and leaves its
-// own depth for later draws.
+// A drawer that buckets each face by summed depth less its face word's bias: `faceLoad` (an LW in `function`) reads
+// that word, and the face's vertices then test `slots(word)` slots of `bin` plus their `back` nearer.
 struct FaceSort {
   std::uint32_t function = 0;
   std::uint32_t faceLoad = 0;
@@ -58,6 +55,8 @@ public:
   }
   // A sorted drawer's face load opens that face.
   void faceLoaded(const LoadedWord &load);
+  // A new translation starts another model, so no face is open.
+  void endFace();
 
   // Off frees the table, so no store or load pays for it.
   void track(bool on);

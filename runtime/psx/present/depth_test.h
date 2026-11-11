@@ -19,15 +19,18 @@ enum class DepthOrder : std::uint8_t {
   // A model the guest sorts into one OT slot, its parts painter-ordered: it draws over everything the slot order put
   // before it, as retail does, and writes its depth so what the slot order puts after it is tested against it.
   Object,
-  // A model whose parts the guest paints in its own order: each part tests against what came before the model, never
-  // against the model's other parts, and the model leaves its last-drawn part's depth moved back by its `back`.
+  // A model whose parts the guest paints in its own order, named by its vertices' GtePlace::model: each part tests
+  // against everything drawn before it but the model's own parts, which it paints over in order, and leaves the
+  // nearest of its depth moved back by its `back` and the depth already there.
   Model,
 };
 
-// How a marked draw's polygons test: their order, and the view units their written depth lies back by.
+// How a marked draw's polygons test: their order, the view units their written depth lies back by, and for a Model
+// the model they belong to.
 struct DepthMark {
   DepthOrder order = DepthOrder::Polygon;
   float bin = 0.0f;
+  std::uint32_t model = 0;
 };
 
 class DepthTest {
@@ -53,12 +56,18 @@ public:
     if (!marked) {
       return std::nullopt;
     }
+    const std::uint32_t model = primitive.vertices[0].model;
     for (int v = 0; v < primitive.vertexCount; v++) {
-      if (primitive.vertices[static_cast<std::size_t>(v)].depth <= 0.0f) {
+      const RecordVertex &vertex = primitive.vertices[static_cast<std::size_t>(v)];
+      if (vertex.depth <= 0.0f) {
+        return std::nullopt;
+      }
+      // A Model part's vertices name one model, or it draws in slot order.
+      if (marked->order == DepthOrder::Model && (model == 0 || vertex.model != model)) {
         return std::nullopt;
       }
     }
-    return marked;
+    return DepthMark{.order = marked->order, .bin = marked->bin, .model = model};
   }
 
 private:

@@ -84,9 +84,10 @@ struct RecordVertex {
   float subX = 0.0f;
   float subY = 0.0f;
   // Polygons: the view depth its projection divided by (GtePlace::z), 0 when unknown, and how far its draw site
-  // sorts it back (GtePlace::back).
+  // sorts it back (GtePlace::back), and the model it belongs to (GtePlace::model).
   float depth = 0.0f;
   float back = 0.0f;
+  std::uint32_t model = 0;
 
   bool operator==(const RecordVertex &) const = default;
 };

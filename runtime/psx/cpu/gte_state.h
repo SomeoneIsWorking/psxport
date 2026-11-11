@@ -5,22 +5,26 @@
 
 // A projected point's screen position before RTPS/RTPT truncate it into an SXY word, and the view depth it was
 // divided by (Beetle's SZ3, at least H/2); depth 0 for a point no projection made. `back`: view units its polygon's
-// draw site sorts it back by, which only the depth that polygon leaves for later draws carries.
+// draw site sorts it back by, which only the depth that polygon leaves for later draws carries. `model`: the model its
+// translation drew (GteTranslationDepth::model), 0 for none.
 typedef struct GtePlace {
   float x;
   float y;
   float z;
   float back;
+  uint32_t model;
 } GtePlace;
 
 // The depth unit of the translation the guest last loaded: a draw site tagged the TRZ word it was loaded from
 // (VertexPlaces), so projections under it are SZ times `scale`, less `nearer`, in the title's common view units.
 // `slot`: the view units one slot of that draw's own per-face sort spans, which its projections' `back` carries.
-// `carried` is 0 for a translation from anywhere else.
+// `model` names the model drawn under it (a render-list entry's address), 0 for none. `carried` is 0 for a translation
+// from anywhere else.
 typedef struct GteTranslationDepth {
   float scale;
   float nearer;
   float slot;
+  uint32_t model;
   uint32_t carried;
 } GteTranslationDepth;
 

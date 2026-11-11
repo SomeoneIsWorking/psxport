@@ -11,7 +11,6 @@
 #include <cstdint>
 #include <optional>
 #include <span>
-#include <utility>
 #include <vector>
 
 namespace psx::render {
@@ -167,10 +166,10 @@ private:
   SDL_GPUGraphicsPipeline *groupTestPipeline_ = nullptr;
   SDL_GPUGraphicsPipeline *groupMarkPipeline_ = nullptr;
   SDL_GPUGraphicsPipeline *objectPipeline_ = nullptr;
+  SDL_GPUGraphicsPipeline *modelTestPipeline_ = nullptr;
+  SDL_GPUGraphicsPipeline *modelPaintPipeline_ = nullptr;
   SDL_GPUGraphicsPipeline *modelMarkPipeline_ = nullptr;
   SDL_GPUGraphicsPipeline *modelClearPipeline_ = nullptr;
-  // Model runs drawn and not yet marked: first vertex and vertex count.
-  std::vector<std::pair<std::uint32_t, std::uint32_t>> pendingModels_;
   const present::DepthTest *depthTest_ = nullptr; // this present's
   gpu::RecordPlanner planner_;
   Plane vram_;

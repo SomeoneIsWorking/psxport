@@ -155,6 +155,7 @@ struct LightrecExecutor::Impl {
     if (move == kCop2Ctc2 && rdField(opcode) == gte::kTranslationZ) {
       const std::optional<NotedPlace> noted = places.tracking() ? places.carried(reg, value) : std::nullopt;
       impl.core.gte().carryTranslation(noted ? noted->translation : GteTranslationDepth{});
+      places.endFace();
       return;
     }
     if (!places.tracking()) {
