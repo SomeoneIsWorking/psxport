@@ -36,9 +36,16 @@ each player's pad on their own machine, pads exchanged per guest frame, every pe
   1.4.4) is BSL 1.1 with Change Date 2025-01-01 to Apache 2.0, so both are Apache 2.0 now; lwIP is BSD. Apache 2.0
   ships beside MIT with its NOTICE and license text in the distribution. A newer revision can carry a later Change
   Date, so the pin stays at a revision whose Change Date has passed. Mega Man X4's LAN co-op uses the same path.
-- **Rollback.** Each peer runs ahead on predicted remote pads (the last one received), saves a state per frame and,
-  when a late pad differs, loads the state of that frame and re-steps to the present with audio and presentation
-  suppressed. The guest's logic rate is untouched (30 Hz titles stay 30 Hz).
+- **Rollback, in Lucent.** The user, 2026-11-11: "Lf2 would probably need a new rollback netcode ... and anything
+  that doesn't have its own multiplayer ofc also gets rollback netcode". So the rollback engine is title-neutral and
+  lives in Lucent as one implementation: input exchange, prediction (the last pad received), rewind and resimulate,
+  an input-delay setting, per-frame state-hash desync detection, and spectating if cheap. A runtime supplies four
+  hooks: save state, load state, advance one frame, set the pads. psxport implements them over whole-machine
+  savestates (S023) and the pad input phase, re-stepping with audio and presentation suppressed; the guest's logic
+  rate is untouched (30 Hz titles stay 30 Hz). psxport is the first consumer and builds the Lucent component when
+  this plan reaches phase 4; LF2 is the second. Prior art first: GGPO (MIT since 2019) and its maintained forks,
+  checked against the four hooks; a fork that fits is adopted, pinned by revision. Its datagrams go through the
+  Lucent ZeroTier component's sockets, never its own UDP.
 - **Lockstep fallback.** A title whose frame cannot be re-stepped cheaply or deterministically enough waits for
   every peer's pad before each frame, with a fixed input delay.
 - **Session.** The host sends the image identity, settings that reach the guest and a start state; a peer with a
@@ -51,7 +58,8 @@ each player's pad on their own machine, pads exchanged per guest frame, every pe
 2. Per-frame savestate cost measured in load-independent units (instructions, bytes) and cut until one frame's
    save plus one re-stepped frame fit beside a normal frame.
 3. Pad exchange and lockstep over loopback, then LAN, then a ZeroTier address.
-4. Rollback with prediction; desync reports.
+4. Rollback: the Lucent engine (GGPO fork or our own after the prior-art check) with psxport's four hooks;
+   desync reports. Tell the lf2 agent the component's name when it exists.
 5. Session setup in the in-window UI (host, join by address, LAN list).
 
 The first title is Crash Bash, 4 players, one pad per machine. Mega Man X4's LAN co-op (its `docs/plans/`) uses
