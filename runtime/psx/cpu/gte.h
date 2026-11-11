@@ -55,9 +55,13 @@ public:
   }
 
   // SXY entry 0..2 with its place: from the projection that pushed it, or its word's pixel once a write replaced it.
-  // Its depth is in the title's common view units: SZ times the open DepthUnit's scale less its nearer, 0 when that is
-  // not in front of the eye.
+  // Its depth is in the title's common view units: SZ times the open DepthUnit's scale less its nearer, and times the
+  // carried translation's scale less its nearer, 0 when that is not in front of the eye.
   gte::ProjectedVertex projected(std::uint32_t entry);
+  // The guest loaded TRZ from a word carrying `depth` (carried 0: from an untagged one). A host write of TRZ drops it.
+  void carryTranslation(const GteTranslationDepth &depth) {
+    regs_.translationDepth = depth;
+  }
 
   // The whole register file, flags and SXY places, copied without running a read port.
   GteRawState saveRaw() const;

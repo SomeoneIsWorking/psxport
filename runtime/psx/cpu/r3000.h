@@ -59,10 +59,11 @@ inline constexpr std::uint32_t kOpLw = 0x23u;
 inline constexpr std::uint32_t kOpLwr = 0x26u;
 inline constexpr std::uint32_t kOpSw = 0x2Bu;
 inline constexpr std::uint32_t kOpSwc2 = 0x3Au;
-// COP2 and its rs field for a move from a data or control register into a GPR.
+// COP2 and its rs field for a move between a GPR and a data or control register.
 inline constexpr std::uint32_t kOpCop2 = 0x12u;
 inline constexpr std::uint32_t kCop2Mfc2 = 0x00u;
 inline constexpr std::uint32_t kCop2Cfc2 = 0x02u;
+inline constexpr std::uint32_t kCop2Ctc2 = 0x06u;
 
 constexpr std::uint32_t primaryOpcode(std::uint32_t instruction) {
   return instruction >> 26;

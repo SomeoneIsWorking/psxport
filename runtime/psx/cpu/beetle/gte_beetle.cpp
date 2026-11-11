@@ -71,7 +71,13 @@ void Gte::writeData(std::uint32_t reg, std::uint32_t value) {
 gte::ProjectedVertex Gte::projected(std::uint32_t entry) {
   bind();
   GtePlace place = regs_.places[entry];
-  place.z = std::max(place.z * depthScale_ - depthNearer_, 0.0f);
+  float scale = depthScale_;
+  float nearer = depthNearer_;
+  if (const GteTranslationDepth &translation = regs_.translationDepth; translation.carried != 0) {
+    scale *= translation.scale;
+    nearer += translation.nearer;
+  }
+  place.z = std::max(place.z * scale - nearer, 0.0f);
   return {GTE_ReadDR(gte::kSxy0 + entry), place};
 }
 
@@ -83,6 +89,9 @@ std::uint32_t Gte::readControl(std::uint32_t reg) {
 void Gte::writeControl(std::uint32_t reg, std::uint32_t value) {
   bind();
   GTE_WriteCR(reg, value);
+  if (reg == gte::kTranslationZ) {
+    regs_.translationDepth = {};
+  }
 }
 
 void Gte::execute(std::uint32_t instruction) {
@@ -102,6 +111,7 @@ GteRawState Gte::saveRaw() const {
   std::memcpy(state.reg, regs_.REG, sizeof state.reg);
   state.flags = regs_.FLAGS;
   std::memcpy(state.places, regs_.places, sizeof state.places);
+  state.translationDepth = regs_.translationDepth;
   return state;
 }
 
@@ -109,6 +119,7 @@ void Gte::restoreRaw(const GteRawState &state) {
   std::memcpy(regs_.REG, state.reg, sizeof state.reg);
   regs_.FLAGS = state.flags;
   std::memcpy(regs_.places, state.places, sizeof regs_.places);
+  regs_.translationDepth = state.translationDepth;
 }
 
 } // namespace psx::cpu

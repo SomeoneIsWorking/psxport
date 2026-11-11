@@ -142,6 +142,7 @@ struct LightrecExecutor::Impl {
   }
 
   // MFC2 of an SXY entry carries its place in the GPR it loads; any other transfer into a GPR ends what it carried.
+  // CTC2 of TRZ hands the GTE the translation depth its GPR carries.
   static void cop2Transfer(lightrec_state *lightrec, std::uint32_t opcode, std::uint32_t value) {
     Impl &impl = owner(lightrec);
     VertexPlaces &places = impl.core.vertexPlaces;
@@ -150,6 +151,11 @@ struct LightrecExecutor::Impl {
     }
     const std::uint32_t reg = rtField(opcode);
     const std::uint32_t move = (opcode >> 21) & 0x1Fu;
+    if (move == kCop2Ctc2 && rdField(opcode) == gte::kTranslationZ) {
+      const std::optional<NotedPlace> noted = places.carried(reg, value);
+      impl.core.gte().carryTranslation(noted ? noted->translation : GteTranslationDepth{});
+      return;
+    }
     if (move == kCop2Mfc2) {
       if (const std::optional<NotedPlace> noted = impl.screenPlace(rdField(opcode), value)) {
         places.carry(reg, value, *noted);

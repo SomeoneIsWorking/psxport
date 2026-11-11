@@ -400,7 +400,12 @@ trim over Spyro's feet, a wall seam over the floor), and leaves everything else 
   SZ back, so that projection names 1/16). `nearer` is the distance the guest itself sorts the draw nearer
   than it lies, read from the guest's own bin bias in bins of 32 view units: a moby's z step and Spyro's
   depth-bias byte are nearer, the far terrain pass's base (Spyro 1 0x40 bins) is farther, so the
-  low-detail mesh never covers near terrain, as its slot never does. A producer's computed vertex (a split midpoint, a resplit) carries `screenBlendDepth`
+  low-detail mesh never covers near terrain, as its slot never does. A guest draw whose translation a
+  native site wrote takes its unit from that word: the site notes the TRZ word with a `NotedPlace.translation`
+  (scale, nearer), an `LW` carries it in the GPR, and a guest `CTC2` of TRZ hands it to the GTE
+  (`Gte::carryTranslation`, fed by `LightrecExecutor::cop2Transfer`), whose projections multiply it into the open
+  unit until the next TRZ write; an untagged word or a host write carries nothing. Spyro 2/3's moby walk tags each
+  render-list entry's centre z this way for the guest moby drawer. A producer's computed vertex (a split midpoint, a resplit) carries `screenBlendDepth`
   of its sources: 1/z is linear on screen.
 - **Sort-back.** A draw site may also say how far back the guest sorts a polygon beyond its depth
   (`GtePlace.back`, view units). Spyro's terrain bins a polygon by its depth sum plus the draw word's bias
@@ -434,9 +439,9 @@ trim over Spyro's feet, a wall seam over the floor), and leaves everything else 
   translucent, decal or shadow draws. A primitive tests when it is a polygon, opaque, its `site` is a marked
   function and every vertex has depth > 0; a draw site that projects with no view depth (a HUD model, `DepthUnit`
   scale 0) leaves its vertices at 0 and draws in slot order. `Polygon` (a mesh the guest sorts per polygon: Spyro 1
-  terrain, Spyro 2's player drawer, which buckets each face by its summed SZ) tests and writes per polygon, with the
-  mark's `bin`: the depth one slot of the guest's sort spans (Spyro 1 terrain: 32 view units; Spyro 2's player
-  buckets: 16 SZ). `Object` (a model the guest sorts into one slot, its parts painter-ordered: a horn base over a
+  terrain, Spyro 2/3's terrain and player drawers, the latter bucketing each face by its summed SZ) tests and writes
+  per polygon, with the mark's `bin`: the depth one slot of the guest's sort spans (Spyro terrain: 32 view units; the
+  Spyro 2/3 player buckets: 4). `Object` (a model the guest sorts into one slot, its parts painter-ordered: a horn base over a
   crest) follows the guest's own rule for a model: nothing the slot order drew before it covers it, so it draws
   over that scene in its own order without testing, and writes its depth, so what the slot order puts after it (a
   ledge trim in a nearer bin) is tested against it.

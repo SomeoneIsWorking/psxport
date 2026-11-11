@@ -16,10 +16,12 @@
 
 namespace psx::cpu {
 
-// A stored vertex's place and the guest function whose SWC2 stored it, 0 for a native draw site.
+// A stored vertex's place and the guest function whose SWC2 stored it, 0 for a native draw site; or a translation
+// word's depth unit, which a guest CTC2 of TRZ hands the GTE (Gte::carryTranslation).
 struct NotedPlace {
   GtePlace place{};
   std::uint32_t site = 0;
+  GteTranslationDepth translation{};
 };
 
 // Every change to the table while `rollback` is armed is put back with the guest's stores, so a replay leaves
@@ -65,6 +67,13 @@ public:
     if (carries(reg)) {
       drop(reg);
     }
+  }
+  // What GPR `reg` carries while it still holds `word`.
+  [[nodiscard]] std::optional<NotedPlace> carried(std::uint32_t reg, std::uint32_t word) const {
+    if (!carries(reg) || carried_[reg].word != word) {
+      return std::nullopt;
+    }
+    return carried_[reg].noted;
   }
   // GPR `reg`, holding `word`, was stored at `address`.
   void stored(std::uint32_t reg, std::uint32_t address, std::uint32_t word) {
