@@ -105,7 +105,9 @@ name is refused with a warning and the Core stays on `record`.
   equal at every S, and only its quads (and the GPU's pixels) grow. The one exception is a triangle whose
   stored places give it area where its words give none, such as a sliver a clip cut between two crossings
   that round to one word: above 1x it draws and writes the native pixels its quads reach (`addTriangle`); without
-  it the pieces either side of the sliver leave a seam. A batch's snapshot refresh
+  it the pieces either side of the sliver leave a seam. A tested sliver covers its neighbours' native pixels, so it
+  also starts a depth group. Spyro 1 Stone Hill at 8x has about 48 slivers and 29 extra groups per record, +3% ops
+  and +37% draws over 1x (psxport issue 0199). A batch's snapshot refresh
   covers every scaled pixel its quads can reach. The 1x walk is CPU work every frame at any S; a line plans as one quad
   per pixel.
 - **Scale.** S is the internal-resolution setting (`setires`, `mods.ires`). Vertices and the draw
@@ -506,7 +508,7 @@ trim over Spyro's feet, a wall seam over the floor), and leaves everything else 
   check per guest store, one extra op per tested triangle, and per tested `Polygon` op a check and a mark of its
   native rows in the open group's map (`grouped_`); per depth group two draws and two pipeline binds. Off: an
   inline range test per store and an early return per stored vertex. A title or op that marks nothing pays no op
-  words, no groups and no `gl_FragDepth`. Nothing per pixel on the CPU and nothing that scales with ires. Spyro 1
+  words, no groups and no `gl_FragDepth`. Nothing per pixel on the CPU. Slivers (Raster, below) add groups above 1x. Spyro 1
   Stone Hill terrace (`warp 0/1/3`, `spyro-at 196200 148000 27000 1536`), 600 fields, ires 8x, 4K sink, unpaced,
   main thread (`perf stat` instructions): 236.7 G on, 213.5 G off (+10.9%; the slot-order pass before depth
   groups measured +2.7%). About 120 depth groups per record there. `perf record` on against off: the group map
@@ -754,7 +756,9 @@ Comparing two builds follows the `perf-units` skill: the same deterministic reci
 `PSXPORT_NOPACE=1`, the judgement ires and sink) on each with `perf` on, at least two runs a side, and
 `perf_compare.py` over the logs. Measured on Spyro 1: on one build the GPU counts repeat exactly and the CPU phase
 totals within about 0.1%, whatever the host load. The meter's own cost (the boundary reads and the covered-pixel sums)
-is about 0.2% of the process's user-space instructions at 8x. The present phase grows with ires (psxport issue 0199).
+is about 0.2% of the process's user-space instructions at 8x. A `preseq` dump converts the picture on the CPU inside
+the present phase, so meter runs take none. Spyro 1 Stone Hill, present phase 1x to 8x: +4.5% (draws +37%). Above
+1x the planner draws slivers, rows only at S and a second walk per triangle, all per primitive (psxport issue 0199).
 
 ## Movies
 
