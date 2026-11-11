@@ -112,7 +112,12 @@ bool GuestRedraw::reachedNoDevice(std::uint32_t entry) {
   if (touched == journal_.effects().end()) {
     return true;
   }
-  lucent::warn("redraw", "the redraw of 0x{:08X} reached {}", entry, cpu::describeSideEffect(*touched));
+  lucent::warn("redraw",
+               "the redraw of 0x{:08X} reached {} (stopped at pc 0x{:08X}, ra 0x{:08X})",
+               entry,
+               cpu::describeSideEffect(*touched),
+               core_.pc,
+               core_.r[31]);
   core_.game->ownerJournal.record(
       core_, {.reason = OwnerReason::ReplayRefused, .producer = entry, .sampleAddress = touched->address}, false);
   return false;
