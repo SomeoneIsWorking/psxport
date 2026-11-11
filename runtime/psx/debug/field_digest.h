@@ -1,12 +1,13 @@
-// field_digest.h — one line per display field that names the guest-visible machine state, so two runs
-// of the same binary on the same inputs can be compared field by field and the FIRST field at which
+// field_digest.h — one line per advance of the display-field clock that names the guest-visible machine
+// state, so two runs of the same binary on the same inputs can be compared and the FIRST point at which
 // they differ named.
 //
 // The channel is off unless `PSXPORT_DEBUG=fielddigest` (lucent's channel switch); an unobserved run
-// pays one boolean test per field. Each line is `field=<n> ticks=<emulated cpu ticks> ram=<hash of
-// the 2 MB main RAM> i_stat=<..> i_mask=<..> pad=<active-low buttons>`, with nothing host-derived in
-// it: no wall-clock time, no thread timing, no addresses. Two runs that are a pure function of the
-// guest and its inputs print identical lines (tools/determinism_check.py compares them).
+// pays one boolean test per advance. Each line is `field=<n-th advance> ticks=<emulated cpu ticks>
+// boundary=<field boundary ticks> ram=<hash of the 2 MB main RAM> i_stat=<..> i_mask=<..> pad=<active-low
+// buttons>`, with nothing host-derived in it. A present cadence in parts (fps60 under the default
+// `GameRuntime::presentDeadline`) advances once per part, so runs of different cadences are compared by
+// `ticks`, not by line; inputs sent over the control channel must land on the same frame (pause and step).
 #pragma once
 
 #include <cstdint>
@@ -21,8 +22,7 @@ public:
   // FNV-1a over 64-bit words. `bytes` must be a multiple of eight long (main RAM is 2 MB).
   [[nodiscard]] static std::uint64_t hashWords(std::span<const std::uint8_t> bytes);
 
-  // Log the state `game` is in at the end of one display field, when the channel is on. The field
-  // number counts the calls made on this instance.
+  // Log the state `game` is in after one advance of the display-field clock, when the channel is on.
   void recordField(const Game &game);
 
 private:

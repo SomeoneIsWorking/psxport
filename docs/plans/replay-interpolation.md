@@ -72,7 +72,9 @@ interpolation in its Tomba 2, Ape Escape and Vigilante 8 ports with `docs/RENDER
    `MotionSet::report` each track's and each `MotionSource`'s unpaired items over the replayed intervals only
    (`MotionSource::write` returns its `MotionCount`) (`RunEndReport`).
    With fps60 off `ReplayFrame::beforeDraw` samples and replays nothing, so a run with fps60 off is the
-   no-replay side of a leak proof (same inputs, identical `fielddigest` lines).
+   no-replay side of a leak proof: inputs on the same frames (pause and step), and the same `ram=` at every
+   `ticks=` both runs print. A title on the default `presentDeadline` advances its clock once per present part, so
+   its lines differ in number with fps60 and align only by `ticks`.
 4. **Titles.** Spyro 1 first (its draw section and motion tracks; the producers it replaces deleted
    once frames show the same picture), then Spyro 2/3's `field_redraw` onto the same owner, then
    Tomba 2.
