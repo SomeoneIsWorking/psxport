@@ -36,7 +36,7 @@ class TitleSettingBinding final : public RowBinding {
 public:
   TitleSettingBinding(const psx::game::TitleIntSetting *setting, Mods *mods) : mSetting(setting), mMods(mods) {}
   bool text(std::string &out) const override {
-    out = std::to_string(mSetting->range.clamp(mSetting->var->get())) + mSetting->unit;
+    out = mSetting->text();
     return true;
   }
   void step(int dir) override {
