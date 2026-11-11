@@ -20,8 +20,9 @@ void StockPadBuffers::deliver(Core &core, const PadDelivery &delivery) const {
       core.mem_w8(buffer, 0xFF);
       continue;
     }
-    for (std::uint32_t index = 0; index < delivery.packet.size(); ++index) {
-      core.mem_w8(buffer + index, delivery.packet[index]);
+    const auto &packet = slot == 0 ? delivery.packet : delivery.slot1Packet;
+    for (std::uint32_t index = 0; index < packet.size(); ++index) {
+      core.mem_w8(buffer + index, packet[index]);
     }
   }
 }

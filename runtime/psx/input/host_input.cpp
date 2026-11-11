@@ -5,7 +5,9 @@
 #include "rmlui_overlay.h"
 #include <lucent/log.h>
 
+#include <algorithm>
 #include <array>
+#include <optional>
 #include <string>
 
 #ifdef PSXPORT_SDL
@@ -171,12 +173,13 @@ void applyGamepad(SDL_Gamepad *gamepad, std::uint16_t &mask) {
 
 } // namespace
 
-std::string psx::input::HostInput::padButton(std::uint16_t bit, InjectedPress press, int holdFrames) {
+std::string
+psx::input::HostInput::padButton(std::uint16_t bit, InjectedPress press, int holdFrames, std::uint32_t port) {
   for (const GamepadBinding &binding : kGamepadBindings) {
     if (binding.bit == bit) {
       return binding.button != SDL_GAMEPAD_BUTTON_INVALID
-                 ? mInjection.gamepadButton(binding.button, press, holdFrames, TapClock::PadFrames)
-                 : mInjection.gamepadTrigger(binding.trigger, press, holdFrames, TapClock::PadFrames);
+                 ? mInjection.gamepadButton(binding.button, press, holdFrames, TapClock::PadFrames, port)
+                 : mInjection.gamepadTrigger(binding.trigger, press, holdFrames, TapClock::PadFrames, port);
     }
   }
   return lucent::format("pad: 0x{:04X} is not one PSX button", bit);
@@ -236,7 +239,7 @@ void psx::input::HostInput::rescanControllers(bool shown) {
   SDL_free(instances);
 }
 
-std::uint16_t psx::input::HostInput::poll(bool shown) {
+psx::input::HostPads psx::input::HostInput::poll(bool shown, std::uint32_t ports) {
   drainEvents();
 
   // Debug pause / frame-step / bug-report keys, edge-detected so one keypress is one action, and read
@@ -310,11 +313,23 @@ std::uint16_t psx::input::HostInput::poll(bool shown) {
   rescanControllers(shown);
   SDL_UpdateGamepads();
   const std::uint16_t keyboardMask = mask;
+  HostPads pads;
+  pads.masks[0] = mask;
+  std::uint32_t physical = 0;
   for (int slot = 0; slot < kMaxGamepads; slot++) {
-    if (mGamepads[slot]) {
-      applyGamepad(mGamepads[slot], mask);
+    if (!mGamepads[slot]) {
+      continue;
     }
+    std::uint32_t port = 0;
+    if (ports > 1) {
+      const std::optional<std::uint32_t> virtualPort =
+          mInjection.virtualPadPort(static_cast<std::uint32_t>(mGamepadInstance[slot]));
+      port = virtualPort ? *virtualPort : std::min(physical++, ports - 1);
+    }
+    applyGamepad(mGamepads[slot], pads.masks[port]);
+    pads.port2Present = pads.port2Present || port == 1;
   }
+  mask = pads.masks[0];
 
   // A controller supplying directions while the keyboard supplied none is the one cause of "WASD is
   // dead" that the player cannot see, so it is reported once: a connected or phantom pad (a drifting
@@ -330,34 +345,36 @@ std::uint16_t psx::input::HostInput::poll(bool shown) {
       mPadDirsWarned = true;
     }
   }
-  return mask;
+  return pads;
 }
 
 #else // !PSXPORT_SDL
 
 // No host input at all in a build without SDL: there is no window to read and no controller to open,
 // so the mask is "nothing pressed" and no debug-key edge can exist.
-std::uint16_t psx::input::HostInput::poll(bool shown) {
+psx::input::HostPads psx::input::HostInput::poll(bool shown, std::uint32_t ports) {
   (void)shown;
+  (void)ports;
   drainEvents();
   mPauseRequested = false;
   mFrameStepRequested = false;
   mBugReportRequested = false;
-  return kNoButtons;
+  return {};
 }
 
-std::string psx::input::HostInput::padButton(std::uint16_t bit, InjectedPress, int) {
+std::string psx::input::HostInput::padButton(std::uint16_t bit, InjectedPress, int, std::uint32_t) {
   return lucent::format("pad: 0x{:04X}: this build has no SDL gamepad", bit);
 }
 
 #endif // PSXPORT_SDL
 
-std::string psx::input::HostInput::padButtons(std::uint16_t bits, InjectedPress press, int holdFrames) {
+std::string
+psx::input::HostInput::padButtons(std::uint16_t bits, InjectedPress press, int holdFrames, std::uint32_t port) {
   std::string reply;
   for (std::uint16_t bit = 1; bit != 0; bit = static_cast<std::uint16_t>(bit << 1)) {
     if ((bits & bit) != 0) {
       reply += reply.empty() ? "" : "; ";
-      reply += padButton(bit, press, holdFrames);
+      reply += padButton(bit, press, holdFrames, port);
     }
   }
   return reply.empty() ? std::string("pad: no button named") : reply;

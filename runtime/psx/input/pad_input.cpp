@@ -13,7 +13,10 @@ void Pad::init() {
 
 // A shown or unmapped window reads the same queue; forced and replayed masks are applied after this.
 void Pad::pollHostInput() {
-  buttons = mHost.poll(game->renderDevice.shown());
+  const psx::input::HostPads pads = mHost.poll(game->renderDevice.shown(), game->core.runtime.padPorts());
+  buttons = pads.masks[0];
+  mPort2Buttons = pads.masks[1];
+  mPort2Present = pads.port2Present;
   // The debug keys act on the one Game the host gave the player's input.
   if (mPlayerInputSuppressed) {
     return;
@@ -36,7 +39,13 @@ void Pad::setPlayerInputSuppressed(bool suppressed) {
   mHost.setOverlayLive(&game->rml_overlay, !suppressed);
 }
 
-std::string Pad::injectButtons(std::uint16_t bits, psx::input::InjectedPress press, int holdFrames) {
+std::string
+Pad::injectButtons(std::uint16_t bits, psx::input::InjectedPress press, int holdFrames, std::uint32_t port) {
+  if (port >= game->core.runtime.padPorts()) {
+    return lucent::format("pad: this title reads {} controller port(s); port {} was not pressed",
+                          game->core.runtime.padPorts(),
+                          port + 1);
+  }
   if (press != psx::input::InjectedPress::Up) {
     if (replaying()) {
       return "pad: a pad replay owns the guest's input; nothing was pressed";
@@ -46,7 +55,7 @@ std::string Pad::injectButtons(std::uint16_t bits, psx::input::InjectedPress pre
       return "pad: this Game does not hold the player's input; nothing was pressed";
     }
   }
-  return mHost.padButtons(bits, press, holdFrames);
+  return mHost.padButtons(bits, press, holdFrames, port);
 }
 
 void Pad::serviceFrame() {
@@ -73,6 +82,7 @@ void Pad::serviceFrame() {
   // Before record/replay, so the guest, the recording and a replay agree.
   if (mPlayerInputSuppressed) {
     buttons = psx::input::kNoButtons;
+    mPort2Buttons = psx::input::kNoButtons;
   }
 
   if (!mSession.configured()) {
@@ -101,5 +111,8 @@ void Pad::serviceFrame() {
   }
   psx::input::PadDelivery delivery;
   delivery.packet = {0x00, 0x41, static_cast<uint8_t>(buttons & 0xFFu), static_cast<uint8_t>(buttons >> 8)};
+  delivery.slot1Connected = mPort2Present;
+  delivery.slot1Packet = {
+      0x00, 0x41, static_cast<uint8_t>(mPort2Buttons & 0xFFu), static_cast<uint8_t>(mPort2Buttons >> 8)};
   c->runtime.deliverPad(*c, delivery);
 }

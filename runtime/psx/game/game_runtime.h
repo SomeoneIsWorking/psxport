@@ -125,6 +125,11 @@ public:
     (void)core;
     (void)delivery;
   }
+  // Controller ports the title reads, 1 or psx::input::kPadPorts. With two, a second controller drives port 2
+  // instead of adding into port 1.
+  virtual std::uint32_t padPorts() const {
+    return 1;
+  }
   // A synchronous stock CdRead landed its payload; the bytes are written and already invalidated.
   virtual void stockCdReadLanded(Core &core, const psx::cd::StockReadLanding &landing) {
     (void)core;

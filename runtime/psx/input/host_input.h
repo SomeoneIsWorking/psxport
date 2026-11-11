@@ -16,6 +16,7 @@
 // reads this one, so a key's press and release always land in the same state.
 #pragma once
 #include "input_injection.h"
+#include "pad_delivery.h"
 
 #include <cstdint>
 #include <string>
@@ -49,6 +50,12 @@ inline constexpr std::uint16_t kButtonDirections = kButtonUp | kButtonRight | kB
 
 class QuitScope;
 
+// One poll's active-low mask per controller port, and whether any device sits on port 2.
+struct HostPads {
+  std::uint16_t masks[kPadPorts] = {kNoButtons, kNoButtons};
+  bool port2Present = false;
+};
+
 class HostInput {
 public:
   // Brings SDL's gamepad subsystem up for the process: its device scan takes hundreds of ms, so never mid-run.
@@ -81,12 +88,15 @@ public:
     mQuitScope = scope;
   }
 
-  // The active-low PSX button mask for this frame, from the host keyboard and every connected
-  // controller, additive so both work at once. Drains first, so a caller only ever has to pump here.
+  // The active-low PSX button masks for this frame, from the host keyboard and every connected
+  // controller. Drains first, so a caller only ever has to pump here.
+  //
+  // With one port everything adds into port 1. With two, the keyboard and the first physical controller drive
+  // port 1, the second physical controller port 2, and each virtual gamepad its own port.
   //
   // `shown` says the window is mapped for a player. An unmapped tool window reads the same queue, which only
   // injected events reach, and opens only virtual gamepads, so a connected controller never steers a tool run.
-  std::uint16_t poll(bool shown);
+  HostPads poll(bool shown, std::uint32_t ports);
 
   // The control channel's keys, mouse, touch and virtual gamepad, delivered through drainEvents and poll.
   InputInjection &injection() {
@@ -115,10 +125,10 @@ public:
 
 private:
   friend class ::Pad;
-  // PSX buttons (kButton bits, active high) on the virtual gamepad, through the binding the controllers are read with;
-  // a tap holds for `holdFrames` pad frames the guest samples. Reached only through Pad::injectButtons.
-  std::string padButtons(std::uint16_t bits, InjectedPress press, int holdFrames);
-  std::string padButton(std::uint16_t bit, InjectedPress press, int holdFrames);
+  // PSX buttons (kButton bits, active high) on port `port`'s virtual gamepad, through the binding the controllers are
+  // read with; a tap holds for `holdFrames` pad frames the guest samples. Reached only through Pad::injectButtons.
+  std::string padButtons(std::uint16_t bits, InjectedPress press, int holdFrames, std::uint32_t port);
+  std::string padButton(std::uint16_t bit, InjectedPress press, int holdFrames, std::uint32_t port);
 #ifdef PSXPORT_SDL
   bool keyDown(int scancode) const;
   void noteHostKey(int scancode, bool down);

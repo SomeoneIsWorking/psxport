@@ -32,6 +32,10 @@ public:
   uint16_t hostButtons() const {
     return mHostButtons;
   }
+  // Port 2's mask, live host input only: forced input, recording and replay serve port 1.
+  uint16_t port2Buttons() const {
+    return mPort2Buttons;
+  }
 
   // Edges of the final mask; consumers decide what an edge means.
   void resetButtonEdges(uint16_t current = psx::input::kNoButtons) {
@@ -68,9 +72,11 @@ public:
   // the P / '.' / B debug keys do nothing here and this Game's overlay takes no host events.
   void setPlayerInputSuppressed(bool suppressed);
 
-  // The one way to press PSX buttons (kButton bits, active high) on the virtual gamepad. A press is refused, with the
-  // reason as the reply, while a pad replay feeds the guest or another Game holds the player's input.
-  std::string injectButtons(std::uint16_t bits, psx::input::InjectedPress press, int holdFrames);
+  // The one way to press PSX buttons (kButton bits, active high) on port `port`'s virtual gamepad (0 is port 1). A
+  // press is refused, with the reason as the reply, while a pad replay feeds the guest, another Game holds the
+  // player's input, or the title reads no such port.
+  std::string
+  injectButtons(std::uint16_t bits, psx::input::InjectedPress press, int holdFrames, std::uint32_t port = 0);
 
 private:
   psx::input::HostInput &mHost;
@@ -79,6 +85,8 @@ private:
   psx::config::ForcedInput mForced;
   uint32_t mFc = 0; // pad frames serviced, the forced pulse's clock
   uint16_t mHostButtons = psx::input::kNoButtons;
+  uint16_t mPort2Buttons = psx::input::kNoButtons;
+  bool mPort2Present = false;
   psx::input::PadRecordReplay mSession;
   bool mLiveInputOnly = false;
   bool mPlayerInputSuppressed = false;

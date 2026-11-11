@@ -200,46 +200,67 @@ void watchHits(const Call &call) {
 // Pad frames a guest-pad `tap` holds when none are given.
 inline constexpr int kDefaultTapFrames = 4;
 
+// A guest-pad verb's port: a last word `p2` names port 2, anything else is port 1.
+struct PadPortArgs {
+  std::uint32_t port = 0;
+  std::size_t words = 0; // the words before the port word
+};
+
+PadPortArgs padPortArgs(const Call &call) {
+  const std::size_t size = call.args.size();
+  if (size >= 2 && call.args.word(size - 1) == "p2") {
+    return {.port = 1, .words = size - 1};
+  }
+  return {.port = 0, .words = size};
+}
+
 void press(const Call &call) {
-  if (call.args.size() < 2) {
-    call.reply("usage: press <button>");
+  const PadPortArgs port = padPortArgs(call);
+  if (port.words < 2) {
+    call.reply("usage: press <button> [p2]");
     return;
   }
-  call.reply(call.core.game->pad.injectButtons(padButtonBit(call.args.word(1)), input::InjectedPress::Down, 0));
+  call.reply(
+      call.core.game->pad.injectButtons(padButtonBit(call.args.word(1)), input::InjectedPress::Down, 0, port.port));
 }
 
 void release(const Call &call) {
-  if (call.args.size() < 2) {
-    call.reply("usage: release <button>");
+  const PadPortArgs port = padPortArgs(call);
+  if (port.words < 2) {
+    call.reply("usage: release <button> [p2]");
     return;
   }
-  call.reply(call.core.game->pad.injectButtons(padButtonBit(call.args.word(1)), input::InjectedPress::Up, 0));
+  call.reply(
+      call.core.game->pad.injectButtons(padButtonBit(call.args.word(1)), input::InjectedPress::Up, 0, port.port));
 }
 
 // Every button held where the active-low mask clears its bit, every other one let go.
 void hold(const Call &call) {
+  const PadPortArgs port = padPortArgs(call);
   const std::optional<std::uint32_t> mask = call.args.hex(1);
   if (!mask) {
-    call.reply("usage: hold <active-low-hex>");
+    call.reply("usage: hold <active-low-hex> [p2]");
     return;
   }
   const auto held = static_cast<std::uint16_t>(~*mask);
   const std::string down =
-      held != 0 ? call.core.game->pad.injectButtons(held, input::InjectedPress::Down, 0) : std::string();
+      held != 0 ? call.core.game->pad.injectButtons(held, input::InjectedPress::Down, 0, port.port) : std::string();
   const std::string up =
-      call.core.game->pad.injectButtons(static_cast<std::uint16_t>(~held), input::InjectedPress::Up, 0);
+      call.core.game->pad.injectButtons(static_cast<std::uint16_t>(~held), input::InjectedPress::Up, 0, port.port);
   call.reply(down.empty() ? up : down + "; " + up);
 }
 
 void tap(const Call &call) {
-  if (call.args.size() < 2) {
-    call.reply("usage: tap <button> [frames]");
+  const PadPortArgs port = padPortArgs(call);
+  if (port.words < 2) {
+    call.reply("usage: tap <button> [frames] [p2]");
     return;
   }
-  const std::uint32_t frames = call.args.number(2).value_or(0);
+  const std::uint32_t frames = port.words > 2 ? call.args.number(2).value_or(0) : 0;
   call.reply(call.core.game->pad.injectButtons(padButtonBit(call.args.word(1)),
                                                input::InjectedPress::Tap,
-                                               frames != 0 ? static_cast<int>(frames) : kDefaultTapFrames));
+                                               frames != 0 ? static_cast<int>(frames) : kDefaultTapFrames,
+                                               port.port));
 }
 
 // Every frame's mask is kept from frame 0, so a session in progress can be cut into a replay on demand.
@@ -726,15 +747,23 @@ inline constexpr std::array kVerbs{
     Verb{"unwatch", "unwatch", "stop the store watch", &unwatch},
     Verb{"hits", "hits", "store-watch hits so far", &watchHits},
     Verb{"press",
-         "press <button>",
-         "hold a pad button (up/down/left/right/x/o/t/sq/start/select/l1..r3) on the virtual gamepad",
+         "press <button> [p2]",
+         "hold a pad button (up/down/left/right/x/o/t/sq/start/select/l1..r3) on the virtual gamepad (p2: port 2)",
          &press,
          Reach::Host},
-    Verb{"release", "release <button>", "let go of a pad button on the virtual gamepad", &release, Reach::Host},
-    Verb{"hold", "hold <hex>", "the virtual gamepad's buttons as an active-low pad mask", &hold, Reach::Host},
+    Verb{"release",
+         "release <button> [p2]",
+         "let go of a pad button on the virtual gamepad (p2: port 2)",
+         &release,
+         Reach::Host},
+    Verb{"hold",
+         "hold <hex> [p2]",
+         "the virtual gamepad's buttons as an active-low pad mask (p2: port 2)",
+         &hold,
+         Reach::Host},
     Verb{"tap",
-         "tap <button> [frames]",
-         "a pad button on the virtual gamepad for n pad frames (default 4)",
+         "tap <button> [frames] [p2]",
+         "a pad button on the virtual gamepad for n pad frames (default 4; p2: port 2)",
          &tap,
          Reach::Host},
     Verb{"padrec",

@@ -30,7 +30,7 @@ title answers there. A hop with no title entry runs on the framework alone.
 
 | hop | owner | title |
 |---|---|---|
-| 1 | `psx/input/pad_input.cpp:Pad::serviceFrame` → `GameRuntime::deliverPad`; default BIOS pad path, `psx/input/stock_pad_buffers.cpp:StockPadBuffers` for buffer-writing titles | `deliverPad` |
+| 1 | `psx/input/pad_input.cpp:Pad::serviceFrame` → `GameRuntime::deliverPad`; default BIOS pad path, `psx/input/stock_pad_buffers.cpp:StockPadBuffers` for buffer-writing titles; a title whose `GameRuntime::padPorts` is 2 gets port 2 from the second physical controller or the control channel's `p2` word (live input only; `.pad` record and replay serve port 1) | `deliverPad`, `padPorts` |
 | 2 | `psx/input/pad_input.cpp:Pad::currentPhase` → `GameRuntime::inputPhase` — the phase a `.pad` replay matches on | `inputPhase` |
 | 3 | `psx/input/pad_record_replay.cpp:PadRecordReplay` — `.pad` record and replay; host input (keyboard, gamepads and the control channel's virtual gamepad), force/hold, host suppression and replay each win over the one before | |
 | 4 | `psx/input/host_input.cpp:HostInput` — the one SDL drain: key state, the overlay, a window close on the `QuitScope`; no window means no host buttons | |

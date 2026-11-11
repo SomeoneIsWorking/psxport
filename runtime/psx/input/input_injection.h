@@ -48,10 +48,12 @@ public:
   std::string mouseWheel(WindowId windowId, WindowXY scroll);
   // `name` is an SDL gamepad button name (a, b, start, dpup); the virtual pad attaches on first use.
   std::string gamepadButton(std::string_view name, InjectedPress press, int holdTurns);
-  // The same by SDL_GamepadButton value, a tap held for `hold` ticks of `clock`.
-  std::string gamepadButton(int button, InjectedPress press, int hold, TapClock clock);
+  // The same by SDL_GamepadButton value on port `port`'s virtual pad, a tap held for `hold` ticks of `clock`.
+  std::string gamepadButton(int button, InjectedPress press, int hold, TapClock clock, std::uint32_t port = 0);
   // An SDL_GamepadAxis trigger pulled fully or let go.
-  std::string gamepadTrigger(int axis, InjectedPress press, int hold, TapClock clock);
+  std::string gamepadTrigger(int axis, InjectedPress press, int hold, TapClock clock, std::uint32_t port = 0);
+  // The controller port whose virtual pad has joystick id `id`, if it is one of them.
+  std::optional<std::uint32_t> virtualPadPort(std::uint32_t id) const;
   // `name` is an SDL gamepad axis name (leftx, lefttrigger); `value` is the raw axis value.
   std::string gamepadAxis(std::string_view name, int value);
   // Down and tap need the finger up, up needs it down.
@@ -76,18 +78,26 @@ private:
     WindowId windowId;
     TapClock clock;
     int ticksLeft;
+    std::uint32_t port;
+  };
+  static constexpr int kAxes = 6;
+  // One virtual pad per controller port, attached on first use.
+  struct VirtualPad {
+    SDL_Joystick *joystick = nullptr;
+    std::uint32_t id = 0;
+    std::int16_t axes[kAxes] = {};
   };
 
   void pushKey(WindowId windowId, int scancode, bool down);
   void pushMouseButton(WindowId windowId, int button, bool down);
-  bool setGamepadButton(int button, bool down);
-  bool setGamepadTrigger(int axis, bool pulled);
-  bool setGamepadAxis(int axis, std::int16_t value);
+  bool setGamepadButton(int button, bool down, std::uint32_t port);
+  bool setGamepadTrigger(int axis, bool pulled, std::uint32_t port);
+  bool setGamepadAxis(int axis, std::int16_t value, std::uint32_t port);
   void pushFinger(WindowId windowId, int finger, bool down, WindowXY normalised);
   // Window coordinates as the 0..1 a touch event carries.
   static std::optional<WindowXY> normalise(WindowId windowId, WindowXY at);
-  bool ensureVirtualPad();
-  void schedule(Device device, int code, WindowId windowId, int hold, TapClock clock);
+  bool ensureVirtualPad(std::uint32_t port);
+  void schedule(Device device, int code, WindowId windowId, int hold, TapClock clock, std::uint32_t port = 0);
   void releaseExpired(TapClock clock);
 
   std::vector<PendingRelease> releases_;
@@ -98,10 +108,8 @@ private:
   static constexpr int kMaxFingers = 10;
   bool fingerDown_[kMaxFingers] = {};
   WindowXY fingerAt_[kMaxFingers] = {};
-  SDL_Joystick *virtualPad_ = nullptr;
-  static constexpr int kAxes = 6;
-  std::int16_t axes_[kAxes] = {};
-  std::uint32_t virtualPadId_ = 0;
+  static constexpr std::uint32_t kVirtualPads = 2;
+  VirtualPad virtualPads_[kVirtualPads];
 };
 
 } // namespace psx::input
