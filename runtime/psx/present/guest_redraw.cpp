@@ -1,5 +1,6 @@
 #include "guest_redraw.h"
 
+#include "emit_memory.h"
 #include "emulated_time.h"
 #include "execution_control.h"
 #include "execution_exit.h"
@@ -40,6 +41,10 @@ void GuestRedraw::writeByte(std::uint32_t address, std::uint8_t byte) {
 
 void GuestRedraw::writeHalf(std::uint32_t address, std::uint16_t half) {
   core_.mem_w16(address, half);
+}
+
+void GuestRedraw::writeVertex(std::uint32_t address, const gte::ProjectedVertex &vertex) {
+  EmitMemory(core_).storeVertex(address, vertex);
 }
 
 bool GuestRedraw::run(std::uint32_t entry, std::span<const std::uint32_t> arguments) {

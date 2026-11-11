@@ -10,6 +10,7 @@
 
 #include "core.h"
 #include "gte_control.h"
+#include "projected_vertex.h"
 #include "side_effect_journal.h"
 
 #include <array>
@@ -32,6 +33,8 @@ public:
   // A byte or an aligned halfword at `address`; the rest of its word is kept.
   void writeByte(std::uint32_t address, std::uint8_t byte);
   void writeHalf(std::uint32_t address, std::uint16_t half);
+  // A packet vertex at `address` with its sub-pixel place (EmitMemory::storeVertex).
+  void writeVertex(std::uint32_t address, const gte::ProjectedVertex &vertex);
 
   // The original routine at `entry` (its override suppressed) with `arguments` in a0..a3. False, logged, when
   // it did not return or reached a device or a syscall (a host body stops at it): its packets then do not describe

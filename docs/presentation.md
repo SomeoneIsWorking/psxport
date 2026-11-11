@@ -212,7 +212,7 @@ re-run in a `GuestRedraw` for each k/n of the interval with the tracks written k
 fraction (a result each caller reads at its own index, an edge one row per draw) blends it there. A blended word is
 whole; an override that draws from a tracked word reads its two samples (`MotionSet::pairedRecord`, through
 `ReplayFrame::motion`) and the rule's unrounded value (`RingRule::exactHalf`) and places its vertices by the
-difference (`EmitMemory::storeVertex`), so a one-unit step lands halfway rather than on one end. The chain head the
+difference (`EmitMemory::storeVertex`, or `GuestRedraw::writeVertex` from a motion source's write), so a one-unit step lands halfway rather than on one end. The chain head the
 section returns is captured (`PacketChainWalker::capture`). At seal the captures belong to S; in-between k is S
 with the one chain run the section names (`ReplaySection::linked`) replaced by the capture decoded under S's draw
 state at that run (`FrameRecord::splice`, `gpu::decodePackets`), CLUTs resolved from VRAM (`RecordCluts`). Each
