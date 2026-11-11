@@ -275,7 +275,9 @@ The composer builds the frame at `t` from S's record:
   no packet and notifies no code write), and runs the routine with devices unreached, interrupts and
   guest time held. The title writes the in-between's inputs through `writeWord`, reads the packets the
   routine linked with `PacketChainWalker::tryEmitChain` before the redraw ends, and saves them as the
-  object's state; a run that does not return, or reaches a device or a syscall, is refused. A host body that
+  object's state; a run that does not return, or reaches a device, a syscall or a host service whose state lives
+  outside guest memory (every BIOS call but the libc leaves, the pad work area), is refused: the rollback cannot put
+  that state back, and a replayed `TestEvent` would take the card event the real frame waits for. A host body that
   reaches one stops there (`DiscardedRunTouchedDevice`), so a native loop polling a device status cannot spin.
 - **Transform.** A render that moves a GTE transform by t blends it with `blendGteControl` (`gte_control.*`): the
   rotation turns along the shorter arc (`lucent::rotation::between`: polar decomposition, slerp) and its stretch moves element by element, so a

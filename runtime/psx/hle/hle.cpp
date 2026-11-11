@@ -155,6 +155,10 @@ constexpr uint32_t kBiosThreadHandle = 0xFF000000u;
 
 } // namespace
 
+bool Hle::biosCallKeepsHostState(char table, uint32_t fn) {
+  return table != 'A' || psx::hle::libcStringLeaf(fn) == nullptr;
+}
+
 bool Hle::dispatchBios(char table, uint32_t fn) {
   Core *c = &game->core;
   uint32_t a0 = c->r[psx::cpu::kA0], a1 = c->r[psx::cpu::kA1], a2 = c->r[psx::cpu::kA2];
@@ -169,7 +173,8 @@ bool Hle::dispatchBios(char table, uint32_t fn) {
                 c->r[psx::cpu::kA3],
                 c->r[psx::cpu::kRa]);
   if (table == 'A') {
-    if (psx::hle::dispatchLibcString(c, fn)) {
+    if (const psx::hle::LibcStringLeaf leaf = psx::hle::libcStringLeaf(fn)) {
+      leaf(*c, a0, a1, a2);
       return true;
     }
     switch (fn) {
@@ -224,7 +229,7 @@ bool Hle::dispatchBios(char table, uint32_t fn) {
       heapInit({a0, a1});
       c->r[psx::cpu::kV0] = 0;
       return true; // InitHeap
-    case 0x13: // setjmp(buf)
+    case 0x13:     // setjmp(buf)
       psx::hle::saveJmpBuf(c, a0);
       c->r[psx::cpu::kV0] = 0;
       return true;

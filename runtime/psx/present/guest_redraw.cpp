@@ -118,11 +118,8 @@ bool GuestRedraw::call(
 }
 
 bool GuestRedraw::reachedNoDevice(std::uint32_t entry) {
-  const auto touched = std::ranges::find_if(journal_.effects(), [](const cpu::SideEffect &effect) {
-    return effect.kind == cpu::SideEffectKind::DeviceRead || effect.kind == cpu::SideEffectKind::DeviceWrite ||
-           effect.kind == cpu::SideEffectKind::Syscall;
-  });
-  if (touched == journal_.effects().end()) {
+  const std::optional<cpu::SideEffect> &touched = journal_.discardStop();
+  if (!touched) {
     return true;
   }
   lucent::warn("redraw",

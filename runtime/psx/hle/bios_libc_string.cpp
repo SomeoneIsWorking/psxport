@@ -26,131 +26,131 @@ void psx::hle::guestCopy(Core &core, uint32_t dst, uint32_t src, uint32_t n, Cop
   }
 }
 
-bool psx::hle::dispatchLibcString(Core *core, uint32_t fn) {
-  const uint32_t a0 = core->r[psx::cpu::kA0];
-  const uint32_t a1 = core->r[psx::cpu::kA1];
-  const uint32_t a2 = core->r[psx::cpu::kA2];
-
+psx::hle::LibcStringLeaf psx::hle::libcStringLeaf(uint32_t fn) {
   switch (fn) {
   case 0x27: // memmove(dst, src, n); 0x2C is the same leaf at another vector
   case 0x2C:
-    psx::hle::guestCopy(*core, a0, a1, a2, psx::hle::CopyOrder::OverlapSafe);
-    core->r[psx::cpu::kV0] = a0;
-    return true;
+    return [](Core &core, uint32_t a0, uint32_t a1, uint32_t a2) {
+      psx::hle::guestCopy(core, a0, a1, a2, psx::hle::CopyOrder::OverlapSafe);
+      core.r[psx::cpu::kV0] = a0;
+    };
   case 0x28: // bzero(dst, n)
-    for (uint32_t i = 0; i < a1; i++) {
-      core->mem_w8(a0 + i, 0);
-    }
-    core->r[psx::cpu::kV0] = a0;
-    return true;
+    return [](Core &core, uint32_t a0, uint32_t a1, uint32_t a2) {
+      for (uint32_t i = 0; i < a1; i++) {
+        core.mem_w8(a0 + i, 0);
+      }
+      core.r[psx::cpu::kV0] = a0;
+    };
   case 0x2A: // memcpy(dst, src, n)
-    psx::hle::guestCopy(*core, a0, a1, a2, psx::hle::CopyOrder::Forward);
-    core->r[psx::cpu::kV0] = a0;
-    return true;
+    return [](Core &core, uint32_t a0, uint32_t a1, uint32_t a2) {
+      psx::hle::guestCopy(core, a0, a1, a2, psx::hle::CopyOrder::Forward);
+      core.r[psx::cpu::kV0] = a0;
+    };
   case 0x2B: // memset(dst, c, n)
-    for (uint32_t i = 0; i < a2; i++) {
-      core->mem_w8(a0 + i, (uint8_t)a1);
-    }
-    core->r[psx::cpu::kV0] = a0;
-    return true;
-  case 0x15: { // strcat(dst, src)
-    uint32_t end = a0;
-    while (core->mem_r8(end)) {
-      end++;
-    }
-    uint32_t i = 0;
-    uint8_t ch;
-    do {
-      ch = core->mem_r8(a1 + i);
-      core->mem_w8(end + i, ch);
-      i++;
-    } while (ch);
-    core->r[psx::cpu::kV0] = a0;
-    return true;
-  }
-  case 0x17: { // strcmp(s1, s2)
-    uint32_t i = 0;
-    uint8_t x;
-    uint8_t y;
-    do {
-      x = core->mem_r8(a0 + i);
-      y = core->mem_r8(a1 + i);
-      i++;
-    } while (x && x == y);
-    core->r[psx::cpu::kV0] = static_cast<uint32_t>(static_cast<int32_t>(static_cast<int>(x) - static_cast<int>(y)));
-    return true;
-  }
-  case 0x18: { // strncmp(s1, s2, n)
-    int difference = 0;
-    for (uint32_t i = 0; i < a2; i++) {
-      const uint8_t x = core->mem_r8(a0 + i);
-      const uint8_t y = core->mem_r8(a1 + i);
-      difference = static_cast<int>(x) - static_cast<int>(y);
-      if (difference || !x) {
-        break;
+    return [](Core &core, uint32_t a0, uint32_t a1, uint32_t a2) {
+      for (uint32_t i = 0; i < a2; i++) {
+        core.mem_w8(a0 + i, (uint8_t)a1);
       }
-    }
-    core->r[psx::cpu::kV0] = static_cast<uint32_t>(static_cast<int32_t>(difference));
-    return true;
-  }
-  case 0x19: { // strcpy(dst, src)
-    uint32_t i = 0;
-    uint8_t ch;
-    do {
-      ch = core->mem_r8(a1 + i);
-      core->mem_w8(a0 + i, ch);
-      i++;
-    } while (ch);
-    core->r[psx::cpu::kV0] = a0;
-    return true;
-  }
-  case 0x1A: { // memcmp(s1, s2, n)
-    int difference = 0;
-    for (uint32_t i = 0; i < a2; i++) {
-      const uint8_t x = core->mem_r8(a0 + i);
-      const uint8_t y = core->mem_r8(a1 + i);
-      difference = static_cast<int>(x) - static_cast<int>(y);
-      if (difference) {
-        break;
+      core.r[psx::cpu::kV0] = a0;
+    };
+  case 0x15: // strcat(dst, src)
+    return [](Core &core, uint32_t a0, uint32_t a1, uint32_t a2) {
+      uint32_t end = a0;
+      while (core.mem_r8(end)) {
+        end++;
       }
-    }
-    core->r[psx::cpu::kV0] = static_cast<uint32_t>(static_cast<int32_t>(difference));
-    return true;
-  }
-  case 0x1B: { // strlen(s)
-    uint32_t length = 0;
-    while (core->mem_r8(a0 + length)) {
-      length++;
-    }
-    core->r[psx::cpu::kV0] = length;
-    return true;
-  }
-  case 0x10:   // atoi(s)
-  case 0x11: { // atol(s)
-    uint32_t i = 0;
-    while (isAsciiSpace(core->mem_r8(a0 + i))) {
-      i++;
-    }
-    bool negative = false;
-    const uint8_t sign = core->mem_r8(a0 + i);
-    if (sign == '-' || sign == '+') {
-      negative = sign == '-';
-      i++;
-    }
-    uint32_t value = 0;
-    for (uint8_t digit = core->mem_r8(a0 + i); digit >= '0' && digit <= '9'; digit = core->mem_r8(a0 + ++i)) {
-      value = value * 10u + static_cast<uint32_t>(digit - '0');
-    }
-    core->r[psx::cpu::kV0] = negative ? 0u - value : value;
-    return true;
-  }
-  case 0x25: { // toupper(c) — Sony BIOS's locale-independent ASCII leaf
-    core->r[psx::cpu::kV0] = a0 >= static_cast<uint32_t>('a') && a0 <= static_cast<uint32_t>('z')
-                                 ? a0 - (static_cast<uint32_t>('a') - static_cast<uint32_t>('A'))
-                                 : a0;
-    return true;
-  }
+      uint32_t i = 0;
+      uint8_t ch;
+      do {
+        ch = core.mem_r8(a1 + i);
+        core.mem_w8(end + i, ch);
+        i++;
+      } while (ch);
+      core.r[psx::cpu::kV0] = a0;
+    };
+  case 0x17: // strcmp(s1, s2)
+    return [](Core &core, uint32_t a0, uint32_t a1, uint32_t a2) {
+      uint32_t i = 0;
+      uint8_t x;
+      uint8_t y;
+      do {
+        x = core.mem_r8(a0 + i);
+        y = core.mem_r8(a1 + i);
+        i++;
+      } while (x && x == y);
+      core.r[psx::cpu::kV0] = static_cast<uint32_t>(static_cast<int32_t>(static_cast<int>(x) - static_cast<int>(y)));
+    };
+  case 0x18: // strncmp(s1, s2, n)
+    return [](Core &core, uint32_t a0, uint32_t a1, uint32_t a2) {
+      int difference = 0;
+      for (uint32_t i = 0; i < a2; i++) {
+        const uint8_t x = core.mem_r8(a0 + i);
+        const uint8_t y = core.mem_r8(a1 + i);
+        difference = static_cast<int>(x) - static_cast<int>(y);
+        if (difference || !x) {
+          break;
+        }
+      }
+      core.r[psx::cpu::kV0] = static_cast<uint32_t>(static_cast<int32_t>(difference));
+    };
+  case 0x19: // strcpy(dst, src)
+    return [](Core &core, uint32_t a0, uint32_t a1, uint32_t a2) {
+      uint32_t i = 0;
+      uint8_t ch;
+      do {
+        ch = core.mem_r8(a1 + i);
+        core.mem_w8(a0 + i, ch);
+        i++;
+      } while (ch);
+      core.r[psx::cpu::kV0] = a0;
+    };
+  case 0x1A: // memcmp(s1, s2, n)
+    return [](Core &core, uint32_t a0, uint32_t a1, uint32_t a2) {
+      int difference = 0;
+      for (uint32_t i = 0; i < a2; i++) {
+        const uint8_t x = core.mem_r8(a0 + i);
+        const uint8_t y = core.mem_r8(a1 + i);
+        difference = static_cast<int>(x) - static_cast<int>(y);
+        if (difference) {
+          break;
+        }
+      }
+      core.r[psx::cpu::kV0] = static_cast<uint32_t>(static_cast<int32_t>(difference));
+    };
+  case 0x1B: // strlen(s)
+    return [](Core &core, uint32_t a0, uint32_t a1, uint32_t a2) {
+      uint32_t length = 0;
+      while (core.mem_r8(a0 + length)) {
+        length++;
+      }
+      core.r[psx::cpu::kV0] = length;
+    };
+  case 0x10: // atoi(s)
+  case 0x11: // atol(s)
+    return [](Core &core, uint32_t a0, uint32_t a1, uint32_t a2) {
+      uint32_t i = 0;
+      while (isAsciiSpace(core.mem_r8(a0 + i))) {
+        i++;
+      }
+      bool negative = false;
+      const uint8_t sign = core.mem_r8(a0 + i);
+      if (sign == '-' || sign == '+') {
+        negative = sign == '-';
+        i++;
+      }
+      uint32_t value = 0;
+      for (uint8_t digit = core.mem_r8(a0 + i); digit >= '0' && digit <= '9'; digit = core.mem_r8(a0 + ++i)) {
+        value = value * 10u + static_cast<uint32_t>(digit - '0');
+      }
+      core.r[psx::cpu::kV0] = negative ? 0u - value : value;
+    };
+  case 0x25: // toupper(c) — Sony BIOS's locale-independent ASCII leaf
+    return [](Core &core, uint32_t a0, uint32_t a1, uint32_t a2) {
+      core.r[psx::cpu::kV0] = a0 >= static_cast<uint32_t>('a') && a0 <= static_cast<uint32_t>('z')
+                                  ? a0 - (static_cast<uint32_t>('a') - static_cast<uint32_t>('A'))
+                                  : a0;
+    };
   default:
-    return false;
+    return nullptr;
   }
 }

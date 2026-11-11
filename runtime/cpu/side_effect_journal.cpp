@@ -101,8 +101,9 @@ std::optional<std::uint32_t> SideEffectJournal::replayDeviceRead(std::uint32_t a
     return std::nullopt;
   }
   if (mode_ == SideEffectMode::Discard) {
-    append({SideEffectKind::DeviceRead, address, width, 0});
-    stopDiscardedRun();
+    const SideEffect effect{SideEffectKind::DeviceRead, address, width, 0};
+    append(effect);
+    stopDiscardedRun(effect);
     return 0u;
   }
   const std::size_t index = effects_.size();
@@ -129,17 +130,25 @@ void SideEffectJournal::recordDeviceRead(std::uint32_t address, std::uint32_t wi
 }
 
 bool SideEffectJournal::admitDeviceWrite(std::uint32_t address, std::uint32_t width, std::uint32_t value) {
-  append({SideEffectKind::DeviceWrite, address, width, value});
-  stopDiscardedRun();
+  const SideEffect effect{SideEffectKind::DeviceWrite, address, width, value};
+  append(effect);
+  stopDiscardedRun(effect);
   return mode_ == SideEffectMode::Record;
 }
 
-bool SideEffectJournal::admitHostService(SideEffectKind kind, std::uint32_t guestAddress, std::uint32_t selector) {
+bool SideEffectJournal::admitHostService(SideEffectKind kind,
+                                         std::uint32_t guestAddress,
+                                         std::uint32_t selector,
+                                         HostState state) {
   const SideEffect effect{kind, guestAddress, 0, selector};
   const std::size_t index = effects_.size();
   append(effect);
   if (mode_ == SideEffectMode::Discard) {
-    return true;
+    if (state == HostState::GuestMemoryOnly) {
+      return true;
+    }
+    stopDiscardedRun(effect);
+    return false;
   }
   if (kind == SideEffectKind::NestedOverride) {
     // Executes on the live path, and on the shadow path only where the live path did the same thing at
@@ -153,7 +162,7 @@ bool SideEffectJournal::admitHostService(SideEffectKind kind, std::uint32_t gues
 bool SideEffectJournal::admitSyscall(std::uint32_t code, std::uint32_t instructionPc) {
   const SideEffect effect{SideEffectKind::Syscall, instructionPc, 0, code};
   append(effect);
-  stopDiscardedRun();
+  stopDiscardedRun(effect);
   markUnreplayable(lucent::format("{} path performed {}", sideEffectPathName(mode_), describeSideEffect(effect)));
   return mode_ == SideEffectMode::Record;
 }
@@ -178,6 +187,10 @@ SideEffectMode SideEffectJournal::mode() const {
 
 std::span<const SideEffect> SideEffectJournal::effects() const {
   return effects_;
+}
+
+const std::optional<SideEffect> &SideEffectJournal::discardStop() const {
+  return discardStop_;
 }
 
 const std::optional<std::string> &SideEffectJournal::unreplayable() const {
@@ -214,9 +227,12 @@ std::uint64_t SideEffectJournal::withheldPendingWork() const {
   return withheldPendingWork_;
 }
 
-void SideEffectJournal::stopDiscardedRun() {
+void SideEffectJournal::stopDiscardedRun(const SideEffect &effect) {
   if (mode_ != SideEffectMode::Discard) {
     return;
+  }
+  if (!discardStop_) {
+    discardStop_ = effect;
   }
   if (translatedExecutions_ == 0) {
     throw DiscardedRunTouchedDevice{};

@@ -226,6 +226,13 @@ std::uint32_t journaledSelector(const Core &core, const ResolvedHostDispatch &re
   return resolved.biosTable != 0 ? (core.r[9] & 0xffu) : 0u;
 }
 
+// The pad work area and every BIOS call but a libc leaf keep their state in Hle, outside guest memory.
+SideEffectJournal::HostState journaledHostState(const Core &core, const ResolvedHostDispatch &resolved) {
+  const bool kept = resolved.padWorkAreaAction.has_value() ||
+                    (resolved.biosTable != 0 && Hle::biosCallKeepsHostState(resolved.biosTable, core.r[9] & 0xffu));
+  return kept ? SideEffectJournal::HostState::Kept : SideEffectJournal::HostState::GuestMemoryOnly;
+}
+
 } // namespace
 
 // How a host leaf the guest reached by jal finishes: its requested exit, else a return to r[31].
@@ -271,8 +278,10 @@ ExecutionResult dispatchGuestHostService(Core &core, std::uint32_t guestAddress)
     return {ExecutionExitReason::Fault, guestAddress, 0, "guest address has no host service"};
   }
   if (core.sideEffectJournal != nullptr &&
-      !core.sideEffectJournal->admitHostService(
-          journaledKind(resolved), guestAddress, journaledSelector(core, resolved))) {
+      !core.sideEffectJournal->admitHostService(journaledKind(resolved),
+                                                guestAddress,
+                                                journaledSelector(core, resolved),
+                                                journaledHostState(core, resolved))) {
     // A shadow-path service the live path did not perform here is withheld from the devices.
     core.pc = core.r[31];
     return {ExecutionExitReason::GuestReturn, core.pc, 0};

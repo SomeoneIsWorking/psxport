@@ -138,6 +138,8 @@ public:
   int eventIndex(uint32_t id) const;
   // BIOS-call dispatch (A0/B0/C0). Returns true if handled (Core V0 set).
   bool dispatchBios(char table, uint32_t fn);
+  // Whether the BIOS call keeps state outside guest memory (events, heap, rand, card files); only libc leaves do not.
+  static bool biosCallKeepsHostState(char table, uint32_t fn);
 
 private:
   void heapCoalesce();

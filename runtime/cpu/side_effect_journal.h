@@ -51,8 +51,9 @@ enum class SideEffectKind : std::uint8_t {
 enum class SideEffectMode : std::uint8_t {
   Record, // the live path: accesses reach the devices and are logged
   Replay, // the shadow path: accesses are logged and served from, or checked against, `recorded`
-  // A run whose memory the caller puts back (present/guest_redraw.h): services execute, devices are
-  // never reached, guest time and pending work are held. Its first device access or syscall raises
+  // A run whose memory the caller puts back (present/guest_redraw.h): services whose state is guest memory execute,
+  // devices are never reached, guest time and pending work are held. Its first device access, syscall or service
+  // with host-side state raises
   // `DiscardedRunTouchedDevice`: out of host code at once, from translated code (served 0) when the executor
   // is next back in host code, so a run polling a device stops instead of spinning out its budget.
   Discard,
@@ -126,10 +127,14 @@ public:
   // swallowed (Replay).
   bool admitDeviceWrite(std::uint32_t address, std::uint32_t width, std::uint32_t value);
 
+  // Whether a host service keeps state outside guest memory (BIOS events, heap, card files), which a Discard run
+  // cannot put back.
+  enum class HostState : std::uint8_t { GuestMemoryOnly, Kept };
   // HOST SERVICES. Returns true when the service may execute. A nested title override executes on both
   // paths (its device traffic goes through this same funnel); every other service is unreplayable:
   // Record lets it run live and marks the call incomparable, Replay withholds it and marks the same.
-  bool admitHostService(SideEffectKind kind, std::uint32_t guestAddress, std::uint32_t selector);
+  // Discard stops at a service that keeps host state and runs the rest.
+  bool admitHostService(SideEffectKind kind, std::uint32_t guestAddress, std::uint32_t selector, HostState state);
   bool admitSyscall(std::uint32_t code, std::uint32_t instructionPc);
   // Pending work is asynchronous to the call. Record services it (and the call becomes incomparable,
   // because an interrupt or host turn ran inside it); Replay withholds it, leaving it pending for the
@@ -140,6 +145,8 @@ public:
 
   SideEffectMode mode() const;
   std::span<const SideEffect> effects() const;
+  // Discard only: the effect the run stopped at, or nullopt when it reached none.
+  const std::optional<SideEffect> &discardStop() const;
   // The first reason this call cannot be compared, or nullopt.
   const std::optional<std::string> &unreplayable() const;
   // Replay only: the index of the first effect that differs from `recorded` (including a length
@@ -182,7 +189,7 @@ public:
 private:
   void markUnreplayable(std::string reason);
   // A Discard run that reached a device stops here, or at the end of the translated segment it is in.
-  void stopDiscardedRun();
+  void stopDiscardedRun(const SideEffect &effect);
   // Refuses the effect and records the fault when the call is already at `kMaxSideEffectsPerCall`. The
   // entry is NOT stored, so a refused effect can never shift the positions the replay compares by.
   void append(SideEffect effect);
@@ -202,6 +209,7 @@ private:
   // The Core the journal was last scoped on, whose executor a deferred stop ends the segment of.
   Core *core_ = nullptr;
   bool stopDeferred_ = false;
+  std::optional<SideEffect> discardStop_;
 };
 
 } // namespace psx::cpu
