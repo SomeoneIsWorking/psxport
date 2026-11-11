@@ -61,6 +61,11 @@ public:
   [[nodiscard]] bool covers(const Interval &interval);
   // In-between `k` of S, assembled; null when S's chain run cannot take it.
   [[nodiscard]] const FrameRecord *at(const FrameRecord &shown, int k, std::span<const std::uint16_t> vram);
+  // The fraction the section is being replayed at, while it runs: a title override inside the replay draws that
+  // in-between of what it emits there.
+  [[nodiscard]] std::optional<float> replaying() const {
+    return replaying_;
+  }
   // Run end: intervals replayed (and their in-betweens) and refused by the section, in-betweens shown and held at
   // assembly, then each track's and source's unpaired items over the replayed intervals.
   void report() const;
@@ -90,6 +95,7 @@ private:
   MotionSet motion_;
   // The interval length the next set is replayed for: the last one the presenter asked for.
   int fields_ = 2;
+  std::optional<float> replaying_;
   Set pending_;
   bool pendingReady_ = false;
   // The section ran since the last drawing seal.

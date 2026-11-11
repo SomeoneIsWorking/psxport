@@ -56,7 +56,9 @@ void ReplayFrame::forget() {
 bool ReplayFrame::replay(Core &core, float t, Capture &capture) {
   GuestRedraw redraw(core);
   motion_.write(redraw, t);
+  replaying_ = t;
   const std::optional<std::uint32_t> head = section_.draw(core, redraw);
+  replaying_.reset();
   // The section's flatten assigned its packets buckets for a walk that never comes.
   core.otTables.endWalk();
   if (!head) {
