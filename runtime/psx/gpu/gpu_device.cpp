@@ -271,10 +271,6 @@ present::RecordDrawState GpuDevice::drawState() const {
   return state;
 }
 
-void GpuDevice::beginPacket() {
-  mTap.beginPacket();
-}
-
 void GpuDevice::noteDrawEntry(std::uint32_t field) {
   mTap.noteDrawEntry(field);
 }

@@ -153,36 +153,13 @@ void submitOrderingTable(Core &core, GpuDevice &device, std::uint32_t rootGuestA
       device.enterSlot(slot, tables.descending(slot->table));
     }
     if (node.carriesPrimitive()) {
-      const std::optional<present::RecordKey> key = core.emission.keyFor(node.guestAddress());
-      // The command word's owner, and the other side of an overwrite pair in the packet: the writer that stored
-      // over a word the owned packet's own scope wrote, or the scope an unowned packet's writer stored over. A word
-      // another scope left in memory the packet reuses is not the packet's.
+      // The packet is its command word's writer's.
       const present::OwnerHandle owner = core.owners.ownerOf(node.guestAddress() + 4u);
-      const bool owned = present::OwnerLedger::isScope(owner);
-      present::OwnerHandle mixed = present::kNoOwner;
-      for (unsigned i = 0; i < node.gp0WordCount() && mixed == present::kNoOwner; i++) {
-        const std::uint32_t address = guestAddressOf(node.gp0WordRamOffset(i));
-        const present::OwnerHandle replaced = core.owners.overwrote(address);
-        if (replaced == present::kNoOwner) {
-          continue;
-        }
-        if (!owned) {
-          mixed = replaced;
-        } else if (key && core.owners.scopeKey(replaced) == key) {
-          mixed = core.owners.ownerOf(address);
-        }
-      }
-      device.beginPacket();
       for (unsigned i = 0; i < node.gp0WordCount(); i++) {
         const std::uint32_t offset = node.gp0WordRamOffset(i);
         const std::uint32_t word = core.mem_r32(offset);
         const std::uint32_t address = guestAddressOf(offset);
-        device.gp0(word,
-                   {.sourceAddress = address,
-                    .packetKey = key,
-                    .owner = owner,
-                    .mixedOwner = mixed,
-                    .place = core.vertexPlaces.at(address, word)});
+        device.gp0(word, {.sourceAddress = address, .owner = owner, .place = core.vertexPlaces.at(address, word)});
       }
     }
     if (const std::optional<present::OtSlot> empty = tables.emptyAfter(node.guestAddress())) {
@@ -192,7 +169,6 @@ void submitOrderingTable(Core &core, GpuDevice &device, std::uint32_t rootGuestA
   device.endChain();
   device.enterSlot(std::nullopt, true);
   core.otTables.endWalk();
-  core.owners.drawListSubmitted();
 }
 
 } // namespace psx::gpu

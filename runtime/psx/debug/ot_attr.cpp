@@ -7,7 +7,6 @@
 // build. That is what keeps the store path off the whole machine — see OtAttr::stampFrame for the crash
 // that reaching through `c->game` for a frame counter caused.
 #include "command_args.h"
-#include "native_dispatch.h"
 #include "ordering_table.h"
 #include "render_substrate.h"
 #include <algorithm>
@@ -193,11 +192,10 @@ void OtAttr::packetsCommand(Core &core, const Emit &emit) const {
 void OtAttr::attributeOne(uint32_t address, const Emit &emit) const {
   Span sp{};
   if (lookupStore(address, &sp)) {
-    emit(std::format("0x{:08X} <- fn=0x{:08X} caller=0x{:08X} claimed=0x{:08X} (span [0x{:08X},0x{:08X}))",
+    emit(std::format("0x{:08X} <- fn=0x{:08X} caller=0x{:08X} (span [0x{:08X},0x{:08X}))",
                      address | 0x80000000u,
                      sp.fn,
                      sp.caller,
-                     sp.claimed,
                      sp.lo,
                      sp.hi));
     return;
@@ -383,9 +381,6 @@ void OtAttr::trackStoreSlow(Core *c, GuestSpan store) {
       return;
     }
   }
-  // Resolved HERE and not at GP0-execution time, because the call chain only exists during the store —
-  // by the time the packet is executed the guest has long returned and there is nothing left to walk.
-  const uint32_t claimed = resolveClaimedFrame(c);
   if (mSpanCount < SPAN_CAP) {
     // Track whether the table stayed ADDRESS-SORTED. The pool pointer is monotonic within a frame (the
     // reason the reverse linear scan below is safe), so in practice it is — and that is what lets
@@ -394,54 +389,10 @@ void OtAttr::trackStoreSlow(Core *c, GuestSpan store) {
     if (mSpanCount > 0 && k < mSpans[mSpanCount - 1].lo) {
       mSpansSorted = false;
     }
-    mSpans[mSpanCount++] = Span{k, k + bytes, fn, caller, c->pc, claimed};
+    mSpans[mSpanCount++] = Span{k, k + bytes, fn, caller, c->pc};
   } else {
     mSpanOverflow++;
   }
-}
-
-uint32_t OtAttr::resolveClaimedFrame(Core *c) {
-  const psx::cpu::NativeDispatcher &dispatcher = c->nativeDispatcher();
-  if (!dispatcher.hasProducers()) {
-    return 0;
-  }
-  if (mResolveCacheRevision != dispatcher.producerRevision()) {
-    for (int i = 0; i < RCACHE_SLOTS; i++) {
-      mResolveCache[i].depth = -1;
-    }
-    mResolveCacheRevision = dispatcher.producerRevision();
-  }
-  const int visNow = c->callAttribution.visibleDepth();
-  const int limNow = visNow < CLAIM_SEARCH_DEPTH ? visNow : CLAIM_SEARCH_DEPTH;
-  uint32_t prefix[CLAIM_SEARCH_DEPTH] = {};
-  uint32_t h = 2166136261u; // FNV-1a over the prefix
-  for (int i = 0; i < limNow; i++) {
-    prefix[i] = c->callAttribution.frameFromTop(i);
-    h = (h ^ prefix[i]) * 16777619u;
-  }
-  ResolveEntry &slot = mResolveCache[(h ^ (uint32_t)limNow) & (RCACHE_SLOTS - 1)];
-  if (slot.depth == limNow) {
-    bool same = true;
-    for (int i = 0; i < limNow && same; i++) {
-      same = slot.prefix[i] == prefix[i];
-    }
-    if (same) {
-      return slot.result;
-    }
-  }
-  uint32_t found = 0;
-  for (int i = 0; i < limNow; i++) {
-    if (prefix[i] && dispatcher.isProducer(prefix[i])) {
-      found = prefix[i];
-      break;
-    }
-  }
-  slot.depth = limNow;
-  for (int i = 0; i < limNow; i++) {
-    slot.prefix[i] = prefix[i];
-  }
-  slot.result = found;
-  return found;
 }
 
 void OtAttr::trackGte(Core *c) {

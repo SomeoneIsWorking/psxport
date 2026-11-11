@@ -13,18 +13,18 @@ zero-filled, the o32 `R_MIPS_32/26/HI16/LO16` relocations) and writes the EXE to
 
 ## Guest
 
-The guest publishes its facts at `0x8001000C` (VSync, `square_draw`, the OT, the sine table, the frame
+The guest publishes its facts at `0x8001000C` (VSync, the OT, the sine table, the frame
 counter, fields per frame, the scene words and the display buffer), double-buffers a 16-bucket OT cleared
 by DMA6 and submitted by DMA2, and calls VSync once per field. Each scene runs 240 frames, then the next:
 
 | scene | drawer | expected rows |
 |---|---|---|
-| `owned-square` | `square_draw`, an owned object; frames alternate 2 and 3 fields | none; presents at thirds and halves, each showing S as drawn |
-| `unowned-moving` | `drifter_draw`, a TILE no producer declares | `UnownedMoving` for `drifter_draw` |
+| `turning-square` | `square_draw`, a turning POLY_F4; frames alternate 2 and 3 fields | `Moving` for `square_draw`; presents at thirds and halves, each showing S as drawn |
+| `drifter` | `drifter_draw`, a TILE stepping across the screen | `Moving` for `drifter_draw` |
 | `mmio-port` | `mmio_bar_draw`, a TILE written to GP0 | `Port mmio-gp0` for `mmio_bar_draw` |
 | `block-dma-port` | `dma_bar_draw`, a TILE sent by block DMA2 | `Port block-dma` for `dma_bar_draw` |
-| `reused-slot` | `square_draw` on a slot a new object takes every 12 frames | none in this stage |
-| `amended-square` | `square_draw`, then `amend_draw` stores the packet's colour word before submit | `Overwrote` for `amend_draw`, producer `square_draw` |
+| `reused-slot` | `square_draw` on a slot a new object takes every 12 frames | `Moving` for `square_draw` |
+| `overwritten-square` | `square_draw`, then `amend_draw` stores the packet's command word before submit | `Moving` for `amend_draw`, the packet's last writer |
 
 One more scene runs only when requested and never comes round in the cycle. It must end the session with a
 `[render:error] draw-list cycle` line, the player's text and exit status 3, and the frame it was drawn in never
@@ -49,22 +49,19 @@ does not trap. Lightrec `57fd2070` died on the first case with SIGFPE; `178bf86c
 `backdrop_draw`, a still TILE every scene draws without an owner, must never make a row. Besides the rows
 above the journal holds, by design:
 
-- one `IntervalHeld/stale-shown` and one `IntervalHeld/no-previous` row on `planted owned-square` from the first
+- one `IntervalHeld/stale-shown` and one `IntervalHeld/no-previous` row on `planted turning-square` from the first
   presents after boot, before a drawing record and a shown predecessor exist;
 - at every scene change, one held interval for the drawer of the scene that ended (it vanished from S), on the
   row of that drawer's reason with the new scene as its screen, since S belongs to the new scene. A run that
   cycles the scenes k times has about k such intervals per scene change.
 
-The planted cases cover the stage 2 reasons the framework can raise today (`UnownedMoving`, `Port`,
-`Overwrote`). `ReplayRefused`, `PlacelessVertex`, `ClosureFailed` and `BranchChange` have no case: the
+The planted cases cover the reasons a draw no replay covers can raise (`Moving`, `Port`). `ReplayRefused`, `PlacelessVertex`, `ClosureFailed` and `BranchChange` have no case: the
 first needs a guest redraw the program does not yet make, the last three are
-reasons of stages 3 and 4 that the framework does not raise yet. The reused slot is pinned only by
-incarnations (stage 4).
+reasons of stages 3 and 4 that the framework does not raise yet.
 
 ## Host
 
-`testprog/host/` is the title: `Runtime` binds VSync and declares `square_draw` the owner of its square from the
-facts, `FrameDriver` runs fields until the frame counter moves and commits once with the guest's field count, and
+`testprog/host/` is the title: `Runtime` binds VSync and names the OT from the facts, `FrameDriver` runs fields until the frame counter moves and commits once with the guest's field count, and
 `DebugMenu` names the scene
 as the journal's screen with `planted <name>` as its route.
 
@@ -74,7 +71,6 @@ as the journal's screen with `planted <name>` as its route.
     PSXPORT_NOPACE=1 PSXPORT_SHOW_WINDOW=0 PSXPORT_DEBUG=presentseq build/agent/bin/psxtest_port
 
 then `owners` on the control channel (or the JSONL under `PSXPORT_OWNERS_DIR`) lists the rows above and the
-by-design rows, and `presentseq` shows the owned square at `t` = 1/3, 2/3, 1 and 1/2, 1 alternating, never
+by-design rows, and `presentseq` shows the turning square at `t` = 1/3, 2/3, 1 and 1/2, 1 alternating, never
 `t = 0`; the run-end `records:` line counts at most one `stalled` present per switch into the alternating
-cadence. On 2026-10-27 a 60 s unpaced run gave exactly that: 10 rows (4 planted, 4 scene-change, 2 boot) and
-`stalled=0`.
+cadence. On 2026-11-12 a 3600-step unpaced run gave exactly that: 14 rows (6 planted, 6 scene-change, 2 boot).

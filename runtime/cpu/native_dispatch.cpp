@@ -49,8 +49,8 @@ bool NativeDispatcher::install(NativeRegistration registration) {
     lucent::error("native-dispatch", "refused incomplete native override registration");
     return false;
   }
-  const auto [entry, inserted] = entries_.try_emplace(
-      registration.key, Entry{std::string(registration.name), registration.function, registration.producer});
+  const auto [entry, inserted] =
+      entries_.try_emplace(registration.key, Entry{std::string(registration.name), registration.function});
   if (!inserted) {
     lucent::error("native-dispatch",
                   "refused duplicate override '{}' at image {}:{} address 0x{:08X}; owned by '{}'",
@@ -62,10 +62,6 @@ bool NativeDispatcher::install(NativeRegistration registration) {
     return false;
   }
   epoch_.advance();
-  if (registration.producer) {
-    ++producerAddresses_[registration.key.address];
-    ++producerRevision_;
-  }
   const std::uint32_t pc = physical(registration.key.address);
   core_.lightrecExecutor().invalidate({pc, pc + 4u});
   return true;
@@ -75,13 +71,6 @@ bool NativeDispatcher::remove(NativeKey key) {
   const auto entry = entries_.find(key);
   if (entry == entries_.end()) {
     return false;
-  }
-  if (entry->second.producer) {
-    const auto producer = producerAddresses_.find(key.address);
-    if (--producer->second == 0) {
-      producerAddresses_.erase(producer);
-    }
-    ++producerRevision_;
   }
   entries_.erase(entry);
   epoch_.advance();
@@ -340,20 +329,10 @@ ExecutionResult dispatchGuestUntilExit(Core &core, std::uint32_t guestAddress, E
   return core.lightrecExecutor().executeUntilExit(guestAddress, budget);
 }
 
-bool NativeDispatcher::isProducer(std::uint32_t guestAddress) const {
-  return producerAddresses_.contains(guestAddress);
-}
-
 std::optional<ExecutionResult> NativeDispatcher::invoke(NativeKey key) {
   const auto entry = entries_.find(key);
   if (entry == entries_.end() || suppressed(key)) {
     return std::nullopt;
-  }
-  std::optional<present::EmissionScope::Guard> emission;
-  if (const std::optional<present::Producer> &producer = entry->second.producer) {
-    const std::uint32_t object =
-        producer->object == present::Arg::None ? 0u : core_.r[4 + static_cast<unsigned>(producer->object)];
-    emission.emplace(core_.emission, key.address, object, 0u);
   }
   if (differential_) {
     if (auto shadowed = differential_->intercept(key, entry->second.name, entry->second.function)) {
@@ -428,11 +407,8 @@ bool dispatchGuestOrPropagate(Core &core, std::uint32_t guestAddress, std::strin
   return completeOrPropagate(core, dispatchGuest(core, guestAddress, ExecutionBudget::currentTurn(core), origin));
 }
 
-std::optional<NativeKey> tryInstallNativeOverride(Core &core,
-                                                  std::uint32_t guestAddress,
-                                                  std::string_view name,
-                                                  NativeFunction function,
-                                                  std::optional<present::Producer> producer) {
+std::optional<NativeKey>
+tryInstallNativeOverride(Core &core, std::uint32_t guestAddress, std::string_view name, NativeFunction function) {
   if (function == nullptr) {
     lucent::error(
         "native-dispatch", "cannot install '{}' at 0x{:08X}: it has no native implementation", name, guestAddress);
@@ -448,18 +424,14 @@ std::optional<NativeKey> tryInstallNativeOverride(Core &core,
     return std::nullopt;
   }
   const NativeKey key{*image, guestAddress};
-  if (!core.nativeDispatcher().install(NativeRegistration{key, name, function, producer})) {
+  if (!core.nativeDispatcher().install(NativeRegistration{key, name, function})) {
     return std::nullopt;
   }
   return key;
 }
 
-void installNativeOverride(Core &core,
-                           std::uint32_t guestAddress,
-                           std::string_view name,
-                           NativeFunction function,
-                           std::optional<present::Producer> producer) {
-  if (!tryInstallNativeOverride(core, guestAddress, name, function, producer)) {
+void installNativeOverride(Core &core, std::uint32_t guestAddress, std::string_view name, NativeFunction function) {
+  if (!tryInstallNativeOverride(core, guestAddress, name, function)) {
     std::abort();
   }
 }

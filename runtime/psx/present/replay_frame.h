@@ -57,7 +57,7 @@ public:
     std::uint64_t from = 0;
     int fields = 0;
   };
-  // Whether S = `shown`'s draw ran the section; an S that did not is composed from producer states, if any.
+  // Whether S = `shown`'s draw ran the section; an S that did not is shown as drawn.
   [[nodiscard]] bool replays(std::uint64_t shown) const;
   // Whether the interval's in-betweens were replayed. The next set is replayed for its `fields`.
   [[nodiscard]] bool covers(const Interval &interval);

@@ -1,7 +1,6 @@
 #pragma once
 
 #include "dispatch_epoch.h"
-#include "emission_scope.h"
 #include "execution_exit.h"
 #include "guest_call_site.h"
 #include "guest_host_dispatch_kind.h"
@@ -28,8 +27,6 @@ struct NativeRegistration {
   NativeKey key;
   std::string_view name;
   NativeFunction function = nullptr;
-  // Set for a producer: the dispatcher opens the emission scope (address, that register) around the call.
-  std::optional<present::Producer> producer;
 };
 
 class NativeDispatcher {
@@ -55,15 +52,6 @@ public:
     }
     return classifyUncached(guestAddress);
   }
-  // Whether an installed override at `guestAddress` (in any image) is a producer.
-  bool isProducer(std::uint32_t guestAddress) const;
-  bool hasProducers() const {
-    return !producerAddresses_.empty();
-  }
-  // Advances whenever the set of producer addresses changes.
-  std::uint64_t producerRevision() const {
-    return producerRevision_;
-  }
 
 private:
   struct NativeKeyHash {
@@ -72,7 +60,6 @@ private:
   struct Entry {
     std::string name;
     NativeFunction function = nullptr;
-    std::optional<present::Producer> producer;
   };
 
   GuestHostDispatchKind classifyUncached(std::uint32_t guestAddress);
@@ -85,25 +72,16 @@ private:
   DispatchEpoch &epoch_;
   std::unordered_map<NativeKey, Entry, NativeKeyHash> entries_;
   std::vector<NativeKey> suppressions_;
-  std::unordered_map<std::uint32_t, int> producerAddresses_; // guest address -> installed producer keys
-  std::uint64_t producerRevision_ = 0;
   HostDispatchVerdictCache verdicts_;
   std::unique_ptr<OverrideDifferential> differential_;
 };
 
 // The one way an override is registered: the key's image identity is resolved here. Refuses a null
 // handler, an address no active image owns, and a key that already has an owner.
-std::optional<NativeKey> tryInstallNativeOverride(Core &core,
-                                                  std::uint32_t guestAddress,
-                                                  std::string_view name,
-                                                  NativeFunction function,
-                                                  std::optional<present::Producer> producer = std::nullopt);
+std::optional<NativeKey>
+tryInstallNativeOverride(Core &core, std::uint32_t guestAddress, std::string_view name, NativeFunction function);
 // The same refusal, then an abort, for a boot-time override catalog.
-void installNativeOverride(Core &core,
-                           std::uint32_t guestAddress,
-                           std::string_view name,
-                           NativeFunction function,
-                           std::optional<present::Producer> producer = std::nullopt);
+void installNativeOverride(Core &core, std::uint32_t guestAddress, std::string_view name, NativeFunction function);
 // Removes the override the active image identity resolves at `guestAddress`; refuses an unowned address.
 bool removeNativeOverride(Core &core, std::uint32_t guestAddress);
 ExecutionResult dispatchGuestHostService(Core &core, std::uint32_t guestAddress);

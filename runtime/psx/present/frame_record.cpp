@@ -7,26 +7,6 @@
 
 namespace psx::present {
 
-const RecordKey *entryKey(const RecordEntry &entry) {
-  if (const auto *primitive = std::get_if<DrawPrimitive>(&entry); primitive != nullptr && primitive->key) {
-    return &*primitive->key;
-  }
-  if (const auto *copy = std::get_if<VramCopy>(&entry); copy != nullptr && copy->key) {
-    return &*copy->key;
-  }
-  return nullptr;
-}
-
-std::optional<OtSlot> entrySlot(const RecordEntry &entry) {
-  if (const auto *primitive = std::get_if<DrawPrimitive>(&entry)) {
-    return primitive->slot;
-  }
-  if (const auto *copy = std::get_if<VramCopy>(&entry)) {
-    return copy->slot;
-  }
-  return std::nullopt;
-}
-
 std::span<const std::uint16_t> FrameRecord::clut(const DrawPrimitive &primitive) const {
   if (primitive.clutOffset == kNoClut) {
     return {};

@@ -1,5 +1,5 @@
-// ownership_verdict.h — whether an interval S'→S can be composed: the draws in S with no owner, grouped by
-// writer and OT table, each either drawn the same in S' (still) or moving (the interval is held).
+// ownership_verdict.h — whether an interval S'→S that no replay draws is still: S's draws grouped by writer and OT
+// table, each either drawn the same in S' (still) or moving (shown at the logic rate).
 #pragma once
 
 #include "frame_record.h"
@@ -15,23 +15,20 @@ namespace psx::present {
 
 class OwnershipVerdict {
 public:
-  // Judges S' (`from`) to S (`to`); true when every unowned group of S is drawn word for word as in S' and no writer
-  // amended an owned packet.
+  // Judges S' (`from`) to S (`to`); true when every group of S is drawn as in S'.
   bool judge(const FrameRecord &from, const FrameRecord &to, const OwnerLedger &ledger);
-  // The last judgement's findings: moving unowned and port groups, and amended packets.
+  // The last judgement's findings: the moving guest and port groups.
   std::span<const OwnerFinding> findings() const {
     return findings_;
   }
 
 private:
-  // Unowned draws of one writer in one table, as one ordered picture.
+  // The draws of one writer in one table, as one ordered picture.
   struct Group {
     WriterKind kind = WriterKind::Guest;
     std::uint32_t code = 0; // the call target, else the block PC; 0 when no writer is known
     std::uint32_t dispatched = 0;
     std::uint16_t table = kNoTable;
-    bool amended = false; // the writer stored over words a scope wrote
-    std::uint32_t producer = 0;
     std::uint64_t hash = 0;
     std::uint32_t count = 0;
     std::uint32_t bucketLo = 0xFFFFFFFFu;
@@ -41,8 +38,7 @@ private:
     std::uint8_t sampleCommand = 0;
 
     bool sameKey(const Group &other) const {
-      return kind == other.kind && code == other.code && dispatched == other.dispatched && table == other.table &&
-             amended == other.amended;
+      return kind == other.kind && code == other.code && dispatched == other.dispatched && table == other.table;
     }
   };
 

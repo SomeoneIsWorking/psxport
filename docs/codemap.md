@@ -30,7 +30,7 @@ Dependency direction: title repo → `runtime/psx/game/` (the title interface) �
 - `runtime/cpu/lightrec_executor.*`, `fallback_policy.h`, `segment_clock.*` — Lightrec dynarec / JIT lifetime per Core, state sync, bounded execution, store observation, fallback, segment cycle commit
 - `runtime/cpu/execution_exit.*`, `execution_control.*`, `execution_services.*`, `execution_ledger.*` — typed executor exits, budgets, break and syscall results, exit requests, executor counters ledger
 - `runtime/cpu/image_identity.*` — code image catalog: authenticated resident and module identity, generation, covered ranges
-- `runtime/cpu/native_dispatch.*`, `native_function.h`, `guest_call*.*` — native overrides / HLE by guest address, producer registration, original calls, native-to-guest call, jal call sites, call attribution
+- `runtime/cpu/native_dispatch.*`, `native_function.h`, `guest_call*.*` — native overrides / HLE by guest address, original calls, native-to-guest call, jal call sites, call attribution
 - `runtime/cpu/resumable_guest_call.*`, `guest_call_census.*` — guest call across host turns / fields: return latch, turn cap, refusal, save-state form of a suspended call, run census
 - `runtime/cpu/host_dispatch_cache.h`, `dispatch_epoch.h`, `guest_host_dispatch_kind.h` — what a guest address is (guest code, host service, unclaimed): the verdict cache and the epoch its input owners advance
 - `runtime/cpu/invalidation.*`, `executable_write_source.h` — self-modifying code / executable writes invalidating translated blocks and dispatch verdicts
@@ -71,12 +71,12 @@ Dependency direction: title repo → `runtime/psx/game/` (the title interface) �
 - `runtime/psx/present/display_presenter.*`, `present_plan.h`, `video_plan.h`, `pixel_size.h` — present: guest display to screen, letterbox, fade, 24bpp, internal resolution scale
 - `runtime/psx/present/render_mode.h`, `render_substrate.*` — render path (Record, Device), per-Core host render state
 - `runtime/psx/present/drawn_logo.*` — a title's logo rebuilt from its title screen's draws: the frame record's primitives on the wordmark's texture page, rasterized from VRAM
-- `runtime/psx/present/frame_record.*`, `emission_scope.*`, `emit_memory.*`, `packet_chains.*`, `blend.h` — frame record, owner keys on primitives and VRAM copies, emission scope (and a packet's own key reopened for an in-place rewrite, `amend`), guest or host emit memory, a replayed chain's capture, lerp blends, sub-pixel vertex places stored with their words (`storeVertex`/`loadVertex`)
+- `runtime/psx/present/frame_record.*`, `emit_memory.*`, `packet_chains.*`, `blend.h` — frame record, the writer of each primitive's packet, guest or host emit memory, a replayed chain's capture, lerp blends, sub-pixel vertex places stored with their words (`storeVertex`/`loadVertex`)
 - `runtime/psx/present/replay_frame.*`, `motion_set.*`, `record_cluts.*`, `palette_cycle.*` — replay in-betweens: a title's draw section re-run in a `GuestRedraw` with motion tracks (keys, title record identity, `TransformRule`) and title motion sources blended into guest RAM, its captured chain spliced over S's chain run; CLUT pool of the splice; a title-declared palette cycle row cross-fades between the two ticks' frames
-- `runtime/psx/present/depth_test.h` — native depth policy: the producers a title marks as opaque world 3D, which record polygons test and write depth
-- `runtime/psx/present/owner_ledger.*` — owner ledger: one owner handle per RAM word, scope instances, unowned writers, port owners (block DMA, MMIO GP0, LoadImage), overwrite pairs
-- `runtime/psx/present/ownership_verdict.*` — interval verdict at seal: unowned draw groups by writer, picture hash, moving / port / overwrote findings
-- `runtime/psx/present/owner_journal.*` — owner journal: unowned writers, ports, baked, overwrote, refused replays and held intervals as rows with screen and warp, `owners` verb, JSONL
+- `runtime/psx/present/depth_test.h` — native depth policy: the draw functions a title marks as opaque world 3D, which record polygons test and write depth
+- `runtime/psx/present/owner_ledger.*` — owner ledger: the writer of every main-RAM word (guest function, block PC, dispatched entry) and port writers (block DMA, MMIO GP0, LoadImage)
+- `runtime/psx/present/ownership_verdict.*` — verdict at seal for an interval no replay draws: draw groups by writer and OT table, picture hash, moving / port findings
+- `runtime/psx/present/owner_journal.*` — owner journal: moving writers, ports, refused replays and held intervals as rows with screen and warp, `owners` verb, JSONL
 - `runtime/psx/present/gp0_command.h`, `gp0_primitive_decode.*` — GP0 command and primitive decode: opcodes, libgpu polygon, line and poly-line segments, packet tags and sizes, draw mode E1
 - `runtime/psx/present/vram_rect.h`, `vram_pixel.h` — VRAM size, points and rects, 555 pixel and 5-to-8 expand, texpage and CLUT words, CLUT entry count, texel sampler
 - `runtime/psx/present/guest_redraw.*`, `runtime/psx/core/write_rollback.h` — guest draw routine re-run for an in-between / redraw (a body to its device tail, stepping over applied calls and host-owned stretches): store undo log, registers and GTE restored, devices held

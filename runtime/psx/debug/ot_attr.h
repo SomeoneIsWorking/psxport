@@ -85,15 +85,11 @@ public:
   // It is a WEAKER claim than `fn`: nothing restores it when a nested call returns, so a store made by A
   // after A called B reads as B. Recorded alongside `fn` rather than instead of it, and reported
   // separately, so the difference stays visible instead of one silently standing in for the other.
-  // `claimed` = the first frame of the store's call chain that a registered producer owns, or 0; the
-  // census row a store belongs to when its emitter `fn` is a helper the producer calls.
   struct Span {
     uint32_t lo, hi;
-    uint32_t fn, caller, pc, claimed;
+    uint32_t fn, caller, pc;
   };
 
-  // Call-chain frames searched for a producer, innermost first.
-  static constexpr int CLAIM_SEARCH_DEPTH = 8;
   struct GteBucket {
     uint32_t fn, count;
   };
@@ -221,9 +217,6 @@ public:
   // The logic frame every table stamps with, or 0 before the frame loop declared one (warned at run end).
   uint32_t stampFrame();
 
-  // The first frame of the store's call chain that a registered producer owns, or 0.
-  uint32_t resolveClaimedFrame(Core *c);
-
 private:
   using Emit = std::function<void(std::string_view)>;
   void watchCommand(const psx::debug::CommandArgs &args, const Emit &emit);
@@ -269,17 +262,6 @@ private:
   int mWatchWordsUsed = 0;
   int mWatchOverflow = 0;
   WordRec mWatchWords[WATCH_CAP_WORDS] = {}; // pooled backing store, indexed via wordBase + offset
-
-  // resolveClaimedFrame's answers, keyed on the exact visible call-chain prefix; valid for one
-  // producer revision of the dispatcher.
-  static constexpr int RCACHE_SLOTS = 256; // power of two
-  struct ResolveEntry {
-    uint32_t prefix[CLAIM_SEARCH_DEPTH] = {};
-    int depth = -1; // -1 = empty slot
-    uint32_t result = 0;
-  };
-  ResolveEntry mResolveCache[RCACHE_SLOTS];
-  uint64_t mResolveCacheRevision = ~0ull; // producer revision the cache was built against
 
   uint32_t mFnStatFrame = NO_FRAME;
   FnStoreStat mFnStat[FNSTAT_CAP] = {};

@@ -117,7 +117,7 @@ bool GuestRedraw::call(
                    cpu::executionExitName(result.reason),
                    result.guestPc);
       core_.game->ownerJournal.record(
-          core_, {.reason = OwnerReason::ReplayRefused, .producer = entry, .sampleAddress = result.guestPc}, false);
+          core_, {.reason = OwnerReason::ReplayRefused, .entry = entry, .sampleAddress = result.guestPc}, false);
       return false;
     }
   } catch (const cpu::DiscardedRunTouchedDevice &) {
@@ -139,7 +139,7 @@ bool GuestRedraw::reachedNoDevice(std::uint32_t entry) {
                core_.pc,
                core_.r[31]);
   core_.game->ownerJournal.record(
-      core_, {.reason = OwnerReason::ReplayRefused, .producer = entry, .sampleAddress = touched->address}, false);
+      core_, {.reason = OwnerReason::ReplayRefused, .entry = entry, .sampleAddress = touched->address}, false);
   return false;
 }
 

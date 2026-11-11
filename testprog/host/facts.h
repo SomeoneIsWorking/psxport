@@ -11,12 +11,9 @@ namespace psx::testprog {
 inline constexpr std::uint32_t kFactsAddress = 0x8001000Cu;
 inline constexpr std::uint32_t kFactsMagic = 0x54505350u;
 inline constexpr std::uint16_t kOrderingTable = 0;
-// The bucket square_draw links its packet into.
-inline constexpr std::uint32_t kSquareBucket = 4;
 
 struct Facts {
   std::uint32_t vsync = 0;
-  std::uint32_t squareDraw = 0;
   std::uint32_t orderingTables = 0; // two tables of `orderingTableLength` words, one per display buffer
   std::uint32_t orderingTableLength = 0;
   std::uint32_t cursor = 0;

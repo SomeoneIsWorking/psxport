@@ -105,9 +105,7 @@ void Gp0RecordTap::onGp0(std::uint32_t word, const Gp0Origin &origin, const Devi
   case Mode::Command:
     if (words_.empty()) {
       packetSource_ = origin.sourceAddress;
-      packetKey_ = origin.packetKey;
       packetOwner_ = origin.owner;
-      packetMixed_ = origin.mixedOwner;
       packetCommand_ = static_cast<std::uint8_t>(word >> 24);
       need_ = firstDispatchWords(word);
     }
@@ -173,11 +171,6 @@ void Gp0RecordTap::seal(present::FrameRecord &into) {
   record_.reset(nextSequence_++, synced_ && mode_ != Mode::QuadTail);
   clutTag_ = kInvalidClutTag;
   clutOffset_ = present::kNoClut;
-  lastKey_.reset();
-}
-
-void Gp0RecordTap::beginPacket() {
-  lastKey_.reset();
 }
 
 void Gp0RecordTap::enterSlot(const std::optional<present::OtSlot> &slot,
@@ -197,19 +190,6 @@ void Gp0RecordTap::enterSlot(const std::optional<present::OtSlot> &slot,
 
 bool Gp0RecordTap::hasPendingWork() const {
   return !record_.empty() || !record_.complete();
-}
-
-std::optional<present::RecordKey> Gp0RecordTap::nextPrimitiveKey() {
-  if (!packetKey_) {
-    return std::nullopt;
-  }
-  present::RecordKey key = *packetKey_;
-  if (lastKey_ && lastKey_->producer == key.producer && lastKey_->object == key.object &&
-      lastKey_->element == key.element) {
-    key.part = lastKey_->part + 1;
-  }
-  lastKey_ = key;
-  return key;
 }
 
 void Gp0RecordTap::notePlace(const Gp0Origin &origin) {
@@ -255,10 +235,8 @@ void Gp0RecordTap::placeVertex(present::DrawPrimitive &primitive,
 }
 
 void Gp0RecordTap::stampPacket(present::DrawPrimitive &primitive) {
-  primitive.key = nextPrimitiveKey();
   primitive.slot = slot_;
   primitive.owner = packetOwner_;
-  primitive.mixedOwner = packetMixed_;
   primitive.command = packetCommand_;
 }
 
@@ -346,9 +324,7 @@ void Gp0RecordTap::executeCommand(const DeviceProbe &probe) {
       polyLinePoint_ = to;
       polyLineOpcode_ = words_[0];
       polyLineSource_ = packetSource_;
-      polyLineKey_ = packetKey_;
       polyLineOwner_ = packetOwner_;
-      polyLineMixed_ = packetMixed_;
       need_ = gouraud ? 2u : 1u;
     }
     words_.clear();
@@ -368,9 +344,7 @@ void Gp0RecordTap::executeCommand(const DeviceProbe &probe) {
   }
   if (command.isVramCopy()) {
     present::VramCopy copy = decodeCopy(placedWords(), drawState_.state());
-    copy.key = nextPrimitiveKey();
     copy.slot = slot_;
-    copy.owner = packetOwner_;
     feedback_.invalidate();
     record_.append(copy);
     words_.clear();
@@ -386,7 +360,6 @@ void Gp0RecordTap::executeCommand(const DeviceProbe &probe) {
     upload_.maskSet = drawState_.state().maskSet;
     upload_.maskCheck = drawState_.state().maskCheck;
     upload_.sourceAddress = packetSource_;
-    upload_.owner = packetOwner_;
     uploadRemaining_ = static_cast<std::uint32_t>(target.width) * static_cast<std::uint32_t>(target.height);
     uploadPixels_.clear();
     feedback_.invalidate();
@@ -489,9 +462,7 @@ void Gp0RecordTap::consumePolyLineWord(std::uint32_t word, const DeviceProbe &pr
   polyLinePointSite_ = pointSite;
   expectedDispatches_ = 1;
   packetSource_ = polyLineSource_;
-  packetKey_ = polyLineKey_;
   packetOwner_ = polyLineOwner_;
-  packetMixed_ = polyLineMixed_;
   packetCommand_ = static_cast<std::uint8_t>(polyLineOpcode_ >> 24);
   recordLineSegment(polyLinePoint_, to, gouraud, command.flags().semiTransparent, probe);
   polyLinePoint_ = to;
@@ -532,7 +503,6 @@ void Gp0RecordTap::settleLast(const DeviceProbe &probe) {
   upload.width = rect.x1 - rect.x0;
   upload.height = rect.y1 - rect.y0;
   upload.sourceAddress = primitive->sourceAddress;
-  upload.key = primitive->key;
   settledPixels_.clear();
   for (int y = rect.y0; y < rect.y1; y++) {
     const auto row = probe.vram.subspan(static_cast<std::size_t>(y) * kVramWidth + static_cast<std::size_t>(rect.x0),

@@ -11,33 +11,6 @@
 
 namespace psx::present {
 
-// Producer identity carried by a primitive.
-struct RecordKey {
-  std::uint32_t producer = 0;
-  std::uint32_t object = 0;
-  std::uint32_t element = 0; // producer-named part
-  std::uint32_t part = 0;
-  std::uint32_t serial = 0; // the object scope that bound the packet; names the state it saved, not the object
-
-  bool operator==(const RecordKey &) const = default;
-  // The key without the scope serial: the object a packet belongs to, equal across frames and respawns of the scope.
-  [[nodiscard]] RecordKey identity() const {
-    RecordKey key = *this;
-    key.serial = 0;
-    return key;
-  }
-};
-
-struct RecordKeyHash {
-  std::size_t operator()(const RecordKey &key) const {
-    std::size_t h = key.producer;
-    h = h * 1000003u ^ key.object;
-    h = h * 1000003u ^ key.element;
-    h = h * 1000003u ^ key.part;
-    return h;
-  }
-};
-
 // A bucket of a title-named ordering table: the table's id and the bucket's index in it.
 struct OtSlot {
   std::uint16_t table = 0;
@@ -114,13 +87,9 @@ struct DrawPrimitive {
   RecordDrawState state;
   std::uint32_t sourceAddress = 0; // guest address of the packet's first word, 0 when not from RAM
   std::uint32_t site = 0;          // the guest function whose SWC2 stored every vertex, 0 when not one
-  std::optional<RecordKey> key;
-  std::optional<OtSlot> slot; // the bucket the OT walk was in when it reached the packet
-  // OwnerLedger handles: who owns the packet's first command word (or the port it came through), and an owner of
-  // the other kind (scope against writer) that stored one of its later words.
-  std::uint32_t owner = 0;
-  std::uint32_t mixedOwner = 0;
-  std::uint8_t command = 0; // the packet's GP0 command byte
+  std::optional<OtSlot> slot;      // the bucket the OT walk was in when it reached the packet
+  std::uint32_t owner = 0;         // OwnerLedger handle of the packet's first command word, or the port it came through
+  std::uint8_t command = 0;        // the packet's GP0 command byte
 
   bool operator==(const DrawPrimitive &) const = default;
 };
@@ -163,9 +132,7 @@ struct VramCopy {
   // Set only by a replay (GuestRedraw::writeCopy); a placed copy that wraps or overlaps its source is drawn at its
   // whole pixels.
   CopyPlace place;
-  std::optional<RecordKey> key;
   std::optional<OtSlot> slot;
-  std::uint32_t owner = 0; // OwnerLedger handle of the packet's command word
 
   bool operator==(const VramCopy &) const = default;
 };
@@ -180,8 +147,6 @@ struct VramUpload {
   bool maskCheck = false;
   std::uint32_t pixelOffset = 0;
   std::uint32_t sourceAddress = 0;
-  std::optional<RecordKey> key; // set when the pixels bake a keyed primitive (texture feedback)
-  std::uint32_t owner = 0;      // OwnerLedger handle of the upload's source or port
 
   bool operator==(const VramUpload &) const = default;
 };
@@ -206,11 +171,6 @@ struct ReadBackTexture {
 };
 
 using RecordEntry = std::variant<DrawPrimitive, VramFill, VramCopy, VramUpload, ReadBackTexture>;
-
-// The producer key of a primitive or a copy, the entries a render replaces; null for any other entry or none set.
-[[nodiscard]] const RecordKey *entryKey(const RecordEntry &entry);
-// The OT slot such an entry was walked in.
-[[nodiscard]] std::optional<OtSlot> entrySlot(const RecordEntry &entry);
 
 // The OT walk reached the head of `slot` when the record held `entry` entries, with the device under
 // `state`. `descending` says the walk visits the slot's table from high bucket indices to low.

@@ -10,7 +10,7 @@
 namespace psx::testprog {
 
 inline constexpr std::array<std::string_view, 7> kSceneNames{
-    "owned-square", "unowned-moving", "mmio-port", "block-dma-port", "reused-slot", "amended-square", "looping-ot"};
+    "turning-square", "drifter", "mmio-port", "block-dma-port", "reused-slot", "overwritten-square", "looping-ot"};
 
 struct DivideCase {
   std::string_view name;

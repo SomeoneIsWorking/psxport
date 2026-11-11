@@ -21,7 +21,6 @@ Facts Facts::read(Core &core) {
   };
   Facts facts;
   facts.vsync = next();
-  facts.squareDraw = next();
   facts.orderingTables = next();
   facts.orderingTableLength = next();
   facts.cursor = next();

@@ -23,18 +23,18 @@ typedef short s16;
 
 // LoopingOt ends the session with a refused draw-list cycle and runs only when requested.
 enum Scene {
-  OwnedSquare,
-  UnownedMoving,
+  TurningSquare,
+  Drifter,
   MmioPort,
   BlockDmaPort,
   ReusedSlot,
-  AmendedSquare,
+  OverwrittenSquare,
   CycledSceneCount,
   LoopingOt = CycledSceneCount,
   SceneCount
 };
 
-// An owned object: what square_draw reads, and what the host producer saves.
+// What square_draw reads.
 struct Square {
   s32 x;
   s32 y;
@@ -61,9 +61,8 @@ const s16 sine_quarter[17] = {
     0, 402, 799, 1189, 1567, 1931, 2276, 2598, 2896, 3166, 3406, 3612, 3784, 3920, 4017, 4076, 4096};
 
 void vsync(u32 mode);
-void square_draw(struct Square *square);
 
-// The facts the host reads at the load address + 12 (testprog/host/facts.h): magic, VSync, the owned drawer, the OT,
+// The facts the host reads at the load address + 12 (testprog/host/facts.h): magic, VSync, the OT,
 // its length, the packet cursor, the sine table and the words the frame driver and the debug menu use.
 __asm__(".section .text.0start,\"ax\",@progbits\n"
         ".set noreorder\n"
@@ -74,7 +73,6 @@ __asm__(".section .text.0start,\"ax\",@progbits\n"
         "  ori $sp, $sp, 0xFF00\n"
         "  .word 0x54505350\n"
         "  .word vsync\n"
-        "  .word square_draw\n"
         "  .word ot\n"
         "  .word 16\n"
         "  .word cursor\n"
@@ -194,7 +192,7 @@ __attribute__((noinline)) void vsync(u32 mode) {
   vsync_calls += 1u + mode;
 }
 
-// The owned drawer: a flat square turned by `angle`, one POLY_F4, the host producer's Arg::A0 object.
+// A flat square turned by `angle`, one POLY_F4.
 __attribute__((noinline)) void square_draw(struct Square *square) {
   static const s32 kCorners[4][2] = {{-24, -24}, {24, -24}, {-24, 24}, {24, 24}};
   const s32 s = sine(square->angle);
@@ -209,7 +207,7 @@ __attribute__((noinline)) void square_draw(struct Square *square) {
   link(p, 5, 4);
 }
 
-// Unowned and still: the same TILE every frame, so the interval composes.
+// Still: the same TILE every frame.
 __attribute__((noinline)) void backdrop_draw(void) {
   u32 *p = packet(3);
   p[1] = 0x60202040u;
@@ -218,7 +216,7 @@ __attribute__((noinline)) void backdrop_draw(void) {
   link(p, 3, OT_LENGTH - 1);
 }
 
-// Unowned and moving: a TILE written by guest code no producer declares.
+// Moving: a TILE that steps across the screen.
 __attribute__((noinline)) void drifter_draw(void) {
   u32 *p = packet(3);
   p[1] = 0x6000C0FFu;
@@ -227,14 +225,14 @@ __attribute__((noinline)) void drifter_draw(void) {
   link(p, 3, 6);
 }
 
-// Drawn through GP0 itself after the list: no packet in RAM, so the Port owner names it.
+// Drawn through GP0 itself after the list: no packet in RAM, so the port names it.
 __attribute__((noinline)) void mmio_bar_draw(void) {
   GP0 = 0x60FF8000u;
   GP0 = xy(20 + (s32)(frame_counter * 2u % 260u), 120);
   GP0 = xy(40, 16);
 }
 
-// Drawn by a block DMA of a TILE: the Port owner again, through the other entry.
+// Drawn by a block DMA of a TILE: a port again, through the other entry.
 __attribute__((noinline)) void dma_bar_draw(void) {
   dma_tile[0] = 0x6080FF80u;
   dma_tile[1] = xy(20 + (s32)(frame_counter * 4u % 260u), 150);
@@ -254,7 +252,7 @@ __attribute__((noinline)) void looping_ot_draw(void) {
   ot[buffer][3] = (u32)&ot[buffer][10] & 0x00FFFFFFu;
 }
 
-// Unowned code storing over the owned square's colour word before the list is submitted: the Overwrote case.
+// Other code storing over the square's command word before the list is submitted: the packet is its writer's.
 __attribute__((noinline)) void amend_draw(void) {
   u32 *p = (u32 *)(0x80000000u | (ot[buffer][4] & 0x00FFFFFFu));
   p[1] = 0x28000000u | ((frame_counter * 8u) & 0xFFu) << 16 | 0x40E0u;
@@ -291,8 +289,8 @@ static void update(void) {
     scene = (scene + 1u) % CycledSceneCount;
     scene_frames = 0;
   }
-  // The owned square's scene alternates 2- and 3-field frames; the rest run at 2.
-  frame_fields = scene == OwnedSquare ? 2u + (frame_counter & 1u) : 2u;
+  // The turning square's scene alternates 2- and 3-field frames; the rest run at 2.
+  frame_fields = scene == TurningSquare ? 2u + (frame_counter & 1u) : 2u;
   squares[0].angle += 1u;
   squares[0].x = 100 + (s32)(frame_counter % 120u);
   squares[0].y = 100;
@@ -326,16 +324,16 @@ void cstart(void) {
     clear_ot();
     backdrop_draw();
     switch (scene) {
-    case OwnedSquare:
+    case TurningSquare:
       square_draw(&squares[0]);
       break;
-    case UnownedMoving:
+    case Drifter:
       drifter_draw();
       break;
     case ReusedSlot:
       square_draw(&squares[1]);
       break;
-    case AmendedSquare:
+    case OverwrittenSquare:
       square_draw(&squares[0]);
       amend_draw();
       break;

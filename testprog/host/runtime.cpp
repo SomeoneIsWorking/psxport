@@ -3,18 +3,9 @@
 #include "core.h"
 #include "frame_driver.h"
 #include "game.h"
-#include "native_dispatch.h"
 #include "ordering_table.h"
 
 namespace psx::testprog {
-namespace {
-
-// square_draw keyed by its square, so the verdict counts its packets as owned.
-void squareDrawOverride(Core *core) {
-  (void)psx::cpu::callOriginalOrPropagate(*core, session(*core).facts.squareDraw);
-}
-
-} // namespace
 
 Session &session(Core &core) {
   return static_cast<Session &>(*core.game->sessionState);
@@ -34,11 +25,6 @@ void Runtime::registerOverrides(Game &game) {
                        4u,
                        psx::gpu::OtWalk::HighToLow);
   }
-  psx::cpu::installNativeOverride(core,
-                                  facts.squareDraw,
-                                  "testprog::squareDraw",
-                                  squareDrawOverride,
-                                  psx::present::Producer{psx::present::Arg::A0});
 }
 
 std::unique_ptr<psx::game::TitleSessionState> Runtime::createSession(Game &) {

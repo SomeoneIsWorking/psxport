@@ -26,7 +26,7 @@ std::uint32_t writerCode(const GuestWriter &writer) {
 bool sameRow(const OwnerRow &row, const OwnerFinding &finding, std::size_t screen, const GuestWriter &writer) {
   const OwnerFinding &key = row.key;
   return row.screen == screen && key.reason == finding.reason && key.cause == finding.cause &&
-         key.producer == finding.producer && key.table == finding.table && row.writer.kind == writer.kind &&
+         key.entry == finding.entry && key.table == finding.table && row.writer.kind == writer.kind &&
          writerCode(row.writer) == writerCode(writer) && row.writer.dispatched == writer.dispatched;
 }
 
@@ -51,12 +51,10 @@ std::string jsonString(std::string_view text) {
 
 const char *ownerReasonName(OwnerReason reason) {
   switch (reason) {
-  case OwnerReason::UnownedMoving:
-    return "UnownedMoving";
+  case OwnerReason::Moving:
+    return "Moving";
   case OwnerReason::Port:
     return "Port";
-  case OwnerReason::Overwrote:
-    return "Overwrote";
   case OwnerReason::ReplayRefused:
     return "ReplayRefused";
   case OwnerReason::IntervalHeld:
@@ -127,13 +125,13 @@ void OwnerJournal::record(Core &core, const OwnerFinding &finding, bool lost) {
   if (!screenKnown_) {
     observeScreen(core, core.runtime.debugMenu().screenKey(core));
   }
-  // A finding with no writer names the declared owner's function, the code that drew the object.
+  // A finding with no writer names the refused section's entry.
   GuestWriter writer;
   if (const GuestWriter *known = core.owners.writer(finding.writer)) {
     writer = *known;
-  } else if (finding.producer != 0) {
-    writer.function = finding.producer;
-    writer.image = core.imageCatalog().resolve(finding.producer).value_or(cpu::ImageIdentity{});
+  } else if (finding.entry != 0) {
+    writer.function = finding.entry;
+    writer.image = core.imageCatalog().resolve(finding.entry).value_or(cpu::ImageIdentity{});
   }
   auto row = std::find_if(rows_.begin(), rows_.end(), [&](const OwnerRow &candidate) {
     return sameRow(candidate, finding, screen_, writer);
@@ -152,7 +150,7 @@ void OwnerJournal::record(Core &core, const OwnerFinding &finding, bool lost) {
     rows_.push_back(added);
     row = rows_.end() - 1;
     lucent::info("owners",
-                 "new row: {}{}{} {} fn={} block={} dispatched={} producer={} ot={}:{}-{} packet={} cmd=0x{:02X} "
+                 "new row: {}{}{} {} fn={} block={} dispatched={} entry={} ot={}:{}-{} packet={} cmd=0x{:02X} "
                  "screen={}",
                  ownerReasonName(finding.reason),
                  finding.cause != HeldCause::None ? "/" : "",
@@ -161,7 +159,7 @@ void OwnerJournal::record(Core &core, const OwnerFinding &finding, bool lost) {
                  hex(row->writer.function),
                  hex(row->writer.blockPc),
                  hex(row->writer.dispatched),
-                 hex(finding.producer),
+                 hex(finding.entry),
                  finding.table == kNoTable ? -1 : static_cast<int>(finding.table),
                  finding.bucketLo,
                  finding.bucketHi,
@@ -191,7 +189,7 @@ std::string OwnerJournal::describe(std::size_t limit) const {
   std::string out = lucent::format("{} row(s), most intervals lost first\n", rows_.size());
   for (std::size_t i = 0; i < order.size() && i < limit; ++i) {
     const OwnerRow &row = *order[i];
-    out += lucent::format("{:>6} lost {:>6} seen {}{}{} {} fn={} block={} dispatched={} producer={} ot={}:{}-{} "
+    out += lucent::format("{:>6} lost {:>6} seen {}{}{} {} fn={} block={} dispatched={} entry={} ot={}:{}-{} "
                           "prims/interval<={} screen='{}'\n",
                           row.intervalsLost,
                           row.intervals,
@@ -202,7 +200,7 @@ std::string OwnerJournal::describe(std::size_t limit) const {
                           hex(row.writer.function),
                           hex(row.writer.blockPc),
                           hex(row.writer.dispatched),
-                          hex(row.key.producer),
+                          hex(row.key.entry),
                           row.key.table == kNoTable ? -1 : static_cast<int>(row.key.table),
                           row.key.bucketLo,
                           row.key.bucketHi,
@@ -255,7 +253,7 @@ std::string OwnerJournal::rowJson(Core &core, const OwnerRow &row) const {
   const std::string &route = row.screen < screens_.size() ? screens_[row.screen].route : std::string{};
   return lucent::format(
       "{{\"title\":{},\"serial\":{},\"reason\":{},\"cause\":{},\"writer_kind\":{},\"function\":{},\"block_pc\":{},"
-      "\"dispatched\":{},\"image\":{},\"image_generation\":{},\"producer\":{},\"ot_table\":{},\"ot_buckets\":[{},{}],"
+      "\"dispatched\":{},\"image\":{},\"image_generation\":{},\"entry\":{},\"ot_table\":{},\"ot_buckets\":[{},{}],"
       "\"sample_packet\":{},\"gp0_command\":{},\"intervals\":{},\"intervals_lost\":{},\"primitives_total\":{},"
       "\"primitives_max_per_interval\":{},\"fields\":[{},{}],\"presents\":[{},{}],\"screen\":{},\"screen_key\":{},"
       "\"warp\":{},"
@@ -270,7 +268,7 @@ std::string OwnerJournal::rowJson(Core &core, const OwnerRow &row) const {
       jsonString(hex(row.writer.dispatched)),
       jsonString(image),
       row.writer.image.generation,
-      jsonString(hex(row.key.producer)),
+      jsonString(hex(row.key.entry)),
       row.key.table == kNoTable ? -1 : static_cast<int>(row.key.table),
       row.key.bucketLo,
       row.key.bucketHi,

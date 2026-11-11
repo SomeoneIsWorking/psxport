@@ -20,7 +20,6 @@
 #include "cpu_divide.h"
 #include "depth_test.h"
 #include "dispatch_epoch.h"
-#include "emission_scope.h"
 #include "frame_pacer.h"
 #include "gte.h"
 #include "guest_call_attribution.h"
@@ -88,10 +87,8 @@ public:
   psx::cpu::GuestWriterLatch writerLatch;
   // Advanced by every input of a host-dispatch verdict (dispatch_epoch.h).
   psx::cpu::DispatchEpoch dispatchEpoch;
-  // The owner of every main-RAM word: a producer scope instance or the writer that stored it.
+  // The writer that stored every main-RAM word.
   psx::present::OwnerLedger owners{*this};
-  // The open producer scopes and the keys their stored packets carry into the frame record.
-  psx::present::EmissionScope emission{owners};
   // The ordering tables the title named; the walk tags each recorded primitive with its bucket.
   psx::gpu::OtTables otTables;
   // The producers whose opaque polygons test depth against each other.

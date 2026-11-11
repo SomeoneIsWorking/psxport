@@ -138,7 +138,7 @@ public:
   virtual GuestAddressRange guestCodeModuleWindow() const {
     return {};
   }
-  // The title's packet pool now; the producer census attributes only stores inside it. Read once per
+  // The title's packet pool now; OtAttr attributes only stores inside it. Read once per
   // logic frame and again after a store to one of its sources. Empty: the pool is not reverse-engineered.
   virtual std::optional<psx::gpu::PacketPoolExtent> packetPool(Core &core) const {
     (void)core;
@@ -151,7 +151,7 @@ public:
   virtual bool interpolates() const {
     return false;
   }
-  // The title's replayed in-betweens; null when its in-betweens are composed from producer states.
+  // The title's replayed in-betweens; null when every in-between shows S as drawn.
   virtual psx::present::ReplayFrame *replayFrame(Core &core) {
     (void)core;
     return nullptr;

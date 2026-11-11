@@ -31,13 +31,11 @@ struct DeviceProbe {
   std::span<const std::uint16_t> vram; // the device's VRAM, 1024x512
 };
 
-// Where a GP0 word came from: its guest address (0 when it came from no packet) and the emission
-// key of the OT node it belongs to.
+// Where a GP0 word came from: its guest address (0 when it came from no packet) and the writer of the packet it
+// belongs to.
 struct Gp0Origin {
   std::uint32_t sourceAddress = 0;
-  std::optional<present::RecordKey> packetKey;
   present::OwnerHandle owner = present::kNoOwner;
-  present::OwnerHandle mixedOwner = present::kNoOwner;
   std::optional<cpu::NotedPlace> place; // where a draw site stored this word's vertex (VertexPlaces)
 };
 
@@ -50,8 +48,6 @@ public:
   Gp0RecordTap();
 
   void onGp0(std::uint32_t word, const Gp0Origin &origin, const DeviceProbe &probe);
-  // The next words belong to a new OT node; `part` numbering restarts.
-  void beginPacket();
   void noteDrawEntry(std::uint32_t field) {
     record_.markDrawEntry(field);
   }
@@ -107,9 +103,7 @@ private:
   void checkDrawState(const DeviceProbe &probe) const;
   void desync();
   void resetFraming();
-  // The key for the next primitive of the current packet: its packet key with the next part.
-  std::optional<present::RecordKey> nextPrimitiveKey();
-  // The packet's key, owners and command onto `primitive`, with its slot.
+  // The packet's writer and command onto `primitive`, with its slot.
   void stampPacket(present::DrawPrimitive &primitive);
   // Keeps the place of the word about to join words_.
   void notePlace(const Gp0Origin &origin);
@@ -134,11 +128,8 @@ private:
   std::array<std::uint32_t, 16> placingSites_{}; // the draw site that stored each, 0 for none
   unsigned need_ = 0;
   std::uint32_t packetSource_ = 0;
-  std::optional<present::RecordKey> packetKey_;
   present::OwnerHandle packetOwner_ = present::kNoOwner;
-  present::OwnerHandle packetMixed_ = present::kNoOwner;
   std::uint8_t packetCommand_ = 0;
-  std::optional<present::RecordKey> lastKey_; // the last primitive key stamped in this packet
   std::optional<present::OtSlot> slot_;
   unsigned expectedDispatches_ = 0; // by the word being processed
 
@@ -150,9 +141,7 @@ private:
   std::uint32_t polyLinePointSite_ = 0; // the last point's
   std::uint32_t polyLineOpcode_ = 0;
   std::uint32_t polyLineSource_ = 0;
-  std::optional<present::RecordKey> polyLineKey_;
   present::OwnerHandle polyLineOwner_ = present::kNoOwner;
-  present::OwnerHandle polyLineMixed_ = present::kNoOwner;
 
   present::VramUpload upload_{};
   std::uint32_t uploadRemaining_ = 0;

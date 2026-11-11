@@ -7,8 +7,6 @@
 
 #include <lucent/log.h>
 
-#include <optional>
-
 namespace psx::gpu {
 
 void refuseDrawListCycle(Core &core, std::uint32_t node, std::string_view refuser, std::string_view detail) {
@@ -17,11 +15,7 @@ void refuseDrawListCycle(Core &core, std::uint32_t node, std::string_view refuse
 }
 
 std::string guestWriterOf(const Core &core, std::uint32_t address) {
-  const present::OwnerHandle owner = core.owners.ownerOf(address);
-  if (const std::optional<present::RecordKey> key = core.owners.scopeKey(owner)) {
-    return lucent::format("producer {} object 0x{:08X} wrote 0x{:08X}", key->producer, key->object, address);
-  }
-  const present::GuestWriter *writer = core.owners.writer(owner);
+  const present::GuestWriter *writer = core.owners.writer(core.owners.ownerOf(address));
   if (writer == nullptr) {
     return lucent::format("no recorded writer of 0x{:08X}", address);
   }

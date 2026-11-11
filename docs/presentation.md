@@ -38,9 +38,7 @@ present plan / sink                           viewport, letterbox, window
 | `gpu/gpu_ports.*` | GP1 writes at the device's scanline clock, DMA2 block and linked-list modes; titles call `core.gpuDevice()` for GP0, GPUREAD, `loadImage` and `vram` |
 | `present/render_mode.h` | the Core's `RenderPath` (`record` or `device`) and its parse |
 | `present/frame_record.*` | ordered primitives and VRAM ops of one logic frame |
-| `gpu/gp0_record_tap.*` | executed GP0 command to `FrameRecord` entry, with its key |
-| `present/emission_scope.*` | the `(P, obj, k)` scope stack and packet-address to key map |
-| `runtime/cpu/native_dispatch.*` | `Producer{Arg}` registration; opens the emission scope around the call |
+| `gpu/gp0_record_tap.*` | executed GP0 command to `FrameRecord` entry, with its packet's writer |
 | `present/guest_redraw.*`, `core/write_rollback.h` | `GuestRedraw`: a guest draw routine run again for an in-between, every store put back, registers and GTE restored, devices and guest time held (`SideEffectMode::Discard`) |
 | `gpu/ordering_table.*` | OT node decode and the OT walk; `OtTables`, the title-named tables whose bucket heads tag each entry's slot |
 | `gpu/draw_list_cycle.*` | the refusal of a draw list that revisits a node, which a console's walk never leaves: the walk stops at the revisit and latches the presentation device off (`FaultCause::DrawListCycle`, one error line naming the node, the refusing walk and the writer of the edge into it), so nothing of that frame reaches the GPU and the session ends with the player told; `LinkCycleCheck`, the cycle check of every linked draw-list walk (OT walk, `PacketChainWalker`, title bin walks). A record past `FrameRecord::kMaxEntries` or its pools is port storage, not a console limit: it warns and is marked incomplete |
@@ -143,13 +141,6 @@ Every present draws the record shown now (S, `t = 1`) or, at 60 fps, an in-betwe
 shown before (S', `t = 0`): S with the title's draw section replayed at `t` (Interpolation), or S as the guest
 drew it. The VRAM image advances by the guest's own records only, so textures stay device-exact.
 
-A native override registered with `Producer{Arg}` opens an object scope around its call, the argument register
-naming its object (`Arg::None` when each call draws one object). Every object scope gets a serial that its
-packets' keys carry, so the verdict and the owner journal know which packets a declared owner wrote.
-
-The serial names a state, not an object, and differs on every scope: `RecordKey ==` compares it, so code that
-asks whether two packets belong to the same object compares `RecordKey::identity()`, the key without the serial.
-
 ## Interpolation
 
 **Replay.** A title whose `GameRuntime::replayFrame` returns a `ReplayFrame` draws its in-betweens with its own
@@ -213,11 +204,6 @@ the `motion` debug channel counts each track's paired records.
   spinning part keeps its size between frames; translation moves by t, rounded to the nearest integer with ties to
   even (`blend.h:lerpInt`), so an odd step at t = 0.5 favours neither frame. A singular matrix, or a mirror paired with a
   rotation, has no turn between them and blends element by element.
-- **In-place rewrite.** A title whose override rewrites an already-written packet (a tint, a palette
-  swap, a blend bit) must do it under the packet's own key: `EmissionScope::amend(keyFor(packet))` opens
-  the binding the packet already carries, so the rewritten colour word re-binds the command word it
-  shares with (`PacketAmendScope`) instead of unbinding it. An out-of-scope rewrite leaves the packet
-  unkeyed and its record is shown whole.
 - **Line and poly-line packets.** A GP0 line packet decodes to one primitive per segment
   (`decodePolyLine`, first point to last through the terminator), each carrying its place, so a replayed
   strip places every line of it.
@@ -247,29 +233,20 @@ the `motion` debug channel counts each track's paired records.
   line's pixels take the offset interpolated along it. At native scale every vertex keeps the guest's pixel. A
   sprite (GP0 0x60-0x7F) takes its origin's place the same way: above native scale its quad and the texel lookup
   move by `floor(offset * scale)` together, so the image slides without resampling (`addSprite`, `record.frag`).
-`EmissionScope` binds each packet to `(P, obj)` at store time through the owner ledger and the OT walk stamps the key on its
-entries, so the verdict knows which packets a declared owner wrote. `element` and `part` are not pairing keys;
-there are no per-vertex keys.
+Records carry no emission keys: a replay redraws the section, so nothing pairs packets. The owner ledger names
+the writer of every packet word, so an interval no replay draws reports what moved in it.
 
-- **Owner ledger.** `OwnerLedger` (`core.owners`) holds one `u32` handle per main-RAM word. A handle names
-  a scope instance (`RecordKey` `(P, obj, element, part)`, opened by the dispatcher as `(P, object register,
-  0)` or by `instance(object)`) or an unowned writer: the innermost guest function (`GuestWriterLatch`, the
-  shadow call stack the block-entry hook keeps), its block-entry PC, the dispatched entry and the image
-  generation. Every store through `Core::mem_w*` binds the word to the open scope, or to its writer when none
-  is open. A writer storing over a word a scope opened since the last draw list wrote keeps that pair
-  (`overwrote`), so an amended owned packet is reported, while pool reuse across frames is not. Port owners
-  name draws that reach GP0 without a RAM packet: block DMA, MMIO GP0 and LoadImage. The OT walk stamps each
-  node's first command word's handle (header + 4) on its entries. A savestate load clears the ledger. Booking is
-  paid on every guest store.
-- **Verdict.** At seal, before any present of S'→S, `OwnershipVerdict` groups S's and S''s unkeyed
-  primitives by writer (kind, function or block PC, dispatched entry), OT table and amended flag, and hashes
-  each group's picture relative to the draw offset (so a double-buffered still draw matches). A group that
-  moved, appeared or vanished makes a finding (`UnownedMoving`, `Port`, `Overwrote`) and holds the interval.
-  A keyed packet a writer stored into (`mixedOwner`) is an `Overwrote` finding too and holds the interval:
-  its owner did not draw what the writer changed. Only a word the packet's own scope wrote counts: a word
-  another scope left past its cursor (a drawer's store at a primitive it then rejected) is free pool memory
-  the next drawer's packet reuses, not an amendment. S's groups are kept, so the next interval's S' is not
-  collected again.
+- **Owner ledger.** `OwnerLedger` (`core.owners`) holds one `u32` writer handle per main-RAM word. A writer is
+  the innermost guest function (`GuestWriterLatch`, the shadow call stack the block-entry hook keeps), its
+  block-entry PC, the dispatched entry and the image generation. Every store through `Core::mem_w*` binds its words to the running writer, so the last writer of a
+  packet's command word owns it. Port writers name draws that reach GP0 without a RAM packet: block DMA, MMIO
+  GP0 and LoadImage. The OT walk stamps each node's first command word's writer (header + 4) on its entries. A
+  savestate load clears the ledger. Booking is paid on every guest store.
+- **Verdict.** At seal, before any present of S'→S that is not replayed, `OwnershipVerdict` groups every
+  primitive of S and S' by writer (kind, function or block PC, dispatched entry) and OT table, and hashes each
+  group's picture relative to the draw offset (so a double-buffered still draw matches). A group that moved,
+  appeared or vanished makes a finding (`Moving` for a guest writer, `Port` for a port) and the interval shows S
+  at the logic rate. S's groups are kept, so the next interval's S' is not collected again.
 - **One mode per interval.** The interval is replayed at every in-between or held at every present: the
   presenter replays the last present first, and a refusal at any of them holds all. A held present shows S
   as the guest drew it: a held in-between builds N's own present (no replayed record), so the record is planned and rastered once per interval and the `t = 1` present finds it applied.
@@ -718,12 +695,12 @@ reads it before loading settings: a title that does not interpolate refuses a sa
 ## Owner journal
 
 `OwnerJournal` (`game.ownerJournal`) turns each interval's findings and refusals into rows, one per reason,
-writer or producer and screen: `UnownedMoving`, `Port`, `Overwrote`, `ReplayRefused` and
+writer or section entry and screen: `Moving`, `Port`, `ReplayRefused` and
 `IntervalHeld` with its cause (`Cut`, `StaleShown`, `NoPrevious`, `ChainBreak`, `NotReplayed`). A row carries the guest function, block PC, dispatched entry, image and
 generation, the OT span, a sample packet address and GP0 command, intervals seen and lost, primitives, the
 screen's title-owned key and warp route (`TitleDebugMenu::screen`) and the `decomp_pipeline.py` command for
-the writer. A finding with no writer (a replay refusal) names the declared producer or the section entry as the
-function and resolves its image. The screen of an interval is the key `TitleDebugMenu::screenKey` read when S was
+the writer. A finding with no writer (a replay refusal) names the refused section's entry as the function and resolves its
+image. The screen of an interval is the key `TitleDebugMenu::screenKey` read when S was
 sealed, so rows land on the screen S shows. The decomp command (`OwnerJournal::decompCommand`) names the
 image through `TitleDebugMenu::decompImage`: the booted executable by default, each overlay's manifest entry
 and extracted file where a title declares them (Tomba 2, Toy Story 2); `--target` decompiles the function and

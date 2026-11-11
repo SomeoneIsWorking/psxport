@@ -1,5 +1,5 @@
-// owner_journal.h — the rows an agent turns into work: draws with no owner, draws through a port, baked or
-// amended draws, refused redraws and held intervals, each with the writer, the OT span, the screen and its warp.
+// owner_journal.h — the rows an agent turns into work: draws that moved in an interval no replay drew, draws through
+// a port, refused redraws and held intervals, each with the writer, the OT span, the screen and its warp.
 #pragma once
 
 #include "owner_ledger.h"
@@ -15,9 +15,8 @@ class Core;
 namespace psx::present {
 
 enum class OwnerReason : std::uint8_t {
-  UnownedMoving, // guest-written draws with no owner that S' did not draw the same
+  Moving,        // guest-written draws S' did not draw the same, in an interval no replay drew
   Port,          // draws that reached GP0 through block DMA, MMIO or LoadImage and moved
-  Overwrote,     // a writer stored over a word a declared owner wrote
   ReplayRefused, // a guest redraw that reached a device or a syscall
   IntervalHeld,  // the interval was shown at the logic rate for `HeldCause`
 };
@@ -38,10 +37,10 @@ inline constexpr std::uint16_t kNoTable = 0xFFFFu;
 
 // One interval's finding before it lands in a row.
 struct OwnerFinding {
-  OwnerReason reason = OwnerReason::UnownedMoving;
+  OwnerReason reason = OwnerReason::Moving;
   HeldCause cause = HeldCause::None;
-  OwnerHandle writer = kNoOwner; // the unowned writer or port, a sample of its group
-  std::uint32_t producer = 0;    // the declared owner involved, 0 when none
+  OwnerHandle writer = kNoOwner; // the writer or port, a sample of its group
+  std::uint32_t entry = 0;       // the refused section's entry, 0 when none
   std::uint16_t table = kNoTable;
   std::uint32_t bucketLo = 0;
   std::uint32_t bucketHi = 0;

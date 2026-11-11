@@ -17,7 +17,7 @@ std::uint64_t mix(std::uint64_t h, std::uint64_t value) {
   return h;
 }
 
-// What a primitive puts on screen, without where its packet lived or who owns it.
+// What a primitive puts on screen, without where its packet lived or who wrote it.
 std::uint64_t pictureHash(const FrameRecord &record, const DrawPrimitive &primitive) {
   std::uint64_t h = mix(0, primitive.command);
   h = mix(h, static_cast<std::uint64_t>(primitive.kind) | (static_cast<std::uint64_t>(primitive.vertexCount) << 8));
@@ -64,7 +64,7 @@ void OwnershipVerdict::collect(const FrameRecord &record, const OwnerLedger &led
   std::size_t last = 0;
   for (const RecordEntry &entry : record.entries()) {
     const auto *primitive = std::get_if<DrawPrimitive>(&entry);
-    if (primitive == nullptr || primitive->key) {
+    if (primitive == nullptr) {
       continue;
     }
     Group key;
@@ -74,10 +74,6 @@ void OwnershipVerdict::collect(const FrameRecord &record, const OwnerLedger &led
       key.dispatched = writer->dispatched;
     }
     key.table = primitive->slot ? primitive->slot->table : kNoTable;
-    if (const std::optional<RecordKey> scope = ledger.scopeKey(primitive->mixedOwner)) {
-      key.amended = true;
-      key.producer = scope->producer;
-    }
     if (last >= groups.size() || !groups[last].sameKey(key)) {
       const auto found = std::find_if(groups.begin(), groups.end(), [&key](const Group &group) {
         return group.sameKey(key);
@@ -121,11 +117,8 @@ bool OwnershipVerdict::judge(const FrameRecord &from, const FrameRecord &to, con
       continue;
     }
     still = false;
-    findings_.push_back({.reason = group.amended                     ? OwnerReason::Overwrote
-                                   : group.kind == WriterKind::Guest ? OwnerReason::UnownedMoving
-                                                                     : OwnerReason::Port,
+    findings_.push_back({.reason = group.kind == WriterKind::Guest ? OwnerReason::Moving : OwnerReason::Port,
                          .writer = group.sample,
-                         .producer = group.producer,
                          .table = group.table,
                          .bucketLo = group.bucketLo == 0xFFFFFFFFu ? 0u : group.bucketLo,
                          .bucketHi = group.bucketHi,
@@ -139,11 +132,8 @@ bool OwnershipVerdict::judge(const FrameRecord &from, const FrameRecord &to, con
           return candidate.sameKey(group);
         })) {
       still = false;
-      findings_.push_back({.reason = group.amended                     ? OwnerReason::Overwrote
-                                     : group.kind == WriterKind::Guest ? OwnerReason::UnownedMoving
-                                                                       : OwnerReason::Port,
+      findings_.push_back({.reason = group.kind == WriterKind::Guest ? OwnerReason::Moving : OwnerReason::Port,
                            .writer = group.sample,
-                           .producer = group.producer,
                            .table = group.table,
                            .bucketLo = group.bucketLo == 0xFFFFFFFFu ? 0u : group.bucketLo,
                            .bucketHi = group.bucketHi,
@@ -152,34 +142,8 @@ bool OwnershipVerdict::judge(const FrameRecord &from, const FrameRecord &to, con
                            .sampleCommand = group.sampleCommand});
     }
   }
-  // An owned packet a writer stored into keeps its key, but its render cannot know what the writer changed: the
-  // interval is held.
-  for (const RecordEntry &entry : to.entries()) {
-    const auto *primitive = std::get_if<DrawPrimitive>(&entry);
-    if (primitive == nullptr || !primitive->key || !OwnerLedger::isWriter(primitive->mixedOwner)) {
-      continue;
-    }
-    still = false;
-    const auto same = std::find_if(findings_.begin(), findings_.end(), [primitive](const OwnerFinding &finding) {
-      return finding.reason == OwnerReason::Overwrote && finding.writer == primitive->mixedOwner &&
-             finding.producer == primitive->key->producer;
-    });
-    if (same != findings_.end()) {
-      ++same->primitives;
-      continue;
-    }
-    findings_.push_back({.reason = OwnerReason::Overwrote,
-                         .writer = primitive->mixedOwner,
-                         .producer = primitive->key->producer,
-                         .table = primitive->slot ? primitive->slot->table : kNoTable,
-                         .bucketLo = primitive->slot ? primitive->slot->index : 0u,
-                         .bucketHi = primitive->slot ? primitive->slot->index : 0u,
-                         .primitives = 1,
-                         .sampleAddress = primitive->sourceAddress,
-                         .sampleCommand = primitive->command});
-  }
   lucent::debug(verdictChannel,
-                "record={}->{}: {} unowned group(s), {} finding(s), still={}",
+                "record={}->{}: {} group(s), {} finding(s), still={}",
                 from.sequence(),
                 to.sequence(),
                 to_.size(),

@@ -48,62 +48,22 @@ const char *writerKindName(WriterKind kind) {
   return "?";
 }
 
-OwnerLedger::OwnerLedger(Core &core)
-    : core_(core), words_(kMainRamWords, kNoOwner), overwrote_(kMainRamWords, kNoOwner), scopes_(kScopeSlots),
-      writerSlots_(kWriterSlots, 0u) {
+OwnerLedger::OwnerLedger(Core &core) : core_(core), words_(kMainRamWords, kNoOwner), writerSlots_(kWriterSlots, 0u) {
   writers_.reserve(kMaxWriters);
 }
 
-OwnerHandle OwnerLedger::openScope(const RecordKey &key) {
-  const std::uint32_t slot = nextScope_;
-  nextScope_ = (nextScope_ + 1u) % kScopeSlots;
-  if (nextScope_ == 0) {
-    epoch_ = epoch_ == kEpochMask ? 1u : epoch_ + 1u;
-  }
-  scopes_[slot] = {key, epoch_, opened_++};
-  return (epoch_ << 16) | slot;
-}
-
-void OwnerLedger::noteStore(GuestSpan store, OwnerHandle scope) {
+void OwnerLedger::noteStore(GuestSpan store) {
   const std::optional<std::uint32_t> first = mainRamWord(store.address);
   const std::optional<std::uint32_t> last = mainRamWord(store.address + store.bytes - 1u);
   if (!first || !last || *last < *first) {
     return;
   }
-  if (scope != kNoOwner) {
-    std::fill(words_.begin() + *first, words_.begin() + *last + 1, scope);
-    std::fill(overwrote_.begin() + *first, overwrote_.begin() + *last + 1, kNoOwner);
-    return;
-  }
-  const OwnerHandle writer = runningWriter();
-  // A writer storing over a scope's word of the draw list being built amends it.
-  for (std::uint32_t word = *first; word <= *last; ++word) {
-    const OwnerHandle previous = words_[word];
-    if (inDrawList(previous)) {
-      overwrote_[word] = previous;
-    } else if (!inDrawList(overwrote_[word])) {
-      overwrote_[word] = kNoOwner;
-    }
-    words_[word] = writer;
-  }
-}
-
-bool OwnerLedger::inDrawList(OwnerHandle handle) const {
-  return scopeKey(handle) && scopes_[handle & 0xFFFFu].opened >= listStart_;
-}
-
-OwnerHandle OwnerLedger::overwrote(std::uint32_t address) const {
-  const std::optional<std::uint32_t> word = mainRamWord(address);
-  return word ? overwrote_[*word] : kNoOwner;
+  std::fill(words_.begin() + *first, words_.begin() + *last + 1, port(WriterKind::Guest));
 }
 
 OwnerHandle OwnerLedger::ownerOf(std::uint32_t address) const {
   const std::optional<std::uint32_t> word = mainRamWord(address);
   return word ? words_[*word] : kNoOwner;
-}
-
-OwnerHandle OwnerLedger::runningWriter() {
-  return port(WriterKind::Guest);
 }
 
 OwnerHandle OwnerLedger::port(WriterKind kind) {
@@ -136,14 +96,14 @@ OwnerHandle OwnerLedger::intern(const GuestWriter &running) {
       continue;
     }
     if (known.revision == revision) {
-      return kWriterBit | (index - 1u);
+      return index;
     }
     if (!resolved) {
       resolved = catalog.resolve(running.blockPc).value_or(cpu::ImageIdentity{});
     }
     if (known.image == *resolved) {
       known.revision = revision;
-      return kWriterBit | (index - 1u);
+      return index;
     }
   }
   if (writers_.size() == kMaxWriters) {
@@ -151,38 +111,22 @@ OwnerHandle OwnerLedger::intern(const GuestWriter &running) {
       overflowReported_ = true;
       lucent::warn("owners", "{} writers interned; later writers are reported as the first", kMaxWriters);
     }
-    return kWriterBit;
+    return 1u;
   }
   GuestWriter added = running;
   added.image = resolved ? *resolved : catalog.resolve(running.blockPc).value_or(cpu::ImageIdentity{});
   added.revision = revision;
   writers_.push_back(added);
   writerSlots_[at] = static_cast<std::uint32_t>(writers_.size());
-  return kWriterBit | static_cast<std::uint32_t>(writers_.size() - 1u);
-}
-
-std::optional<RecordKey> OwnerLedger::scopeKey(OwnerHandle handle) const {
-  if (!isScope(handle)) {
-    return std::nullopt;
-  }
-  const ScopeSlot &slot = scopes_[handle & 0xFFFFu];
-  if (slot.epoch != (handle >> 16)) {
-    return std::nullopt;
-  }
-  return slot.key;
+  return static_cast<std::uint32_t>(writers_.size());
 }
 
 const GuestWriter *OwnerLedger::writer(OwnerHandle handle) const {
-  if (!isWriter(handle)) {
-    return nullptr;
-  }
-  const std::uint32_t index = handle & ~kWriterBit;
-  return index < writers_.size() ? &writers_[index] : nullptr;
+  return handle != kNoOwner && handle <= writers_.size() ? &writers_[handle - 1u] : nullptr;
 }
 
 void OwnerLedger::clear() {
   std::fill(words_.begin(), words_.end(), kNoOwner);
-  std::fill(overwrote_.begin(), overwrote_.end(), kNoOwner);
   core_.writerLatch.clear();
   lastHandle_ = kNoOwner;
 }

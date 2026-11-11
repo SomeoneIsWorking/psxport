@@ -81,7 +81,7 @@ inline void pkt_track(Core *c, uint32_t a, uint32_t bytes) {
 } // namespace
 
 // The bookkeeping of one store into guest storage at `p` (null for a device); false when the write rollback will put
-// it back, so it binds no packet and changes no code.
+// it back, so it names no writer and changes no code.
 bool Core::bookStore(uint8_t *p, GuestSpan store) {
   // Inside a replay the forget goes back with the store.
   vertexPlaces.forget(store.address, store.bytes);
@@ -90,7 +90,7 @@ bool Core::bookStore(uint8_t *p, GuestSpan store) {
     return false;
   }
   pkt_track(this, store.address, store.bytes);
-  emission.noteStore(store);
+  owners.noteStore(store);
   return true;
 }
 

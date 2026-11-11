@@ -78,8 +78,9 @@ interpolation in its Tomba 2, Ape Escape and Vigilante 8 ports with `docs/RENDER
    Tomba 2.
 5. **Delete.** No title registers a state producer: `StateProducer`, `FrameStates`, `FrameComposer`, the
    present ledger and the producer census are gone (2026-11-12), and an S no replay covers is shown as drawn.
-   `OwnerLedger`, `OwnershipVerdict` and `EmissionScope` keying go once no title declares a `Producer{Arg}`
-   owner (Tomba! 2 still does); the ledger's booking on every guest store goes with them.
+   Emission keys are gone too (2026-11-12): `EmissionScope`, `RecordKey`, the ledger's scope half, the
+   `Producer{Arg}` option and Tomba's key helpers. The ledger keeps one writer per word, so `OwnershipVerdict`
+   still reports a moving draw in an interval no replay covers.
 
 ## Not covered by a replay
 
@@ -144,29 +145,10 @@ world MATRIX and part angles, paired by the title's record life) and the effect 
 word depths. Village, Area 1 cave, A04 snow and A08 temple unpaced: Tomba, the pig and the scene land halfway; a
 paced village run shows 698 of 702 vblanks at 0.5. No A04 CLUT-upload refusal was seen (hazard 4 open until one is).
 
-Step 5 (2026-11-11) is still blocked: `StateProducer`, `EmissionScope` keying, `FrameComposer`'s per-object
-compose, `OwnershipVerdict`, the `OwnerJournal` producer rows and `Core::bookStore` all have live consumers.
-`FramePresenter` composes from producers only for an S no replay covers (`ReplayFrame::replays`), so each consumer
-below is what such an S still reaches. Crash Bash and Toy Story 2 now replay their draw sections and consume none
-of it; Crash 1/2/3, CTR, Spider-Man, Vagrant Story, Mega Man X4, Tekken 3 and C-12 never did. Deleted as unused:
-`PrimitiveSink::emitCopy` (no render emitted a copy) and the composer's copy placement. `CopyPlace` and the
-placed-copy raster path stay, fed by a replay: `GuestRedraw::writeCopy` keeps a part-pixel place on a DR_MOVE's
-words and `decodeCopy` reads it back (Crash Bash's texture scroll, its issue 0047).
+Step 5 is done (2026-11-12). Crash Bash and Toy Story 2 replay their draw sections; Crash 1/2/3, CTR, Spider-Man,
+Vagrant Story, Mega Man X4, Tekken 3 and C-12 never composed. `CopyPlace` and the placed-copy raster path stay, fed
+by a replay: `GuestRedraw::writeCopy` keeps a part-pixel place on a DR_MOVE's words and `decodeCopy` reads it back
+(Crash Bash's texture scroll, its issue 0047).
 After the deletion (unpaced, ires 0, fps60, sink 3840x2160): Crash Bash hub pan 510 intervals replayed, 0 refused,
 the signs stepping evenly over six presents; Toy Story 2 Andy's House 783 replayed, 0 refused; Spyro 1 Stone Hill
 1318 replayed, 0 refused, every moby record paired.
-
-| consumer | what it composes | what removes it |
-|---|---|---|
-| `psx-tomba` `game/render/subdivided_ground.*`, `game/core/entry/runtime.cpp` | A03 ground state render, saved per call | nothing: drawn only in the replayed field draw; its owner deletes `registerStateRenders`, `SubdividedGroundRender` and the per-call `ListJobWriter` (`psx-tomba` issue 0055 follow-up) |
-| `psx-tomba` `game/ui/{font,ui_sprite,panel_build,dialog_glyphs}.*`, `game/render/screen_fade.*` | menu text, sprites, panels, dialog glyphs and fades on screens no section replays | the pause options page (12 held in-betweens, not a field draw) and any other menu draw as a `DrawSection` variant, then delete the renders and their saves |
-| `psx-tomba` `game/render/billboard_state.*` | the map screen's `0x8003C8F4`, drawn with the field draw off | the map screen's draw as a section |
-| `psx-tomba` `game/render/guest_keyed_emitters.*`, `object_draw.*`, `quad_state.*`, `anchored_packets.*`, `list_state_producer.*`, `tile_grid_layer.*` and the `EmissionScope::Guard` sites (`drop_shadow`, `gradient_backdrop`, `hud_gauge_emitter`, `letterbox_bars`, `packed_mesh`, `perobj_dispatch`, `text_label`, `widescreen_margin_quad`) | keyed emitters and their keys; the overrides stay for widescreen culls | a census showing no unreplayed S draws them, then their renders, saves and `Producer{}` arguments to `NativeOverrideCatalog::declare` go |
-| `psx-spyro` `titles/spyro1/render/shaded_line.*` | the shaded line, kept for its widescreen extension | its override stays; the state render, `EmissionScope` guard and `stateProducers.install` go once no unreplayed Spyro 1 state draws it. `spyro1::DrawSection::replays` takes GS_Playing, the title, GS_Dragon, GS_Fairy, GS_Balloonist, GS_Cutscene and the menus (2026-11-11); the inventory band producer is deleted (its native body widens the band). Respawn/game over `0x8001CA38` tints over the image the frame before left; flight results (GS 7, `Flight5`) still draws the lines and the credits the tint. So the lines (flight results) and the tint (respawn, credits) stay, see `psx-spyro` `docs/plans/spyro1-motion-tracks.md` Other state draws |
-| `psx-spyro` `game/render/screen_overlays.*`, `state_producer_override.h` | `FullscreenTint` with its `rests` state | the screens that draw it replayed, then `installProducerOverride` becomes a plain `installNativeOverride`. The letterbox producer is deleted (2026-11-11): every draw that calls it is replayed in all three titles. Spyro 1 still draws the tint (`0x800190D4`) in the respawn and game-over draw `0x8001CA38` (psx-spyro issue 0245: its fade subtracts over the frame before, a presenter-side hold) and the credits overlay |
-| `psx-spyro` `game/core/{runtime,session}.*` | the producer table and lookup | goes with the rows above (the unused `state_producer.h` includes in `guest_terrain_frame.h`, `actor_emitter_polygons.cpp` and `paired_actor_polygons.cpp` are gone, 2026-11-11) |
-| `psxport` `testprog/host/square_producer.*`, `runtime.*` | the test program's square | a test-program draw section with the square as a motion track |
-
-When those rows are gone, `GameRuntime::stateProducer`, `StateProducerTable`, `FrameComposer`, `OwnershipVerdict`,
-`OwnerLedger`, `EmissionScope`, `native_dispatch.h`'s `Producer` parameter, the journal's producer rows and the
-booking in `Core::bookStore` (`guest_memory.cpp`) go in one change.
