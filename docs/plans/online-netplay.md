@@ -42,8 +42,9 @@ each player's pad on their own machine, pads exchanged per guest frame, every pe
   an input-delay setting, per-frame state-hash desync detection, and spectating if cheap. A runtime supplies four
   hooks: save state, load state, advance one frame, set the pads. psxport implements them over whole-machine
   savestates (S023) and the pad input phase, re-stepping with audio and presentation suppressed; the guest's logic
-  rate is untouched (30 Hz titles stay 30 Hz). psxport is the first consumer and builds the Lucent component when
-  this plan reaches phase 4; LF2 is the second. Prior art first: GGPO (MIT since 2019) and its maintained forks,
+  rate is untouched (30 Hz titles stay 30 Hz). The Lucent component is built by the lucent-online session together with psxport, which
+  supplies the four hooks; Crash Bash 4-player is its first proof, LF2 the second consumer. The interface is settled
+  with lucent-online at phase 4. Prior art first: GGPO (MIT since 2019) and its maintained forks,
   checked against the four hooks; a fork that fits is adopted, pinned by revision. Its datagrams go through the
   Lucent ZeroTier component's sockets, never its own UDP.
 - **Engine API (provisional until the GGPO check).** `lucent::rollback::Session`, built from a config of slot count,
