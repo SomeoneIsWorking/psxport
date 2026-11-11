@@ -5,21 +5,39 @@
 
 #include <cstdint>
 #include <span>
-#include <utility>
 #include <vector>
 
 namespace psx::present {
 
 class RecordCluts {
 public:
+  // An in-between `t` of the way from `earlier` to the shown record.
+  struct Between {
+    const FrameRecord &earlier;
+    float t;
+  };
   // The pool offsets `shown` sampled, by CLUT attribute and texture depth; the lowest offset for each.
   void index(const FrameRecord &shown);
+  // As index(shown), and a CLUT both records sampled with different entries resolves to their blend at `between.t`.
+  void index(const FrameRecord &shown, Between between);
   // Sets `primitive`'s CLUT offset in `into`, which holds the indexed record's pools: the entries the record
-  // sampled, else the ones `vram` holds now, appended. False when the pool is full.
+  // sampled (blended with the earlier record's when indexed between two), else the ones `vram` holds now,
+  // appended. False when the pool is full.
   [[nodiscard]] bool resolve(FrameRecord &into, DrawPrimitive &primitive, std::span<const std::uint16_t> vram);
 
 private:
-  std::vector<std::pair<std::uint32_t, std::uint32_t>> offsets_; // sorted by CLUT key
+  struct Indexed {
+    std::uint32_t key;
+    std::uint32_t offset;
+    bool settled; // offset is final in the record being assembled
+  };
+  static const Indexed *find(std::span<const Indexed> offsets, std::uint32_t key);
+  static void collect(const FrameRecord &record, std::vector<Indexed> &out);
+
+  std::vector<Indexed> offsets_;        // sorted by CLUT key
+  std::vector<Indexed> earlierOffsets_; // sorted by CLUT key
+  const FrameRecord *earlier_ = nullptr;
+  float t_ = 1.0f;
 };
 
 } // namespace psx::present

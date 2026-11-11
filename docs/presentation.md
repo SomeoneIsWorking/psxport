@@ -217,7 +217,11 @@ whole; an override that draws from a tracked word reads its two samples (`Motion
 difference (`EmitMemory::storeVertex`, or `GuestRedraw::writeVertex` from a motion source's write), so a one-unit step lands halfway rather than on one end. A motion source moves a copy packet the same way (`GuestRedraw::writeCopy`): its source, destination and size words each keep the part past their whole pixels, `decodeCopy` reads them into the copy's `CopyPlace`, and `addCopy` draws its rect at scale (`scaledCoordinate`, so two copies sharing an edge meet on one scaled row) and shifts its source read by the places' difference (`kOpShiftX/Y`); one that wraps VRAM or overlaps its source is drawn at its whole pixels. The chain head the
 section returns is captured (`PacketChainWalker::capture`). At seal the captures belong to S; in-between k is S
 with the one chain run the section names (`ReplaySection::linked`) replaced by the capture decoded under S's draw
-state at that run (`FrameRecord::splice`, `gpu::decodePackets`), CLUTs resolved from VRAM (`RecordCluts`). Each
+state at that run (`FrameRecord::splice`, `gpu::decodePackets`), CLUTs resolved by `RecordCluts`: one S sampled
+keeps its entries, blended k/n of the way from S''s entries when S' sampled the same CLUT (attribute and depth) with
+different ones (each 5-bit channel by `lerpInt`, the STP bit S's, the transparent 0x0000 never blended into, out of or
+landed on), so a palette cycle cross-fades; one S never sampled is read from VRAM. A composed in-between keeps S's
+entries. Each
 captured word keeps the depth a draw site noted with it (`EmitMemory::capturedPlace`), so replayed primitives test
 depth as the real present's do. A run that bakes an upload, a capture that does not decode, or no single matching
 run gives no in-between, and an interval with no replayed set is held (`not-replayed`). An S whose draw never ran

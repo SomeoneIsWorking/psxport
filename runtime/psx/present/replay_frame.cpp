@@ -108,7 +108,8 @@ bool ReplayFrame::covers(const Interval &interval) {
   return set != nullptr && set->from == interval.from && set->fields == interval.fields;
 }
 
-const FrameRecord *ReplayFrame::at(const FrameRecord &shown, int k, std::span<const std::uint16_t> vram) {
+const FrameRecord *
+ReplayFrame::at(const FrameRecord &shown, const FrameRecord &from, int k, std::span<const std::uint16_t> vram) {
   const Set *set = setFor(shown.sequence());
   if (set == nullptr || k < 1 || k >= set->fields) {
     return nullptr;
@@ -118,15 +119,23 @@ const FrameRecord *ReplayFrame::at(const FrameRecord &shown, int k, std::span<co
   if (assembledFor_[index] == shown.sequence()) {
     return assembledHeld_[index] ? nullptr : &assembled_[index];
   }
-  const FrameRecord *assembled = assemble(shown, set->captures[index], k, vram);
+  const FrameRecord *assembled =
+      assemble(shown,
+               {.earlier = from, .t = static_cast<float>(k) / static_cast<float>(set->fields)},
+               set->captures[index],
+               k,
+               vram);
   assembledFor_[index] = shown.sequence();
   assembledHeld_[index] = assembled == nullptr;
   ++(assembled == nullptr ? held_ : shownInBetweens_);
   return assembled;
 }
 
-const FrameRecord *
-ReplayFrame::assemble(const FrameRecord &shown, const Capture &capture, int k, std::span<const std::uint16_t> vram) {
+const FrameRecord *ReplayFrame::assemble(const FrameRecord &shown,
+                                         RecordCluts::Between between,
+                                         const Capture &capture,
+                                         int k,
+                                         std::span<const std::uint16_t> vram) {
   const std::span<const ChainRun> runs = shown.chainRuns();
   const auto drawn_by_section = [this](const ChainRun &run) {
     return section_.linked(run.head);
@@ -152,7 +161,7 @@ ReplayFrame::assemble(const FrameRecord &shown, const Capture &capture, int k, s
   }
   FrameRecord &assembled = assembled_[static_cast<std::size_t>(k - 1)];
   assembled.splice(shown, run, decoded_);
-  cluts_.index(shown);
+  cluts_.index(shown, between);
   const std::span<RecordEntry> spliced = assembled.entries().subspan(run.firstEntry, decoded_.size());
   for (RecordEntry &entry : spliced) {
     auto *primitive = std::get_if<DrawPrimitive>(&entry);

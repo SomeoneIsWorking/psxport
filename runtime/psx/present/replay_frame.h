@@ -59,8 +59,9 @@ public:
   [[nodiscard]] bool replays(std::uint64_t shown) const;
   // Whether the interval's in-betweens were replayed. The next set is replayed for its `fields`.
   [[nodiscard]] bool covers(const Interval &interval);
-  // In-between `k` of S, assembled; null when S's chain run cannot take it.
-  [[nodiscard]] const FrameRecord *at(const FrameRecord &shown, int k, std::span<const std::uint16_t> vram);
+  // In-between `k` of S' = `from` → S = `shown`, assembled; null when S's chain run cannot take it.
+  [[nodiscard]] const FrameRecord *
+  at(const FrameRecord &shown, const FrameRecord &from, int k, std::span<const std::uint16_t> vram);
   // The fraction the section is being replayed at, while it runs: a title override inside the replay draws that
   // in-between of what it emits there.
   [[nodiscard]] std::optional<float> replaying() const {
@@ -90,8 +91,11 @@ private:
   // One replay at `t`; false when the section refused or its chain could not be read.
   bool replay(Core &core, float t, Capture &capture);
   // In-between `k` of S from its capture; null, logged, when S's chain run cannot take it.
-  [[nodiscard]] const FrameRecord *
-  assemble(const FrameRecord &shown, const Capture &capture, int k, std::span<const std::uint16_t> vram);
+  [[nodiscard]] const FrameRecord *assemble(const FrameRecord &shown,
+                                            RecordCluts::Between between,
+                                            const Capture &capture,
+                                            int k,
+                                            std::span<const std::uint16_t> vram);
   // The set that S = `shown` took, or null.
   [[nodiscard]] const Set *setFor(std::uint64_t shown) const;
 

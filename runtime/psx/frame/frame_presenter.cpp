@@ -341,7 +341,7 @@ void FramePresenter::presentRecords(Core &core, const present::StateProducers *p
       if (k < 1 || k >= fields) {
         return nullptr;
       }
-      const present::FrameRecord *replayed = replay->at(base, k, core.gpuDevice().vram());
+      const present::FrameRecord *replayed = replay->at(base, *from->record, k, core.gpuDevice().vram());
       held = replayed == nullptr;
       return replayed;
     }
