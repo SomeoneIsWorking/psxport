@@ -146,14 +146,18 @@ struct LightrecExecutor::Impl {
   static void cop2Transfer(lightrec_state *lightrec, std::uint32_t opcode, std::uint32_t value) {
     Impl &impl = owner(lightrec);
     VertexPlaces &places = impl.core.vertexPlaces;
-    if (!places.tracking() || primaryOpcode(opcode) != kOpCop2) {
+    if (primaryOpcode(opcode) != kOpCop2) {
       return;
     }
     const std::uint32_t reg = rtField(opcode);
     const std::uint32_t move = (opcode >> 21) & 0x1Fu;
+    // Every TRZ write replaces the carried translation depth, tracked or not.
     if (move == kCop2Ctc2 && rdField(opcode) == gte::kTranslationZ) {
-      const std::optional<NotedPlace> noted = places.carried(reg, value);
+      const std::optional<NotedPlace> noted = places.tracking() ? places.carried(reg, value) : std::nullopt;
       impl.core.gte().carryTranslation(noted ? noted->translation : GteTranslationDepth{});
+      return;
+    }
+    if (!places.tracking()) {
       return;
     }
     if (move == kCop2Mfc2) {

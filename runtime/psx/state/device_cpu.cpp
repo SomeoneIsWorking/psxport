@@ -149,6 +149,8 @@ bool readGteSection(Game &game, psx::platform::BlobReader &in, std::string &erro
   psx::cpu::placeReplacedScreenEntries(gte, std::span<const std::uint32_t, 32>(regs.data(), 32));
   std::copy(regs.begin(), regs.end(), gte.REG);
   gte.FLAGS = flags;
+  // The saved TRZ was written by no tracked CTC2.
+  gte.translationDepth = {};
   // DR and CR alias REG and REG+32.
   gte.DR = gte.REG;
   gte.CR = gte.REG + 32;
