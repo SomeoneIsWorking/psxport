@@ -138,9 +138,28 @@ world MATRIX and part angles, paired by the title's record life) and the effect 
 word depths. Village, Area 1 cave, A04 snow and A08 temple unpaced: Tomba, the pig and the scene land halfway; a
 paced village run shows 698 of 702 vblanks at 0.5. No A04 CLUT-upload refusal was seen (hazard 4 open until one is).
 
-Step 5 (2026-11-10) is blocked: producers still compose. Tomba! 2's pause screen and boot (issue 0055 there),
-Spyro's shaded line, inventory band, tint and letterbox, every Crash Bash and Toy Story 2 in-between, and the test
-program's square producer go through `StateProducer`, `EmissionScope` keying and `FrameComposer`, judged by
-`OwnershipVerdict` over the ledger's booking. Crash 1/2/3, CTR, Spider-Man, Vagrant Story, Mega Man X4, Tekken 3 and
-C-12 consume none of it. Only the unused parts went: `Composition::Refused` with `HeldCause::ProducerRefused`, and
-`inBetweenAt`.
+Step 5 (2026-11-11) is still blocked: `StateProducer`, `EmissionScope` keying, `FrameComposer`'s per-object
+compose, `OwnershipVerdict`, the `OwnerJournal` producer rows and `Core::bookStore` all have live consumers.
+`FramePresenter` composes from producers only for an S no replay covers (`ReplayFrame::replays`), so each consumer
+below is what such an S still reaches. Crash Bash and Toy Story 2 now replay their draw sections and consume none
+of it; Crash 1/2/3, CTR, Spider-Man, Vagrant Story, Mega Man X4, Tekken 3 and C-12 never did. Deleted as unused:
+`PrimitiveSink::emitCopy` (no render emitted a copy), the composer's copy placement, `CopyPlace` and the placed-copy
+raster path (`addCopy`'s scaled rect and its `kOpShiftX/Y` source shift in `record.frag`).
+After the deletion (unpaced, ires 0, fps60, sink 3840x2160): Crash Bash hub pan 510 intervals replayed, 0 refused,
+the signs stepping evenly over six presents; Toy Story 2 Andy's House 783 replayed, 0 refused; Spyro 1 Stone Hill
+1318 replayed, 0 refused, every moby record paired.
+
+| consumer | what it composes | what removes it |
+|---|---|---|
+| `psx-tomba` `game/render/subdivided_ground.*`, `game/core/entry/runtime.cpp` | A03 ground state render, saved per call | nothing: drawn only in the replayed field draw; its owner deletes `registerStateRenders`, `SubdividedGroundRender` and the per-call `ListJobWriter` (`psx-tomba` issue 0055 follow-up) |
+| `psx-tomba` `game/ui/{font,ui_sprite,panel_build,dialog_glyphs}.*`, `game/render/screen_fade.*` | menu text, sprites, panels, dialog glyphs and fades on screens no section replays | the pause options page (12 held in-betweens, not a field draw) and any other menu draw as a `DrawSection` variant, then delete the renders and their saves |
+| `psx-tomba` `game/render/billboard_state.*` | the map screen's `0x8003C8F4`, drawn with the field draw off | the map screen's draw as a section |
+| `psx-tomba` `game/render/guest_keyed_emitters.*`, `object_draw.*`, `quad_state.*`, `anchored_packets.*`, `list_state_producer.*`, `tile_grid_layer.*` and the `EmissionScope::Guard` sites (`drop_shadow`, `gradient_backdrop`, `hud_gauge_emitter`, `letterbox_bars`, `packed_mesh`, `perobj_dispatch`, `text_label`, `widescreen_margin_quad`) | keyed emitters and their keys; the overrides stay for widescreen culls | a census showing no unreplayed S draws them, then their renders, saves and `Producer{}` arguments to `NativeOverrideCatalog::declare` go |
+| `psx-spyro` `titles/spyro1/render/{inventory_band,shaded_line}.*` | the inventory band and shaded line, kept for their widescreen extension | their overrides stay; the state renders, `EmissionScope` guards and `stateProducers.install` go once no unreplayed Spyro 1 S draws them |
+| `psx-spyro` `game/render/screen_overlays.*`, `state_producer_override.h` | `FullscreenTint` and `CinematicLetterbox` with their `rests` states | the screens that draw them (menus, cutscene bars) replayed, then `installProducerOverride` becomes a plain `installNativeOverride` |
+| `psx-spyro` `game/core/{runtime,session}.*`, `game/render/terrain/guest_terrain_frame.h`, `titles/spyro1/render/{actor_emitter_polygons,paired_actor_polygons}.cpp` | the producer table and lookup; the last two only include `state_producer.h` | goes with the rows above; the includes are dead now |
+| `psxport` `testprog/host/square_producer.*`, `runtime.*` | the test program's square | a test-program draw section with the square as a motion track |
+
+When those rows are gone, `GameRuntime::stateProducer`, `StateProducerTable`, `FrameComposer`, `OwnershipVerdict`,
+`OwnerLedger`, `EmissionScope`, `native_dispatch.h`'s `Producer` parameter, the journal's producer rows and the
+booking in `Core::bookStore` (`guest_memory.cpp`) go in one change.

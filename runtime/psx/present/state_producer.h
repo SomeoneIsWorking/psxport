@@ -19,17 +19,14 @@ class PrimitiveSink {
 public:
   virtual ~PrimitiveSink() = default;
   virtual void emit(OtSlot slot, const DrawPrimitive &primitive) = 0;
-  // A VRAM copy the object's guest packets issued, at `t`. Aborts in a sink that keeps only primitives.
-  virtual void emitCopy(OtSlot slot, const VramCopy &copy);
 };
 
 // A sink that keeps what it is handed, in order. `clear` keeps the storage for the next render.
 class PrimitiveList final : public PrimitiveSink {
 public:
   void emit(OtSlot slot, const DrawPrimitive &primitive) override;
-  void emitCopy(OtSlot slot, const VramCopy &copy) override;
   void clear();
-  std::vector<std::pair<OtSlot, RecordEntry>> entries;
+  std::vector<std::pair<OtSlot, DrawPrimitive>> entries;
 };
 
 // An object's two saved states and the point `t` between them. With no earlier state (birth, cut),

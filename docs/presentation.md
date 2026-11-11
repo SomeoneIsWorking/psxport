@@ -113,7 +113,7 @@ name is refused with a warning and the Core stays on `record`.
   S×S blocks; uploads replicate, copies run at full resolution. A texel reads the pixel of its S×S block
   where the fragment's UV falls inside it (a triangle's interpolant fraction, a sprite's pixel within its
   native pixel; `record.frag` `texel`): an uploaded block is uniform and reads as at 1x, while a block a
-  draw or a placed copy wrote at scale shows its detail. 24bpp display keeps the device picture.
+  draw or a copy of one wrote at scale shows its detail. 24bpp display keeps the device picture.
   `record.frag` finds a scaled pixel's native pixel by integer floor division; a float divide is inexact
   at S = 3 and puts each block's first row and column in the block before.
 - **Texture cache.** `gpu.c` fetches texels through a cache that GP0(01), copy, upload, read, soft reset and
@@ -257,14 +257,9 @@ The composer builds the frame at `t` from S's record:
   An in-between (`from` set, `t < 1`) with any object whose render cannot be placed is not composed: the
   interval is held, never a mix of two moments. The `compose` debug channel names the baked, unrendered or
   unpaired object.
-- **Keyed copy.** A VRAM-to-VRAM copy (GP0 0x80) carries its packet's key and slot like a primitive, so a
-  producer whose guest function links copies (a scrolled texture strip) owns them: the composer removes them
-  with the object's entries and places the copies its render emits (`PrimitiveSink::emitCopy`) by the same slot
-  rule, with the mask bits in effect where they land. A rendered copy may carry a `CopyPlace`, sub-pixel offsets
-  of its source and destination origins and size; `addCopy` draws its destination rect at scale from them
-  (`scaledCoordinate`, so two copies sharing an edge meet on one scaled row) and shifts its source read by the
-  places' difference (`kOpShiftX/Y`). One that wraps VRAM or overlaps its source is drawn at its whole pixels; at
-  1x every copy is.
+- **Keyed copy.** A VRAM-to-VRAM copy (GP0 0x80) carries its packet's key and slot like a primitive, so the
+  composer removes a covered object's copies with its entries. A render emits primitives only; the object's
+  copies are gone from its in-between.
 - **Composition.** `StateProducer::composition(states)` says what the object's entries become at `t`:
   `Render` (replaced by `render`, the default) or `Recorded` (kept as the guest drew them, which is the
   object at `t`).

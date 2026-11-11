@@ -157,10 +157,8 @@ void main() {
     if (kind == kRecordOpKindCopy) {
         int rx = wrap(p.x - int(word(kOpOriginX)) * S, vramWidth);
         int ry = wrap(p.y - int(word(kOpOriginY)) * S, vramHeight);
-        // A placed copy reads its source shifted by the target pixels its place moved against its destination.
-        ivec2 shift = ivec2(int(word(kOpShiftX)), int(word(kOpShiftY)));
-        ivec2 src = ivec2(wrap(int(word(kOpSourceX)) * S + rx + shift.x, vramWidth),
-                          wrap(int(word(kOpSourceY)) * S + ry + shift.y, vramHeight));
+        ivec2 src = ivec2(wrap(int(word(kOpSourceX)) * S + rx, vramWidth),
+                          wrap(int(word(kOpSourceY)) * S + ry, vramHeight));
         if (maskCheck && (dst & 0x8000u) != 0u) {
             discard;
         }

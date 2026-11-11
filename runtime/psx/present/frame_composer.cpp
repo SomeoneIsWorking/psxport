@@ -215,31 +215,7 @@ FrameComposer::Placement FrameComposer::place(const FrameRecord &shown,
     } else {
       drawable = false;
     }
-    auto *copy = std::get_if<VramCopy>(&emitted);
-    if (copy != nullptr && drawable) {
-      // A copy takes only the mask bits in effect where it lands, and samples no CLUT.
-      if (environment != nullptr) {
-        copy->maskSet = environment->maskSet;
-        copy->maskCheck = environment->maskCheck;
-      }
-      copy->key = RecordKey{id.producer, id.object, 0, 0};
-      copy->slot = slot;
-      placed_.emplace_back(position, *copy);
-      continue;
-    }
-    if (copy != nullptr) {
-      if (refuses) {
-        lucent::debug(composeChannel,
-                      "record={} in-between shown whole: object {:#010x}/{:#010x} has no place for a copy",
-                      shown.sequence(),
-                      id.producer,
-                      id.object);
-        refusal_ = {HeldCause::Unplaceable, id.producer, false, run.empty() ? SIZE_MAX : run.front().entry};
-        return Placement::Refused;
-      }
-      return Placement::Kept;
-    }
-    DrawPrimitive &primitive = std::get<DrawPrimitive>(emitted);
+    DrawPrimitive &primitive = emitted;
     if (drawable) {
       drawable = cluts_.resolve(output(shown), primitive, vram);
     }
