@@ -2,6 +2,7 @@
 // blended into a replay of the section (GuestRedraw::writeWord).
 #pragma once
 
+#include "blend.h"
 #include "guest_redraw.h"
 
 #include <array>
@@ -73,8 +74,15 @@ public:
   // The fields come in pairs, a word and then the word holding its periods, which steps.
   constexpr RingRule() = default;
   void blend(const Samples &samples, float t, std::span<std::uint32_t> out) const override;
+  // Halfword `half` of field `field` `t` of the way, before blend rounds it; nullopt where it steps. A native
+  // emitter that reads the word places its draw by the difference.
+  [[nodiscard]] std::optional<double>
+  exactHalf(const Samples &samples, std::size_t field, Halfword half, float t) const;
 
 private:
+  // Field `field`'s periods, the low halfword's in the low half.
+  [[nodiscard]] std::uint32_t periodsOf(const Samples &samples, std::size_t field) const;
+
   std::optional<Periods> periods_;
 };
 
@@ -163,6 +171,8 @@ public:
   // Every paired record's fields `t` of the way from the earlier sample to the later, into the replay's
   // guest memory.
   void write(GuestRedraw &redraw, float t) const;
+  // The two samples of the record at `address` in `track`, one of the set's, while they pair.
+  [[nodiscard]] std::optional<MotionRule::Samples> pairedRecord(const MotionTrack &track, std::uint32_t address) const;
   // The writes since the last call drew an interval that is shown (`kept`) or one the section refused.
   void settle(bool kept);
   // Run end: per track and source, the items the shown in-betweens drew and how many were unpaired (drawn as now).

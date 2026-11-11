@@ -30,19 +30,32 @@ struct RingHalf {
   std::uint32_t period = 0;
 };
 
-std::uint32_t ringHalf(const RingHalf &half, float t) {
+// The halfword `t` of the way round its ring, unrounded; nullopt for a zero period.
+std::optional<double> ringExact(const RingHalf &half, float t) {
   if (half.period == 0u) {
+    return std::nullopt;
+  }
+  const auto start = static_cast<std::int32_t>((half.from & kHalfword) % half.period);
+  const auto end = static_cast<std::int32_t>((half.to & kHalfword) % half.period);
+  return lerpRing(start, end, static_cast<std::int32_t>(half.period), t);
+}
+
+std::uint32_t ringHalf(const RingHalf &half, float t) {
+  const std::optional<double> exact = ringExact(half, t);
+  if (!exact) {
     return half.to & kHalfword;
   }
   const auto ring = static_cast<std::int32_t>(half.period);
-  const auto start = static_cast<std::int32_t>((half.from & kHalfword) % half.period);
-  const auto end = static_cast<std::int32_t>((half.to & kHalfword) % half.period);
-  return static_cast<std::uint32_t>(static_cast<std::int32_t>(std::nearbyint(lerpRing(start, end, ring, t))) % ring);
+  return static_cast<std::uint32_t>(static_cast<std::int32_t>(std::nearbyint(*exact)) % ring);
+}
+
+RingHalf halfOf(const RingHalf &word, Halfword half) {
+  const auto shift = static_cast<unsigned>(half);
+  return {(word.from >> shift) & kHalfword, (word.to >> shift) & kHalfword, (word.period >> shift) & kHalfword};
 }
 
 std::uint32_t ringWord(const RingHalf &word, float t) {
-  return ringHalf({word.from, word.to, word.period & kHalfword}, t) |
-         ringHalf({word.from >> 16, word.to >> 16, word.period >> 16}, t) << 16;
+  return ringHalf(halfOf(word, Halfword::Low), t) | ringHalf(halfOf(word, Halfword::High), t) << 16;
 }
 
 bool holds(const RecordByte &byte, std::uint8_t value) {
@@ -98,18 +111,22 @@ void TransformRule::blend(const Samples &samples, float t, std::span<std::uint32
   }
 }
 
+std::uint32_t RingRule::periodsOf(const Samples &samples, std::size_t field) const {
+  return periods_ ? (*periods_)[0] | static_cast<std::uint32_t>((*periods_)[1]) << 16 : samples.to[field + 1];
+}
+
 void RingRule::blend(const Samples &samples, float t, std::span<std::uint32_t> out) const {
-  if (periods_) {
-    const std::uint32_t periods = (*periods_)[0] | static_cast<std::uint32_t>((*periods_)[1]) << 16;
-    for (std::size_t i = 0; i < out.size(); ++i) {
-      out[i] = ringWord({samples.from[i], samples.to[i], periods}, t);
+  const std::size_t stride = periods_ ? 1 : 2;
+  for (std::size_t i = 0; i + stride <= out.size(); i += stride) {
+    out[i] = ringWord({samples.from[i], samples.to[i], periodsOf(samples, i)}, t);
+    if (!periods_) {
+      out[i + 1] = samples.to[i + 1];
     }
-    return;
   }
-  for (std::size_t i = 0; i + 1 < out.size(); i += 2) {
-    out[i] = ringWord({samples.from[i], samples.to[i], samples.to[i + 1]}, t);
-    out[i + 1] = samples.to[i + 1];
-  }
+}
+
+std::optional<double> RingRule::exactHalf(const Samples &samples, std::size_t field, Halfword half, float t) const {
+  return ringExact(halfOf({samples.from[field], samples.to[field], periodsOf(samples, field)}, half), t);
 }
 
 MotionSet::MotionSet(std::span<const MotionTrack> tracks, std::span<MotionSource *const> sources)
@@ -228,6 +245,32 @@ void MotionSet::write(GuestRedraw &redraw, float t) const {
   for (std::size_t source = 0; source < sources_.size(); ++source) {
     pending_[tracks_.size() + source] += sources_[source]->write(redraw, t);
   }
+}
+
+std::optional<MotionRule::Samples> MotionSet::pairedRecord(const MotionTrack &track, std::uint32_t address) const {
+  const auto index = static_cast<std::size_t>(&track - tracks_.data());
+  if (!paired() || index >= tracks_.size()) {
+    return std::nullopt;
+  }
+  const auto find = [&](const Sample &sample) -> std::optional<std::span<const std::uint32_t>> {
+    const std::size_t begin = index == 0 ? 0 : sample.trackEnds[index - 1];
+    const auto first = sample.addresses.begin() + static_cast<std::ptrdiff_t>(begin);
+    const auto last = sample.addresses.begin() + static_cast<std::ptrdiff_t>(sample.trackEnds[index]);
+    const auto at = std::lower_bound(first, last, address);
+    if (at == last || *at != address) {
+      return std::nullopt;
+    }
+    const auto record = static_cast<std::size_t>(at - sample.addresses.begin());
+    return std::span(sample.words).subspan(sample.starts[record], recordWords(track));
+  };
+  const auto earlier = find(from_);
+  const auto later = find(to_);
+  const std::size_t keys = keyWords(track);
+  if (!earlier || !later ||
+      !std::equal(earlier->begin(), earlier->begin() + static_cast<std::ptrdiff_t>(keys), later->begin())) {
+    return std::nullopt;
+  }
+  return MotionRule::Samples{.address = address, .from = earlier->subspan(keys), .to = later->subspan(keys)};
 }
 
 void MotionSet::settle(bool kept) {

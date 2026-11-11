@@ -66,6 +66,10 @@ public:
   [[nodiscard]] std::optional<float> replaying() const {
     return replaying_;
   }
+  // The tracks' samples, for a title override that places its draw by a blended input.
+  [[nodiscard]] const MotionSet &motion() const {
+    return motion_;
+  }
   // Run end: intervals replayed (and their in-betweens) and refused by the section, in-betweens shown and held at
   // assembly, then each track's and source's unpaired items over the replayed intervals.
   void report() const;
