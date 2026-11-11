@@ -27,6 +27,12 @@ each player's pad on their own machine, pads exchanged per guest frame, every pe
   matchmaking, lobby or relay service exists or is assumed; one peer hosts, the others join by address, and LAN
   peers are found by broadcast. Interface enumeration (which address is the ZeroTier one) comes from the Lucent
   owner the xmen2 agent is adding.
+- **Embedded ZeroTier.** Online setup is automatic: netplay's UDP goes through the optional Lucent ZeroTier
+  component (libzt, built by the xmen2 agent) when it lands, never through hand-rolled NAT traversal. It joins a
+  controller-less ad-hoc network with no account or install; a player's code is their 10-hex-digit node ID, and
+  ZeroTier's public roots relay when no direct path exists (ZeroTier's infrastructure, not ours). Ad-hoc networks
+  are public and IPv6 unicast only, so the session authenticates its peers itself. libzt's license is checked
+  against MIT distribution before it ships. Mega Man X4's LAN co-op uses the same path.
 - **Rollback.** Each peer runs ahead on predicted remote pads (the last one received), saves a state per frame and,
   when a late pad differs, loads the state of that frame and re-steps to the present with audio and presentation
   suppressed. The guest's logic rate is untouched (30 Hz titles stay 30 Hz).
