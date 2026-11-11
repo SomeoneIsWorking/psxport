@@ -71,13 +71,17 @@ bool GuestRedraw::dispatch(std::uint32_t entry, std::span<const std::uint32_t> a
 bool GuestRedraw::dispatchTo(std::uint32_t entry,
                              std::uint32_t end,
                              std::span<const std::uint32_t> arguments,
-                             std::span<const std::uint32_t> appliedCalls) {
+                             std::span<const Skip> skips) {
   const std::uint32_t sp = core_.r[cpu::kSp];
   const std::uint32_t ra = core_.r[cpu::kRa];
-  bool reached = call(entry, arguments, Call::ToEnd, appliedCalls.empty() ? end : appliedCalls.front());
-  for (std::size_t next = 1; reached && next <= appliedCalls.size(); ++next) {
-    const std::uint32_t stop = next < appliedCalls.size() ? appliedCalls[next] : end;
-    reached = call(entry, {}, Call::ToEnd, stop, core_.r[cpu::kRa]);
+  bool reached = call(entry, arguments, Call::ToEnd, skips.empty() ? end : skips.front().at);
+  for (std::size_t next = 1; reached && next <= skips.size(); ++next) {
+    const Skip &skip = skips[next - 1];
+    if (skip.host) {
+      skip.host();
+    }
+    const std::uint32_t stop = next < skips.size() ? skips[next].at : end;
+    reached = call(entry, {}, Call::ToEnd, stop, skip.resume != 0 ? skip.resume : core_.r[cpu::kRa]);
   }
   core_.r[cpu::kSp] = sp;
   core_.r[cpu::kRa] = ra;

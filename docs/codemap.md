@@ -80,7 +80,7 @@ Dependency direction: title repo → `runtime/psx/game/` (the title interface) �
 - `runtime/psx/present/gp0_command.h`, `gp0_primitive_decode.*` — GP0 command and primitive decode: opcodes, libgpu polygon, line and poly-line segments, packet tags and sizes, draw mode E1
 - `runtime/psx/present/vram_rect.h`, `vram_pixel.h` — VRAM size, points and rects, 555 pixel and 5-to-8 expand, texpage and CLUT words, CLUT entry count, texel sampler
 - `runtime/psx/present/packet_chains.*` — packet tag chains and bucket tables walked as primitives
-- `runtime/psx/present/guest_redraw.*`, `runtime/psx/core/write_rollback.h` — guest draw routine re-run for an in-between / redraw: store undo log, registers and GTE restored, devices held
+- `runtime/psx/present/guest_redraw.*`, `runtime/psx/core/write_rollback.h` — guest draw routine re-run for an in-between / redraw (a body to its device tail, stepping over applied calls and host-owned stretches): store undo log, registers and GTE restored, devices held
 - `runtime/psx/present/gte_control.*` — GTE control registers saved, blended (rotation through `lucent::rotation::between`) and restored around a render
 - `runtime/psx/present/guest_widescreen_projection.*`, `viewport_layout.h`, `proj_params.*`, `picture_announce.*` — widescreen / 16:9: aspect policy, canvas margins, projection constants, picture geometry announce
 - `runtime/psx/present/pane_host.h`, `rgb24_picture.h` — a session presenting into a host screen's pane, host pictures

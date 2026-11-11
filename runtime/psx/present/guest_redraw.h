@@ -16,6 +16,7 @@
 
 #include <array>
 #include <cstdint>
+#include <functional>
 #include <span>
 
 namespace psx::present {
@@ -46,15 +47,23 @@ public:
   [[nodiscard]] bool run(std::uint32_t entry, std::span<const std::uint32_t> arguments);
   // The same as a guest call to `entry`: its override, if any, runs. A draw section's steps are called this way.
   [[nodiscard]] bool dispatch(std::uint32_t entry, std::span<const std::uint32_t> arguments);
+  // A stretch of a dispatchTo body the run does not execute: the run stops on reaching `at`, `host` (when set) does
+  // the stretch's work, and the run resumes at `resume`. With `resume` 0, `at` is a callee's entry whose device work
+  // the real frame already did (a draw's leading PutDrawEnv): the run resumes at the return address the call left,
+  // so the callee does not run and its delay slot did.
+  struct Skip {
+    std::uint32_t at = 0;
+    std::uint32_t resume = 0;
+    std::function<void()> host;
+  };
+
   // The routine at `entry` (no override of its own) from its start until execution reaches `end`, a block start of
-  // its body where its device tail begins; the run then continues from the section's sp and ra. `appliedCalls` are
-  // callees whose device work the real frame already did (a draw's leading PutDrawEnv), in the order the body calls
-  // them: the run stops as it enters each, once, and resumes at the return address the call left, so the callee
-  // does not run and its delay slot did.
+  // its body where its device tail begins; the run then continues from the section's sp and ra. Each of `skips`,
+  // in the order the body reaches them, is stepped over once.
   [[nodiscard]] bool dispatchTo(std::uint32_t entry,
                                 std::uint32_t end,
                                 std::span<const std::uint32_t> arguments,
-                                std::span<const std::uint32_t> appliedCalls = {});
+                                std::span<const Skip> skips = {});
 
 private:
   enum class Call : std::uint8_t { Original, Dispatched, ToEnd };
