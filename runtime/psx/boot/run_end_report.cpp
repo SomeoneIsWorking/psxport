@@ -21,7 +21,7 @@ void RunEndReport::emit(std::uint64_t productSteps) const {
       "runtime", "run complete: product_steps={} presentation_fences={}", productSteps, game_.presentation.fence());
   psx::cpu::logLedger(core.lightrecExecutor().counters(), "run-end", lucent::Level::Info);
   core.guestCallCensus().log("product loop ended");
-  game_.perf.reportPresents();
+  game_.perf.report();
   game_.presentation.reportStability();
   if (const psx::present::ReplayFrame *replay = core.runtime.replayFrame(core)) {
     replay->report();

@@ -25,6 +25,7 @@ void ReplayFrame::beforeDraw(Core &core) {
     forget();
     return;
   }
+  const GpuPerf::PhaseScope phase(core.game->perf, GpuPerf::Phase::Replay);
   ran_ = true;
   motion_.sample(core);
   pendingReady_ = false;

@@ -40,6 +40,15 @@ struct ParamsUniform {
   std::int32_t unused = 0;
 };
 
+std::uint64_t coveredPixels(std::span<const gpu::RecordQuad> quads) {
+  std::uint64_t pixels = 0;
+  for (const gpu::RecordQuad &quad : quads) {
+    pixels += static_cast<std::uint64_t>(std::max(0, quad.x1 - quad.x0)) *
+              static_cast<std::uint64_t>(std::max(0, quad.y1 - quad.y0));
+  }
+  return pixels;
+}
+
 // record.frag writes log2(z) / 16; 24 bits resolve z far below a bin.
 SDL_GPUTextureFormat depthFormat(SDL_GPUDevice *device) {
   return SDL_GPUTextureSupportsFormat(device,
@@ -280,6 +289,7 @@ void RecordRasterizer::seedCanvas(SDL_GPUCommandBuffer *cmd, Canvas &canvas) {
     clear.load_op = SDL_GPU_LOADOP_CLEAR;
     clear.store_op = SDL_GPU_STOREOP_STORE;
     SDL_EndGPURenderPass(SDL_BeginGPURenderPass(cmd, &clear, 1, nullptr));
+    ++work_.renderPasses;
     copyTexture(cmd, from, canvas.shape.buffer, to, canvas.shape.margin, 0);
   }
   copyTexture(cmd, canvas.plane.image, {0, 0, canvas.plane.width, canvas.plane.height}, canvas.plane.snapshot, 0, 0);
@@ -329,6 +339,8 @@ void RecordRasterizer::selectField(SDL_GPUCommandBuffer *cmd, const present::Fra
     to.y = static_cast<Uint32>(row * scale_);
     SDL_CopyGPUTextureToTexture(
         copy, &from, &to, static_cast<Uint32>(width * scale_), static_cast<Uint32>(scale_), 1, false);
+    ++work_.textureCopies;
+    work_.copyPixels += static_cast<std::uint64_t>(width) * static_cast<std::uint64_t>(scale_ * scale_);
   }
   SDL_EndGPUCopyPass(copy);
   presented_ = {field_, {0, 0, width, height}};
@@ -422,6 +434,7 @@ bool RecordRasterizer::show(SDL_GPUCommandBuffer *cmd,
                             int scale,
                             const RecordView &view,
                             const present::DepthTest *depthTest) {
+  work_ = {};
   depthTest_ = depthTest;
   if (composed != nullptr && drawInBetween(cmd, *composed, scale, view)) {
     if (advanceToRecord) {
@@ -456,6 +469,9 @@ void RecordRasterizer::copyTexture(
                               1,
                               false);
   SDL_EndGPUCopyPass(copy);
+  ++work_.textureCopies;
+  work_.copyPixels += static_cast<std::uint64_t>(source.x1 - source.x0) *
+                      static_cast<std::uint64_t>(source.y1 - source.y0) * static_cast<std::uint64_t>(s * s);
 }
 
 void RecordRasterizer::ensureBuffer(Buffer &buffer, std::uint32_t bytes) {
@@ -557,6 +573,7 @@ void RecordRasterizer::execute(SDL_GPUCommandBuffer *cmd, const gpu::RecordRaste
     offset += bytes;
   }
   SDL_EndGPUCopyPass(copy);
+  work_.uploadBytes += quadBytes + opBytes + clutBytes + pixelBytes;
 
   const int s = plan.scale;
   const int planes = 1 + static_cast<int>(canvases_.size());
@@ -606,6 +623,8 @@ void RecordRasterizer::execute(SDL_GPUCommandBuffer *cmd, const gpu::RecordRaste
       }
       SDL_GPURenderPass *pass = SDL_BeginGPURenderPass(cmd, &colour, 1, depth ? &depthInfo : nullptr);
       SDL_BindGPUGraphicsPipeline(pass, depth ? slotPipeline_ : pipeline_);
+      ++work_.renderPasses;
+      ++work_.pipelineBinds;
       SDL_BindGPUVertexStorageBuffers(pass, 0, &quads_.buffer, 1);
       SDL_GPUSampler *nearest = device_.nearestSampler();
       // With no capture the binding is never sampled: only a held read-back plans read-back ops.
@@ -643,14 +662,24 @@ void RecordRasterizer::drawQuads(SDL_GPURenderPass *pass,
                                  std::span<const gpu::RecordQuad> quads,
                                  std::uint32_t firstVertexQuad,
                                  bool depthTarget) {
+  // Each draw is two triangles a quad, its fragments the quads' covered pixels.
+  const auto tally = [&](std::span<const gpu::RecordQuad> drawn) {
+    ++work_.draws;
+    ++work_.pipelineBinds;
+    work_.triangles += drawn.size() * 2;
+    work_.pixels += countPixels_ ? coveredPixels(drawn) : 0;
+  };
   if (!depthTarget) {
     SDL_BindGPUGraphicsPipeline(pass, pipeline_);
     SDL_DrawGPUPrimitives(pass, static_cast<Uint32>(quads.size()) * 6, 1, firstVertexQuad * 6, 0);
+    tally(quads);
     return;
   }
+  std::span<const gpu::RecordQuad> runQuads;
   const auto draw = [&](SDL_GPUGraphicsPipeline *pipeline, Uint32 first, Uint32 count) {
     SDL_BindGPUGraphicsPipeline(pass, pipeline);
     SDL_DrawGPUPrimitives(pass, count, 1, first, 0);
+    tally(runQuads);
   };
   std::size_t run = 0;
   while (run < quads.size()) {
@@ -660,6 +689,7 @@ void RecordRasterizer::drawQuads(SDL_GPURenderPass *pass,
       end++;
     }
     const auto count = static_cast<Uint32>(end - run) * 6;
+    runQuads = quads.subspan(run, end - run);
     const Uint32 first = (firstVertexQuad + static_cast<std::uint32_t>(run)) * 6;
     if ((key.flags & gpu::kOpDepthModel) != 0u) {
       // Its parts' colour where they pass or cover their own model, then the depth they leave.

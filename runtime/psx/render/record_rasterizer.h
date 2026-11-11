@@ -2,6 +2,7 @@
 #pragma once
 
 #include "frame_record.h"
+#include "gpu_work.h"
 #include "record_raster_setup.h"
 #include "render_device.h"
 
@@ -66,6 +67,15 @@ public:
             int scale,
             const RecordView &view,
             const present::DepthTest *depthTest);
+
+  // Whether the next show() counts its covered pixels; every other GpuWork count is always kept.
+  void countPixels(bool counting) {
+    countPixels_ = counting;
+  }
+  // The GPU work the last show() recorded.
+  [[nodiscard]] const GpuWork &work() const {
+    return work_;
+  }
 
   // `picture` at the image scale as row-major halfwords, after everything submitted before it.
   MappedTransfer download(const RecordPicture &picture);
@@ -204,6 +214,8 @@ private:
   std::uint64_t beforeOf_ = 0; // the last applied record with entries; those after it changed nothing
   std::uint64_t replayed_ = 0;
   std::uint64_t resynced_ = 0;
+  GpuWork work_;
+  bool countPixels_ = false;
 };
 
 } // namespace psx::render

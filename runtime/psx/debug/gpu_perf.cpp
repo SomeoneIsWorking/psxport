@@ -1,34 +1,72 @@
-// gpu_perf.cpp — per-frame CPU phase and frame-time averages on the `perf` channel, one line per 60 frames.
-// The phases are the ones gpu_perf.h defines and the title's FrameDriver brackets; nothing here times the GPU.
+// gpu_perf.cpp — the cost lines on `perf` (run end) and `perfframe` (per frame and present), the planned cadence and
+// the wall-clock present series on `playcheck`.
 
 #include "gpu_perf.h"
-#include <cstdio>
+
+#include "display_presenter.h"
+
+#include <cmath>
+#include <cstdlib>
 #include <format>
-#include <lucent/log.h>
 #include <string>
 
 namespace {
+
+using psx::render::GpuWork;
 
 inline double ms_between(std::chrono::steady_clock::time_point a, std::chrono::steady_clock::time_point b) {
   return std::chrono::duration<double, std::milli>(b - a).count();
 }
 
+constexpr double kVblankMs = 1000.0 / 60.0; // the simulated display, 60.00 Hz
+
+constexpr std::array<const char *, 7> kSpanNames{
+    "pre", "padfence", "audio", "game-logic", "present", "replay", "other"};
+
+struct GpuCount {
+  const char *name;
+  std::uint64_t GpuWork::*field;
+  double scale;
+  const char *unit;
+};
+constexpr std::array<GpuCount, 8> kGpuCountNames{{
+    {"draws", &GpuWork::draws, 1.0, "draws"},
+    {"pipeline binds", &GpuWork::pipelineBinds, 1.0, "binds"},
+    {"render passes", &GpuWork::renderPasses, 1.0, "passes"},
+    {"texture copies", &GpuWork::textureCopies, 1.0, "copies"},
+    {"triangles", &GpuWork::triangles, 1e-3, "ktri"},
+    {"pixels", &GpuWork::pixels, 1e-6, "Mpx"},
+    {"copy pixels", &GpuWork::copyPixels, 1e-6, "Mpx"},
+    {"upload", &GpuWork::uploadBytes, 1.0 / 1024.0, "KiB"},
+}};
+
+// Per-frame work is printed in millions of the clock's unit.
+const char *workUnit(psx::platform::WorkUnit unit) {
+  return unit == psx::platform::WorkUnit::Instructions ? "Minsn" : "cpu-ms";
+}
+
+const char *workSource(psx::platform::WorkUnit unit) {
+  return unit == psx::platform::WorkUnit::Instructions
+             ? "user-space instructions retired (perf_event, per product thread)"
+             : "thread CPU time (no instruction counter on this host), NOT instructions";
+}
+
 } // namespace
 
-// One arm per Phase, each returning the identically named slot. `Phase` is exhaustive, so a new
-// phase without a slot is a compile error rather than a silently dropped measurement.
-double *GpuPerf::phaseSlot(Phase phase) {
+GpuPerf::Span GpuPerf::spanOf(Phase phase) {
   switch (phase) {
   case Phase::PadFence:
-    return &mAcc.padFence;
+    return Span::PadFence;
   case Phase::Audio:
-    return &mAcc.audio;
+    return Span::Audio;
   case Phase::Present:
-    return &mAcc.present;
+    return Span::Present;
   case Phase::GameLogic:
-    return &mAcc.gameLogic;
+    return Span::GameLogic;
+  case Phase::Replay:
+    return Span::Replay;
   }
-  return nullptr;
+  return Span::Other;
 }
 
 int GpuPerf::perfOn() {
@@ -39,98 +77,157 @@ int GpuPerf::perfOn() {
   return mPerf;
 }
 
-// Top of the title-owned frame step: start the frame clock.
-void GpuPerf::frameBegin() {
-  if (!perfOn()) {
-    return;
-  }
-  mTFrame = mTMark = clk::now();
+void GpuPerf::charge() {
+  const std::uint64_t now = mClock.now();
+  const Span span = mDepth != 0 ? mOpen[mDepth - 1] : mOutside;
+  mFrame[static_cast<std::size_t>(span)] += now - mLast;
+  mLast = now;
 }
 
-// Mark the boundary between the pre-tick host work and the next phase (charges elapsed since the last
-// mark to `pre`). Called just before the guest tick begins.
+void GpuPerf::frameBegin() {
+  if (!perfOn()) {
+    mClock.stop();
+    return;
+  }
+  if (mDepth != 0) {
+    lucent::error("perf", "a logic frame began inside the {} phase", kSpanNames[static_cast<std::size_t>(mOpen[0])]);
+    std::abort();
+  }
+  mClock.start();
+  mFrameStart = mLast = mClock.now();
+  mFrame = {};
+  mOutside = Span::Pre;
+}
+
 void GpuPerf::markPre() {
   if (mPerf <= 0) {
     return;
   }
-  clk::time_point n = clk::now();
-  mAcc.pre += ms_between(mTMark, n);
-  mTMark = n;
+  charge();
+  mOutside = Span::Other;
 }
 
-// Open a timed phase.
 void GpuPerf::phaseBegin(Phase phase) {
   if (mPerf <= 0) {
     return;
   }
-  (void)phase;
-  mTPhase = clk::now();
+  if (mDepth == kMaxDepth) {
+    lucent::error("perf", "phases nest deeper than {}", kMaxDepth);
+    std::abort();
+  }
+  charge();
+  mOpen[mDepth++] = spanOf(phase);
 }
 
-// Close the open phase, charging its elapsed time to the phase slot and advancing the post-mark.
 void GpuPerf::phaseEnd(Phase phase) {
   if (mPerf <= 0) {
     return;
   }
-  clk::time_point n = clk::now();
-  double *s = phaseSlot(phase);
-  if (s) {
-    *s += ms_between(mTPhase, n);
+  if (mDepth == 0 || mOpen[mDepth - 1] != spanOf(phase)) {
+    lucent::error("perf",
+                  "the {} phase ended while it was not the innermost open phase",
+                  kSpanNames[static_cast<std::size_t>(spanOf(phase))]);
+    std::abort();
   }
-  mTMark = n; // anything after the last closed phase counts toward `post`
+  charge();
+  --mDepth;
 }
 
-// Bottom of the title-owned frame step: close the frame, accumulate the post-tick remainder + the full frame
-// wall time, and emit the rolling average every 60 frames.
 void GpuPerf::frameEnd() {
   if (mPerf <= 0) {
     return;
   }
-  clk::time_point n = clk::now();
-  mAcc.post += ms_between(mTMark, n);
-  const double thisFrame = ms_between(mTFrame, n);
-  mAcc.frame += thisFrame;
-  if (++mAcc.frames < 60) {
+  charge();
+  if (mDepth != 0) {
+    lucent::error("perf", "a logic frame ended inside the {} phase", kSpanNames[static_cast<std::size_t>(mOpen[0])]);
+    std::abort();
+  }
+  for (std::size_t span = 0; span < kSpans; ++span) {
+    mSpanWork[span].add(mFrame[span]);
+  }
+  const std::uint64_t total = mLast - mFrameStart;
+  mFrameWork.add(total);
+  ++mMeteredFrames;
+  lucent::debug(mFrameChannel,
+                "frame {} {}: pre={} padfence={} audio={} game-logic={} present={} replay={} other={} total={}",
+                mMeteredFrames,
+                mClock.unit() == psx::platform::WorkUnit::Instructions ? "insn" : "cpu-ns",
+                mFrame[0],
+                mFrame[1],
+                mFrame[2],
+                mFrame[3],
+                mFrame[4],
+                mFrame[5],
+                mFrame[6],
+                total);
+}
+
+void GpuPerf::presentWork(const psx::render::GpuWork &work) {
+  if (mPerf <= 0) {
     return;
   }
+  for (std::size_t count = 0; count < kGpuCounts; ++count) {
+    mGpuWork[count].add(work.*kGpuCountNames[count].field);
+  }
+  lucent::debug(mFrameChannel,
+                "present gpu: draws={} binds={} passes={} copies={} triangles={} pixels={} copy-pixels={} "
+                "upload-bytes={}",
+                work.draws,
+                work.pipelineBinds,
+                work.renderPasses,
+                work.textureCopies,
+                work.triangles,
+                work.pixels,
+                work.copyPixels,
+                work.uploadBytes);
+}
 
-  double nf = (double)mAcc.frames;
-  double frame = mAcc.frame / nf;
-  double pre = mAcc.pre / nf, padFence = mAcc.padFence / nf, audio = mAcc.audio / nf;
-  double present = mAcc.present / nf, gameLogic = mAcc.gameLogic / nf, post = mAcc.post / nf;
-  double cpu_sum = pre + padFence + audio + present + gameLogic + post;
-  double idle = frame - cpu_sum; // pacing / vsync sleep / anything outside the measured spans
-  lucent::info("perf",
-               "{:.0f}f avg {:.2f}ms ({:.1f} fps) | frame {:.2f} = pre {:.2f} padfence {:.2f} audio {:.2f} "
-               "present-cpu {:.2f} game-logic {:.2f} post {:.2f} + idle/pace {:.2f} | CPU-sum {:.2f}ms",
-               nf,
-               frame,
-               frame > 0 ? 1000.0 / frame : 0.0,
-               frame,
-               pre,
-               padFence,
-               audio,
-               present,
-               gameLogic,
-               post,
-               idle,
-               cpu_sum);
-  // The average above cannot answer a budget: one late present in a thousand is a visible stutter
-  // and does not move a mean. Cumulative over the whole run; `beyond-range` is not folded into the
-  // last bucket.
-  lucent::info("perf",
-               "{} present distribution p50 {:.2f} p95 {:.2f} p99 {:.2f} worst {:.2f}ms beyond-range {} "
-               "missed {} longest-miss-run {}",
-               mFrames.count(),
-               mFrames.percentileMs(0.50),
-               mFrames.percentileMs(0.95),
-               mFrames.percentileMs(0.99),
-               mFrames.worstMs(),
-               mFrames.beyondRange(),
-               mPresents.missed,
-               mPresents.longestMissRun);
+void GpuPerf::planned(const psx::present::PresentNote &note, double fieldMs) {
+  ++mPlannedPresents;
+  std::optional<double> moment;
+  if (note.shown) {
+    const auto shown = static_cast<double>(*note.shown);
+    moment = note.from ? static_cast<double>(*note.from) + note.t * (shown - static_cast<double>(*note.from)) : shown;
+  }
+  const double heldMs = mPlanHeldFields * fieldMs;
+  mPlanHeldFields = 0.0;
+  if (!mPlanDueMs) {
+    mPlanDueMs = 0.0;
+    mVblankIndex = 0;
+    mNextVblankMs = 0.0;
+    mPlanMoment = moment;
+    return;
+  }
+  const double due = *mPlanDueMs + heldMs;
+  while (mNextVblankMs < due) {
+    showOnVblank(mPlanMoment);
+    mNextVblankMs = static_cast<double>(++mVblankIndex) * kVblankMs;
+  }
+  mPlanDueMs = due;
+  mPlanMoment = moment;
+}
 
-  mAcc = Acc{};
+void GpuPerf::showOnVblank(std::optional<double> moment) {
+  ++mVblanks;
+  if (mHaveShown && moment && mShownMoment) {
+    ++mSteps[static_cast<int>(std::lround((*moment - *mShownMoment) * 100.0))];
+  } else if (mHaveShown) {
+    ++mUnknownSteps;
+  }
+  mHaveShown = true;
+  mShownMoment = moment;
+  if (mVblanks % kPresentSummaryEvery == 0) {
+    lucent::debug("playcheck", "cadence so far: {}", cadenceSummary());
+  }
+}
+
+void GpuPerf::restartPresentSeries() {
+  mHavePresent = false;
+  mHeldFields = 0.0;
+  mPlanDueMs.reset();
+  mPlanHeldFields = 0.0;
+  mHaveShown = false;
+  mVblankIndex = 0;
 }
 
 void GpuPerf::presented(clk_time_point at, double vsyncPeriodMs) {
@@ -160,8 +257,61 @@ void GpuPerf::presented(clk_time_point at, double vsyncPeriodMs) {
   }
 }
 
-void GpuPerf::reportPresents() const {
+void GpuPerf::report() const {
   lucent::info("playcheck", "presents: {}", presentSummary());
+  lucent::info("playcheck", "cadence: {}", cadenceSummary());
+  reportCost();
+}
+
+void GpuPerf::reportCost() const {
+  const psx::platform::WorkUnit unit = mClock.unit();
+  const char *unitName = workUnit(unit);
+  lucent::debug("perf",
+                "cpu run-end: {} logic frames metered in {}; {} product thread(s) uncounted",
+                mMeteredFrames,
+                workSource(unit),
+                mClock.uncountedThreads());
+  const auto line = [&](const char *name, const psx::debug::CountHistogram &work) {
+    lucent::debug("perf",
+                  "cpu {}: p50 {:.3f} p99 {:.3f} max {:.3f} {}/frame, total {:.1f} {}",
+                  name,
+                  static_cast<double>(work.percentile(0.50)) * 1e-6,
+                  static_cast<double>(work.percentile(0.99)) * 1e-6,
+                  static_cast<double>(work.max()) * 1e-6,
+                  unitName,
+                  static_cast<double>(work.total()) * 1e-6,
+                  unitName);
+  };
+  for (std::size_t span = 0; span < kSpans; ++span) {
+    line(kSpanNames[span], mSpanWork[span]);
+  }
+  line("frame", mFrameWork);
+  lucent::debug("perf", "gpu run-end: {} record presents metered", mGpuWork[0].count());
+  for (std::size_t count = 0; count < kGpuCounts; ++count) {
+    const GpuCount &named = kGpuCountNames[count];
+    const psx::debug::CountHistogram &work = mGpuWork[count];
+    lucent::debug("perf",
+                  "gpu {}: p50 {:.3f} p99 {:.3f} max {:.3f} {}/present, total {:.1f} {}",
+                  named.name,
+                  static_cast<double>(work.percentile(0.50)) * named.scale,
+                  static_cast<double>(work.percentile(0.99)) * named.scale,
+                  static_cast<double>(work.max()) * named.scale,
+                  named.unit,
+                  static_cast<double>(work.total()) * named.scale,
+                  named.unit);
+  }
+}
+
+std::string GpuPerf::cadenceSummary() const {
+  std::string steps;
+  for (const auto &[hundredths, vblanks] : mSteps) {
+    steps += std::format(" {:.2f}x{}", static_cast<double>(hundredths) / 100.0, vblanks);
+  }
+  return std::format("vblanks={} planned_presents={} unknown={} logic ticks advanced per 60.00 Hz vblank:{}",
+                     mVblanks,
+                     mPlannedPresents,
+                     mUnknownSteps,
+                     steps);
 }
 
 std::string GpuPerf::presentSummary() const {

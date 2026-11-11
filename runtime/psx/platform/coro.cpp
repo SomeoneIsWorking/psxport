@@ -9,10 +9,12 @@ void Coro::thread_main() {
       return turn_ == Turn::Fiber;
     }); // block until the first resume()
   }
+  clock_.enter(&work_);
   // exit_now()/cancel longjmp here to unwind the fiber's guest call chain; setjmp returns non-zero then.
   if (setjmp(exit_jmp_) == 0) {
     body_(); // runs, ping-ponging via yield()
   }
+  clock_.leave();
   {
     std::lock_guard<std::mutex> lk(m_);
     finished_ = true;
@@ -31,18 +33,23 @@ void Coro::resume() {
   if (!started_ || finished_) {
     return;
   }
+  psx::platform::WorkClock::Thread *const scheduler = clock_.leave();
   {
     std::lock_guard<std::mutex> lk(m_);
     turn_ = Turn::Fiber;
   }
   cv_.notify_all();
-  std::unique_lock<std::mutex> lk(m_);
-  cv_.wait(lk, [this] {
-    return turn_ == Turn::Scheduler;
-  }); // until the fiber yields or finishes
+  {
+    std::unique_lock<std::mutex> lk(m_);
+    cv_.wait(lk, [this] {
+      return turn_ == Turn::Scheduler;
+    }); // until the fiber yields or finishes
+  }
+  clock_.enter(scheduler);
 }
 
 void Coro::yield() {
+  clock_.leave();
   {
     std::lock_guard<std::mutex> lk(m_);
     turn_ = Turn::Scheduler;
@@ -54,6 +61,7 @@ void Coro::yield() {
       return turn_ == Turn::Fiber;
     }); // until the next resume()/cancel()
   }
+  clock_.enter(&work_);
   if (canceling_) {
     longjmp(exit_jmp_, 1); // cancel()'d while blocked -> unwind to the body root
   }

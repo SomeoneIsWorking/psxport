@@ -57,6 +57,7 @@ void RenderState::presentRecord(present::PresentInputs &inputs) {
   recordFade_[1] = inputs.fade_r;
   recordFade_[2] = inputs.fade_g;
   recordFade_[3] = inputs.fade_b;
+  record_->countPixels(game_.perf.counting());
   const bool drewComposed = record_->show(cmd,
                                           record,
                                           composed,
@@ -66,6 +67,7 @@ void RenderState::presentRecord(present::PresentInputs &inputs) {
                                           scale,
                                           view,
                                           depth ? &core.depthTest : nullptr);
+  game_.perf.presentWork(record_->work());
   // The display, or its wide canvas, at the 4:3 display's aspect per column.
   const gpu::RecordRect shown = record_->presented().rect;
   inputs.sx = shown.x0;

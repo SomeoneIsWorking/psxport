@@ -4,6 +4,7 @@
 
 #include "diagnostic_config.h"
 #include "display_presenter.h"
+#include "field_rate.h"
 #include "fs_util.h"
 #include "game.h"
 #include "gpu_device.h"
@@ -99,6 +100,8 @@ void DisplayPresenter::show() {
 
 void DisplayPresenter::showAt(std::optional<double> dueMs, const PresentNote &note) {
   finishShow();
+  core_.game->perf.planned(
+      note, frame::fieldIntervalMs(frame::fieldRateMilliHz(core_.game->timing.displayFieldRate()), 1, 1));
   scheduled_ = ScheduledShow{dueMs.value_or(psx::platform::hostNowMs()), note};
   showIfDue();
 }

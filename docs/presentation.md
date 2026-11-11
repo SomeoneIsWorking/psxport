@@ -710,6 +710,52 @@ present for (`GpuPerf::heldFor`, quota / parts); a movie frame reports the whole
 was shown for (`MovieFieldGrid::show`, below). Reports before one present add up, and a present nothing paced is held for
 one field. An interval is a miss when it is over held fields + 0.5 display refresh periods, so a
 2-field frame at 33 ms is on time and at 50 ms is late. `longest_miss_run` counts consecutive misses.
+The wall-clock `presents:` line is the one real-time check; it needs a quiet host.
+
+### Cost and cadence
+
+`GpuPerf` (`debug/gpu_perf.*`, a stale name: it meters CPU, GPU and pacing) reports what a frame and a present cost
+in units no host load moves, so two builds are compared on any host, paced or unpaced. Counting runs while the `perf`
+channel is on (`PSXPORT_DEBUG=perf`, REPL `debug perf`); off, each hook is a cached branch.
+
+- **CPU, per logic frame.** `platform/work_clock.*` counts user-space instructions retired by the product's threads:
+  the emulation thread and the `Coro` fibers it resumes (Tomba's guest tasks), which never run at once. Each thread
+  reads only its own counter (`platform/thread_work_counter.*`: `perf_event_open(PERF_COUNT_HW_INSTRUCTIONS)`,
+  user space only, one event per PMU on a hybrid CPU); a `Coro` handoff banks the leaving thread's work. Where no
+  counter opens (`perf_event_paranoid` above 2, a VM without a PMU, macOS, Windows) the unit is thread CPU time, and
+  every line says so (`cpu-ms`, "NOT instructions"). One read per boundary. The frame driver's `frameBegin`,
+  `markPre`, `phaseBegin`/`phaseEnd` and `frameEnd` split the frame into `pre`, `padfence`, `audio`, `game-logic`,
+  `present`, `replay` (`ReplayFrame::beforeDraw`, the in-between runs of the draw section) and `other` (the rest
+  after `markPre`); phases nest and an inner phase's work is not its parent's.
+- **GPU, per record present.** `RecordRasterizer` counts what each `show` records (`render/gpu_work.h`): draws,
+  pipeline binds, render passes, texture copies, triangles, pixels its draws cover at the internal resolution (the
+  raster plan's quads, once per draw), copy pixels and bytes uploaded. These follow from the record, ires and the
+  canvas. The sink pass into the present image (fixed by the sink) is not counted. GPU time is not measured: SDL_GPU
+  has no timestamp queries.
+- **Cadence, from the plan.** Every scheduled present (`DisplayPresenter::showAt`) is due the fields its pacer held
+  it for (`GpuPerf::heldFor`) after the one before, a field lasting the guest's field period. The guest moment it
+  shows is `from + t (shown - from)` in records (logic ticks). A simulated 60.00 Hz display shows at each vblank the
+  newest present due by it; `cadence:` counts the logic ticks each vblank advances. A 30 Hz title at fps60 reads
+  almost all `0.50`, with a `0.00` about every 5.5 s from the 59.817 Hz field on 60.00 Hz; `unknown` counts vblanks
+  across a present that names no record: a movie, a load, and every present with fps60 off on a title without
+  state producers (`FramePresenter::commitSealed` names the shown record only when it composes). The pacer's real
+  deadlines do not enter it, so it reads the same unpaced and on a loaded host.
+
+Lines. At run end, always: `[playcheck] cadence: vblanks=… planned_presents=… unknown=… logic ticks advanced per
+60.00 Hz vblank: 0.50x… 0.00x…`. With `perf` on: `[perf] cpu run-end: <frames> logic frames metered in <unit>`, one
+`[perf] cpu <phase>: p50 p99 max Minsn/frame, total Minsn` line per phase and one for the whole `frame`, then
+`[perf] gpu run-end: <n> record presents metered` and one `[perf] gpu <count>: p50 p99 max <unit>/present, total`
+line per count. Percentiles are at most 1.6% high (`debug/count_histogram.*`); max and total are exact. With
+`perfframe` on, one `frame N insn: pre=… total=…` line per logic frame and one `present gpu: …` line per present,
+raw counts, for diffing two runs frame by frame.
+
+Comparing two builds: run the same deterministic recipe (a warp and held buttons, `PSXPORT_NOPACE=1`, the judgement
+ires and sink) on each with `perf` on and compare the totals. On one build the GPU counts repeat exactly and the CPU
+phase totals within about 0.1%, whatever the host load; a difference above that is the change. The meter's own cost
+(the boundary reads and the covered-pixel sums) is about 0.2% of the process's user-space instructions at 8x, from
+`perf stat -e instructions:u` with the channel on and off. The rule "nothing on the CPU scales with ires" is checked
+by running the recipe at two ires: the GPU `pixels` and `copy pixels` scale with ires squared, the CPU phases must
+not.
 
 ## Movies
 

@@ -73,6 +73,8 @@ set(PSXPORT_FRAMEWORK_SRC
   ${PSXPORT_ROOT}/runtime/psx/present/guest_widescreen_projection.cpp
   ${PSXPORT_ROOT}/runtime/psx/platform/fs_util.cpp          # generic std::filesystem host-I/O wrapper (class Fs), no game types
   ${PSXPORT_ROOT}/runtime/psx/platform/coro.cpp
+  ${PSXPORT_ROOT}/runtime/psx/platform/thread_work_counter.cpp # per-thread instructions or CPU time
+  ${PSXPORT_ROOT}/runtime/psx/platform/work_clock.cpp # product work across the threads that hand off
   ${PSXPORT_ROOT}/runtime/psx/debug/memcensus.cpp      # --wrap=memcpy call-site attribution (PSXPORT_MEMCENSUS)
   ${PSXPORT_ROOT}/runtime/psx/platform/io_peripherals.cpp
   ${PSXPORT_ROOT}/runtime/psx/input/sio_pad.cpp
@@ -188,6 +190,7 @@ set(PSXPORT_FRAMEWORK_SRC
   ${PSXPORT_ROOT}/runtime/psx/render/render_panes.cpp # a present image built from panes (the title selector)
   ${PSXPORT_ROOT}/runtime/psx/present/picture_announce.cpp
   ${PSXPORT_ROOT}/runtime/psx/debug/gpu_perf.cpp
+  ${PSXPORT_ROOT}/runtime/psx/debug/count_histogram.cpp
   ${PSXPORT_ROOT}/runtime/psx/frame/frame_time_histogram.cpp  # the frame-time distribution gpu_perf reports percentiles from
   ${PSXPORT_ROOT}/runtime/psx/game/mods.cpp
   ${PSXPORT_ROOT}/runtime/psx/config/config.cpp
