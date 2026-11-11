@@ -57,14 +57,14 @@ each player's pad on their own machine, pads exchanged per guest frame, every pe
     virtual void save(int slot) = 0;                              // keep this frame's state in ring slot `slot`
     virtual void load(int slot) = 0;                              // restore ring slot `slot`
     virtual void setInputs(std::span<const std::uint8_t> all) = 0; // slots x input bytes, slot-major
-    virtual void advance() = 0;                                   // one logic frame; no audio/present while resimulating
+    virtual void advance(bool resimulating) = 0;                  // one logic frame; no audio/present while resimulating
     [[nodiscard]] virtual std::uint64_t hash() const = 0;         // state hash for desync detection
   };
   }
   ```
 
   The runtime owns its state storage (psxport whole-machine states, LF2 dirty-page snapshots); the engine only names
-  ring slots in `[0, maxRollback]`. `advance` is told whether it is resimulating.
+  ring slots in `[0, maxRollback]`. LF2 confirmed the interface (8 slots x 1 byte, `advance` = one guest frame).
 - **Lockstep fallback.** A title whose frame cannot be re-stepped cheaply or deterministically enough waits for
   every peer's pad before each frame, with a fixed input delay.
 - **Session.** The host sends the image identity, settings that reach the guest and a start state; a peer with a
