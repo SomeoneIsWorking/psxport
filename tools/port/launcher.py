@@ -29,6 +29,9 @@ from project import lightning_cmake_definitions, lightrec_cmake_definitions  # n
 FRAMEWORK = TOOLS.parent
 PLAYER_BUILD = Path("build/player")
 AGENT_BUILD = Path("build/agent")
+CI_BUILD = Path("build/ci")
+# The trees a maintainer build may name; one tree per purpose, never one per task.
+MAINTAINER_BUILDS = (AGENT_BUILD, CI_BUILD)
 FRAMEWORK_TOOLS_BUILD = Path("build/player-tools")
 # Set by the desktop shortcut: launch the newest product already built instead of building.
 RUN_BUILT = "PSXPORT_RUN_BUILT"
@@ -224,6 +227,16 @@ def configure(source: Path, build: Path, build_type: str, definitions: Sequence[
     mismatch = _compiler_mismatch(build, options)
     if mismatch:
         raise ToolError(f"CMake configured a different compiler than requested: {mismatch}")
+
+
+def maintainer_build(root: Path, requested: Path) -> Path:
+    """``root/requested`` when it names a maintainer purpose tree; refuses a per-task tree."""
+    build = (requested if requested.is_absolute() else root / requested).absolute()
+    allowed = [root / tree for tree in MAINTAINER_BUILDS]
+    if build not in allowed:
+        raise ToolError(f"{build} is not a purpose build tree; use one of: "
+                        + ", ".join(str(tree) for tree in MAINTAINER_BUILDS))
+    return build
 
 
 def build_targets(build: Path, targets: Sequence[str], environment: Mapping[str, str]) -> None:

@@ -9,7 +9,7 @@ import sys
 from pathlib import Path
 
 from automation.process import ToolError
-from port.launcher import build_targets, configure
+from port.launcher import build_targets, configure, maintainer_build
 from project import DEFAULT_BUILD, ROOT, lightning_cmake_definitions, lightrec_cmake_definitions
 
 
@@ -19,10 +19,11 @@ def main() -> int:
     args = parser.parse_args()
     environment = os.environ
     try:
-        configure(ROOT, args.build.resolve(), "RelWithDebInfo",
+        build = maintainer_build(ROOT, args.build)
+        configure(ROOT, build, "RelWithDebInfo",
                   ["-DCMAKE_EXPORT_COMPILE_COMMANDS=ON", *lightrec_cmake_definitions(environment),
                    *lightning_cmake_definitions(environment)], environment)
-        build_targets(args.build.resolve(), [], environment)
+        build_targets(build, [], environment)
     except ToolError as error:
         print(f"[build] FAILED: {error}", file=sys.stderr)
         return 1

@@ -6,7 +6,7 @@ engine refuses rather than passes when it reads nothing.
 
 | engine | reads (per title) |
 |---|---|
-| `consumer_build.py` | a title root: one Ninja configure and build with the caller's Clang (`--build build/agent`, `--target`, `-DNAME=VALUE`) |
+| `consumer_build.py` | a title root: one Ninja configure and build with the caller's Clang in a purpose tree (`--build build/agent` or `build/ci`, never a per-task tree; `--target`, `-DNAME=VALUE`) |
 | `launcher.py` | a title's `tools/run.py`: dependency refusals, the `build/player` configure and build, the framework discdump in `build/player-tools`, the product exec |
 | `launch_environment.py` | the process environment at a launcher's product exec (`player_environment`, `agent_environment`) |
 | `present_geometry.py` | a capture the caller names, read with Pillow |
