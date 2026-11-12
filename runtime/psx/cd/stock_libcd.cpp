@@ -296,8 +296,9 @@ void StockLibcd::read(Core &core) const {
       return;
     }
     // A guest may stream a code module through CdRead (Tomba! 1 does), so each sector is reported.
-    core.mem_write(
-        buf + i * bytes, std::span<const std::uint8_t>(raw + framing.offset, bytes), psx::cpu::ExecutableWriteSource::ModuleLoad);
+    core.mem_write(buf + i * bytes,
+                   std::span<const std::uint8_t>(raw + framing.offset, bytes),
+                   psx::cpu::ExecutableWriteSource::ModuleLoad);
   }
   cd.setloc_lba += static_cast<std::int32_t>(sectors);
   cd.sec_pos = 0;
