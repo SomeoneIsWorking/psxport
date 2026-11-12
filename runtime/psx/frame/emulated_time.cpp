@@ -1,6 +1,7 @@
 #include "emulated_time.h"
 
 #include <algorithm>
+#include <optional>
 
 namespace psx::frame {
 
@@ -31,30 +32,47 @@ void EmulatedTime::advanceInstructions(uint32_t ticks) {
   mNowQ32 += static_cast<unsigned __int128>(ticks) << kFractionBits;
 }
 
-bool EmulatedTime::advanceDisplayFields(uint32_t fields, uint32_t parts, uint32_t fieldRateMilliHz) {
-  const unsigned __int128 duration = display_field_duration_q32(fields, parts, fieldRateMilliHz);
-  if (duration == 0) {
-    return false;
-  }
-
+EmulatedTime::DisplayWait
+EmulatedTime::planDisplayWait(uint32_t fields, uint32_t parts, uint32_t fieldRateMilliHz) const {
+  DisplayWait wait{mIntervalStartQ32, mIntervalPart, 0};
   if (mIntervalPart == 0 || fields != mIntervalFields || parts != mIntervalParts) {
     // The interval ends `fields` after the last boundary, moved on by the whole fields the guest's work already ran
     // past: no catch-up debt, and boundaries stay on the field grid while the clock keeps its part-field lead.
     const unsigned __int128 whole = display_field_duration_q32(fields, 1, fieldRateMilliHz);
     const unsigned __int128 field = display_field_duration_q32(1, 1, fieldRateMilliHz);
     const unsigned __int128 end = mDisplayBoundaryQ32 + whole;
-    mIntervalStartQ32 = mDisplayBoundaryQ32 + (mNowQ32 > end ? (mNowQ32 - end) / field * field : 0);
-    mIntervalFields = fields;
-    mIntervalParts = parts;
-    mIntervalPart = 0;
+    wait.intervalStart = mDisplayBoundaryQ32 + (mNowQ32 > end ? (mNowQ32 - end) / field * field : 0);
+    wait.part = 0;
   }
-  ++mIntervalPart;
+  ++wait.part;
   // A part the guest's work already ran past is delivered at once, so the last part lands on the interval's end.
-  mDisplayBoundaryQ32 = mIntervalStartQ32 + display_field_duration_q32(fields * mIntervalPart, parts, fieldRateMilliHz);
-  mNowQ32 = std::max(mNowQ32, mDisplayBoundaryQ32);
-  if (mIntervalPart == parts) {
-    mIntervalPart = 0;
+  wait.boundary = wait.intervalStart + display_field_duration_q32(fields * wait.part, parts, fieldRateMilliHz);
+  return wait;
+}
+
+std::optional<uint64_t>
+EmulatedTime::displayWaitEndTicks(uint32_t fields, uint32_t parts, uint32_t fieldRateMilliHz) const {
+  if (display_field_duration_q32(fields, parts, fieldRateMilliHz) == 0) {
+    return std::nullopt;
   }
+  return static_cast<uint64_t>(planDisplayWait(fields, parts, fieldRateMilliHz).boundary >> kFractionBits);
+}
+
+void EmulatedTime::advanceTo(uint64_t ticks) {
+  mNowQ32 = std::max(mNowQ32, static_cast<unsigned __int128>(ticks) << kFractionBits);
+}
+
+bool EmulatedTime::advanceDisplayFields(uint32_t fields, uint32_t parts, uint32_t fieldRateMilliHz) {
+  if (display_field_duration_q32(fields, parts, fieldRateMilliHz) == 0) {
+    return false;
+  }
+  const DisplayWait wait = planDisplayWait(fields, parts, fieldRateMilliHz);
+  mIntervalStartQ32 = wait.intervalStart;
+  mIntervalFields = fields;
+  mIntervalParts = parts;
+  mIntervalPart = wait.part == parts ? 0 : wait.part;
+  mDisplayBoundaryQ32 = wait.boundary;
+  mNowQ32 = std::max(mNowQ32, mDisplayBoundaryQ32);
   return true;
 }
 

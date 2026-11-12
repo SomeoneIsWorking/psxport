@@ -397,8 +397,7 @@ struct LightrecExecutor::Impl {
       boundary.reason = BoundaryReason::GuestReturn;
     } else if (boundary.skipPendingBoundaryOnce) {
       boundary.skipPendingBoundaryOnce = false;
-    } else if (impl.core.game && impl.core.active_native_address == 0 && impl.core.pending_guest_redirect == 0 &&
-               __atomic_load_n(&impl.core.pending_work, __ATOMIC_RELAXED) != 0) {
+    } else if (impl.pendingWorkDeliverable()) {
       boundary.reason = BoundaryReason::PendingWork;
     }
     if (boundary.reason == BoundaryReason::None && boundary.dispatchHostServices &&
@@ -535,6 +534,24 @@ struct LightrecExecutor::Impl {
         stats.refused_fallback_blocks_by_reason[LIGHTREC_FALLBACK_LOAD_DELAY_HAZARD];
     counters.fallback.refusedUnsafeInstructionFetch =
         stats.refused_fallback_blocks_by_reason[LIGHTREC_FALLBACK_UNSAFE_FETCH];
+  }
+
+  [[nodiscard]] bool pendingWorkDeliverable() const {
+    return core.game && core.active_native_address == 0 && core.pending_guest_redirect == 0 &&
+           __atomic_load_n(&core.pending_work, __ATOMIC_RELAXED) != 0;
+  }
+
+  // Pending work served where the guest stopped; a result when the caller, not this executor, resumes the guest.
+  std::optional<ExecutionResult> servicePendingWorkAt(BoundaryContext &boundary, std::uint64_t consumedCycles) {
+    servicePendingWork(core);
+    if (auto requested = core.executionControl().consume(core.pc, consumedCycles)) {
+      return requested;
+    }
+    if (!boundary.dispatchHostServices) {
+      return ExecutionResult{ExecutionExitReason::HostService, core.pc, consumedCycles, "pending work"};
+    }
+    boundary.skipPendingBoundaryOnce = __atomic_load_n(&core.pending_work, __ATOMIC_RELAXED) != 0;
+    return std::nullopt;
   }
 
   ExecutionResult fallbackThresholdFault(const BoundaryContext &boundary, std::uint64_t cycles) {
@@ -743,14 +760,9 @@ ExecutionResult LightrecExecutor::executeWithBoundary(std::uint32_t guestAddress
         continue;
       }
       case LightrecExecutor::Impl::BoundaryReason::PendingWork:
-        servicePendingWork(impl.core);
-        if (auto requested = impl.core.executionControl().consume(impl.core.pc, consumedCycles)) {
-          return *requested;
+        if (auto handedBack = impl.servicePendingWorkAt(boundary, consumedCycles)) {
+          return *handedBack;
         }
-        if (!dispatchHostServices) {
-          return {ExecutionExitReason::HostService, impl.core.pc, consumedCycles, "pending work"};
-        }
-        boundary.skipPendingBoundaryOnce = __atomic_load_n(&impl.core.pending_work, __ATOMIC_RELAXED) != 0;
         nextPc = impl.core.pc;
         continue;
       case LightrecExecutor::Impl::BoundaryReason::None:
@@ -772,7 +784,14 @@ ExecutionResult LightrecExecutor::executeWithBoundary(std::uint32_t guestAddress
       return {ExecutionExitReason::HostService, nextPc, consumedCycles, "pending work"};
     }
     if (consumedCycles < budget.cycles) {
-      // Ended at the field or device deadline, not the caller's budget.
+      // Ended at the field or device deadline, not the caller's budget: what the deadline raised is taken before the
+      // guest resumes, since a loop inside one block reaches no block boundary until the next deadline.
+      if (impl.pendingWorkDeliverable()) {
+        if (auto handedBack = impl.servicePendingWorkAt(boundary, consumedCycles)) {
+          return *handedBack;
+        }
+        nextPc = impl.core.pc;
+      }
       continue;
     }
     return {Impl::recordBudgetExit(impl, nextPc), nextPc, consumedCycles, "cycle budget exhausted"};

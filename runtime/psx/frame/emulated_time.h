@@ -2,6 +2,7 @@
 #pragma once
 
 #include <cstdint>
+#include <optional>
 
 namespace psx::frame {
 
@@ -26,6 +27,11 @@ public:
   void advanceInstructions(uint32_t ticks);
   // One of `parts` deliveries of a `fields`-field interval; the interval's parts arrive back to back.
   bool advanceDisplayFields(uint32_t fields, uint32_t parts, uint32_t fieldRateMilliHz);
+  // Where that delivery would end the wait, without delivering it; nullopt for an invalid cadence.
+  [[nodiscard]] std::optional<uint64_t>
+  displayWaitEndTicks(uint32_t fields, uint32_t parts, uint32_t fieldRateMilliHz) const;
+  // Guest time inside a display wait reaching a device deadline; never moves the clock back.
+  void advanceTo(uint64_t ticks);
   [[nodiscard]] uint64_t nowTicks() const;
   // The last delivered display field edge.
   [[nodiscard]] uint64_t boundaryTicks() const;
@@ -46,6 +52,12 @@ public:
   }
 
 private:
+  struct DisplayWait {
+    unsigned __int128 intervalStart = 0;
+    uint32_t part = 0;
+    unsigned __int128 boundary = 0;
+  };
+  [[nodiscard]] DisplayWait planDisplayWait(uint32_t fields, uint32_t parts, uint32_t fieldRateMilliHz) const;
   static uint64_t hSyncCountAt(unsigned __int128 timeQ32, uint32_t fieldRateMilliHz, uint32_t linesPerField);
   // Q32 CPU ticks preserve the fractional NTSC field duration without a floating-point or host-time
   // dependency. The display boundary is a phase anchor on the field grid: instructions can consume a field

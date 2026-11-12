@@ -19,8 +19,8 @@ lost every field.
 
 ## Resolution
 `service_drive_event` serves every sector whose deadline has passed, and an audio sector re-arms one period
-after its own deadline (`schedule_sector_event_after`). Data sectors still hold the head until the guest
-consumes them. Test: `test_cdc_xa_filter` `testLateServicePassesEveryElapsedAudioSector` (failed before:
+after its own deadline (`schedule_sector_event_after`). Data sectors held the head until the guest
+consumes them (until issue 0202). Test: `test_cdc_xa_filter` `testLateServicePassesEveryElapsedAudioSector` (failed before:
 "a service 2.5 periods late did not pass the 3 sectors due by then").
 
 After, same run: 150.2 sector events/s, 238 of 238 audio sectors for the same title stream, continuous

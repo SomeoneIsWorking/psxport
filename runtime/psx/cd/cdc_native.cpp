@@ -295,7 +295,7 @@ void CdController::cancelDriveEvent() {
 
 // The next sector is due one drive period after `origin`.
 void CdController::scheduleSectorEventAfter(uint64_t origin) {
-  if (!reading || following_sector_ready || drive_event_armed || !tick_now) {
+  if (!reading || drive_event_armed || !tick_now) {
     return;
   }
   drive_deadline_ticks = origin + driveSectorPeriodCpuTicks(mode);
@@ -362,7 +362,7 @@ bool CdController::serviceDueSector(uint64_t now_ticks) {
   drive_event_armed = 0;
   drive_deadline_ticks = 0;
   lucent::debug("cdcpace", "servicing sector event now={} first={} lba={}", now_ticks, first_sector_pending, loc_lba);
-  if (!reading || following_sector_ready) {
+  if (!reading) {
     return 0;
   }
 
@@ -380,11 +380,21 @@ bool CdController::serviceDueSector(uint64_t now_ticks) {
       return 0;
     }
     queueDataReady();
+    scheduleSectorEventAfter(due_ticks);
     return 1;
   }
 
-  // One drive buffer, one INT1: the guest's next BFRD request swaps the ready sector into the FIFO. Only
-  // STRSND can make the next sector audio, which the drive consumes without an interrupt.
+  // The head never waits for the guest: a sector it left untaken is read over (Beetle PS_CDC_HandlePlayRead).
+  if (following_sector_ready) {
+    lucent::debug("cdcpace",
+                  "sector @ {} was left untaken (INT{} current); the head reads past it",
+                  loc_lba + 1,
+                  static_cast<int>(currentIrqType()));
+    loc_lba++;
+    following_sector_ready = 0;
+  }
+  // The guest's next BFRD request swaps the announced sector into the FIFO. Only STRSND can make the next
+  // sector audio, which the drive consumes without an interrupt.
   if (mode & kModeXaAdpcm) {
     uint8_t raw[kRawSectorBytes];
     const DriveSector sector = routeDriveSector(loc_lba + 1, raw);
@@ -399,6 +409,7 @@ bool CdController::serviceDueSector(uint64_t now_ticks) {
   }
   following_sector_ready = 1;
   queueDataReady();
+  scheduleSectorEventAfter(due_ticks);
   return 1;
 }
 
@@ -759,7 +770,6 @@ void CdController::writeRequestRegister(uint8_t value) {
   const bool flushed = data_n > 0 && data_rd >= data_n;
 
   // Stock libcd writes the bit once per sector and never clears it (psxport issue 0002).
-  const bool fresh_request = bfrd == 0;
   bfrd = 1;
   if (!reading && !following_sector_ready) {
     if (flushed) {
@@ -776,15 +786,8 @@ void CdController::writeRequestRegister(uint8_t value) {
       stopContinuousRead(ReadStop::DriveStopped);
       return;
     }
-    // With one drive buffer, taking the announced sector is what lets the drive read the next one.
-    scheduleSectorEvent();
-  } else {
-    if (flushed) {
-      data_rd = 0;
-    }
-    if (fresh_request && data_n > 0 && !following_sector_ready) {
-      scheduleSectorEvent();
-    }
+  } else if (flushed) {
+    data_rd = 0;
   }
 }
 

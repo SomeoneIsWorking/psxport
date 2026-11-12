@@ -40,6 +40,8 @@ public:
   bool advanceDisplayFields(FieldCadence cadence, uint32_t fieldRateMilliHz);
   // CDC deadlines against the emulated drive clock, advancing nothing else.
   void serviceCdc();
+  // Every device deadline before `endTicks`, each at its own time with its interrupt delivered.
+  void serviceDeviceEventsBefore(uint64_t endTicks);
   // The guest's display standard, from GP1(0x08).
   [[nodiscard]] DisplayFieldRate displayFieldRate() const;
   [[nodiscard]] uint64_t emulatedCpuTicks() const;

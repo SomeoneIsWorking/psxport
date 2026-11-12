@@ -6,6 +6,7 @@
 #include "gpu_device.h"
 
 #include <algorithm>
+#include <optional>
 #include <utility>
 
 namespace psx::frame {
@@ -29,6 +30,11 @@ bool Timing::advanceDisplayFields(FieldCadence cadence, uint32_t fieldRateMilliH
   if (cadence.fields <= 0 || cadence.parts <= 0 || fieldRateMilliHz == 0) {
     return false;
   }
+  const std::optional<uint64_t> waitEnd = mEmulatedTime.displayWaitEndTicks(
+      static_cast<uint32_t>(cadence.fields), static_cast<uint32_t>(cadence.parts), fieldRateMilliHz);
+  if (waitEnd) {
+    serviceDeviceEventsBefore(*waitEnd);
+  }
   if (!mEmulatedTime.advanceDisplayFields(
           static_cast<uint32_t>(cadence.fields), static_cast<uint32_t>(cadence.parts), fieldRateMilliHz)) {
     return false;
@@ -47,6 +53,31 @@ bool Timing::advanceDisplayFields(FieldCadence cadence, uint32_t fieldRateMilliH
   serviceCdc();
   game->fieldDigest.recordField(*game);
   return true;
+}
+
+// The guest waits in VSync while the drive keeps reading: each deadline inside the wait raises its interrupt at its own
+// time, so the guest's handler takes every sector the head reaches, not one per field edge.
+void Timing::serviceDeviceEventsBefore(uint64_t endTicks) {
+  uint64_t deadline = 0;
+  std::optional<uint64_t> serviced;
+  for (;;) {
+    // An interrupt raised before this point is taken before the clock moves past it.
+    if (game->core.irqPendingEnabled() != 0u) {
+      game->hle.irqPoll(&game->core);
+    }
+    if (!game->cdc.nextDeadlineTicks(&deadline) || deadline >= endTicks) {
+      return;
+    }
+    // An event the guest cannot take yet stays due; the field edge services it again.
+    if (serviced && deadline <= *serviced) {
+      return;
+    }
+    if (deadline > mEmulatedTime.nowTicks()) {
+      mEmulatedTime.advanceTo(deadline);
+    }
+    serviced = mEmulatedTime.nowTicks();
+    serviceCdc();
+  }
 }
 
 namespace {
