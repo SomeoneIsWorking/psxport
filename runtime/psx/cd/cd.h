@@ -3,21 +3,28 @@
 #pragma once
 
 #include "cd_position.h"
+#include "field_rate.h"
 
 #include <array>
 #include <cstdint>
+#include <optional>
 class Game;
 class Core;
 namespace psx::cd {
 class StockLibcd;
 
-// A continuous read's progress since it started, for drive-rate pacing.
+// A continuous read's progress since it started: guest display fields elapsed and sectors the head passed.
 struct StreamProgress {
-  uint64_t elapsedNs = 0;
-  uint32_t delivered = 0;
+  uint64_t elapsedFields = 0;
+  uint32_t passed = 0;
+};
+// Where a host-pumped stream's pacing starts: the field and head LBA of its first pump.
+struct StreamOrigin {
+  uint64_t field = 0;
+  uint32_t lba = 0;
 };
 // Sectors the drive owes now at `sectorsPerSecond`, at most kStreamMaxBurst so a stall is repaid over fields.
-int streamSectorsDue(StreamProgress progress, int sectorsPerSecond);
+int streamSectorsDue(StreamProgress progress, int sectorsPerSecond, psx::frame::DisplayFieldRate fieldRate);
 // One field of double-speed delivery (150/60), rounded up.
 inline constexpr int kStreamMaxBurst = 3;
 } // namespace psx::cd
@@ -63,9 +70,8 @@ public:
 
   // A ReadN/ReadS stream that wants its ready callback until the guest's Pause/Stop.
   int stream_active = 0;
-  // Host-clock pacing of a host-pumped stream; reset by every ReadN/ReadS.
-  uint64_t stream_t0_ns = 0;
-  uint32_t stream_delivered = 0;
+  // Guest-field pacing of a host-pumped stream; reset by every ReadN/ReadS.
+  std::optional<psx::cd::StreamOrigin> stream_origin;
 
   // CdGetSector pops one raw sector sequentially from past the sync, as the whole-sector data FIFO does.
   uint8_t sec_raw[psx::cd::kRawSectorBytes] = {};

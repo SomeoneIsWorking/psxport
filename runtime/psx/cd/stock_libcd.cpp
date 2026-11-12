@@ -7,7 +7,6 @@
 #include "execution_control.h"
 #include "game.h"
 #include "guest_call.h"
-#include "host_clock.h"
 #include "platform_hle.h"
 #include "r3000.h"
 #include "stock_cd_response.h"
@@ -176,8 +175,7 @@ void StockLibcd::applyCommand(Core &core) const {
     }
     cd.stream_active = 1;
     // A new stream starts with a fresh pacing budget.
-    cd.stream_t0_ns = 0;
-    cd.stream_delivered = 0;
+    cd.stream_origin.reset();
     readStarted(core);
     break;
   case 0x08:
@@ -376,22 +374,24 @@ void StockLibcd::pumpStream(Core &core, int sectors) const {
   if (!callback) {
     return;
   }
-  const std::uint64_t nowNs = psx::platform::hostNowNs();
-  if (cd.stream_t0_ns == 0) {
-    cd.stream_t0_ns = nowNs;
-  }
   Game &game = *core.game;
+  const std::uint64_t field = game.timing.displayField();
+  if (!cd.stream_origin) {
+    cd.stream_origin = psx::cd::StreamOrigin{field, game.cdc.loc_lba};
+  }
+  // The head also passes audio sectors on the guest's own clock, so its position, not the pump, is progress.
+  const psx::cd::StreamProgress progress{field - cd.stream_origin->field, game.cdc.loc_lba - cd.stream_origin->lba};
   const int rate = psx::cd::driveSectorsPerSecond(game.cdc.mode);
-  int due = streamSectorsDue({nowNs - cd.stream_t0_ns, cd.stream_delivered}, rate);
+  int due = streamSectorsDue(progress, rate, game.timing.displayFieldRate());
   // At t = 0 nothing is owed yet, and a stream that cannot deliver its first sector never starts.
-  if (cd.stream_delivered == 0 && due == 0) {
+  if (progress.passed == 0 && due == 0) {
     due = 1;
   }
   if (due <= 0) {
     lucent::debug("cdpace",
-                  "holding: {} sector(s) delivered in {} ms at {}/s; the drive is ahead",
-                  cd.stream_delivered,
-                  (nowNs - cd.stream_t0_ns) / 1000000ull,
+                  "holding: the head passed {} sector(s) in {} field(s) at {}/s; the drive is ahead",
+                  progress.passed,
+                  progress.elapsedFields,
                   rate);
     return;
   }
@@ -408,7 +408,6 @@ void StockLibcd::pumpStream(Core &core, int sectors) const {
         }
         game.timing.serviceCdc();
       }
-      cd.stream_delivered++;
       // An interleaved XA sector passes under the head without a ready call.
       if (game.cdc.currentIrqType() != CdcResponse::DataReady) {
         continue;
@@ -451,15 +450,16 @@ CdReadyDelivery GuestInterruptLibcd::deliverOnInterrupt(Core &core) const {
   return deliverReadyCompletion(core, readySlot(), completion_.status);
 }
 
-int streamSectorsDue(StreamProgress progress, int sectorsPerSecond) {
-  if (sectorsPerSecond <= 0) {
+int streamSectorsDue(StreamProgress progress, int sectorsPerSecond, psx::frame::DisplayFieldRate fieldRate) {
+  if (sectorsPerSecond <= 0 || fieldRate.frequencyNumerator == 0) {
     return 0;
   }
-  const uint64_t owed = progress.elapsedNs * static_cast<uint64_t>(sectorsPerSecond) / 1000000000ull;
-  if (owed <= static_cast<uint64_t>(progress.delivered)) {
+  const uint64_t owed = progress.elapsedFields * static_cast<uint64_t>(sectorsPerSecond) *
+                        fieldRate.frequencyDenominator / fieldRate.frequencyNumerator;
+  if (owed <= static_cast<uint64_t>(progress.passed)) {
     return 0;
   }
-  const uint64_t due = owed - static_cast<uint64_t>(progress.delivered);
+  const uint64_t due = owed - static_cast<uint64_t>(progress.passed);
   return static_cast<int>(std::min(due, static_cast<uint64_t>(kStreamMaxBurst)));
 }
 
