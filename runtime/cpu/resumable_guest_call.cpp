@@ -7,6 +7,7 @@
 #include "native_dispatch.h"
 
 #include <cstdlib>
+#include <iterator>
 #include <lucent/log.h>
 #include <span>
 #include <vector>
@@ -110,6 +111,14 @@ CallStep ResumableGuestCall::advance(const std::optional<NativeKey> &original, s
   resumePc_ = result.guestPc;
   suspended_ = static_cast<const R3000 &>(core);
   return CallStep{CallOutcome::Suspended, result.guestPc, turns_, cycles_, 0u, {}, result.reason};
+}
+
+void ResumableGuestCall::setSuspendedRegister(unsigned index, std::uint32_t value) {
+  if (!pending_ || turns_ == 0u || index >= std::size(suspended_.r)) {
+    lucent::error("guest-call", "{}: no suspended turn holds register {}", owner_, index);
+    std::abort();
+  }
+  suspended_.r[index] = value;
 }
 
 void ResumableGuestCall::save(psx::platform::BlobWriter &out) const {

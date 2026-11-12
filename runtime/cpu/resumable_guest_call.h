@@ -86,6 +86,8 @@ public:
   [[nodiscard]] std::uint32_t resumePc() const {
     return resumePc_;
   }
+  // A register of the suspended turn, as the guest reads it on resume; aborts with no turn suspended.
+  void setSuspendedRegister(unsigned index, std::uint32_t value);
   [[nodiscard]] std::uint32_t turns() const {
     return turns_;
   }
