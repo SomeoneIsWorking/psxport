@@ -532,6 +532,16 @@
       "code_last": "0x204F",
       "note": "The credits overlay, WAD.WAD bytes 0x097A9000..+0x2800, which 0x80054CD8 loads through 0x80050578 to [0x80011254] = 0x800742D0 (size [0x8006DE8C], offset [0x8006DE88], read in a credits RAM dump). Update 0x80074BA0, draw 0x80076118. code_first is the first prologue (0x800744BC), code_last the last jr ra's delay slot."
     },
+    "spyro3_portal": {
+      "kind": "module",
+      "title": "spyro3",
+      "serial": "SCUS_944.67",
+      "sha1": "ed0632beae170624e7cb74f73b3e9645fdef8f2f",
+      "load_base": "0x800742D0",
+      "code_first": "0x684",
+      "code_last": "0x73D7",
+      "note": "The portal overlay, WAD.WAD bytes 0x0322C800..+0xA000 (offset [0x8006DB00], size [0x8006DB04]), resident at [0x80011254] = 0x800742D0 during state 7 sub-states 1-5 (read in a RAM dump at sub-state 3 after Sunrise Spring's Sunny Villa portal). Update 0x80076538, draw 0x80075B74, the level-load stages with the autosave 0x80074954. code_first is the first prologue (0x80074954), code_last the last jr ra's delay slot."
+    },
     "spyro3_boot": {
       "kind": "module",
       "title": "spyro3",
