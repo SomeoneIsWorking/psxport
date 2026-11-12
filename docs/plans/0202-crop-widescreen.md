@@ -38,7 +38,7 @@ GTE aspect; neither crops gameplay height to 16:9 and relocates the HUD
 1. Config: the widescreen mode value, its UI row and the settings migration.
 2. Record rasteriser: a per-primitive layer and one mapping per layer (world band, ui box, screen).
 3. A title hook mapping its draw owners to layers, and the band anchor; Tomba 2 and Spyro first.
-5. Docs: `presentation.md` (Widescreen) and each title's state row.
+4. Docs: `presentation.md` (Widescreen) and each title's state row.
 
 ## Proof
 
