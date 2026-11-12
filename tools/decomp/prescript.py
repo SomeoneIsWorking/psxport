@@ -90,7 +90,6 @@ def map_bss_window(program, text_end: int) -> dict:
     block.setWrite(True)
     block.setExecute(False)
     block.setVolatile(False)
-    block.setInitialized(False)
     return {"mapped": True, "start": "0x%08X" % text_end, "end": "0x%08X" % KSEG0_LAST}
 
 
