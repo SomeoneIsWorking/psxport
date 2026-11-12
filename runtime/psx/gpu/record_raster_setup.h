@@ -126,20 +126,21 @@ struct RecordQuad {
 // The draw area is the buffer: its columns exactly, its rows covered.
 bool drawAreaSpansBuffer(const present::RecordDrawState &state, const RecordRect &buffer);
 
-// A display buffer's wide canvas: `buffer` (native VRAM pixels) with `margin` more columns each side.
+// A display buffer's wide canvas: `buffer` (native VRAM pixels) with `left` and `right` more columns.
 // Its pixel (x, y) is VRAM-space pixel (originX() + x, originY() + y), which may lie outside VRAM.
 struct RecordCanvas {
   RecordRect buffer;
-  int margin = 0;
+  int left = 0;
+  int right = 0;
 
   int originX() const {
-    return buffer.x0 - margin;
+    return buffer.x0 - left;
   }
   int originY() const {
     return buffer.y0;
   }
   int width() const {
-    return buffer.x1 - buffer.x0 + 2 * margin;
+    return buffer.x1 - buffer.x0 + left + right;
   }
   int height() const {
     return buffer.y1 - buffer.y0;
@@ -147,9 +148,9 @@ struct RecordCanvas {
   bool operator==(const RecordCanvas &) const = default;
 };
 
-// Whether a kept canvas still serves displays of this margin and width. The two buffers of a double-buffered
+// Whether a kept canvas still serves displays of these margins and width. The two buffers of a double-buffered
 // title may differ in height, so each keeps its own canvas and only a margin or width change retires one.
-bool canvasSurvives(const RecordCanvas &canvas, int displayWidth, int margin);
+bool canvasSurvives(const RecordCanvas &canvas, int displayWidth, int left, int right);
 
 // Plane 0 is the VRAM image; plane 1 + i is canvas i.
 inline constexpr int kRecordMaxCanvases = 2;
@@ -174,7 +175,7 @@ struct RecordReadBack {
   RecordRect pageVram; // the same, VRAM halfwords
   int texMode = 0;
   RecordRect read;     // VRAM-space native pixels; the page's first texel is read's first pixel
-  RecordRect captured; // what the capture holds: `read`, widened by the margin on a side where it meets its canvas edge
+  RecordRect captured; // what the capture holds: `read`, widened by that side's margin where it meets its canvas edge
   std::uint32_t weights = 0; // kOpReadBackWeights
 
   bool operator==(const RecordReadBack &) const = default;

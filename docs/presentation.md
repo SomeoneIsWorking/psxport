@@ -446,8 +446,11 @@ for the displayed rect. `RenderState::buildDisplay` latches it once per present,
 or drawn, so every reader of `guestDisplay.plan()` sees this present's plan. A title's guest projection plan there keeps the retail centre and draw width
 (`projectionCenterX`, `guestDrawWidth`): the canvas, not a wider draw area, holds the margins, and the
 title widens only what it culls. `RecordRasterizer` keeps a canvas per displayed buffer (at most two, the
-least recently shown is dropped; a margin or width change retires both, a height difference between the two buffers does not): the buffer plus M columns each side, at scale, seeded from the image
-with black margins and reseeded after a resync. Each record entry is planned once per plane:
+least recently shown is dropped; a margin or width change retires both, a height difference between the two buffers does not): the buffer plus `presentedMargins.left` and `.right` columns, at scale, seeded from the image
+with black margins and reseeded after a resync. The sides are M each unless the title's
+`GuestWidescreenProjection::presentedMargins` moves them: a view that would leave the title's world gives that side's
+columns to the other, `clampedMargins` holds each side to `[0, 2M]` and their sum to 2M, and a canvas narrower than
+the buffer plus 2M is pillarboxed (Mega Man X4 at a camera bound, psx-mega-man-x4 issue 0044). Each record entry is planned once per plane:
 
 - A primitive whose draw area spans the buffer's columns (x range equal, rows inside the buffer; a title may inset its rows) draws into the
   canvas with its x clip widened by M. Any other primitive lands in the canvas only inside the buffer.

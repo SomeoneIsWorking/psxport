@@ -3,6 +3,7 @@
 
 #include "frame_record.h"
 #include "gpu_work.h"
+#include "guest_widescreen_projection.h"
 #include "record_raster_setup.h"
 #include "render_device.h"
 
@@ -25,7 +26,7 @@ struct RecordPicture {
 // What a present shows: the guest display (native VRAM pixels) and the columns added each side of it.
 struct RecordView {
   gpu::RecordRect display;
-  int margin = 0;
+  present::HorizontalMargins margins;
 };
 
 // The image is VRAM at an integer scale, RG8 holding 1555 halfwords. Each record applies on top of

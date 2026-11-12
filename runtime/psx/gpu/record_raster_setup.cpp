@@ -573,8 +573,8 @@ PlaneClips RecordPlanner::Builder::planeClips(const RecordDrawState &state) cons
               std::min(area.x1, buffer.x1 - 1),
               std::min(area.y1, buffer.y1 - 1)};
     if (drawsBuffer) {
-      clip.x0 = buffer.x0 - canvas.margin;
-      clip.x1 = buffer.x1 - 1 + canvas.margin;
+      clip.x0 = buffer.x0 - canvas.left;
+      clip.x1 = buffer.x1 - 1 + canvas.right;
     }
     if (clip.x0 <= clip.x1 && clip.y0 <= clip.y1) {
       clips.push_back(PlaneClip{1 + static_cast<int>(i), clip});
@@ -1244,7 +1244,7 @@ void RecordPlanner::Builder::addCanvasMargins(const DrawPrimitive &primitive) {
     const int rowEnd = (y1 + s - 1) / s;
     target(planeClip.plane);
     int left = std::max(canvas.originX(), clip.x0);
-    int right = std::min(canvas.buffer.x1 + canvas.margin, clip.x1 + 1);
+    int right = std::min(canvas.buffer.x1 + canvas.right, clip.x1 + 1);
     if (sampling_) {
       left = std::max(left, sampling_->captured.x0 - sampling_->x);
       right = std::min(right, sampling_->captured.x1 - sampling_->x);
@@ -1275,7 +1275,7 @@ void RecordPlanner::Builder::addFill(const present::VramFill &fill) {
       const int y1 = std::min(rect.y1, canvas.buffer.y1);
       if (rect.x0 <= canvas.buffer.x0 && rect.x1 >= canvas.buffer.x1 && y0 < y1) {
         emit({canvas.originX(), y0, canvas.buffer.x0, y1});
-        emit({canvas.buffer.x1, y0, canvas.buffer.x1 + canvas.margin, y1});
+        emit({canvas.buffer.x1, y0, canvas.buffer.x1 + canvas.right, y1});
       }
     }
   }
@@ -1375,8 +1375,8 @@ void RecordPlanner::Builder::addReadBack(const present::ReadBackTexture &texture
       continue;
     }
     RecordRect captured = read;
-    captured.x0 -= read.x0 == canvas.buffer.x0 ? canvas.margin : 0;
-    captured.x1 += read.x1 == canvas.buffer.x1 ? canvas.margin : 0;
+    captured.x0 -= read.x0 == canvas.buffer.x0 ? canvas.left : 0;
+    captured.x1 += read.x1 == canvas.buffer.x1 ? canvas.right : 0;
     // The capture sees every op before it and replaces the one the rest of the record would sample.
     closeBatch();
     readBack_.reset();
@@ -1403,8 +1403,9 @@ bool drawAreaSpansBuffer(const present::RecordDrawState &state, const RecordRect
          area.y0 < buffer.y1 && area.y1 >= buffer.y0;
 }
 
-bool canvasSurvives(const RecordCanvas &canvas, int displayWidth, int margin) {
-  return margin > 0 && canvas.margin == margin && canvas.buffer.x1 - canvas.buffer.x0 == displayWidth;
+bool canvasSurvives(const RecordCanvas &canvas, int displayWidth, int left, int right) {
+  return left + right > 0 && canvas.left == left && canvas.right == right &&
+         canvas.buffer.x1 - canvas.buffer.x0 == displayWidth;
 }
 
 RecordPlanner::RecordPlanner() : builder_(std::make_unique<Builder>()) {}
