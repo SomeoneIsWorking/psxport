@@ -80,6 +80,8 @@ inline constexpr std::uint32_t kDpcs = 0x4A780010u;
 inline constexpr std::uint32_t kDpct = 0x4AF8002Au;
 inline constexpr std::uint32_t kDcpl = 0x4A680029u;
 inline constexpr std::uint32_t kCc = 0x4B38041Cu;          // lm=1
+inline constexpr std::uint32_t kNccs = 0x4B08041Bu;        // sf lm=1
+inline constexpr std::uint32_t kNcct = 0x4B18043Fu;        // sf lm=1
 inline constexpr std::uint32_t kMvmvaRtIr = 0x4A49E012u;   // sf, RT * IR, no offset
 inline constexpr std::uint32_t kMvmvaRtV0 = 0x4A486012u;   // sf, RT * V0, no offset
 inline constexpr std::uint32_t kMvmvaRtIrTr = 0x4A498012u; // sf, RT * IR + TR

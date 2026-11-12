@@ -484,7 +484,7 @@ of these is not:
 
 1. **A horizontal culling owner still comparing against a retail 4:3 literal.** The frustum widens,
    the cull does not, and the margins are empty (Mega Man X4 `is_on_screen` `0x8002B288`, Tekken 3's
-   stage-tile wedge `FUN_8006D95C`).
+   stage-tile wedge `FUN_8006D95C`). A title's native submitter culls through `psx::present::ScreenCull` over `recordCanvasColumns`.
 2. **An authored 4:3 2D layout that never uses the margin.** A HUD moves only when a title producer
    anchors it.
 
