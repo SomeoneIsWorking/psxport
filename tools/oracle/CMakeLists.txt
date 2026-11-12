@@ -65,7 +65,7 @@ target_include_directories(psxport_oracle PUBLIC
 
 # -fno-strict-aliasing: Mednafen's memory paths type-pun through MultiAccessSizeMem, and the vendor build
 # uses it. Dropping it would let the optimiser reorder RAM accesses the reference must perform exactly.
-target_compile_options(psxport_oracle PRIVATE -Wall -Wextra -O2 -g -fno-strict-aliasing)
+target_compile_options(psxport_oracle PRIVATE -Wall -Wextra -fno-strict-aliasing)
 target_link_libraries(psxport_oracle PUBLIC m)
 
 # oracle_trace — runs a REAL game executable in the reference and writes a per-instruction trace, which is
@@ -76,7 +76,6 @@ add_executable(oracle_trace oracle_trace.c)
 # oracle_shim.h fixes its enums' base type, a C23 feature, for the C and C++ units that share its structs.
 set_target_properties(psxport_oracle oracle_trace PROPERTIES C_STANDARD 23 C_STANDARD_REQUIRED ON)
 target_link_libraries(oracle_trace PRIVATE psxport_oracle)
-target_compile_options(oracle_trace PRIVATE -O2 -g)
 # Snapshot/window tools remain separate diagnostic processes; the player never links this library.
 target_compile_features(psxport_oracle PRIVATE cxx_std_20)
 add_executable(oracle_window oracle_window.cpp)

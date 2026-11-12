@@ -4,6 +4,7 @@
 # presentation owners, and vendored hardware backends. Title code and restricted game data remain in
 # the consumer. Build-generated shader and identity headers belong to the consumer's build tree.
 
+include("${CMAKE_CURRENT_LIST_DIR}/build_policy.cmake")
 include("${CMAKE_CURRENT_LIST_DIR}/psxport_presentation_dependencies.cmake")
 psxport_configure_presentation_dependencies()
 
@@ -324,7 +325,7 @@ target_include_directories(psxport PRIVATE ${PSXPORT_INTERNAL_INCLUDES})
 target_compile_definitions(psxport PUBLIC
   PSXPORT_SDL _XOPEN_SOURCE=700 RMLUI_STATIC_LIB RMLUI_SDL_VERSION_MAJOR=3)
 
-target_compile_options(psxport PRIVATE -w -O2 -g)
+target_compile_options(psxport PRIVATE -w)
 
 # WHICH CALL SITES MOVE THE BYTES (runtime/psx/debug/memcensus.cpp). --wrap is a LINK-time rewrite, and
 # it must be on the final executable's link rather than this static library's, so it is INTERFACE:
