@@ -25,8 +25,17 @@ public:
   bool returnRequested() const {
     return mReturnRequested;
   }
+  // Declared once, before the first frame: a selector panel's preview, which the player watches but does not
+  // control. A title may end its uncontrolled screens (cards, movies) at their own terminal transitions.
+  void setPreview(bool preview) {
+    mPreview = preview;
+  }
+  bool preview() const {
+    return mPreview;
+  }
 
 private:
+  bool mPreview = false;
   bool mReturnAvailable = false;
   bool mReturnRequested = false;
 };

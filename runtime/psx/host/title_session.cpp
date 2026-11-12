@@ -82,6 +82,7 @@ bool TitleSession::boot() {
   Game &game = *parts_->game;
   Core &core = game.core;
   game.session.setReturnAvailable(selectorAvailable_);
+  game.session.setPreview(role_ == Role::Panel);
   game.productName = catalog_.productName();
   game.title = title_.identity;
   game.executable = title_.executable;

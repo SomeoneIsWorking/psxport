@@ -147,8 +147,10 @@ return` or the ESC row ends it as `ReturnedToSelector` and the selector is rebui
   button, and a triangle tap on the selector during it leaves the demo running.
 - **The attract demo is the title's own.** A focused panel runs its title's boot path with no input:
   publisher cards, title screen, and the demo the title itself starts when its title screen times
-  out, looping as on the console. That is the only route today; a title whose attract loop needs
-  another route would supply it through `GameRuntime`. Walked in the selector (issue 0196): Spyro 1,
+  out, looping as on the console. A panel's Game is a preview (`Game::session.preview()`, set by
+  `TitleSession::boot` for `Role::Panel`): a title may end the screens the player does not control (cards,
+  movies) at their own terminal transitions, as a Start skip would, so its panel reaches the demo. Each such
+  skip is the title's own; the host skips nothing. Walked in the selector (issue 0196): Spyro 1,
   Crash 2, Spider-Man 1 and Tomba! 2 reach their demos; Crash 3 hangs on the way (psx-crash 0035),
   Enter Electro presents only black (psx-spider-man 0039), Tomba! 1 showed only its opening movie in
   21812 steps; Spyro 2/3 and Crash 1 reach theirs per their title docs, not walked here.
