@@ -502,6 +502,26 @@
       "text_size": "0x5C800",
       "note": "Insomniac, Spyro: Year of the Dragon. Geometry and identity match spyro/titles/spyro3/executable.json."
     },
+    "spyro2_credits": {
+      "kind": "module",
+      "title": "spyro2",
+      "serial": "SCUS_944.25",
+      "sha1": "18022ea566bbe1be675a873791cc14dc3c27ab47",
+      "load_base": "0x8006D264",
+      "code_first": "0x34",
+      "code_last": "0x1DB7",
+      "note": "The credits overlay, WAD.WAD bytes 0x002ED800..+0x2000, which 0x8001A910 loads through 0x80013810 to [0x80011110] = 0x8006D264 (size [0x80067714], offset [0x80067710], read in a credits RAM dump). Update 0x8006D96C, draw 0x8006EE18. code_first is the first prologue (0x8006D298), code_last the last jr ra's delay slot."
+    },
+    "spyro3_credits": {
+      "kind": "module",
+      "title": "spyro3",
+      "serial": "SCUS_944.67",
+      "sha1": "7067afaf5192884c6cb4ea6cbcf7c3240658f914",
+      "load_base": "0x800742D0",
+      "code_first": "0x1EC",
+      "code_last": "0x204F",
+      "note": "The credits overlay, WAD.WAD bytes 0x097A9000..+0x2800, which 0x80054CD8 loads through 0x80050578 to [0x80011254] = 0x800742D0 (size [0x8006DE8C], offset [0x8006DE88], read in a credits RAM dump). Update 0x80074BA0, draw 0x80076118. code_first is the first prologue (0x800744BC), code_last the last jr ra's delay slot."
+    },
     "toystory2": {
       "kind": "resident",
       "serial": "SLUS_008.93",
