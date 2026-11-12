@@ -152,8 +152,9 @@ return` or the ESC row ends it as `ReturnedToSelector` and the selector is rebui
   movies) at their own terminal transitions, as a Start skip would, so its panel reaches the demo. Each such
   skip is the title's own; the host skips nothing. Walked in the selector (issue 0196): Spyro 1,
   Crash 2, Spider-Man 1 and Tomba! 2 reach their demos; Crash 3 hangs on the way (psx-crash 0035),
-  Enter Electro presents only black (psx-spider-man 0039), Tomba! 1 showed only its opening movie in
-  21812 steps; Spyro 2/3 and Crash 1 reach theirs per their title docs, not walked here.
+  Enter Electro presents only black (psx-spider-man 0039); Tomba! 1 has no gameplay demo, and its
+  panel reaches its attract (the intro movie and title loop) within 2 s; Spyro 2/3 and Crash 1 reach
+  theirs per their title docs, not walked here.
 - **Unfocused panels show their still.** A paused panel draws its newest present (the frame it was on
   when it lost focus) greyed, and its logo. A panel never focused yet has no picture; it shows its logo
   on black when one is saved.
