@@ -522,8 +522,10 @@ turn ends at the stock VSync (`StockVSync` notes the wait, `Timing::noteVSyncWai
 `Timing::takeStepFields()`: the wait's fields less those earlier no-wait steps already delivered since its last return,
 or, for a turn that ran out without a wait, the field edges it crossed (C-12, Vagrant Story). Toy Story 2's resident
 loop commits its fixed count (psx-toy-story-2 issue 0059); the titles whose loop is not owned answer each guest VSync
-with one field (each title's frame-loop issue). Spyro's field owner
-needs no count: its host turn delivers each field as the guest clock crosses it. Deadlines step at the guest's field rate (`field_rate.h`: NTSC 59.817 Hz, the console's 263 lines of 3413
+with one field (each title's frame-loop issue). Spyro 1, 2 and 3 need no count: the field owner's host
+turn delivers each field as the guest clock crosses it and each `VSync(0)` takes the next, and the draws keep
+their inline `while (VSync(-1) - last < 2)` loop, which gives max(2, k + flag) fields where `vsyncFields(2)`
+would give max(2, k + 1) (psx-spyro issue 0217). Deadlines step at the guest's field rate (`field_rate.h`: NTSC 59.817 Hz, the console's 263 lines of 3413
 video clocks), so an NTSC title on a 60.00 Hz display shows one present twice about every 5.5 s; that is accepted. A field that overruns its deadline by more than
 an interval drops the debt in whole intervals (`pacePlan`), so later deadlines keep their place on the field grid.
 NOPACE suppresses host waiting only. Each `Game` owns its `FramePacer`
