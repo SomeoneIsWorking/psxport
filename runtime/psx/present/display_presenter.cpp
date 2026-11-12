@@ -59,10 +59,16 @@ gpu::VramRect DisplayPresenter::presentedRect(Core &core) {
   return {area.x, area.y, area.width, declared > 0 ? declared : area.height};
 }
 
+ScanoutWindow DisplayPresenter::scanoutWindow(Core &core) {
+  const gpu::DisplayArea area = core.gpuDevice().displayArea();
+  const int declared = core.runtime.displayHeight();
+  return declared > 0 ? ScanoutWindow{declared, 0} : ScanoutWindow{area.windowLines, area.windowTop};
+}
+
 void DisplayPresenter::buildDisplay() {
   const gpu::VramRect rect = presentedRect(core_);
   core_.game->rml_overlay.newFrame();
-  core_.game->render().buildDisplay(rect);
+  core_.game->render().buildDisplay(rect, scanoutWindow(core_));
   psx::picture::announceOnChange(core_, rect.width);
   core_.game->render().preseqCapture();
 }

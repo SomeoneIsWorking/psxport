@@ -606,6 +606,14 @@ seams (`PickerPanes`), so nothing is cropped to fit or magnified. A panel's `PSX
 pane image, which the selector draws only once the panel is ready (a boot prefix shows the logo over black);
 `pshot` captures the window the player sees.
 
+The vertical fit is the television's scanout window, not the guest's GP1(07) range: Beetle `gpu.c` scans NTSC from
+line 16 for 240 lines and PAL from line 20 for 288, doubled at 480i (`GpuDevice::displayArea` sets
+`DisplayArea::windowLines/windowTop`). `planPresent` fits `ScanoutWindow::lines` and places the GP1(07) rows at
+their offset inside it; `present.frag` draws the window's unscanned rows black. A title that alternates 240- and
+239-line ranges between its two buffers (Mega Man X4's title) keeps one scale. A presenter that declares
+`displayHeight()` fits that height from row 0 instead (Tomba! 2's 224). Check: consecutive presents of a static
+double-buffered screen differ only in the unscanned row.
+
 ### Auto, a pane, and the internal-resolution budget
 
 Auto is `round(sinkHeight / 240)` — one render sample per PSX scanline — bounded by `videoStatus`'s

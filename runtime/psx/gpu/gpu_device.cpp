@@ -373,9 +373,13 @@ DisplayArea GpuDevice::displayArea() {
   area.width = psx::gpu::displayWidthFromMode(GPU.DisplayMode);
   const int lines = static_cast<int>(GPU.VertEnd) - static_cast<int>(GPU.VertStart);
   const bool interlaced480 = (GPU.DisplayMode & (DISP_INTERLACED | DISP_VERT480)) == (DISP_INTERLACED | DISP_VERT480);
-  area.height = std::max(lines, 0) * (interlaced480 ? 2 : 1);
+  const int rowsPerLine = interlaced480 ? 2 : 1;
+  area.height = std::max(lines, 0) * rowsPerLine;
   area.depth24 = (GPU.DisplayMode & DISP_RGB24) != 0;
   area.pal = (GPU.DisplayMode & DISP_PAL) != 0;
+  area.windowLines = (area.pal ? kPalWindowLines : kNtscWindowLines) * rowsPerLine;
+  area.windowTop =
+      (static_cast<int>(GPU.VertStart) - (area.pal ? kPalWindowFirstLine : kNtscWindowFirstLine)) * rowsPerLine;
   area.enabled = !GPU.DisplayOff;
   return area;
 }

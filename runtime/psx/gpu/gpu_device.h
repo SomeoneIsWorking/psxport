@@ -14,12 +14,22 @@
 
 namespace psx::gpu {
 
+// Beetle gpu.c's default visible scanlines (LineVisFirst + 16 or 20, 240 or 288 lines).
+inline constexpr int kNtscWindowFirstLine = 16;
+inline constexpr int kNtscWindowLines = 240;
+inline constexpr int kPalWindowFirstLine = 20;
+inline constexpr int kPalWindowLines = 288;
+
 // The VRAM rectangle the display scans out, as GP1(05/07/08) programmed it.
 struct DisplayArea {
   int x = 0;
   int y = 0;
   int width = 0;
-  int height = 0;
+  int height = 0; // GP1(07) range lines (x2 at 480-line interlace)
+  // Beetle's fixed scanout window, scanlines 16 (NTSC) or 20 (PAL) on, 240 or 288 per field; the range sits
+  // windowTop rows below its top and the window's other rows scan out black.
+  int windowLines = 0;
+  int windowTop = 0;
   bool depth24 = false;
   bool pal = false;     // GP1(08) video mode: 50 Hz fields
   bool enabled = false; // GP1(03) display enable: off scans out black

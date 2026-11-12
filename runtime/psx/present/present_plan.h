@@ -7,6 +7,12 @@
 
 namespace psx::present {
 
+// The rows the 4:3 picture spans and where the display's rows start among them.
+struct ScanoutWindow {
+  int lines = 0;
+  int top = 0;
+};
+
 // Everything outside the renderer's own state that the presented picture depends on.
 struct PresentInputs {
   int sink_w, sink_h; // presented-image size in pixels
@@ -21,6 +27,10 @@ struct PresentInputs {
   int content_w = 0;
   // 1 = fill the sink, centre-cropped to its aspect, instead of letterboxing (a pane).
   int fill = 0;
+  // Rows of the scanout window the 4:3 picture spans, and where the display's disp_h rows start in it; the window's
+  // other rows are black. 0 = the display is the window.
+  int window_h = 0;
+  int window_top = 0;
 };
 
 struct PresentPlan {
@@ -29,7 +39,7 @@ struct PresentPlan {
   PaneRect viewport;  // where the picture lands inside the sink
   int disp[4];        // fragment uniform: sampled source rect (scaled when presenting from ires); x in bytes at 24bpp
   int fade[4];        // fragment uniform: mode, r, g, b
-  int fmt[4];         // fragment uniform: fmt[0] = 24bpp flag
+  int fmt[4];         // fragment uniform: fmt[0] = 24bpp flag; sampled rows outside [fmt[1], fmt[2]) are black
   int src_ires;       // 0 = sample the native target, >1 = sample the ires target
 };
 
@@ -87,14 +97,20 @@ inline PresentPlan planPresent(const PresentInputs &in) {
   // An unknown native width degrades to 4:3.
   const int aspect_h = in.native_w > 0 ? in.native_w : aspect_w;
   // A fill crop is taken from the rendered source, so the compositor does not resample it again.
+  const int window_h = in.window_h > 0 ? in.window_h : in.disp_h;
+  const int window_top = in.window_h > 0 ? in.window_top : 0;
   const PictureFit fit =
-      fitPicture(4LL * aspect_w, 3LL * aspect_h, content_w, in.disp_h, in.sink_w, in.sink_h, in.fill != 0);
+      fitPicture(4LL * aspect_w, 3LL * aspect_h, content_w, window_h, in.sink_w, in.sink_h, in.fill != 0);
   p.viewport = fit.viewport;
+  // The window keeps one line pitch whatever the range; its rows the display does not scan out are black.
+  const int windowRow = in.sy - window_top;
   // A 24bpp row is addressed in bytes, three per column; a 1555 row in halfwords, one per column.
   p.disp[0] = p.fmt[0] == 1 ? in.sx * 2 + fit.source.x * 3 : (in.sx + fit.source.x) * scale;
-  p.disp[1] = (in.sy + fit.source.y) * scale;
+  p.disp[1] = (windowRow + fit.source.y) * scale;
   p.disp[2] = fit.source.w * scale;
   p.disp[3] = fit.source.h * scale;
+  p.fmt[1] = in.sy * scale;
+  p.fmt[2] = (in.sy + in.disp_h) * scale;
   return p;
 }
 

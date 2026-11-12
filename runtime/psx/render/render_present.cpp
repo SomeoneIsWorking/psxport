@@ -112,7 +112,8 @@ void RenderState::ensureHostImage(PixelSize size) {
 }
 
 // The plan's inputs out of renderer state; planPresent() stays the pure decision.
-present::PresentInputs RenderState::presentInputs(gpu::VramRect display, int nativeWidth) {
+present::PresentInputs
+RenderState::presentInputs(gpu::VramRect display, int nativeWidth, present::ScanoutWindow window) {
   present::PresentInputs in{};
   const PixelSize image = presentImageSize();
   in.sink_w = image.width;
@@ -130,10 +131,12 @@ present::PresentInputs RenderState::presentInputs(gpu::VramRect display, int nat
   in.disp_rgb24 = game_.core.gpuDevice().displayArea().depth24 ? 1 : 0;
   // A pane fills its panel, cropped at the rendered resolution, rather than letterboxing into a band.
   in.fill = target_ == PresentTarget::Pane ? 1 : 0;
+  in.window_h = window.lines;
+  in.window_top = window.top;
   return in;
 }
 
-void RenderState::buildDisplay(gpu::VramRect display) {
+void RenderState::buildDisplay(gpu::VramRect display, present::ScanoutWindow window) {
   if (!device_.enabled()) {
     return;
   }
@@ -144,7 +147,7 @@ void RenderState::buildDisplay(gpu::VramRect display) {
       present::widePresentation(core), present::widePresentationWidth(core), display.width);
   lastDisplay_ = {display.x, display.y, width, display.height};
   SDL_GPUCommandBuffer *cmd = device_.acquire();
-  present::PresentInputs inputs = presentInputs(lastDisplay_, display.width);
+  present::PresentInputs inputs = presentInputs(lastDisplay_, display.width, window);
   presentRecord(inputs);
   if (!presentsRecord_) {
     uploadDeviceVram(cmd, game_.core.gpuDevice().vram());

@@ -3,6 +3,7 @@
 #include "pane_host.h"
 #include "pixel_size.h"
 #include "present_clip.h"
+#include "present_plan.h"
 #include "present_sink.h"
 #include "record_rasterizer.h"
 #include "render_pane.h"
@@ -13,11 +14,6 @@
 #include <span>
 
 class Game;
-
-namespace psx::present {
-struct PresentInputs;
-struct PresentPlan;
-} // namespace psx::present
 
 namespace psx::render {
 
@@ -52,7 +48,7 @@ public:
   // A present is built, then shown. Building rasterizes the picture into the present image and submits
   // it; showing only acquires the swapchain image, blits the present image and presents it.
   // `display` is the guest display rect in VRAM at its native width.
-  void buildDisplay(gpu::VramRect display);
+  void buildDisplay(gpu::VramRect display, present::ScanoutWindow window);
   // A host RGBA8 picture (movie frame, splash) letterboxed 4:3 and faded by `fade`.
   void buildImage(const std::uint8_t *rgba, PixelSize size, float fade);
   // A host screen assembled from panes, drawn in order (render_panes.cpp).
@@ -101,7 +97,7 @@ private:
   void uploadDeviceVram(SDL_GPUCommandBuffer *cmd, std::span<const std::uint16_t> vram);
   void ensurePresentImage(PixelSize size);
   void ensureHostImage(PixelSize size);
-  present::PresentInputs presentInputs(gpu::VramRect display, int nativeWidth);
+  present::PresentInputs presentInputs(gpu::VramRect display, int nativeWidth, present::ScanoutWindow window);
   // Whether the record picture presents the display rather than the device's VRAM.
   bool recordPresents() const;
   // This present's guest display plan, latched before anything sizes, announces or draws it.

@@ -5,6 +5,7 @@
 
 #include "frame_schedule.h"
 #include "pixel_size.h"
+#include "present_plan.h"
 #include "render_pane.h"
 #include "vram_rect.h"
 
@@ -73,6 +74,8 @@ public:
 
   // The guest display rect in VRAM, its height GameRuntime::displayHeight when the title declares one.
   static gpu::VramRect presentedRect(Core &core);
+  // The scanout window that rect sits in; a declared height is the whole window.
+  static ScanoutWindow scanoutWindow(Core &core);
 
 private:
   void buildDisplay();
