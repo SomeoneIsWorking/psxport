@@ -158,7 +158,8 @@ private:
   bool serviceDueSector(uint64_t now_ticks);
   bool serviceDriveEvent();
   void sectorConsumed();
-  void retirePendingCommand();
+  enum class RetireTo : uint8_t { Execution, Completion };
+  void retirePendingCommand(RetireTo to);
   uint64_t execCommand(uint8_t cmd);
   void completeCommand();
   uint32_t sectorPayloadBytes() const;

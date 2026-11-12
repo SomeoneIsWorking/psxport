@@ -80,7 +80,7 @@ title answers there. A hop with no title entry runs on the framework alone.
 
 | hop | owner | title |
 |---|---|---|
-| 1 | `psx/cd/stock_libcd.cpp:StockLibcd::bind` — stock libcd entries bound at the title's addresses; `GuestInterruptLibcd` when the guest's INT1 delivers readiness, its synchronous read's completion due after the drive time or, for a title whose loads carry no drive wait, at once (`Completion::timing`, `ReadTiming`); a command run here latches the interrupt edge it raises (`Core::irqStatLatch`), as a guest controller write does (issue 0186) | `registerOverrides` |
+| 1 | `psx/cd/stock_libcd.cpp:StockLibcd::bind` — stock libcd entries bound at the title's addresses; `GuestInterruptLibcd` when the guest's INT1 delivers readiness, its synchronous read's completion due after the drive time or, for a title whose loads carry no drive wait, at once (`Completion::timing`, `ReadTiming`); a command run here latches the interrupt edge it raises (`Core::irqStatLatch`), as a guest controller write does (issue 0186); a Pause or Stop sent while the previous one is still being received executes that one first, as libcd waits out BUSYSTS (`CdController::issueCommand`, issue 0200) | `registerOverrides` |
 | 2 | `psx/cd/cdc_native.cpp:CdController` — the CD controller over `psx/cd/disc.cpp:Disc`, opened when the title boots; CHD hunks decoded ahead by `psx/cd/hunk_reader.cpp:HunkReader` | |
 | 3 | `psx/core/guest_code_module.cpp:publishLanding` → `GameRuntime::guestCodeModuleWindow` — a module landed in its window | `guestCodeModuleWindow` |
 | 4 | `psx/cd/cd_stock_read_completion.cpp:announceStockReadLanding` → `GameRuntime::stockCdReadLanded` | `stockCdReadLanded` |

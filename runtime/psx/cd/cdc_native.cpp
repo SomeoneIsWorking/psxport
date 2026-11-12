@@ -446,13 +446,13 @@ void CdController::setFilter(uint8_t file, uint8_t channel) {
   lucent::debug("cdc", "setfilter file={} chan={}", file, channel);
 }
 
-// Runs a still-pending command through its own execute/complete phases now, so a read applied
-// synchronously after it cannot be cancelled by it (C-12's Pause before ReadN).
-void CdController::retirePendingCommand() {
+// Runs a still-pending command through its own phases now, up to its execution or its completion.
+void CdController::retirePendingCommand(RetireTo to) {
   if (!command_event_armed || !tick_now) {
     return;
   }
-  for (int guard = 0; guard < 64 && command_event_armed; ++guard) {
+  for (int guard = 0; guard < 64 && command_event_armed && (to == RetireTo::Completion || command_phase <= 1);
+       ++guard) {
     command_deadline_ticks = tick_now(tick_context);
     const CdcCommandEvent event = serviceCommand(1);
     if (event == CdcCommandEvent::Execute) {
@@ -464,7 +464,8 @@ void CdController::retirePendingCommand() {
 }
 
 void CdController::beginRead(uint32_t lba) {
-  retirePendingCommand();
+  // A read applied synchronously after a pending command cannot be cancelled by it (C-12's Pause before ReadN).
+  retirePendingCommand(RetireTo::Completion);
   loc_lba = lba;
   command_lba = lba;
   startContinuousRead();
@@ -472,6 +473,8 @@ void CdController::beginRead(uint32_t lba) {
 
 void CdController::issueCommand(uint8_t command) {
   index = 0;
+  // libcd waits out BUSYSTS before it writes a command, so one still being received executes first.
+  retirePendingCommand(RetireTo::Execution);
   // Timed like a register write; the guest that issued it consumes both responses.
   scheduleCommand(command);
 }
