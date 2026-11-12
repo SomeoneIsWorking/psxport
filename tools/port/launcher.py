@@ -28,7 +28,10 @@ from project import lightning_cmake_definitions, lightrec_cmake_definitions  # n
 
 FRAMEWORK = TOOLS.parent
 PLAYER_BUILD = Path("build/player")
+AGENT_BUILD = Path("build/agent")
 FRAMEWORK_TOOLS_BUILD = Path("build/player-tools")
+# Set by the desktop shortcut: launch the newest product already built instead of building.
+RUN_BUILT = "PSXPORT_RUN_BUILT"
 CMAKE_STATE = ("CMakeCache.txt", "CMakeFiles", "build.ninja", "rules.ninja", ".ninja_deps", ".ninja_log",
                "cmake_install.cmake", "CPackConfig.cmake", "CPackSourceConfig.cmake")
 
@@ -273,7 +276,15 @@ def preflight(extra: Iterable[Dependency] = ()) -> None:
 
 def build_product(root: Path, target: str, environment: Mapping[str, str],
                   definitions: Sequence[str] = ()) -> Path:
-    """Configure and build the title's player product in ``build/player``; returns that directory."""
+    """Configure and build the title's player product in ``build/player``; returns that directory.
+
+    With RUN_BUILT set, the newest of the player and agent builds that already holds ``target`` is
+    returned unbuilt; a checkout with neither builds as usual."""
+    if environment.get(RUN_BUILT) == "1":
+        built = newest_build(root, target)
+        if built is not None:
+            say(f"launching the built {target} in {built.relative_to(root)} without building")
+            return built
     build = root / PLAYER_BUILD
     say(f"building {target}…")
     configure_consumer(root, build, "Release", definitions, environment, quiet=True)
@@ -281,18 +292,31 @@ def build_product(root: Path, target: str, environment: Mapping[str, str],
     return build
 
 
+def newest_build(root: Path, target: str) -> Path | None:
+    """The player or agent build directory whose ``bin/<target>`` is newest, or None when neither exists."""
+    built = [root / tree for tree in (PLAYER_BUILD, AGENT_BUILD) if os.access(root / tree / "bin" / target, os.X_OK)]
+    return max(built, key=lambda tree: (tree / "bin" / target).stat().st_mtime, default=None)
+
+
+def _discdump_in(build: Path) -> Path | None:
+    for name in ("discdump", "discdump.exe"):
+        if os.access(build / "tools" / name, os.X_OK):
+            return build / "tools" / name
+    return None
+
+
 def build_discdump(root: Path, environment: Mapping[str, str]) -> Path:
     """psxport's disc reader, built from the framework tree into the title's ``build/player-tools``."""
     build = root / FRAMEWORK_TOOLS_BUILD
+    if environment.get(RUN_BUILT) == "1" and (built := _discdump_in(build)) is not None:
+        return built
     say("building discdump…")
     configure(FRAMEWORK, build, "Release", [*lightrec_cmake_definitions(environment),
                                             *lightning_cmake_definitions(environment)],
               environment, owner=root, quiet=True)
     build_targets(build, ["discdump"], environment)
-    for name in ("discdump", "discdump.exe"):
-        candidate = build / "tools" / name
-        if os.access(candidate, os.X_OK):
-            return candidate
+    if (built := _discdump_in(build)) is not None:
+        return built
     raise ToolError(f"the discdump build produced no executable under {build / 'tools'}")
 
 

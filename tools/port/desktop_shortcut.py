@@ -5,7 +5,7 @@
 Run from the title root. The title owns ``packaging/linux/<app-id>.desktop`` and the SVG its
 ``Icon=`` names; this engine rewrites ``Exec`` / ``TryExec`` / ``Path`` to the launcher in this
 checkout and installs both files into the user's data home, so the shortcut is per machine and never
-committed. Re-run it when the launcher, the product name or the icon changes.
+committed. The shortcut launches the newest build already made and builds only when there is none. Re-run it when the launcher, the product name or the icon changes.
 """
 
 from __future__ import annotations
@@ -22,6 +22,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from automation.process import ToolError  # noqa: E402
+from port import launcher as launcher_module  # noqa: E402
 
 PACKAGING = Path("packaging") / "linux"
 LAUNCHER = Path("run.sh")
@@ -113,7 +114,7 @@ def desktop_home() -> Path | None:
 
 
 def launcher_exec(root: Path) -> str:
-    """The command the shortcut runs: the title launcher, with uv reachable for its shebang path."""
+    """The command the shortcut runs: the title launcher on the newest build already made, with uv reachable."""
     launcher = root / LAUNCHER
     if not launcher.is_file():
         raise ToolError(f"no title launcher at {launcher}")
@@ -123,7 +124,8 @@ def launcher_exec(root: Path) -> str:
     if uv is None:
         raise ToolError("uv is not on PATH, so the shortcut could not run the launcher")
     search = os.pathsep.join((str(Path(uv).resolve().parent), LAUNCH_PATH))
-    return f"{quoted_exec('env')} {quoted_exec('PATH=' + search)} {quoted_exec(str(launcher))}"
+    return " ".join(quoted_exec(part) for part in
+                    ("env", f"PATH={search}", f"{launcher_module.RUN_BUILT}=1", str(launcher)))
 
 
 def install_entry(shortcut: Shortcut) -> Path:
