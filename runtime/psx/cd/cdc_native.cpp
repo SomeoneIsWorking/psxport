@@ -402,6 +402,14 @@ bool CdController::serviceDueSector(uint64_t now_ticks) {
   return 1;
 }
 
+bool CdController::reachNextSector() {
+  if (!drive_event_armed) {
+    return false;
+  }
+  serviceDueSector(drive_deadline_ticks);
+  return true;
+}
+
 bool CdController::serviceDriveEvent() {
   if (!drive_event_armed || !tick_now) {
     return 0;

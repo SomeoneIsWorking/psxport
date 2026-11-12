@@ -78,6 +78,9 @@ public:
   int dmaRead(uint32_t *out, int words);
   // Position at `lba` and start a continuous read, so a guest that drives the hardware directly sees real data.
   void beginRead(uint32_t lba);
+  // A host-paced stream owes the head's next sector now: the armed drive event fires ahead of the guest clock. False
+  // when none is armed.
+  bool reachNextSector();
   // Issue one parameterless command the native CD layer intercepted (Pause, Stop), with both its responses.
   void issueCommand(uint8_t command);
   // Drain the current response, keeping the first `capacity` bytes in `bytes`. Returns how many it held.

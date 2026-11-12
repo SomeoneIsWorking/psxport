@@ -400,10 +400,18 @@ void StockLibcd::pumpStream(Core &core, int sectors) const {
     const psx::cpu::GuestContextScope context(core);
     for (int i = 0; i < sectors && cd.stream_active; i++) {
       game.timing.serviceCdc();
+      // The sector is owed at the drive's rate, so the head reaches it now; the guest clock stands still here.
       if (game.cdc.currentIrqType() != CdcResponse::DataReady) {
-        break;
+        if (!game.cdc.reachNextSector()) {
+          break;
+        }
+        game.timing.serviceCdc();
       }
       cd.stream_delivered++;
+      // An interleaved XA sector passes under the head without a ready call.
+      if (game.cdc.currentIrqType() != CdcResponse::DataReady) {
+        continue;
+      }
       auto result = callReady(core, callback);
       if (!result.returned()) {
         exit.emplace(std::move(result));
