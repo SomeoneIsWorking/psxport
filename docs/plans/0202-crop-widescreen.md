@@ -23,7 +23,8 @@ GTE aspect; neither crops gameplay height to 16:9 and relocates the HUD
   the same draw-site tags it already uses for widescreen HUD anchoring: a tagged 2D draw is offset at present
   time by the rows its anchor edge lost (top-anchored down, bottom-anchored up). Untagged 2D stays where the
   guest put it; screens whose UI would be cut (full-screen menus, text pages) present uncropped at 4:3 with
-  pillarbox bars, declared per screen by the title.
+  pillarbox bars, declared per screen by the title (user, 2026-11-12: Mega Man X4's pause screen and Tomba 2's
+  inventory show normally at 4:3, unadjusted).
 - **Movies** present uncropped (pillarboxed) unless the title declares a movie as safe to crop.
 - **Interpolation** is unchanged: the replay renders the 4:3 frame and the crop applies to each present.
 
