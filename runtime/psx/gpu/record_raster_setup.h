@@ -126,31 +126,37 @@ struct RecordQuad {
 // The draw area is the buffer: its columns exactly, its rows covered.
 bool drawAreaSpansBuffer(const present::RecordDrawState &state, const RecordRect &buffer);
 
-// A display buffer's wide canvas: `buffer` (native VRAM pixels) with `left` and `right` more columns.
+// A display buffer's wide canvas: `buffer` (native VRAM pixels) with `reach` more columns allocated each side, of
+// which the window `left` and `right` (each at most `reach`) is drawn and shown.
 // Its pixel (x, y) is VRAM-space pixel (originX() + x, originY() + y), which may lie outside VRAM.
 struct RecordCanvas {
   RecordRect buffer;
+  int reach = 0;
   int left = 0;
   int right = 0;
 
   int originX() const {
-    return buffer.x0 - left;
+    return buffer.x0 - reach;
   }
   int originY() const {
     return buffer.y0;
   }
   int width() const {
-    return buffer.x1 - buffer.x0 + left + right;
+    return buffer.x1 - buffer.x0 + 2 * reach;
   }
   int height() const {
     return buffer.y1 - buffer.y0;
   }
+  // The window in canvas pixels.
+  RecordRect window() const {
+    return {reach - left, 0, reach + buffer.x1 - buffer.x0 + right, height()};
+  }
   bool operator==(const RecordCanvas &) const = default;
 };
 
-// Whether a kept canvas still serves displays of these margins and width. The two buffers of a double-buffered
-// title may differ in height, so each keeps its own canvas and only a margin or width change retires one.
-bool canvasSurvives(const RecordCanvas &canvas, int displayWidth, int left, int right);
+// Whether a kept canvas still serves displays of this width at this reach. The two buffers of a double-buffered
+// title may differ in height, so each keeps its own canvas and only a widening or width change retires one.
+bool canvasSurvives(const RecordCanvas &canvas, int displayWidth, int reach);
 
 // Plane 0 is the VRAM image; plane 1 + i is canvas i.
 inline constexpr int kRecordMaxCanvases = 2;

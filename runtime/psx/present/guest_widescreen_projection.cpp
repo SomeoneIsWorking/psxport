@@ -43,7 +43,7 @@ PresentationAspect requestedAspect(const Core &core) {
 }
 
 GuestProjectionPlan latch(Core &core, PixelSize nativePresentation, GuestProjectionGeometry nativeProjection) {
-  GuestProjectionPlan plan = guestProjectionPlan({
+  const GuestProjectionPlan plan = guestProjectionPlan({
       .path = core.rsub.mode.path(),
       .requested = requestedAspect(core),
       .nativePresentation = nativePresentation,
@@ -51,11 +51,6 @@ GuestProjectionPlan latch(Core &core, PixelSize nativePresentation, GuestProject
       .sink = core.game->renderDevice.sinkSize(),
       .vramWidth = gpu::kVramWidth,
   });
-  const GuestWidescreenProjection *projection = core.runtime.guestWidescreenProjection();
-  if (projection != nullptr && plan.widescreen()) {
-    const int margin = plan.presentationHorizontalMargin;
-    plan.presentedMargins = clampedMargins(projection->presentedMargins(core, margin), margin);
-  }
   core.game->guestDisplay.latch(plan);
   return plan;
 }
@@ -86,6 +81,17 @@ GuestProjectionPlan latchGuestProjection(Core &core, GuestProjectionGeometry geo
     std::abort();
   }
   return latch(core, nativeDisplaySize(core), geometry);
+}
+
+HorizontalMargins frameMargins(Core &core) {
+  const GuestProjectionPlan &plan = core.game->guestDisplay.plan();
+  if (!plan.widescreen()) {
+    return {};
+  }
+  const GuestWidescreenProjection *projection = core.runtime.guestWidescreenProjection();
+  const HorizontalMargins picture = projection != nullptr ? projection->pictureBeyondBuffer(core)
+                                                          : HorizontalMargins{kUnboundedPicture, kUnboundedPicture};
+  return fitMargins(picture, plan.presentationHorizontalMargin);
 }
 
 GuestProjectionPlan latchRecordDisplay(Core &core, PixelSize display) {

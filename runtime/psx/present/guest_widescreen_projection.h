@@ -1,6 +1,7 @@
 // guest_widescreen_projection.h — title-owned projection matched to a host presentation extent.
 #pragma once
 
+#include "horizontal_margins.h"
 #include "pixel_size.h"
 #include "render_mode.h"
 #include "video_plan.h"
@@ -23,26 +24,6 @@ enum class PresentationAspect : std::uint8_t {
 // The player's aspect setting.
 PresentationAspect presentationAspectFor(const Mods &mods);
 
-// Columns of picture beside the 4:3 window, each side.
-struct HorizontalMargins {
-  int left = 0;
-  int right = 0;
-
-  int total() const {
-    return left + right;
-  }
-  bool operator==(const HorizontalMargins &) const = default;
-};
-
-// A title's wanted sides held to the widening: each in [0, 2 * margin], together at most 2 * margin.
-inline HorizontalMargins clampedMargins(HorizontalMargins wanted, int margin) {
-  const int span = 2 * (margin > 0 ? margin : 0);
-  const int left = wanted.left < 0 ? 0 : (wanted.left > span ? span : wanted.left);
-  const int room = span - left;
-  const int right = wanted.right < 0 ? 0 : (wanted.right > room ? room : wanted.right);
-  return {left, right};
-}
-
 // A title implements this only when its own guest code owns projection, culling and layout changes.
 // Returning a wide aspect does not patch guest state and does not stretch the picture: the title must
 // explicitly latch the matching plan when it publishes its guest projection.
@@ -51,11 +32,11 @@ public:
   virtual ~GuestWidescreenProjection() = default;
   // The player's aspect setting; a title overrides this only to hold 4:3 in some state.
   virtual PresentationAspect presentationAspect(const Core &core) const;
-  // The picture's columns each side for a symmetric widening of `margin`; a title whose view runs past its
-  // world's edge gives that side's columns to the other or drops them, and the presenter pillarboxes the rest.
-  virtual HorizontalMargins presentedMargins(Core &core, int margin) const {
+  // Native columns of picture the frame being sealed holds beyond the display buffer, each side; a title whose
+  // view stops at its world's edge says so here. fitMargins turns it into the frame's margins.
+  virtual HorizontalMargins pictureBeyondBuffer(Core &core) const {
     (void)core;
-    return {margin, margin};
+    return {kUnboundedPicture, kUnboundedPicture};
   }
 };
 
@@ -77,8 +58,6 @@ struct GuestProjectionPlan {
   int nativeGuestDrawWidth = 0;
   int guestDrawWidth = 0;
   int presentationHorizontalMargin = 0;
-  // The record canvas's columns each side of the display buffer (GuestWidescreenProjection::presentedMargins).
-  HorizontalMargins presentedMargins;
   int projectionHorizontalMargin = 0;
   int projectionCenterX = 0;
   int projectionClipRight = 0;
@@ -168,7 +147,6 @@ inline GuestProjectionPlan guestProjectionPlan(const GuestProjectionInputs &inpu
   // The record canvas adds the margins around the buffer, so the guest keeps its retail centre and width.
   plan.guestDrawWidth = inputs.nativeProjection.drawWidth;
   plan.presentationHorizontalMargin = (plan.presentationExtent.width - inputs.nativePresentation.width) / 2;
-  plan.presentedMargins = {plan.presentationHorizontalMargin, plan.presentationHorizontalMargin};
   plan.projectionHorizontalMargin = (plan.projectionExtent.width - inputs.nativeProjection.extent.width) / 2;
   plan.projectionCenterX = inputs.nativeProjection.extent.width / 2;
   plan.projectionClipRight = plan.projectionExtent.width - 1;
@@ -198,6 +176,8 @@ private:
 bool widePresentation(const Core &core);
 int widePresentationWidth(const Core &core);
 GuestProjectionPlan latchGuestProjection(Core &core, GuestProjectionGeometry geometry);
+// The margins of the frame sealed now: the title's picture beyond the buffer fitted to the latched widening.
+HorizontalMargins frameMargins(Core &core);
 // The guest's display size, 320x240 before it programmed one.
 PixelSize nativeDisplaySize(Core &core);
 // RenderPath::Record: latches the plan for a guest display of `display` at the title's declared

@@ -7,6 +7,7 @@
 #include "fs_util.h"
 #include "game.h"
 #include "gpu_device.h"
+#include "guest_widescreen_projection.h"
 #include "render_mode.h"
 #include "replay_frame.h"
 #include "texture_feedback.h"
@@ -64,6 +65,7 @@ void FramePresenter::commit(Core *core, int guestFields) {
   core->game->display.finishShow();
   present::FrameRecord &slot = freeSlot();
   core->gpuDevice().sealRecord(slot);
+  slot.setMargins(present::frameMargins(*core));
   core->game->bugReport.frameSealed(*core, slot.sequence());
   commitSealed(*core, slot, guestFields);
 }

@@ -43,7 +43,8 @@ void RenderState::presentRecord(present::PresentInputs &inputs) {
   }
   const gpu::RecordRect display = gpu::clampedVramRect({inputs.sx, inputs.sy, inputs.native_w, inputs.disp_h});
   const present::GuestProjectionPlan &plan = core.game->guestDisplay.plan();
-  const RecordView view{display, plan.presentedMargins};
+  // Either side may take the whole widening, so a canvas reaches twice the symmetric margin.
+  const RecordView view{display, plan.widescreen() ? 2 * plan.presentationHorizontalMargin : 0};
   const present::FrameRecord &record = game_.presentation.currentRecord();
   const present::FrameRecord *composed = game_.presentation.composedRecord();
   const bool advances = game_.presentation.composedAdvances();
@@ -84,7 +85,7 @@ void RenderState::presentRecord(present::PresentInputs &inputs) {
                 drewComposed ? 1 : 0);
   device_.submit(cmd, drewComposed ? "record composed" : "record");
   // An in-between has no device picture to match; the t = 1 composed frame at 4:3 must match it.
-  if ((drewComposed && (!advances || view.margins.total() > 0)) || !lucent::channel_on("recordcheck")) {
+  if ((drewComposed && (!advances || view.reach > 0)) || !lucent::channel_on("recordcheck")) {
     return;
   }
   checkRecord(record, drewComposed, deviceAhead, scale);

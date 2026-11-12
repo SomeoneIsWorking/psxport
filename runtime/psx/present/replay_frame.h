@@ -82,6 +82,7 @@ private:
     std::vector<gpu::CapturedPacket> packets;
     std::vector<std::uint32_t> words;
     std::vector<gte::WordPlace> places;
+    HorizontalMargins margins; // frameMargins inside the replay, so the in-between frames its own view
   };
   struct Set {
     std::optional<std::uint64_t> shown;

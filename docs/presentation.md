@@ -446,14 +446,18 @@ for the displayed rect. `RenderState::buildDisplay` latches it once per present,
 or drawn, so every reader of `guestDisplay.plan()` sees this present's plan. A title's guest projection plan there keeps the retail centre and draw width
 (`projectionCenterX`, `guestDrawWidth`): the canvas, not a wider draw area, holds the margins, and the
 title widens only what it culls. `RecordRasterizer` keeps a canvas per displayed buffer (at most two, the
-least recently shown is dropped; a margin or width change retires both, a height difference between the two buffers does not): the buffer plus `presentedMargins.left` and `.right` columns, at scale, seeded from the image
-with black margins and reseeded after a resync. The sides are M each unless the title's
-`GuestWidescreenProjection::presentedMargins` moves them: a view that would leave the title's world gives that side's
-columns to the other, `clampedMargins` holds each side to `[0, 2M]` and their sum to 2M, and a canvas narrower than
-the buffer plus 2M is pillarboxed (Mega Man X4 at a camera bound, psx-mega-man-x4 issue 0044). Each record entry is planned once per plane:
+least recently shown is dropped; a widening or width change retires both, a split change or a height difference between the two buffers does not): the buffer plus a reach of 2M columns each side, at scale, cleared and seeded from the image when made; a resync reseeds only the buffer's columns.
+Each `FrameRecord` carries the margins it drew (`FrameRecord::margins`): `FramePresenter::commit` stamps
+`present::frameMargins` at the seal, and a replayed in-between stamps its own inside the replay. `frameMargins` asks the
+title's `GuestWidescreenProjection::pictureBeyondBuffer` how much picture the sealed frame holds beyond the buffer on
+each side (unbounded by default) and `fitMargins` (`horizontal_margins.h`, the one rule) fits it to the widening: a short side
+gives its columns to the other, each side and their sum held to 2M, and what neither side holds is pillarboxed. A record
+plans into the window of its own margins; a canvas it drew keeps that window, and a present shows the window of the
+record that last drew the canvas, so the picture always carries the split it was drawn with. Copies are limited to the
+windows before and after the record (Mega Man X4 at a camera bound, psx-mega-man-x4 issue 0044). Each record entry is planned once per plane:
 
 - A primitive whose draw area spans the buffer's columns (x range equal, rows inside the buffer; a title may inset its rows) draws into the
-  canvas with its x clip widened by M. Any other primitive lands in the canvas only inside the buffer.
+  canvas with its x clip widened to the record's window. Any other primitive lands in the canvas only inside the buffer.
   Inside VRAM's columns a canvas plots as `gpu.c` does; past them (left of 0, right of 1023) it plots the
   unwrapped position, where the device's 11-bit x would wrap, so a buffer at column 704 keeps its right margin
   (`coveredColumns`, `record.frag`, `addSprite`, `addLine`; psx-tomba Tomba 1 field foliage).

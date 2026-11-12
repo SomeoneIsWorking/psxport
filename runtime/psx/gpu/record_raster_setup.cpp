@@ -1243,7 +1243,7 @@ void RecordPlanner::Builder::addCanvasMargins(const DrawPrimitive &primitive) {
     const int rowFirst = y0 / s;
     const int rowEnd = (y1 + s - 1) / s;
     target(planeClip.plane);
-    int left = std::max(canvas.originX(), clip.x0);
+    int left = std::max(canvas.buffer.x0 - canvas.left, clip.x0);
     int right = std::min(canvas.buffer.x1 + canvas.right, clip.x1 + 1);
     if (sampling_) {
       left = std::max(left, sampling_->captured.x0 - sampling_->x);
@@ -1274,7 +1274,7 @@ void RecordPlanner::Builder::addFill(const present::VramFill &fill) {
       const int y0 = std::max(rect.y0, canvas.buffer.y0);
       const int y1 = std::min(rect.y1, canvas.buffer.y1);
       if (rect.x0 <= canvas.buffer.x0 && rect.x1 >= canvas.buffer.x1 && y0 < y1) {
-        emit({canvas.originX(), y0, canvas.buffer.x0, y1});
+        emit({canvas.buffer.x0 - canvas.left, y0, canvas.buffer.x0, y1});
         emit({canvas.buffer.x1, y0, canvas.buffer.x1 + canvas.right, y1});
       }
     }
@@ -1403,9 +1403,8 @@ bool drawAreaSpansBuffer(const present::RecordDrawState &state, const RecordRect
          area.y0 < buffer.y1 && area.y1 >= buffer.y0;
 }
 
-bool canvasSurvives(const RecordCanvas &canvas, int displayWidth, int left, int right) {
-  return left + right > 0 && canvas.left == left && canvas.right == right &&
-         canvas.buffer.x1 - canvas.buffer.x0 == displayWidth;
+bool canvasSurvives(const RecordCanvas &canvas, int displayWidth, int reach) {
+  return reach > 0 && canvas.reach == reach && canvas.buffer.x1 - canvas.buffer.x0 == displayWidth;
 }
 
 RecordPlanner::RecordPlanner() : builder_(std::make_unique<Builder>()) {}
