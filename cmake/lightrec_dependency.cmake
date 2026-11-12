@@ -136,49 +136,9 @@ function(psxport_configure_lightrec_dependency)
 
   set(PSXPORT_LIGHTREC_SOURCE_DIR "${_resolved}" CACHE INTERNAL "The exact Lightrec tree this build compiles")
 
-  # A parent may already have added Lightrec, but target-name equality is not dependency identity.
-  # Refuse an injected target unless it came from the exact source tree resolved and pinned above.
-  if(TARGET lightrec)
-    get_target_property(_target_source lightrec SOURCE_DIR)
-    if(NOT _target_source OR _target_source STREQUAL "_target_source-NOTFOUND")
-      message(FATAL_ERROR
-        "existing lightrec target does not expose a source directory; expected ${_resolved}")
-    endif()
-    cmake_path(ABSOLUTE_PATH _target_source NORMALIZE OUTPUT_VARIABLE _target_source_absolute)
-    if(NOT _target_source_absolute STREQUAL _resolved)
-      message(FATAL_ERROR
-        "existing lightrec target source mismatch: expected ${_resolved}, "
-        "found ${_target_source_absolute}")
-    endif()
-    return()
-  endif()
-
-  # Lightrec's build declares these generic cache options. Scope the required values to its
-  # add_subdirectory call, then restore the consumer's cache entries exactly (including absence).
-  foreach(_option IN ITEMS BUILD_SHARED_LIBS BUILD_TESTING)
-    get_property(_cache_entry_exists CACHE "${_option}" PROPERTY TYPE SET)
-    set("_saved_${_option}_exists" "${_cache_entry_exists}")
-    if(_cache_entry_exists)
-      get_property("_saved_${_option}_value" CACHE "${_option}" PROPERTY VALUE)
-      get_property("_saved_${_option}_type" CACHE "${_option}" PROPERTY TYPE)
-      get_property("_saved_${_option}_help" CACHE "${_option}" PROPERTY HELPSTRING)
-      get_property("_saved_${_option}_advanced" CACHE "${_option}" PROPERTY ADVANCED)
-    endif()
-  endforeach()
-
-  set(BUILD_SHARED_LIBS OFF CACHE BOOL "Build static dependencies" FORCE)
-  set(BUILD_TESTING OFF CACHE BOOL "Do not register dependency-owned tests in consumers" FORCE)
-  set(BUILD_SHARED_LIBS OFF)
-  set(BUILD_TESTING OFF)
-  add_subdirectory("${_resolved}" "${CMAKE_BINARY_DIR}/shared_lightrec" EXCLUDE_FROM_ALL)
-
-  foreach(_option IN ITEMS BUILD_SHARED_LIBS BUILD_TESTING)
-    if(_saved_${_option}_exists)
-      set(${_option} "${_saved_${_option}_value}" CACHE "${_saved_${_option}_type}"
-        "${_saved_${_option}_help}" FORCE)
-      set_property(CACHE "${_option}" PROPERTY ADVANCED "${_saved_${_option}_advanced}")
-    else()
-      unset(${_option} CACHE)
-    endif()
-  endforeach()
+  # Lightning is resolved here, the way Lightrec's own build would, so the prefix is keyed by it.
+  find_library(LIBLIGHTNING lightning REQUIRED)
+  find_path(LIBLIGHTNING_INCLUDE_DIR NAMES lightning.h lightning/lightning.h REQUIRED)
+  psxport_dependency_prefix(lightrec SOURCE "${_resolved}" PACKAGE lightrec RECIPE
+    OPTIONS "-DLIBLIGHTNING=${LIBLIGHTNING}" "-DLIBLIGHTNING_INCLUDE_DIR=${LIBLIGHTNING_INCLUDE_DIR}")
 endfunction()

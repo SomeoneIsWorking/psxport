@@ -40,6 +40,8 @@ Dependency direction: title repo → `runtime/psx/game/` (the title interface) �
 - `runtime/cpu/guest_writer_latch.h` — guest writer latch / shadow call stack: innermost guest function (called by `jal`/`jalr` or entered by the host, `HostCall`), block-entry PC, dispatched entry of a store
 - `runtime/cpu/host_turn.*` — host turn clock: one display field owed per field period of guest time, PW_HOST
 - `cmake/lightrec_dependency.cmake` — pinned Lightrec revision and worktree
+- `cmake/dependency_prefix.cmake`, `cmake/deps/` — RmlUi, libchdr, Lucent and Lightrec built once per source content and toolchain into `~/.cache/psxport/deps/<dep>/<compiler>-<config>-<key>` (`PSXPORT_DEPENDENCY_ROOT`), found with find_package; libpsxport, bug-report and setup-ui stay per build tree
+- `cmake/build_policy.cmake` — per-build-type flags (line tables + zstd debug sections for RelWithDebInfo, no debug info in Release, full `-g` only in Debug) and lld for Clang
 - `runtime/psx/hle/hle.*`, `hle_heap.cpp`, `hle_interrupt.cpp`, `kernel_syscall.cpp`, `syscall_exception.*` — BIOS / kernel HLE: A0/B0/C0 tables, events, heap, interrupt chain, syscall exception entry and return
 - `runtime/psx/hle/bios_*` — BIOS libc string and memory leaves, setjmp / HookEntryInt, LoadExec / LoadAndExecute, pad work area
 - `runtime/psx/hle/platform_hle.*`, `stock_*` — PSY-Q stock library bodies a title binds: libgpu DrawSync waits, libgte projection setters, libetc VSync frame boundary, DMACallback table

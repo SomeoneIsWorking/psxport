@@ -13,9 +13,6 @@ include(cmake/build_policy.cmake)
 find_package(Threads REQUIRED)
 find_package(Python3 REQUIRED COMPONENTS Interpreter)
 
-# libchdr (CHD access for psx::cd::Disc) — from the Beetle PSX submodule (bundles its own lzma).
-add_subdirectory(vendor/beetle-psx/deps/libchdr EXCLUDE_FROM_ALL)
-
 add_subdirectory(tools)
 
 # The framework static library `psxport`.

@@ -16,6 +16,7 @@ get_filename_component(PSXPORT_ROOT ${CMAKE_CURRENT_LIST_DIR} DIRECTORY)  # <psx
 set(RT runtime/psx)
 set(MED ${PSXPORT_ROOT}/vendor/beetle-psx/mednafen)
 
+include("${PSXPORT_ROOT}/cmake/dependency_prefix.cmake")
 include("${PSXPORT_ROOT}/cmake/lightrec_dependency.cmake")
 psxport_configure_lightrec_dependency()
 
@@ -23,12 +24,13 @@ psxport_configure_lightrec_dependency()
 # vendor/rmlui is a submodule of upstream RmlUi pinned at the 6.3 release, the workspace's standard
 # RmlUi version; nothing in it is modified.
 set(BUILD_SHARED_LIBS OFF)
-set(RMLUI_SAMPLES        OFF CACHE BOOL   "" FORCE)
-set(RMLUI_LUA_BINDINGS   OFF CACHE BOOL   "" FORCE)
-set(RMLUI_SVG_PLUGIN     OFF CACHE BOOL   "" FORCE)
-set(RMLUI_LOTTIE_PLUGIN  OFF CACHE BOOL   "" FORCE)
-set(RMLUI_FONT_ENGINE    freetype CACHE STRING "" FORCE)
-add_subdirectory(${PSXPORT_ROOT}/vendor/rmlui ${CMAKE_BINARY_DIR}/rmlui_build EXCLUDE_FROM_ALL)
+psxport_dependency_prefix(rmlui SOURCE "${PSXPORT_ROOT}/vendor/rmlui" PACKAGE RmlUi
+  OPTIONS -DBUILD_SHARED_LIBS=OFF -DRMLUI_SAMPLES=OFF -DRMLUI_LUA_BINDINGS=OFF -DRMLUI_SVG_PLUGIN=OFF
+          -DRMLUI_LOTTIE_PLUGIN=OFF -DRMLUI_FONT_ENGINE=freetype)
+
+# libchdr (CHD access for psx::cd::Disc), from the Beetle PSX submodule with its bundled codecs.
+psxport_dependency_prefix(libchdr SOURCE "${PSXPORT_ROOT}/vendor/beetle-psx/deps/libchdr"
+  PACKAGE libchdr RECIPE)
 
 # ---- bug-report (the in-app bug report form) and setup-ui (the first-run screen), over that RmlUi --
 include("${PSXPORT_ROOT}/cmake/shared_dependency.cmake")
@@ -309,10 +311,9 @@ target_include_directories(psxport PUBLIC
   # Public: a title's NativeStatePort includes machine_state.h.
   ${PSXPORT_ROOT}/${RT}/state
   ${MED} ${MED}/psx
-  ${PSXPORT_ROOT}/vendor/beetle-psx/libretro-common/include ${PSXPORT_ROOT}/vendor/beetle-psx
-  ${PSXPORT_ROOT}/vendor/beetle-psx/deps/libchdr/include)
+  ${PSXPORT_ROOT}/vendor/beetle-psx/libretro-common/include ${PSXPORT_ROOT}/vendor/beetle-psx)
 # Third-party headers: their own diagnostics are not ours.
-target_include_directories(psxport SYSTEM PUBLIC ${PSXPORT_ROOT}/vendor/rmlui/Include ${PSXPORT_ROOT}/vendor/rmlui/Backends)
+target_include_directories(psxport SYSTEM PUBLIC ${PSXPORT_ROOT}/vendor/rmlui/Backends)
 # NO game include dirs: the framework #includes no game/ header.
 
 # Framework internals no title includes; framework tools link psxport_internal for them.
@@ -344,30 +345,19 @@ if(PSXPORT_WRAP_MEMCPY)
 endif()
 
 # Link deps PUBLIC/INTERFACE so any consumer (the game exe, the smoke) inherits them.
-# lucent — logging + configuration (https://github.com/SomeoneIsWorking/lucent). Vendored as a submodule (vendor/lucent) alongside beetle-psx/rmlui so the framework and its
-# offline tools build hermetically — no configure-time network fetch. add_subdirectory installs the `lucent` target and
-# its `lucent::lucent` alias; lucent's own tests are gated on its CMAKE_SOURCE_DIR and never build
-# here.
-#
-# Lucent reads the public PSXPORT_DEBUG and PSXPORT_LOG_FILE names directly. They are build-time
-# settings because the logger resolves them lazily at its own boundary; no separate initialization
-# call may determine whether a diagnostic channel works.
-set(LUCENT_CHANNEL_ENV  "PSXPORT_DEBUG")
-set(LUCENT_LOG_FILE_ENV "PSXPORT_LOG_FILE")
+# lucent — logging + configuration (https://github.com/SomeoneIsWorking/lucent), the vendor/lucent
+# submodule. It reads the public PSXPORT_DEBUG and PSXPORT_LOG_FILE names, baked in at build time so
+# the first log line of the process already honours them.
+set(_psxport_lucent_options -DLUCENT_CHANNEL_ENV=PSXPORT_DEBUG -DLUCENT_LOG_FILE_ENV=PSXPORT_LOG_FILE)
 if(ANDROID)
-  set(LUCENT_FORMAT_BACKEND fmt CACHE STRING
-    "Use the Android prefix's fmt package for Lucent's formatted logger" FORCE)
+  list(APPEND _psxport_lucent_options -DLUCENT_FORMAT_BACKEND=fmt "-Dfmt_DIR=${fmt_DIR}")
 endif()
-# EXPLICIT BINARY DIR, like rmlui's above (line 58). add_subdirectory with a source dir OUTSIDE the
-# consuming project's tree is an error unless one is given — so without it the framework could only be
-# built from a PSXPORT_ROOT nested under the consumer, and `-DPSXPORT_DIR=<a psxport clone elsewhere>`
-# died here with "binary_dir must be specified". That is the whole point of the workspace's framework
-# dev clone, so the path has to be honest about being relocatable.
-add_subdirectory(${PSXPORT_ROOT}/vendor/lucent ${CMAKE_BINARY_DIR}/lucent_build)
+psxport_dependency_prefix(lucent SOURCE "${PSXPORT_ROOT}/vendor/lucent" PACKAGE lucent RECIPE
+  OPTIONS ${_psxport_lucent_options})
 
 target_link_libraries(psxport PUBLIC
   lucent::lucent
-  lightrec rmlui_debugger rmlui_core bug_report::bug_report chdr-static
+  lightrec::lightrec RmlUi::Debugger RmlUi::Core bug_report::bug_report chdr::chdr-static
   psxport_presentation_dependencies
   Threads::Threads m)
 # The first-run screen is the host's own; titles never include it.
