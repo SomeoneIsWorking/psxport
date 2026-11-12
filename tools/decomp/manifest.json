@@ -512,6 +512,16 @@
       "code_last": "0x1DB7",
       "note": "The credits overlay, WAD.WAD bytes 0x002ED800..+0x2000, which 0x8001A910 loads through 0x80013810 to [0x80011110] = 0x8006D264 (size [0x80067714], offset [0x80067710], read in a credits RAM dump). Update 0x8006D96C, draw 0x8006EE18. code_first is the first prologue (0x8006D298), code_last the last jr ra's delay slot."
     },
+    "spyro2_boot": {
+      "kind": "module",
+      "title": "spyro2",
+      "serial": "SCUS_944.25",
+      "sha1": "7aceeb25ede2fd5e3fa6b17ac0fbee3ab8a708c0",
+      "load_base": "0x8006D264",
+      "code_first": "0x2834",
+      "code_last": "0x11D87",
+      "note": "The boot overlay, WAD.WAD bytes 0x00023000..+0x12800, which the boot prefix 0x80011E9C loads through 0x80013810 to [0x80011110] = 0x8006D264 (size [0x800676E4], offset [0x800676E0], read in a RAM dump at boot step 100) before calling 0x80077374(1), the logo sequence. code_first is the first prologue (0x8006FA98), code_last the last jr ra's delay slot."
+    },
     "spyro3_credits": {
       "kind": "module",
       "title": "spyro3",
