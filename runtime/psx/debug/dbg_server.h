@@ -34,7 +34,7 @@ public:
     mMachine = machine;
   }
 
-  // Before a frame: while a client has paused the game, idle until `play` or `step` arrives.
+  // Before a frame: while a client has paused the game, idle until `play`, `step` or `quit` arrives.
   void honourPause(Core *c);
   // One idle tick of a held field: host input, repaint, one command, ~15 ms.
   void idleFrame(Core *c);

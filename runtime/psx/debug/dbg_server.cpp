@@ -250,13 +250,13 @@ void DbgServer::service(Core *c) {
   });
 }
 
-// A pause re-shows the last real frame and never re-renders.
+// A pause re-shows the last real frame and never re-renders; a quit ends it so the run's owner can take the quit.
 void DbgServer::honourPause(Core *c) {
   if (!mPaused) {
     return;
   }
   psx::platform::Watchdog::suspend();
-  while (mPaused) {
+  while (mPaused && !mQuitRequested.load()) {
     if (mStep > 0) {
       mStep--;
       break;
