@@ -34,3 +34,8 @@ sets `CdController::head_holds_untaken` when the host delivers the ready callbac
 `deliversOnInterrupt`). The head then waits on an announced sector and a BFRD take re-arms it. After:
 `LOGO.STR` runs guest fields 560 to 923 unpaced, LBAs 57830-58739 each serviced once with none read over
 (psx-tomba `scratch/x4-fw-check2/t1b`).
+
+Open: `head_holds_untaken` leaves two drive behaviours chosen by delivery mode. The single-behaviour fix is
+for `StockLibcd::pumpStream` to call the ready callback at each sector's own deadline inside the field, as
+interrupt delivery does, so the head always runs free; the flag is then removed. Proof is Tomba! 1's
+`LOGO.STR` field span (560 to 923) with every sector taken once.
