@@ -112,6 +112,8 @@ public:
   uint8_t first_sector_pending = 0;   // ReadN accepted; first data sector waits for its drive deadline
   uint8_t bfrd = 0;                   // request-register BFRD latch (bit 7)
   uint8_t following_sector_ready = 0; // drive-side next-sector availability, independent of FIFO drain
+  // The host stands in for libcd's INT1 service once per field, so the head holds a sector it has not taken.
+  uint8_t head_holds_untaken = 0;
   uint8_t drive_event_armed = 0;
   uint64_t drive_deadline_ticks = 0; // absolute, in the injected guest-instruction domain
   uint8_t command_event_armed = 0;

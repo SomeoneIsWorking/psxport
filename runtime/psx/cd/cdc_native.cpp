@@ -33,7 +33,9 @@ constexpr uint8_t kCdcErrorBadArgument = 0x10;
 void CdController::reset() {
   Disc *const wiredDisc = disc;
   psx::audio::XaStream *const wiredXa = xa;
+  const uint8_t wiredHold = head_holds_untaken;
   *this = CdController{};
+  head_holds_untaken = wiredHold;
   stat = kCdlStatStandby;
   // As the replaced BIOS CD initialisation leaves it.
   irq_en = kCdcIrqEnableAll;
@@ -384,7 +386,11 @@ bool CdController::serviceDueSector(uint64_t now_ticks) {
     return 1;
   }
 
-  // The head never waits for the guest: a sector it left untaken is read over (Beetle PS_CDC_HandlePlayRead).
+  // The guest's INT1 service never makes the head wait: a sector it left untaken is read over (Beetle
+  // PS_CDC_HandlePlayRead). A host-paced take re-arms the head instead.
+  if (following_sector_ready && head_holds_untaken) {
+    return 0;
+  }
   if (following_sector_ready) {
     lucent::debug("cdcpace",
                   "sector @ {} was left untaken (INT{} current); the head reads past it",
@@ -785,6 +791,9 @@ void CdController::writeRequestRegister(uint8_t value) {
     if (!loadSector(loc_lba)) {
       stopContinuousRead(ReadStop::DriveStopped);
       return;
+    }
+    if (head_holds_untaken) {
+      scheduleSectorEvent();
     }
   } else if (flushed) {
     data_rd = 0;

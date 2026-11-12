@@ -25,3 +25,12 @@ sector still announced when the next is due is read over (`cdcpace` logs it with
 keep their own native nesting (psx-mega-man-x4 `bios_threads::Service::resumeFiber`) and interrupts reach task
 code. After: the player-select BGM plays (-18 to -20 dB where it was silent), the title stream's data sectors are
 all taken, and only the filler sectors are read over, each with its INT1 already acknowledged.
+
+A host-paced stream keeps the hold. Tomba! 1 binds a base `StockLibcd` with a ready slot, so
+`StockLibcd::pumpStream` stands in for libcd's INT1 service once per display field. A free-running head
+read every `LOGO.STR` sector over before the pump ran, and the pump, which paces by the head's position,
+saw nothing owed, so the movie task spun for 33 fields and the frame driver aborted. `StockLibcd::bind`
+sets `CdController::head_holds_untaken` when the host delivers the ready callback (`readySlot != 0` and not
+`deliversOnInterrupt`). The head then waits on an announced sector and a BFRD take re-arms it. After:
+`LOGO.STR` runs guest fields 560 to 923 unpaced, LBAs 57830-58739 each serviced once with none read over
+(psx-tomba `scratch/x4-fw-check2/t1b`).

@@ -63,6 +63,7 @@ StockCdCommand sentCommand(const Core &core, std::uint32_t result) {
 
 void StockLibcd::bind(Game &game) const & {
   game.cd.bindStockLibrary(*this);
+  game.cdc.head_holds_untaken = readySlot_ != 0 && !deliversOnInterrupt();
   PlatformHle &table = game.platform_hle;
   table.bindStock(entries_.read, entry<&StockLibcd::read>);
   table.bindStock(entries_.readSync, entry<&StockLibcd::readSync>);
