@@ -91,6 +91,7 @@ def agent_environment(environment: Mapping[str, str],
     player's file and never rewrites a tracked seed. ``card`` starts the run on a blank memory card.
     """
     result = dict(environment)
+    result.update(session_display(result))
     result[SHOW_WINDOW] = "0"
     for key in AGENT_RUNTIME_KEYS:
         result[key] = "1"
@@ -99,6 +100,26 @@ def agent_environment(environment: Mapping[str, str],
     if card is not None:
         result = blank_card_environment(result, card)
     return result
+
+
+class NoSessionDisplay(RuntimeError):
+    """The hidden window has no user session to open on."""
+
+
+def session_display(environment: Mapping[str, str]) -> dict[str, str]:
+    """The user's display for the unmapped window, found in XDG_RUNTIME_DIR when the caller has none.
+
+    Background agent shells inherit no WAYLAND_DISPLAY; the window still belongs on the user's session.
+    """
+    if environment.get("WAYLAND_DISPLAY") or environment.get("DISPLAY"):
+        return {}
+    runtime = environment.get("XDG_RUNTIME_DIR", "")
+    sockets = sorted(p.name for p in Path(runtime).glob("wayland-*") if p.is_socket()) if runtime else []
+    if len(sockets) != 1:
+        raise NoSessionDisplay(
+            f"no single Wayland socket in XDG_RUNTIME_DIR={runtime or '(unset)'} (found {sockets}); "
+            "set WAYLAND_DISPLAY to the user's session")
+    return {"WAYLAND_DISPLAY": sockets[0]}
 
 
 def tool_settings(seed: str | Path | None) -> Path:
