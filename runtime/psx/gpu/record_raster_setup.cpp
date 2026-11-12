@@ -217,13 +217,20 @@ PlottedSpan plottedSpan(const TrianglePart &part, int row) {
   return {x0, x0 + (right - left), x0 - static_cast<std::int64_t>(left)};
 }
 
-// `area` narrowed to the columns any of its rows covers. Each edge is linear in the row.
-RecordRect coveredColumns(const TrianglePart &part, RecordRect area) {
+// `area` narrowed to the columns any of its rows covers. Each edge is linear in the row. A canvas also covers the
+// unwrapped columns, which lie past VRAM's.
+RecordRect coveredColumns(const TrianglePart &part, RecordRect area, bool canvas) {
   const PlottedSpan a = plottedSpan(part, area.y0);
   const PlottedSpan b = plottedSpan(part, area.y1 - 1);
   if (a.shift == b.shift) {
-    area.x0 = std::max(std::min(a.x0, b.x0), area.x0);
-    area.x1 = std::min(std::max(a.x1, b.x1), area.x1);
+    std::int64_t x0 = std::min(a.x0, b.x0);
+    std::int64_t x1 = std::max(a.x1, b.x1);
+    if (canvas) {
+      x0 = std::min(x0, x0 - a.shift);
+      x1 = std::max(x1, x1 - a.shift);
+    }
+    area.x0 = static_cast<int>(std::max<std::int64_t>(x0, area.x0));
+    area.x1 = static_cast<int>(std::min<std::int64_t>(x1, area.x1));
   }
   return area;
 }
@@ -387,7 +394,8 @@ RecordOp depthPlane(const DrawPrimitive &primitive, int firstVertex, const prese
   double w[3];
   float back = 0.0f;
   for (int i = 0; i < 3; i++) {
-    const present::RecordVertex &v = primitive.vertices[static_cast<std::size_t>(firstVertex + i)];
+    const present::RecordVertex &v =
+        primitive.vertices[static_cast<std::size_t>(firstVertex) + static_cast<std::size_t>(i)];
     x[i] = v.x + static_cast<double>(v.subX);
     y[i] = v.y + static_cast<double>(v.subY);
     w[i] = 1.0 / static_cast<double>(v.depth);
@@ -962,7 +970,8 @@ void RecordPlanner::Builder::addTriangle(const TriVertex scaled[3],
       const int rowLow = std::max(part.rowLow, clip.y0 * s);
       const int rowHigh = std::min(part.rowHigh, (clip.y1 + 1) * s);
       if (rowLow < rowHigh) {
-        const RecordRect covered = coveredColumns(part, {clip.x0 * s, rowLow, (clip.x1 + 1) * s, rowHigh});
+        const RecordRect covered =
+            coveredColumns(part, {clip.x0 * s, rowLow, (clip.x1 + 1) * s, rowHigh}, planeClip.plane != 0);
         if (covered.x0 < covered.x1) {
           place({.x0 = covered.x0,
                  .y0 = covered.y0,
@@ -983,7 +992,8 @@ void RecordPlanner::Builder::addTriangle(const TriVertex scaled[3],
       const int nativeHigh = std::min(nativePart.rowHigh, clip.y1 + 1);
       reaches_ = reaches_ || nativeLow < nativeHigh;
       for (int row = nativeLow; row < nativeHigh; row++) {
-        const RecordRect covered = coveredColumns(nativePart, {clip.x0, row, clip.x1 + 1, row + 1});
+        const RecordRect covered =
+            coveredColumns(nativePart, {clip.x0, row, clip.x1 + 1, row + 1}, planeClip.plane != 0);
         if (covered.x0 < covered.x1) {
           markWritten(covered);
         }
@@ -1085,9 +1095,12 @@ void RecordPlanner::Builder::addSprite(const DrawPrimitive &primitive) {
   const std::int32_t shiftY = placeOffset(vertex.subY, s);
   for (const PlaneClip &planeClip : planeClips(primitive.state)) {
     const Clip &clip = planeClip.clip;
-    const RecordRect covered{std::max(vertex.x * s + shiftX, clip.x0 * s),
+    // A canvas continues the picture past VRAM's columns, where the 11-bit position wrapped; u repeats every 256.
+    const int unwrapped = vertex.x + 2 * kVramWidth;
+    const int x = planeClip.plane != 0 && unwrapped <= clip.x1 ? unwrapped : vertex.x;
+    const RecordRect covered{std::max(x * s + shiftX, clip.x0 * s),
                              std::max(vertex.y * s + shiftY, clip.y0 * s),
-                             std::min((vertex.x + primitive.width) * s + shiftX, (clip.x1 + 1) * s),
+                             std::min((x + primitive.width) * s + shiftX, (clip.x1 + 1) * s),
                              std::min((vertex.y + primitive.height) * s + shiftY, (clip.y1 + 1) * s)};
     if (covered.x1 <= covered.x0 || covered.y1 <= covered.y0) {
       continue;
@@ -1164,6 +1177,7 @@ void RecordPlanner::Builder::addLine(const DrawPrimitive &primitive) {
     const std::int32_t shiftX = placeOffset(p0.subX + (p1.subX - p0.subX) * along, s);
     const std::int32_t shiftY = placeOffset(p0.subY + (p1.subY - p0.subY) * along, s);
     const int px = static_cast<int>((x >> 32) & 2047u);
+    const auto unwrappedX = static_cast<int>(static_cast<std::int64_t>(x) >> 32);
     const int py = static_cast<int>((y >> 32) & 2047u);
     if (!skipsRow(primitive.state, py)) {
       const std::uint32_t cr = primitive.gouraud ? static_cast<std::uint8_t>(r >> 12) : p0.r;
@@ -1171,8 +1185,8 @@ void RecordPlanner::Builder::addLine(const DrawPrimitive &primitive) {
       const std::uint32_t cb = primitive.gouraud ? static_cast<std::uint8_t>(b >> 12) : p0.b;
       const std::uint32_t colour = cr | (cg << 8) | (cb << 16);
       for (const PlaneClip &planeClip : clips) {
-        // A canvas reaches left of VRAM, where the 11-bit position reads as negative.
-        const int nx = planeClip.plane == 0 ? px : ((px ^ 1024) - 1024);
+        // A canvas continues the picture past VRAM's columns, where the 11-bit position would wrap.
+        const int nx = planeClip.plane == 0 ? px : unwrappedX;
         const int ny = planeClip.plane == 0 ? py : ((py ^ 1024) - 1024);
         const Clip &clip = planeClip.clip;
         if (nx >= clip.x0 && nx <= clip.x1 && ny >= clip.y0 && ny <= clip.y1) {

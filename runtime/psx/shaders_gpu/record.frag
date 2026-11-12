@@ -194,7 +194,8 @@ void main() {
             int yi = p.y - int(word(part + kPartRowShift));
             int left = edgeX(part + kPartLeft, part + kPartLeftStep, yi);
             int right = edgeX(part + kPartRight, part + kPartRightStep, yi);
-            int x0 = wrap(left + vramWidth, 2 * vramWidth) - vramWidth;
+            // A canvas continues the picture past VRAM's columns, where the 11-bit position would wrap.
+            int x0 = p.x < 0 || p.x >= vramWidth ? left : wrap(left + vramWidth, 2 * vramWidth) - vramWidth;
             if (p.x < x0 || p.x >= x0 + (right - left)) {
                 discard;
             }
