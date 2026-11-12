@@ -36,7 +36,7 @@ void FrameRecord::reset(std::uint64_t sequence, bool complete) {
   tableExits_.clear();
   chainRuns_.clear();
   drawEntryField_.reset();
-  margins_ = {};
+  windows_ = {};
 }
 
 void FrameRecord::append(const RecordEntry &entry) {
@@ -176,7 +176,7 @@ void FrameRecord::replaceEntries(std::span<const RecordEntry> entries) {
 void FrameRecord::assignPools(const FrameRecord &other) {
   sequence_ = other.sequence_;
   complete_ = other.complete_;
-  margins_ = other.margins_;
+  windows_ = other.windows_;
   entries_.clear();
   clutPool_.assign(other.clutPool_.begin(), other.clutPool_.end());
   uploadPixels_.assign(other.uploadPixels_.begin(), other.uploadPixels_.end());

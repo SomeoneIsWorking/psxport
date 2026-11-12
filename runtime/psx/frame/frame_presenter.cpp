@@ -65,7 +65,7 @@ void FramePresenter::commit(Core *core, int guestFields) {
   core->game->display.finishShow();
   present::FrameRecord &slot = freeSlot();
   core->gpuDevice().sealRecord(slot);
-  slot.setMargins(present::frameMargins(*core));
+  slot.setWindows(present::frameWindows(*core));
   core->game->bugReport.frameSealed(*core, slot.sequence());
   commitSealed(*core, slot, guestFields);
 }

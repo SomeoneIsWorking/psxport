@@ -17,10 +17,12 @@
 
 namespace psx::render {
 
-// A texture and the rect of it to show, in native pixels; the texture holds them at the image scale.
+// A texture and the rect of it to show, in native pixels; the texture holds them at the image scale. Only the
+// columns of `drawn` (inside `rect`, same rows) hold picture; the rest of `rect` shows black.
 struct RecordPicture {
   SDL_GPUTexture *texture = nullptr;
   gpu::RecordRect rect;
+  gpu::RecordRect drawn;
 };
 
 // What a present shows: the guest display (native VRAM pixels) and the widest margin either side can take.
@@ -32,8 +34,8 @@ struct RecordView {
 // The image is VRAM at an integer scale, RG8 holding 1555 halfwords. Each record applies on top of
 // the one before it; when that chain breaks, the device's VRAM is uploaded instead. With a reach,
 // each displayed buffer also has a wide canvas (RecordCanvas) that the record draws into beside VRAM, inside the
-// window of the record's own margins (FrameRecord::margins), and a present shows the window of the record that last
-// drew that canvas;
+// drawn window of the record's own windows (FrameRecord::windows), and a present shows the view window of the record
+// that last drew that canvas, black where that record drew nothing;
 // the VRAM image stays exactly the device's, and textures and copies read only it, except a declared
 // read-back page, which is read from the canvas pixels captured for it (gpu::RecordReadBack).
 class RecordRasterizer {
@@ -123,8 +125,10 @@ private:
     int originX = 0; // VRAM-space position of pixel (0, 0)
     int originY = 0;
   };
+  // `shape`'s window is the drawn window of the record that last drew it, `view` that record's view.
   struct Canvas {
     gpu::RecordCanvas shape;
+    present::HorizontalMargins view;
     Plane plane;
     std::uint64_t shown = 0;
   };
@@ -137,20 +141,20 @@ private:
                std::span<const std::uint16_t> vram);
   Plane makePlane(const gpu::RecordCanvas &shape);
   void releasePlane(Plane &plane);
-  // Keeps a canvas for `view`'s display, created from the image with empty margins and `margins`' window.
-  void showCanvas(SDL_GPUCommandBuffer *cmd, const RecordView &view, present::HorizontalMargins margins);
+  // Keeps a canvas for `view`'s display, created from the image with empty margins and `windows`.
+  void showCanvas(SDL_GPUCommandBuffer *cmd, const RecordView &view, const present::RecordWindows &windows);
   // The buffer's columns from the image; a new canvas is cleared first, a kept one keeps its margins.
   void seedCanvas(SDL_GPUCommandBuffer *cmd, Canvas &canvas, bool fresh);
   Canvas *canvasFor(const RecordView &view);
   // The shapes the planner draws `margins` into, in plane order.
   std::span<const gpu::RecordCanvas> canvasShapes(present::HorizontalMargins margins);
-  // A canvas `plan` drew into takes its window.
-  void adoptWindows(const gpu::RecordRasterPlan &plan, present::HorizontalMargins margins);
+  // A canvas `plan` drew into takes its windows.
+  void adoptWindows(const gpu::RecordRasterPlan &plan, const present::RecordWindows &windows);
   // The part of plane `index` a record of `margins` can change or show: the canvas windows before and after it.
   gpu::RecordRect copiedRect(int index, present::HorizontalMargins margins);
   Plane &plane(int index);
-  // Shows the canvas window, or `window` for an in-between that drew the canvas.
-  void present(const RecordView &view, bool inBetween, const present::HorizontalMargins *window);
+  // Shows the canvas's windows, or `windows` for an in-between that drew the canvas.
+  void present(const RecordView &view, bool inBetween, const present::RecordWindows *windows);
   // Replaces the presented picture by the field `record` drew, when it draws one field per frame.
   void selectField(SDL_GPUCommandBuffer *cmd, const present::FrameRecord &record);
   void execute(SDL_GPUCommandBuffer *cmd, const gpu::RecordRasterPlan &plan, bool inBetween);

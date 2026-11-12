@@ -447,14 +447,18 @@ or drawn, so every reader of `guestDisplay.plan()` sees this present's plan. A t
 (`projectionCenterX`, `guestDrawWidth`): the canvas, not a wider draw area, holds the margins, and the
 title widens only what it culls. `RecordRasterizer` keeps a canvas per displayed buffer (at most two, the
 least recently shown is dropped; a widening or width change retires both, a split change or a height difference between the two buffers does not): the buffer plus a reach of 2M columns each side, at scale, cleared and seeded from the image when made; a resync reseeds only the buffer's columns.
-Each `FrameRecord` carries the margins it drew (`FrameRecord::margins`): `FramePresenter::commit` stamps
-`present::frameMargins` at the seal, and a replayed in-between stamps its own inside the replay. `frameMargins` asks the
-title's `GuestWidescreenProjection::pictureBeyondBuffer` how much picture the sealed frame holds beyond the buffer on
-each side (unbounded by default) and `fitMargins` (`horizontal_margins.h`, the one rule) fits it to the widening: a short side
-gives its columns to the other, each side and their sum held to 2M, and what neither side holds is pillarboxed. A record
-plans into the window of its own margins; a canvas it drew keeps that window, and a present shows the window of the
-record that last drew the canvas, so the picture always carries the split it was drawn with. Copies are limited to the
-windows before and after the record (Mega Man X4 at a camera bound, psx-mega-man-x4 issue 0044). Each record entry is planned once per plane:
+Each `FrameRecord` carries its windows (`FrameRecord::windows`, `RecordWindows`): `FramePresenter::commit` stamps
+`present::frameWindows` at the seal, and a replayed in-between stamps its own inside the replay. `frameWindows` asks the
+title's `GuestWidescreenProjection::pictureBeyondBuffer` how far the sealed frame's view reaches beyond the buffer on each
+side and how much of that holds picture (both unbounded by default), and `fitWindows` (`horizontal_margins.h`, the one
+rule) fits it to the widening. The view window is the whole widening (its sides sum to 2M): a side whose view runs short
+gives its columns to the other (`fitMargins`), and a view short on both sides is centred. The drawn window is the part
+of the view the picture covers. A record plans into its drawn window; a canvas it drew keeps both windows, and a present
+shows the view window of the record that last drew the canvas at a fixed size on the sink, with the columns outside its
+drawn window black (`RecordPicture::drawn`, `PresentInputs::drawn_x/drawn_w`, `present.frag` `cols`). A side that cannot
+be filled is therefore pillarboxed in place: the picture moves on the sink only with the view. Copies are limited to
+the drawn windows before and after the record (Mega Man X4 at a camera bound and at a far layer's map end,
+psx-mega-man-x4 issue 0044). Each record entry is planned once per plane:
 
 - A primitive whose draw area spans the buffer's columns (x range equal, rows inside the buffer; a title may inset its rows) draws into the
   canvas with its x clip widened to the record's window. Any other primitive lands in the canvas only inside the buffer.

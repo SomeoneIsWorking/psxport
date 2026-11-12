@@ -32,11 +32,12 @@ public:
   virtual ~GuestWidescreenProjection() = default;
   // The player's aspect setting; a title overrides this only to hold 4:3 in some state.
   virtual PresentationAspect presentationAspect(const Core &core) const;
-  // Native columns of picture the frame being sealed holds beyond the display buffer, each side; a title whose
-  // view stops at its world's edge says so here. fitMargins turns it into the frame's margins.
-  virtual HorizontalMargins pictureBeyondBuffer(Core &core) const {
+  // Native columns the frame being sealed reaches beyond the display buffer, each side: a title whose view stops at
+  // a camera bound or whose picture stops at its world's edge says so here. fitWindows turns it into the record's
+  // windows.
+  virtual PictureBeyondBuffer pictureBeyondBuffer(Core &core) const {
     (void)core;
-    return {kUnboundedPicture, kUnboundedPicture};
+    return {};
   }
 };
 
@@ -176,8 +177,8 @@ private:
 bool widePresentation(const Core &core);
 int widePresentationWidth(const Core &core);
 GuestProjectionPlan latchGuestProjection(Core &core, GuestProjectionGeometry geometry);
-// The margins of the frame sealed now: the title's picture beyond the buffer fitted to the latched widening.
-HorizontalMargins frameMargins(Core &core);
+// The windows of the frame sealed now: the title's picture beyond the buffer fitted to the latched widening.
+RecordWindows frameWindows(Core &core);
 // The guest's display size, 320x240 before it programmed one.
 PixelSize nativeDisplaySize(Core &core);
 // RenderPath::Record: latches the plan for a guest display of `display` at the title's declared

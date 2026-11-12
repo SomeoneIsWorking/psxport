@@ -8,6 +8,7 @@ layout(set = 3, binding = 0) uniform PC {
     ivec4 disp;   // x, y, w, h — VRAM display/FB region to sample; x is a byte at 24bpp
     ivec4 fade;   // mode (0 none / 1 additive-white / 2 subtractive-black), r, g, b (0..255)
     ivec4 fmt;    // x = display colour depth: 0 = 15-bit (1555), 1 = 24-bit (packed RGB888); y..z = rows scanned out
+    ivec4 cols;   // x..y = columns holding picture; the rest is pillarbox
 } pc;
 // VRAM byte bx of row y, as a 0..1 channel.
 float vram_byte(int bx, int y) {
@@ -16,7 +17,7 @@ float vram_byte(int bx, int y) {
 }
 void main() {
     ivec2 t = pc.disp.xy + ivec2(v_uv * vec2(pc.disp.zw));
-    if (t.y < pc.fmt.y || t.y >= pc.fmt.z) {
+    if (t.y < pc.fmt.y || t.y >= pc.fmt.z || t.x < pc.cols.x || t.x >= pc.cols.y) {
         o_col = vec4(0.0, 0.0, 0.0, 1.0);
         return;
     }

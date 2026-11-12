@@ -245,6 +245,11 @@ void setWindow(RecordCanvas &shape, present::HorizontalMargins margins) {
   shape.right = std::clamp(margins.right, 0, shape.reach);
 }
 
+RecordRect windowOf(RecordCanvas shape, present::HorizontalMargins margins) {
+  setWindow(shape, margins);
+  return shape.window();
+}
+
 } // namespace
 
 std::span<const RecordCanvas> RecordRasterizer::canvasShapes(present::HorizontalMargins margins) {
@@ -255,10 +260,11 @@ std::span<const RecordCanvas> RecordRasterizer::canvasShapes(present::Horizontal
   return {shapes_.data(), canvases_.size()};
 }
 
-void RecordRasterizer::adoptWindows(const gpu::RecordRasterPlan &plan, present::HorizontalMargins margins) {
+void RecordRasterizer::adoptWindows(const gpu::RecordRasterPlan &plan, const present::RecordWindows &windows) {
   for (std::size_t i = 0; i < canvases_.size(); i++) {
     if (!plan.quads[1 + i].empty()) {
-      setWindow(canvases_[i].shape, margins);
+      setWindow(canvases_[i].shape, windows.drawn);
+      canvases_[i].view = windows.view;
     }
   }
 }
@@ -268,10 +274,9 @@ RecordRect RecordRasterizer::copiedRect(int index, present::HorizontalMargins ma
   if (index == 0) {
     return {0, 0, target.width, target.height};
   }
-  RecordCanvas next = canvases_[static_cast<std::size_t>(index - 1)].shape;
-  const RecordRect now = next.window();
-  setWindow(next, margins);
-  const RecordRect then = next.window();
+  const RecordCanvas &shape = canvases_[static_cast<std::size_t>(index - 1)].shape;
+  const RecordRect now = shape.window();
+  const RecordRect then = windowOf(shape, margins);
   return {std::min(now.x0, then.x0), 0, std::max(now.x1, then.x1), target.height};
 }
 
@@ -281,7 +286,7 @@ RecordRasterizer::Plane &RecordRasterizer::plane(int index) {
 
 void RecordRasterizer::showCanvas(SDL_GPUCommandBuffer *cmd,
                                   const RecordView &view,
-                                  present::HorizontalMargins margins) {
+                                  const present::RecordWindows &windows) {
   const int width = view.display.x1 - view.display.x0;
   const int height = view.display.y1 - view.display.y0;
   // A widening or display width change makes every canvas another shape; a split change keeps them.
@@ -306,7 +311,8 @@ void RecordRasterizer::showCanvas(SDL_GPUCommandBuffer *cmd,
     }
     Canvas added;
     added.shape = RecordCanvas{.buffer = view.display, .reach = view.reach};
-    setWindow(added.shape, margins);
+    setWindow(added.shape, windows.drawn);
+    added.view = windows.view;
     added.plane = makePlane(added.shape);
     canvases_.push_back(added);
     canvas = &canvases_.back();
@@ -335,16 +341,16 @@ void RecordRasterizer::seedCanvas(SDL_GPUCommandBuffer *cmd, Canvas &canvas, boo
   copyTexture(cmd, canvas.plane.image, seeded, canvas.plane.snapshot, seeded.x0, 0);
 }
 
-void RecordRasterizer::present(const RecordView &view, bool inBetween, const present::HorizontalMargins *window) {
+void RecordRasterizer::present(const RecordView &view, bool inBetween, const present::RecordWindows *windows) {
   if (Canvas *canvas = view.reach > 0 ? canvasFor(view) : nullptr) {
-    RecordCanvas shown = canvas->shape;
-    if (window != nullptr) {
-      setWindow(shown, *window);
-    }
-    presented_ = {inBetween ? canvas->plane.inBetween : canvas->plane.image, shown.window()};
+    const present::RecordWindows shown =
+        windows != nullptr ? *windows : present::RecordWindows{canvas->view, {canvas->shape.left, canvas->shape.right}};
+    presented_ = {inBetween ? canvas->plane.inBetween : canvas->plane.image,
+                  windowOf(canvas->shape, shown.view),
+                  windowOf(canvas->shape, shown.drawn)};
     wovenOriginY_ = canvas->plane.originY;
   } else {
-    presented_ = {inBetween ? vram_.inBetween : vram_.image, view.display};
+    presented_ = {inBetween ? vram_.inBetween : vram_.image, view.display, view.display};
     wovenOriginY_ = view.display.y0;
   }
   woven_ = presented_;
@@ -386,7 +392,7 @@ void RecordRasterizer::selectField(SDL_GPUCommandBuffer *cmd, const present::Fra
     work_.copyPixels += static_cast<std::uint64_t>(width) * static_cast<std::uint64_t>(scale_ * scale_);
   }
   SDL_EndGPUCopyPass(copy);
-  presented_ = {field_, {0, 0, width, height}};
+  presented_ = {field_, {0, 0, width, height}, {woven_.drawn.x0 - source.x0, 0, woven_.drawn.x1 - source.x0, height}};
 }
 
 void RecordRasterizer::update(SDL_GPUCommandBuffer *cmd,
@@ -396,7 +402,7 @@ void RecordRasterizer::update(SDL_GPUCommandBuffer *cmd,
                               int scale,
                               const RecordView &view) {
   ensureImage(std::max(scale, 1));
-  showCanvas(cmd, view, record.margins());
+  showCanvas(cmd, view, record.windows());
   advance(cmd, record, deviceAhead, vram);
   present(view, false, nullptr);
   selectField(cmd, record);
@@ -417,13 +423,13 @@ void RecordRasterizer::advance(SDL_GPUCommandBuffer *cmd,
     }
     for (int index = 0; index <= static_cast<int>(canvases_.size()); index++) {
       const Plane &target = plane(index);
-      const RecordRect copied = copiedRect(index, record.margins());
+      const RecordRect copied = copiedRect(index, record.windows().drawn);
       copyTexture(cmd, target.image, copied, target.before, copied.x0, 0);
     }
     const gpu::RecordRasterPlan &plan =
-        planner_.plan(record, scale_, canvasShapes(record.margins()), readBack_, true, depthTest_);
+        planner_.plan(record, scale_, canvasShapes(record.windows().drawn), readBack_, true, depthTest_);
     execute(cmd, plan, false);
-    adoptWindows(plan, record.margins());
+    adoptWindows(plan, record.windows());
     readBack_ = plan.readBack;
     beforeOf_ = applied_;
     beforeHeld_ = true;
@@ -453,7 +459,8 @@ bool RecordRasterizer::drawInBetween(SDL_GPUCommandBuffer *cmd,
   if (!onImage && !(beforeHeld_ && record.sequence() == beforeOf_)) {
     return false;
   }
-  const present::HorizontalMargins margins = record.margins();
+  const present::RecordWindows windows = record.windows();
+  const present::HorizontalMargins margins = windows.drawn;
   for (int index = 0; index <= static_cast<int>(canvases_.size()); index++) {
     const Plane &target = plane(index);
     const RecordRect copied = copiedRect(index, margins);
@@ -473,7 +480,7 @@ bool RecordRasterizer::drawInBetween(SDL_GPUCommandBuffer *cmd,
   const Canvas *shown = view.reach > 0 ? canvasFor(view) : nullptr;
   const bool drewShown =
       shown != nullptr && !plan.quads[1 + static_cast<std::size_t>(shown - canvases_.data())].empty();
-  present(view, true, drewShown ? &margins : nullptr);
+  present(view, true, drewShown ? &windows : nullptr);
   selectField(cmd, record);
   return true;
 }

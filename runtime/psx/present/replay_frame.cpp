@@ -73,7 +73,7 @@ bool ReplayFrame::replay(Core &core, float t, Capture &capture) {
   capture.places.clear();
   PacketChainWalker(EmitMemory(core), PacketBound::anywhere())
       .capture(*head, capture.packets, capture.words, capture.places);
-  capture.margins = frameMargins(core);
+  capture.windows = frameWindows(core);
   return true;
 }
 
@@ -166,7 +166,7 @@ const FrameRecord *ReplayFrame::assemble(const FrameRecord &shown,
   }
   FrameRecord &assembled = assembled_[static_cast<std::size_t>(k - 1)];
   assembled.splice(shown, run, decoded_);
-  assembled.setMargins(capture.margins);
+  assembled.setWindows(capture.windows);
   cluts_.index(shown, between);
   const std::span<RecordEntry> spliced = assembled.entries().subspan(run.firstEntry, decoded_.size());
   for (RecordEntry &entry : spliced) {

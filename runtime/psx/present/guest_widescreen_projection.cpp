@@ -83,15 +83,15 @@ GuestProjectionPlan latchGuestProjection(Core &core, GuestProjectionGeometry geo
   return latch(core, nativeDisplaySize(core), geometry);
 }
 
-HorizontalMargins frameMargins(Core &core) {
+RecordWindows frameWindows(Core &core) {
   const GuestProjectionPlan &plan = core.game->guestDisplay.plan();
   if (!plan.widescreen()) {
     return {};
   }
   const GuestWidescreenProjection *projection = core.runtime.guestWidescreenProjection();
-  const HorizontalMargins picture = projection != nullptr ? projection->pictureBeyondBuffer(core)
-                                                          : HorizontalMargins{kUnboundedPicture, kUnboundedPicture};
-  return fitMargins(picture, plan.presentationHorizontalMargin);
+  const PictureBeyondBuffer beyond =
+      projection != nullptr ? projection->pictureBeyondBuffer(core) : PictureBeyondBuffer{};
+  return fitWindows(beyond, plan.presentationHorizontalMargin);
 }
 
 GuestProjectionPlan latchRecordDisplay(Core &core, PixelSize display) {

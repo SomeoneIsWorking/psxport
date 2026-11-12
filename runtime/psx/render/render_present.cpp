@@ -23,11 +23,12 @@
 namespace psx::render {
 namespace {
 
-// present.frag's `PC { ivec4 disp; ivec4 fade; ivec4 fmt; }`.
+// present.frag's `PC { ivec4 disp; ivec4 fade; ivec4 fmt; ivec4 cols; }`.
 struct PresentUniform {
   std::int32_t disp[4];
   std::int32_t fade[4];
   std::int32_t fmt[4];
+  std::int32_t cols[4];
 };
 
 // image.frag's `PC { vec4 fade; vec4 source; }`: brightness in fade[0], 1 when the picture's own fade was applied
@@ -208,6 +209,7 @@ void RenderState::buildPresentImage(SDL_GPUCommandBuffer *cmd, const present::Pr
     uniform.disp[i] = plan.disp[i];
     uniform.fade[i] = plan.fade[i];
     uniform.fmt[i] = plan.fmt[i];
+    uniform.cols[i] = plan.cols[i];
   }
   SDL_GPUTexture *source = presentsRecord_ ? record_->presented().texture : vramTexture_;
   SDL_GPURenderPass *pass = beginClearedPass(cmd, presentImage_);

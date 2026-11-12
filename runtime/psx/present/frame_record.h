@@ -253,15 +253,16 @@ public:
     return entries_.empty();
   }
 
+  // Where this record's view sits beside its display buffer and the columns of it drawn (frameWindows at its seal
+  // or replay).
+  RecordWindows windows() const {
+    return windows_;
+  }
+  void setWindows(RecordWindows windows) {
+    windows_ = windows;
+  }
   // The display field the record's first draw reached the GPU in: the logic frame's draw entry, which spaces
   // its picture from the one before.
-  // The picture columns this record drew beside its display buffer (frameMargins at its seal or replay).
-  HorizontalMargins margins() const {
-    return margins_;
-  }
-  void setMargins(HorizontalMargins margins) {
-    margins_ = margins;
-  }
   std::optional<std::uint32_t> drawEntryField() const {
     return drawEntryField_;
   }
@@ -308,7 +309,7 @@ private:
   std::vector<TableExit> tableExits_;
   std::vector<ChainRun> chainRuns_;
   std::optional<std::uint32_t> drawEntryField_;
-  HorizontalMargins margins_;
+  RecordWindows windows_;
 };
 
 } // namespace psx::present

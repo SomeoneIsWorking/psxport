@@ -69,12 +69,15 @@ void RenderState::presentRecord(present::PresentInputs &inputs) {
                                           view,
                                           depth ? &core.depthTest : nullptr);
   game_.perf.presentWork(record_->work());
-  // The display, or its wide canvas, at the 4:3 display's aspect per column.
-  const gpu::RecordRect shown = record_->presented().rect;
+  // The display, or its wide canvas's view, at the 4:3 display's aspect per column.
+  const RecordPicture presented = record_->presented();
+  const gpu::RecordRect shown = presented.rect;
   inputs.sx = shown.x0;
   inputs.sy = shown.y0;
   inputs.disp_w = shown.x1 - shown.x0;
   inputs.disp_h = shown.y1 - shown.y0;
+  inputs.drawn_x = presented.drawn.x0 - shown.x0;
+  inputs.drawn_w = presented.drawn.x1 - presented.drawn.x0;
   inputs.content_w = 0;
   inputs.present_ires = scale > 1 ? scale : 0;
   lucent::debug("recordcheck",
@@ -158,10 +161,17 @@ bool RenderState::recordShot(const char *path) {
   const int scale = record_->scale();
   const int width = (picture.rect.x1 - picture.rect.x0) * scale;
   const int height = (picture.rect.y1 - picture.rect.y0) * scale;
+  const int drawnFirst = (picture.drawn.x0 - picture.rect.x0) * scale;
+  const int drawnEnd = (picture.drawn.x1 - picture.rect.x0) * scale;
   const std::size_t pixels = static_cast<std::size_t>(width) * static_cast<std::size_t>(height);
   const auto *words = reinterpret_cast<const std::uint16_t *>(image.bytes());
+  // Columns the record did not draw stay black, as the present shows them.
   std::vector<std::uint8_t> rgb(pixels * 3);
   for (std::size_t i = 0; i < pixels; i++) {
+    const int column = static_cast<int>(i % static_cast<std::size_t>(width));
+    if (column < drawnFirst || column >= drawnEnd) {
+      continue;
+    }
     const gpu::VramPixel pixel = gpu::decodeVramPixel(words[i]);
     const present::Rgb8 colour = present::fadeRgb(
         recordFade_, {gpu::scale5to8(pixel.red), gpu::scale5to8(pixel.green), gpu::scale5to8(pixel.blue)});

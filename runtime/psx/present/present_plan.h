@@ -31,6 +31,9 @@ struct PresentInputs {
   // other rows are black. 0 = the display is the window.
   int window_h = 0;
   int window_top = 0;
+  // Columns of disp_w that hold picture, from sx + drawn_x; the others are black (a pillarbox in place). 0 = all.
+  int drawn_x = 0;
+  int drawn_w = 0;
 };
 
 struct PresentPlan {
@@ -40,6 +43,7 @@ struct PresentPlan {
   int disp[4];        // fragment uniform: sampled source rect (scaled when presenting from ires); x in bytes at 24bpp
   int fade[4];        // fragment uniform: mode, r, g, b
   int fmt[4];         // fragment uniform: fmt[0] = 24bpp flag; sampled rows outside [fmt[1], fmt[2]) are black
+  int cols[4];        // fragment uniform: sampled columns outside [cols[0], cols[1]) are black
   int src_ires;       // 0 = sample the native target, >1 = sample the ires target
 };
 
@@ -111,6 +115,13 @@ inline PresentPlan planPresent(const PresentInputs &in) {
   p.disp[3] = fit.source.h * scale;
   p.fmt[1] = in.sy * scale;
   p.fmt[2] = (in.sy + in.disp_h) * scale;
+  if (in.drawn_w > 0) {
+    p.cols[0] = (in.sx + in.drawn_x) * scale;
+    p.cols[1] = (in.sx + in.drawn_x + in.drawn_w) * scale;
+  } else {
+    p.cols[0] = p.disp[0];
+    p.cols[1] = p.disp[0] + p.disp[2];
+  }
   return p;
 }
 
