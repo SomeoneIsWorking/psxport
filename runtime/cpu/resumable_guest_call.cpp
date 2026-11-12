@@ -113,11 +113,20 @@ CallStep ResumableGuestCall::advance(const std::optional<NativeKey> &original, s
   return CallStep{CallOutcome::Suspended, result.guestPc, turns_, cycles_, 0u, {}, result.reason};
 }
 
-void ResumableGuestCall::setSuspendedRegister(unsigned index, std::uint32_t value) {
+void ResumableGuestCall::requireSuspended(unsigned index) const {
   if (!pending_ || turns_ == 0u || index >= std::size(suspended_.r)) {
     lucent::error("guest-call", "{}: no suspended turn holds register {}", owner_, index);
     std::abort();
   }
+}
+
+std::uint32_t ResumableGuestCall::suspendedRegister(unsigned index) const {
+  requireSuspended(index);
+  return suspended_.r[index];
+}
+
+void ResumableGuestCall::setSuspendedRegister(unsigned index, std::uint32_t value) {
+  requireSuspended(index);
   suspended_.r[index] = value;
 }
 

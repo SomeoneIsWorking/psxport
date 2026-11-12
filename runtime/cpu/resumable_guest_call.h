@@ -87,6 +87,7 @@ public:
     return resumePc_;
   }
   // A register of the suspended turn, as the guest reads it on resume; aborts with no turn suspended.
+  [[nodiscard]] std::uint32_t suspendedRegister(unsigned index) const;
   void setSuspendedRegister(unsigned index, std::uint32_t value);
   [[nodiscard]] std::uint32_t turns() const {
     return turns_;
@@ -96,6 +97,8 @@ public:
   }
 
 private:
+  void requireSuspended(unsigned index) const;
+
   Core *core_ = nullptr;
   std::string owner_;
   std::uint32_t entry_ = 0;
