@@ -1,4 +1,4 @@
-# 0202 — Crop widescreen (optional)
+# 0203 — Crop widescreen (optional)
 
 User, 2026-11-12: an optional widescreen mode for every title that crops the picture's height to 16:9
 instead of extending the sides, with the UI moved to fit. It keeps the original logic and culling; the
