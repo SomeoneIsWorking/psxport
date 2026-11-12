@@ -13,31 +13,36 @@ GTE aspect; neither crops gameplay height to 16:9 and relocates the HUD
 - **One setting**, owned by the config owner: widescreen `extend` (default) or `crop`. In `crop` the guest
   runs exactly as at 4:3: no canvas widening, no projection, cull or emitter change, so every widescreen
   override is off and the guest's draws are byte-identical to 4:3.
-- **The crop** is a presentation step on the sealed frame: a band of the 4:3 picture, full width and
-  `width * 9 / 16` tall, scaled to the sink. `present::fitPicture` (`viewport_layout.h`) already centre-crops
-  a pane's image; extend it as the one crop owner rather than adding a second.
-- **Band placement.** Centred by default. A title may supply a vertical anchor per screen from RE'd state
-  (for example the camera's focus row or the player's screen Y) so the action stays in the band; the anchor
-  is smoothed by the 60 fps replay like any other presentation input. No pixel-based tracking.
-- **UI.** HUD, dialog and menu draws that fall outside the band move into it. Each title owns this, through
-  the same draw-site tags it already uses for widescreen HUD anchoring: a tagged 2D draw is offset at present
-  time by the rows its anchor edge lost (top-anchored down, bottom-anchored up). Untagged 2D stays where the
-  guest put it; screens whose UI would be cut (full-screen menus, text pages) present uncropped at 4:3 with
-  pillarbox bars, declared per screen by the title (user, 2026-11-12: Mega Man X4's pause screen and Tomba 2's
-  inventory show normally at 4:3, unadjusted).
-- **Movies** present uncropped (pillarboxed) unless the title declares a movie as safe to crop.
-- **Interpolation** is unchanged: the replay renders the 4:3 frame and the crop applies to each present.
+- **No viewport changes during play** (user, 2026-11-12). The screen is always 16:9 and every recorded
+  primitive is rasterised with the mapping of its layer:
+  - **world**: the 4:3 picture's band of full width and `width * 9 / 16` height mapped to fill the 16:9
+    screen, rasterised at the sink's resolution (not an upscaled image);
+  - **ui**: HUD, dialog, menu and full-screen menu draws mapped to a 4:3 box centred on the screen, exactly
+    their 4:3 size and place, over the world layer;
+  - **screen**: full-screen fades, flashes and letterbox bars stretched over the whole 16:9 screen.
+- **Layer classification** is the title's, from what it already declares: draw-site tags and
+  `render::callSiteOwner` for HUD and menu sites (the same tags its extend-mode HUD anchoring uses), OT bucket
+  ranges where a title's UI owns whole buckets. Untagged draws are world. One owner per title maps owners to
+  layers; the framework owns the mappings.
+- **Band placement.** Centred by default. A title may supply a vertical anchor from RE'd state (the camera's
+  focus row or the player's screen Y), smoothed by the 60 fps replay like any other presentation input, so
+  the band never jumps. No pixel-based tracking.
+- **Movies** map like the ui layer (4:3, centred) unless the title declares a movie safe to crop.
+- **Interpolation** is unchanged: the replay produces the 4:3 record, and the layer mappings apply to each
+  present.
+- **Risk:** UI that the guest blends with the world beneath it (semi-transparent panels) blends with the
+  world pixels now under it, which differ from 4:3; reviewed per screen.
 
 ## Steps
 
 1. Config: the widescreen mode value, its UI row and the settings migration.
-2. `fitPicture` takes the crop band; the presenter applies it on the shown image in crop mode.
-3. A title hook for the band anchor and for screens that opt out of the crop.
-4. Draw-site UI offset for tagged 2D in crop mode; Tomba 2 and Spyro first, each title's HUD tags reviewed.
+2. Record rasteriser: a per-primitive layer and one mapping per layer (world band, ui box, screen).
+3. A title hook mapping its draw owners to layers, and the band anchor; Tomba 2 and Spyro first.
 5. Docs: `presentation.md` (Widescreen) and each title's state row.
 
 ## Proof
 
-Tomba 2 and Spyro in crop mode: guest RAM after a warp equals the 4:3 run's; the shown band matches the 4:3
-frame's rows exactly; HUD, dialog and menus are fully visible; 60 fps in-betweens stay halfway. Extend mode
+Tomba 2 and Spyro in crop mode: guest RAM after a warp equals the 4:3 run's; the world layer shows exactly the 4:3
+frame's band; HUD, dialog and menus sit at their 4:3 size and place in every screen with no viewport
+change; 60 fps in-betweens stay halfway. Extend mode
 and 4:3 are byte-identical to before.
