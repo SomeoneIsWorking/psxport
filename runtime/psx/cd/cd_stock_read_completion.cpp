@@ -23,11 +23,12 @@ void announceStockReadLanding(Core &core, const StockReadLanding &landing) {
   psx::code_module::publishLanding(core, {begin, begin + landing.bytes});
 }
 
-bool raiseStockReadCompletion(Core &core, std::uint32_t firstLba, std::uint32_t sectors, std::uint8_t mode) {
+bool raiseStockReadCompletion(
+    Core &core, std::uint32_t firstLba, std::uint32_t sectors, std::uint8_t mode, ReadTiming timing) {
   if (sectors == 0u) {
     return false;
   }
-  if (core.game->cdc.postDataReadyAfterRead(firstLba, sectors, mode) == 0) {
+  if (core.game->cdc.postDataReadyAfterRead(firstLba, sectors, mode, timing) == 0) {
     lucent::error("cd",
                   "stock CdRead of {} sector(s) completed but its completion could NOT be queued: four completions "
                   "are already owed or the response queue is full, so the guest's ready callback will not run "
@@ -38,9 +39,10 @@ bool raiseStockReadCompletion(Core &core, std::uint32_t firstLba, std::uint32_t 
   // Owed to the drive clock, which psx::frame::Timing services, so the guest sees the read in flight.
   const Hle &hle = core.game->hle;
   lucent::debug("cdirq",
-                "stock CdRead of {} sector(s) owes its data-ready completion after the drive time (I_STAT=0x{:03X} "
+                "stock CdRead of {} sector(s) owes its data-ready completion{} (I_STAT=0x{:03X} "
                 "I_MASK=0x{:03X}, interrupts {})",
                 sectors,
+                timing == ReadTiming::Drive ? " after the drive time" : " at once",
                 hle.i_stat,
                 hle.i_mask,
                 hle.irq_enabled ? "enabled" : "disabled");

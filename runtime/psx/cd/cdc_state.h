@@ -2,6 +2,7 @@
 // param/response/data FIFOs, the pending-interrupt queue, drive/read state), one per Game. Its registers
 // stay public members because machine state saves them field by field (state/device_bus.cpp).
 #pragma once
+#include "cd_drive_timing.h"
 #include "cd_position.h"
 
 #include <stdint.h>
@@ -68,9 +69,9 @@ public:
   // queuing nothing, when the response queue is full.
   bool postDataReady();
   // The same completion, announced once the drive would have read `sectors` from `first_lba` at `mode`'s speed
-  // (seek, spin-up, one period per sector; reads queue serially). False when `sectors` is 0 or four are owed. With
-  // no tick source bound it posts at once.
-  bool postDataReadyAfterRead(uint32_t first_lba, uint32_t sectors, uint8_t mode);
+  // (seek, spin-up, one period per sector) under ReadTiming::Drive, or at the next service under AtOnce; reads queue
+  // serially. False when `sectors` is 0 or four are owed. With no tick source bound it posts at once.
+  bool postDataReadyAfterRead(uint32_t first_lba, uint32_t sectors, uint8_t mode, ReadTiming timing);
   uint32_t read(CdcRegister reg);
   void write(CdcRegister reg, uint8_t v);
   // DMA3 read: FIFO data first, then zeros after depletion. Returns the FIFO-sourced word count.

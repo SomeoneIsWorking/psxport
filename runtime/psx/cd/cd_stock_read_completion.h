@@ -1,6 +1,8 @@
 // The data-ready completion a synchronous stock CdRead owes a guest that chains reads from its callback.
 #pragma once
 
+#include "cd_drive_timing.h"
+
 #include <cstdint>
 
 class Core;
@@ -18,8 +20,9 @@ struct StockReadLanding {
 // Calls GameRuntime::stockCdReadLanded once per whole successful read, before its completion is queued.
 void announceStockReadLanding(Core &core, const StockReadLanding &landing);
 
-// Queues the completion once the drive would have spent the read's time; false when none is owed.
-bool raiseStockReadCompletion(Core &core, std::uint32_t firstLba, std::uint32_t sectors, std::uint8_t mode);
+// Queues the completion once `timing` says it is due; false when none is owed.
+bool raiseStockReadCompletion(
+    Core &core, std::uint32_t firstLba, std::uint32_t sectors, std::uint8_t mode, ReadTiming timing);
 
 // Sets I_MASK bit 2 as retail CdInit does, for a title that replaces CdInit; true when the bit changed.
 bool armCdInterrupt(Core &core);

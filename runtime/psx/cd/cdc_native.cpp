@@ -249,7 +249,7 @@ bool CdController::postDataReady() {
   return 1;
 }
 
-bool CdController::postDataReadyAfterRead(uint32_t first_lba, uint32_t sectors, uint8_t mode) {
+bool CdController::postDataReadyAfterRead(uint32_t first_lba, uint32_t sectors, uint8_t mode, ReadTiming timing) {
   if (sectors == 0 || read_completion_n >= 4) {
     return 0;
   }
@@ -258,8 +258,9 @@ bool CdController::postDataReadyAfterRead(uint32_t first_lba, uint32_t sectors, 
   }
   const uint64_t now_ticks = tick_now(tick_context);
   const uint64_t start = read_completion_n ? read_completion_deadline_ticks[read_completion_n - 1] : now_ticks;
-  read_completion_deadline_ticks[read_completion_n++] = (start > now_ticks ? start : now_ticks) + seekTime(first_lba) +
-                                                        uint64_t{sectors} * driveSectorPeriodCpuTicks(mode);
+  const uint64_t driveTicks =
+      timing == ReadTiming::Drive ? seekTime(first_lba) + uint64_t{sectors} * driveSectorPeriodCpuTicks(mode) : 0u;
+  read_completion_deadline_ticks[read_completion_n++] = (start > now_ticks ? start : now_ticks) + driveTicks;
   loc_lba = first_lba + sectors;
   stat |= kCdlStatStandby;
   return 1;

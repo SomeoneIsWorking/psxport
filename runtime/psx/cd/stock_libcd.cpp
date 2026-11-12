@@ -431,7 +431,7 @@ void GuestInterruptLibcd::readStarted(Core &core) const {
 
 void GuestInterruptLibcd::readLanded(Core &core, const StockReadLanding &landing, std::uint8_t mode) const {
   if (completion_.perStockRead && deliversOnInterrupt()) {
-    raiseStockReadCompletion(core, landing.firstLba, landing.sectors, mode);
+    raiseStockReadCompletion(core, landing.firstLba, landing.sectors, mode, completion_.timing);
   }
 }
 

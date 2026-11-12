@@ -14,6 +14,10 @@ inline constexpr uint8_t kModeWholeSector = 0x20u; // 2340 bytes from the header
 inline constexpr uint8_t kModeSize2328 = 0x10u;    // 2328 bytes after the subheader; wins over kModeWholeSector
 inline constexpr uint8_t kModeXaFilter = 0x08u;    // only the Setfilter file/channel reaches the SPU
 
+// When a synchronous stock read's completion is due: after the drive's seek and sector time, or at once for a
+// title whose loads carry no drive wait.
+enum class ReadTiming : uint8_t { Drive, AtOnce };
+
 constexpr int driveSectorsPerSecond(uint8_t mode) {
   return (mode & kModeDoubleSpeed) != 0 ? 2 * kSectorsPerSecond : kSectorsPerSecond;
 }

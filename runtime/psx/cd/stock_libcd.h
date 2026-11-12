@@ -100,6 +100,8 @@ public:
     std::uint8_t status = 1;
     // A synchronous CdRead still owes one INT1 completion, for a guest that chains reads from it.
     bool perStockRead = false;
+    // When that completion is due; AtOnce removes the load's drive wait.
+    ReadTiming timing = ReadTiming::Drive;
   };
 
   GuestInterruptLibcd(const Entries &entries,
