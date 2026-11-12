@@ -108,6 +108,8 @@ public:
   psx::WriteRollback writeRollback;
   // The places of projected vertices the guest and native draw sites stored into guest words.
   psx::cpu::VertexPlaces vertexPlaces{writeRollback};
+  // The innermost armed run keeps its stores to the guest storage `span` and the vertex places noted there.
+  void keepStores(GuestSpan span);
 
   // Deferred work checked at guest-service points: PW_IRQ an interrupt may be deliverable, PW_HOST
   // the host field clock owes a turn.

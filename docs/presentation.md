@@ -199,6 +199,12 @@ the `motion` debug channel counts each track's paired records.
   A redraw names the host services whose work is the real frame's (`GuestRedraw::applied`, a sound a draw starts):
   the Discard journal withholds each wherever the run reaches it (`SideEffectJournal::withhold`) and the call
   returns at its ra with the registers as it found them, so only call sites that read nothing back may name one.
+  A redraw may keep some of its stores (`GuestRedraw::keep`, declared before the run): a store wholly inside a kept
+  guest span, and the vertex places noted there, are not put back and are booked like any store, so a side pass can
+  commit packets to the guest's pool and ordering table (Spyro 2/3's margin mobys) while its list and class writes
+  go back; `keepNothing` puts them back too when the run is refused. A redraw opened inside another's run nests
+  (`WriteRollback::arm` marks the log, each nested run has its own `run()`): its rollback puts back only what it
+  wrote outside its kept spans, and the enclosing run still puts back everything, kept bytes included.
 - **Transform.** A track that moves a GTE transform by t blends it with `blendGteControl` (`gte_control.*`): the
   rotation turns along the shorter arc (`lucent::rotation::between`: polar decomposition, slerp) and its stretch moves element by element, so a
   spinning part keeps its size between frames; translation moves by t, rounded to the nearest integer with ties to

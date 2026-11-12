@@ -80,13 +80,23 @@ inline void pkt_track(Core *c, uint32_t a, uint32_t bytes) {
 
 } // namespace
 
+void Core::keepStores(GuestSpan span) {
+  uint8_t *p = host_ptr(span);
+  if (p == nullptr) {
+    lucent::error("redraw", "kept span 0x{:08X}+0x{:X} is not guest storage", span.address, span.bytes);
+    std::abort();
+  }
+  writeRollback.keep(p, span.bytes);
+  vertexPlaces.keepPlaces(span.address, span.bytes);
+}
+
 // The bookkeeping of one store into guest storage at `p` (null for a device); false when the write rollback will put
 // it back, so it names no writer and changes no code.
 bool Core::bookStore(uint8_t *p, GuestSpan store) {
   // Inside a replay the forget goes back with the store.
   vertexPlaces.forget(store.address, store.bytes);
-  if (p && writeRollback.armed()) {
-    writeRollback.note(p, store.bytes);
+  // A store every open run keeps outlives them, so it is booked as any other.
+  if (p && writeRollback.armed() && !writeRollback.note(p, store.bytes)) {
     return false;
   }
   pkt_track(this, store.address, store.bytes);

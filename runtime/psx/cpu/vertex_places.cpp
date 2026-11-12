@@ -20,15 +20,31 @@ void VertexPlaces::note(std::uint32_t address, std::uint32_t word, const NotedPl
   if (!tracking_ || at == kNoSlot) {
     return;
   }
+  allocate();
+  keep(stored_[at]);
+  stored_[at] = {.word = word, .noted = noted};
+  keepBits(at / 64u);
+  placed_[at / 64u] |= std::uint64_t{1} << (at % 64u);
+}
+
+void VertexPlaces::allocate() {
   if (placed_.empty()) {
     placed_.resize((kSlots + 63u) / 64u);
     keptRun_.resize(placed_.size());
     stored_.resize(kSlots);
   }
-  keep(stored_[at]);
-  stored_[at] = {.word = word, .noted = noted};
-  keepBits(at / 64u);
-  placed_[at / 64u] |= std::uint64_t{1} << (at % 64u);
+}
+
+void VertexPlaces::keepPlaces(std::uint32_t address, std::uint32_t bytes) {
+  const std::uint32_t first = slot(address);
+  const std::uint32_t last = slot(address + bytes - 1u);
+  if (!tracking_ || bytes == 0 || first == kNoSlot || last == kNoSlot || last < first) {
+    return;
+  }
+  allocate();
+  rollback_.keep(&stored_[first], (last - first + 1u) * sizeof(Stored));
+  // A bit word is kept whole, with its neighbours' bits.
+  rollback_.keep(&placed_[first / 64u], (last / 64u - first / 64u + 1u) * sizeof(std::uint64_t));
 }
 
 void VertexPlaces::keepBits(std::uint32_t index) {

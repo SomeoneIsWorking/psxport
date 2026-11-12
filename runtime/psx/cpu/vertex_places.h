@@ -78,6 +78,8 @@ public:
       unplace(at);
     }
   }
+  // The innermost armed run keeps the places of the words in `bytes` at `address` as it leaves them.
+  void keepPlaces(std::uint32_t address, std::uint32_t bytes);
   // The place noted at `address` while it still holds `word`.
   [[nodiscard]] std::optional<NotedPlace> at(std::uint32_t address, std::uint32_t word) const;
 
@@ -143,6 +145,8 @@ private:
   [[nodiscard]] bool carries(std::uint32_t reg) const {
     return ((carriedMask_ >> reg) & 1u) != 0;
   }
+  // The table, allocated once tracking needs it.
+  void allocate();
   void unplace(std::uint32_t at);
   void forgetSpan(std::uint32_t address, std::uint32_t bytes);
   // GPR `reg` was loaded with `word`, placed at `noted` or not at all.

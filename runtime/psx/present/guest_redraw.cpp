@@ -31,6 +31,14 @@ GuestRedraw::~GuestRedraw() {
   core_.writerLatch = writerLatch_;
 }
 
+void GuestRedraw::keep(std::uint32_t address, std::uint32_t bytes) {
+  core_.keepStores({address, bytes});
+}
+
+void GuestRedraw::keepNothing() {
+  core_.writeRollback.keepNothing();
+}
+
 void GuestRedraw::writeWord(std::uint32_t address, std::uint32_t word) {
   core_.mem_w32(address, word);
 }

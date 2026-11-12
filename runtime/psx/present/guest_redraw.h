@@ -4,7 +4,8 @@
 //
 // The routine is the guest's own code, so its projection is the GTE's and its topology the guest's; the
 // title decides which inputs move (camera, object positions and angles) and pairs each object by its guest
-// address. Nothing the run does outlives the GuestRedraw: memory, registers, GTE and the writer latch are as they were.
+// address. Nothing the run does outlives the GuestRedraw but the stores it keeps: memory, registers, GTE and the writer
+// latch are as they were. One opened inside another's run nests, and the outer run still puts back what the inner kept.
 // The run cannot suspend at a turn's end, so an override's original call inside it gets the run's budget.
 #pragma once
 
@@ -29,6 +30,12 @@ public:
   GuestRedraw &operator=(const GuestRedraw &) = delete;
   GuestRedraw(GuestRedraw &&) = delete;
   GuestRedraw &operator=(GuestRedraw &&) = delete;
+
+  // The run's stores wholly inside the `bytes` at `address`, and the vertex places noted there, outlive it (unless an
+  // enclosing run puts them back); declared before the stores.
+  void keep(std::uint32_t address, std::uint32_t bytes);
+  // The run did not draw what it was for: every kept store goes back too.
+  void keepNothing();
 
   // `word` at `address` through the guest's memory, put back with the rest.
   void writeWord(std::uint32_t address, std::uint32_t word);
