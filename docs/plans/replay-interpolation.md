@@ -154,3 +154,8 @@ by a replay: `GuestRedraw::writeCopy` keeps a part-pixel place on a DR_MOVE's wo
 After the deletion (unpaced, ires 0, fps60, sink 3840x2160): Crash Bash hub pan 510 intervals replayed, 0 refused,
 the signs stepping evenly over six presents; Toy Story 2 Andy's House 783 replayed, 0 refused; Spyro 1 Stone Hill
 1318 replayed, 0 refused, every moby record paired.
+
+Crash 2 (2026-11-13, `psx-crash` `titles/crash2/frame/`): its picture half is inline in `Sys_MainLoop`, a loop that
+never returns, so the section resumes the loop's body at a block start and stops at a later one
+(`GuestRedraw::resumeTo`) around `Obj_UpdateAll(0)` and `Gfx_EndFrame` up to `Snd_Update`. Tracks: the camera and the
+object pool. `warp 15` (scene 0x15) held right, unpaced: 2265 intervals replayed, 0 refused, 6 of 29517 object draws unpaired.

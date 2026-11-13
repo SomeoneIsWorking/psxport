@@ -77,6 +77,11 @@ public:
                                 std::span<const std::uint32_t> arguments,
                                 std::span<const Skip> skips = {});
 
+  // A stretch of `entry`'s body from the block start `from` until execution reaches `end`, run with the registers the
+  // run holds: a draw section inline in a frame loop that never returns, reached from a call inside that loop whose
+  // registers the stretch's own code holds. The run then continues from the section's sp and ra.
+  [[nodiscard]] bool resumeTo(std::uint32_t entry, std::uint32_t from, std::uint32_t end);
+
 private:
   enum class Call : std::uint8_t { Original, Dispatched, ToEnd };
   // A ToEnd call resumes `entry`'s body at `from` (its start when 0).

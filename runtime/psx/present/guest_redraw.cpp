@@ -106,6 +106,15 @@ bool GuestRedraw::dispatchTo(std::uint32_t entry,
   return reached;
 }
 
+bool GuestRedraw::resumeTo(std::uint32_t entry, std::uint32_t from, std::uint32_t end) {
+  const std::uint32_t sp = core_.r[cpu::kSp];
+  const std::uint32_t ra = core_.r[cpu::kRa];
+  const bool reached = call(entry, {}, Call::ToEnd, end, from);
+  core_.r[cpu::kSp] = sp;
+  core_.r[cpu::kRa] = ra;
+  return reached;
+}
+
 bool GuestRedraw::call(
     std::uint32_t entry, std::span<const std::uint32_t> arguments, Call kind, std::uint32_t end, std::uint32_t from) {
   std::copy(arguments.begin(), arguments.end(), core_.r + cpu::kA0);
