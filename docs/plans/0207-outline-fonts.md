@@ -59,10 +59,14 @@ font through the title's `OutlineGlyphs`.
   0x800520CC).
 - 2e, Spyro 2's pre-rendered string images: whole strings, not glyphs; this needs a layout of the string into its
   rect rather than an `OutlineGlyph` per cell, so it is new framework work.
-- Tomba 2 leftovers: the `*` cell (a reference mark), the arrows and symbols, the thin font at v 152 and the
-  `FUN_80078988` token strings (0x80016DA0-0x80016DAC, table 0x800A55E0) still draw their bitmaps
-  (tomba2-decomp `docs/notes/text-fonts.md`). Its 16x16 button icons are multicoloured; PromptFont glyphs take one
-  CLUT index a row, so under a PlayStation pad they lose the ring colours.
+- Tomba 2 leftovers (tomba2-decomp `docs/notes/text-fonts.md`): the token strings are the four buttons, already
+  named; the v 152 font has no drawer. The reference mark (cell 0x0A) and the symbol cells 0x64-0x98 the token table
+  names need a face none of Fira Sans, Fredoka and PromptFont has (※ ○ ◇ □ △ ♪ 『』 and the rest): a JIS-complete
+  OFL face such as Noto Sans JP or M PLUS 1 covers every token, pending review. Most symbols are two-coloured (a fill
+  in indices 3/4), which one index a row cannot carry.
+- Multicoloured glyphs: the A channel of an unshadowed glyph could hold the field of its silhouette (the outer contour
+  filled), so a button's symbol, cut from PromptFont's disc, takes the symbol's own CLUT index from the bitmap under
+  it. Shadowed glyphs (Tomba 2's 8x8 buttons) have no channel left for it.
 - Proof routes: Spyro `ally_text.sh` (Ally, `warp 0/0/0`, start, downs, cross; Spyro 3 Help is three downs);
   Tomba 2 `psx-tomba/scratch/outline-text/tools/` (`drive.py` with the REPL files: title New Game, `warp 8/0`,
   start; the narration dump is mid-route).
@@ -85,6 +89,8 @@ font through the title's `OutlineGlyphs`.
   variable faces keep overlapping contours. The atlas holds the fonts one under another, each over the box of its
   glyph rectangles (`OutlineAtlasFont`); a font not drawn keeps its last fields. A texel of a font's box that no named
   glyph with an outline covers (index A 0) draws its bitmap from VRAM, so a font names only the glyphs it has faces for.
+- A button glyph marked `padArt` is the PlayStation button itself in several colours (Tomba 2's rings and symbols):
+  under a PlayStation pad it has no codepoint and draws its bitmap; under any other family its PromptFont glyph.
 - Colours stay the guest's: the index texture holds per glyph row the CLUT index most of the row's glyph
   texels use (R) and its shadow's (G), so the glyph shades down its rectangle as the bitmap does; the packet's CLUT,
   modulation and blending apply as for any texel. A button glyph's B names its button's slot in `OutlineAtlas::buttons` (four buttons across all fonts);
@@ -96,4 +102,5 @@ font through the title's `OutlineGlyphs`.
   the bitmap draws.
 - Check: Spyro 2 Summer Forest pause and Spyro 3 Sunrise Spring pause and Help at `ires=0`, 3840x2160
   (`warp 0/0/0`, start, down, cross): letters and button glyphs sharp, shaded and shadowed as the bitmap; Help
-  under `gamepad make xbox` and `gamepad make playstation` for the face colours.
+  under `gamepad make xbox` and `gamepad make playstation` for the face colours. Tomba 2's Options screen (New Game,
+  `warp 8/0`, start, cross) under both makes for its `padArt` buttons.

@@ -40,6 +40,9 @@ struct OutlineGlyph {
   char32_t codepoint = 0;
   OutlineFace face = OutlineFace::Text;
   std::uint16_t button = 0;
+  // The bitmap is the PlayStation button itself in colours one outline cannot carry: under a PlayStation pad it
+  // draws as the bitmap.
+  bool padArt = false;
 };
 
 // Equal cells across a page from (u, v), `columns` a row, numbered row-major: one way to name a font's glyphs.
@@ -58,9 +61,10 @@ struct OutlineGrid {
             .codepoint = codepoint,
             .face = face};
   }
-  [[nodiscard]] constexpr OutlineGlyph button(int cell, std::uint16_t psxButton) const {
+  [[nodiscard]] constexpr OutlineGlyph button(int cell, std::uint16_t psxButton, bool padArt = false) const {
     OutlineGlyph named = glyph(cell, 0, OutlineFace::Prompt);
     named.button = psxButton;
+    named.padArt = padArt;
     return named;
   }
 };

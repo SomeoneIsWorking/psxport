@@ -205,7 +205,10 @@ public:
       std::vector<char32_t> codepoints;
       for (const OutlineGlyph &glyph : font.glyphs) {
         bitmaps.push_back(readGlyph(font, vram, glyph));
-        codepoints.push_back(glyph.button != 0 ? pads.glyph(glyph.button) : glyph.codepoint);
+        codepoints.push_back(glyph.button == 0 ? glyph.codepoint
+                             : glyph.padArt && pads.family() == psx::input::PadFamily::PlayStation
+                                 ? psx::input::kNoGlyph
+                                 : pads.glyph(glyph.button));
       }
       const auto sameIndices = [](const BitmapGlyph &a, const BitmapGlyph &b) {
         return a.indices == b.indices;
@@ -383,7 +386,8 @@ private:
           glyph.button != 0
               ? static_cast<int>(std::ranges::find(atlas_.buttons, glyph.button) - atlas_.buttons.begin()) + 1
               : 0;
-      if (bitmap.empty()) {
+      // A glyph without a codepoint draws its bitmap.
+      if (bitmap.empty() || state.codepoints[i] == psx::input::kNoGlyph) {
         continue;
       }
       const FieldKey key{state.codepoints[i],
