@@ -27,9 +27,7 @@ timing and colours are the game's.
    nothing to replace: its text is mesh letters the record rasterizes at the internal resolution
    (`spyro1.text-glyphs`, open-spyro).
 2. Next, in this order:
-   a. Glyph-rectangle fonts: `OutlineFont` names each glyph's rect on its page (u, v, width, height) with its
-      codepoint or button, and the fixed grid becomes one way to fill that table. A title names several fonts;
-      `OutlineGlyphs` tags each packet with the font it drew from, and the atlas holds every font's cells.
+   a. Glyph-rectangle fonts: built (see As built).
    b. Tomba 2's dialogue and menu font on that model.
    c. Spyro 3's Atlas book font (spyro-3 `spyro3.atlas-font`): 12x9 semi-transparent quads (0x2E), a shadow
       pass modulated 0x202020 then the text modulated 0x78898C, from DR_TPAGE 0x0009 (x 576 y 0, 4bpp)
@@ -46,25 +44,28 @@ timing and colours are the game's.
 
 ## As built
 
-- `runtime/psx/present/outline_text` owns it. A title's `GameRuntime::outlineFont()` names its page (texture
-  page, cell size and grid, the cell-to-codepoint table, the text face and its weight, the shadow's CLUT
-  indices and offset); `outlineGlyphs(core)` names the ordering-table packets its text drawer filled with
-  cells. At seal, `markGlyphs` flags those textured primitives (`DrawPrimitive::outline`); a replayed
-  in-between carries the same flags through `Capture::glyphPackets`.
-- A frame that drew flagged packets brings the atlas up to date: each cell's bitmap is read from VRAM, and a
-  cell whose bitmap or codepoint changed gets a new field: the codepoint's outline (the title's face, or
-  PromptFont for a button cell, whose codepoint the pad in hand picks through `GlyphSet`) fitted to the box of
-  the cell's glyph texels, as an MSDF in RGB and the shadow's SDF, moved by the shadow offset, in A, eight
-  field pixels a texel. Fields take their sign from the outline's nonzero fill, then msdfgen's error
-  correction (its scanline pass): variable faces keep overlapping contours.
-- Colours stay the guest's: the index texture holds per cell row the CLUT index most of the row's glyph
-  texels use (R) and its shadow's (G), so the glyph shades down the cell as the bitmap does; the packet's CLUT,
-  modulation and blending apply as for any texel. A button cell's B names its slot in `OutlineAtlas::buttons`;
+- `runtime/psx/present/outline_text` owns it. A title's `GameRuntime::outlineFonts()` names up to four fonts
+  (`kMaxOutlineFonts`). An `OutlineFont` is a texture page and its glyphs, each an `OutlineGlyph`: the rectangle
+  (u, v, width, height) its text drawer samples, with its codepoint and face or its PSX button; `OutlineGrid` fills
+  them for a font of equal cells. Also per font: the text face and its weight, the shadow's CLUT indices and offset.
+  `outlineGlyphs(core)` names, for each ordering-table packet its text drawers filled with glyphs, the font it drew
+  from (`OutlineGlyphs::glyphFont`). At seal, `markGlyphs` tags those textured primitives with their font
+  (`DrawPrimitive::outlineFont`); a replayed in-between carries the same tags through `Capture::glyphPackets`.
+- A frame that drew tagged packets brings each drawn font up to date in the atlas: each glyph's bitmap is read from
+  VRAM, and a glyph whose bitmap or codepoint changed gets a new field: the codepoint's outline (the title's face, or
+  PromptFont for a button glyph, whose codepoint the pad in hand picks through `GlyphSet`) fitted to the box of the
+  glyph's ink texels, as an MSDF in RGB and the shadow's SDF, moved by the shadow offset, in A, eight field pixels a
+  texel. Fields take their sign from the outline's nonzero fill, then msdfgen's error correction (its scanline pass):
+  variable faces keep overlapping contours. The atlas holds the fonts one under another, each over the box of its
+  glyph rectangles (`OutlineAtlasFont`); a font not drawn keeps its last fields.
+- Colours stay the guest's: the index texture holds per glyph row the CLUT index most of the row's glyph
+  texels use (R) and its shadow's (G), so the glyph shades down its rectangle as the bitmap does; the packet's CLUT,
+  modulation and blending apply as for any texel. A button glyph's B names its slot in `OutlineAtlas::buttons` (four across all fonts);
   at draw time `buttonFaceColours` asks `GlyphSet::faceColour` per slot and the glyph takes that colour, keeping
   its CLUT texel's semi-transparency bit: Xbox prints A green, B red, X blue, Y yellow; PlayStation, Nintendo
   and the keyboard keep the game's colours.
-- The record op of a flagged primitive (`kOpOutline`, set only at internal scale above 1) samples the atlas
-  instead of VRAM in `record.frag`, so it keeps its ordering-table slot, crop UI place and replay. At scale 1
+- The record op of a tagged primitive (`kOpOutline`, set only at internal scale above 1, its font in the two bits
+  from `kOpOutlineFontShift`) samples that font's place in the atlas instead of VRAM in `record.frag`, so it keeps its ordering-table slot, crop UI place and replay. At scale 1
   the bitmap draws.
 - Check: Spyro 2 Summer Forest pause and Spyro 3 Sunrise Spring pause and Help at `ires=0`, 3840x2160
   (`warp 0/0/0`, start, down, cross): letters and button glyphs sharp, shaded and shadowed as the bitmap; Help

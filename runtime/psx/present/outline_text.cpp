@@ -11,6 +11,7 @@
 #include <array>
 #include <cstddef>
 #include <cstdlib>
+#include <limits>
 #include <map>
 #include <optional>
 #include <string>
@@ -29,10 +30,12 @@ constexpr std::size_t offsetOf(int x, int y, int width, int channels = 1) {
          static_cast<std::size_t>(channels);
 }
 
-// A cell's bitmap glyph: its CLUT indices, the box of its glyph texels (the shadow's excluded), half open, and
-// whether it carries the shadow.
-struct BitmapCell {
-  std::vector<int> indices; // row-major, cellWidth x cellHeight
+// A glyph's bitmap: its CLUT indices, the box of its glyph texels (the shadow's excluded), half open, and whether it
+// carries the shadow.
+struct BitmapGlyph {
+  int width = 0;
+  int height = 0;
+  std::vector<int> indices; // row-major, width x height
   int x0 = 0;
   int y0 = 0;
   int x1 = 0;
@@ -44,7 +47,7 @@ struct BitmapCell {
   }
 };
 
-// What a cell's field is drawn from; a cell keeps its field while this holds.
+// What a glyph's field is drawn from; a glyph keeps its field while this holds.
 struct FieldKey {
   char32_t codepoint = 0;
   OutlineFace face = OutlineFace::Text;
@@ -66,35 +69,35 @@ bool glyphTexel(const OutlineFont &font, int index) {
 }
 
 // Whether a texel of `bitmap` is its glyph's ink rather than its shadow.
-bool glyphInk(const OutlineFont &font, const BitmapCell &bitmap, int index) {
+bool glyphInk(const OutlineFont &font, const BitmapGlyph &bitmap, int index) {
   return bitmap.shadowed ? glyphTexel(font, index) : index != 0;
 }
 
-BitmapCell readCell(const OutlineFont &font, std::span<const std::uint16_t> vram, int cell) {
-  const int u0 = (cell % font.columns) * font.cellWidth;
-  const int v0 = (cell / font.columns) * font.cellHeight;
-  BitmapCell bitmap;
-  bitmap.indices.resize(offsetOf(0, font.cellHeight, font.cellWidth));
+BitmapGlyph readGlyph(const OutlineFont &font, std::span<const std::uint16_t> vram, const OutlineGlyph &glyph) {
+  BitmapGlyph bitmap;
+  bitmap.width = glyph.width;
+  bitmap.height = glyph.height;
+  bitmap.indices.resize(offsetOf(0, bitmap.height, bitmap.width));
   const auto halfWordAt = [vram](psx::gpu::VramPoint at) {
     return psx::gpu::vramHalfWord(vram, at);
   };
-  bool glyph = false;
+  bool ink = false;
   bool shadow = false;
-  for (int y = 0; y < font.cellHeight; y++) {
-    for (int x = 0; x < font.cellWidth; x++) {
-      const int index = psx::gpu::fetchIndex(halfWordAt, font.page, u0 + x, v0 + y);
-      bitmap.indices[offsetOf(x, y, font.cellWidth)] = index;
-      glyph = glyph || glyphTexel(font, index);
+  for (int y = 0; y < bitmap.height; y++) {
+    for (int x = 0; x < bitmap.width; x++) {
+      const int index = psx::gpu::fetchIndex(halfWordAt, font.page, glyph.u + x, glyph.v + y);
+      bitmap.indices[offsetOf(x, y, bitmap.width)] = index;
+      ink = ink || glyphTexel(font, index);
       shadow = shadow || shadowTexel(font, index);
     }
   }
-  // A cell of the shadow's indices alone is drawn in them.
-  bitmap.shadowed = glyph && shadow;
-  bitmap.x0 = font.cellWidth;
-  bitmap.y0 = font.cellHeight;
-  for (int y = 0; y < font.cellHeight; y++) {
-    for (int x = 0; x < font.cellWidth; x++) {
-      const int index = bitmap.indices[offsetOf(x, y, font.cellWidth)];
+  // A glyph of the shadow's indices alone is drawn in them.
+  bitmap.shadowed = ink && shadow;
+  bitmap.x0 = bitmap.width;
+  bitmap.y0 = bitmap.height;
+  for (int y = 0; y < bitmap.height; y++) {
+    for (int x = 0; x < bitmap.width; x++) {
+      const int index = bitmap.indices[offsetOf(x, y, bitmap.width)];
       if (glyphInk(font, bitmap, index)) {
         bitmap.x0 = std::min(bitmap.x0, x);
         bitmap.y0 = std::min(bitmap.y0, y);
@@ -106,15 +109,15 @@ BitmapCell readCell(const OutlineFont &font, std::span<const std::uint16_t> vram
   return bitmap;
 }
 
-// The CLUT index each row of a cell draws `inked` texels in: the font's gradient runs down the cell, so a row takes
+// The CLUT index each row of a glyph draws `inked` texels in: the font's gradient runs down the glyph, so a row takes
 // the index most of its such texels hold, and a row without any takes the nearest row's.
-template <class Inked> std::vector<int> rowIndices(const OutlineFont &font, const BitmapCell &bitmap, Inked inked) {
-  const auto h = static_cast<std::size_t>(font.cellHeight);
+template <class Inked> std::vector<int> rowIndices(const BitmapGlyph &bitmap, Inked inked) {
+  const auto h = static_cast<std::size_t>(bitmap.height);
   std::vector<int> rows(h, 0);
   for (std::size_t y = 0; y < h; y++) {
     std::array<int, 256> counts{};
-    for (int x = 0; x < font.cellWidth; x++) {
-      const int index = bitmap.indices[offsetOf(x, static_cast<int>(y), font.cellWidth)];
+    for (int x = 0; x < bitmap.width; x++) {
+      const int index = bitmap.indices[offsetOf(x, static_cast<int>(y), bitmap.width)];
       if (inked(index)) {
         counts.at(static_cast<std::size_t>(index))++;
       }
@@ -133,6 +136,27 @@ template <class Inked> std::vector<int> rowIndices(const OutlineFont &font, cons
     }
   }
   return banded;
+}
+
+// The page texels a font's glyphs cover: the box of their rectangles, `originX`/`originY` across VRAM.
+OutlineAtlasFont placeOf(const OutlineFont &font) {
+  int x0 = std::numeric_limits<int>::max();
+  int y0 = std::numeric_limits<int>::max();
+  int x1 = 0;
+  int y1 = 0;
+  for (const OutlineGlyph &glyph : font.glyphs) {
+    x0 = std::min<int>(x0, glyph.u);
+    y0 = std::min<int>(y0, glyph.v);
+    x1 = std::max(x1, glyph.u + glyph.width);
+    y1 = std::max(y1, glyph.v + glyph.height);
+  }
+  if (x1 <= x0 || y1 <= y0) {
+    return {};
+  }
+  return {.originX = (font.page.x << (2 - static_cast<int>(font.page.depth))) + x0,
+          .originY = font.page.y + y0,
+          .width = x1 - x0,
+          .height = y1 - y0};
 }
 
 std::uint8_t fieldByte(float value) {
@@ -157,26 +181,54 @@ public:
   Builder(const Builder &) = delete;
   Builder &operator=(const Builder &) = delete;
 
-  void drew(const OutlineFont &font, std::span<const std::uint16_t> vram, const psx::input::GlyphSet &glyphs) {
-    std::vector<BitmapCell> bitmaps;
-    std::vector<char32_t> codepoints;
-    for (const OutlineCell &cell : font.cells) {
-      bitmaps.push_back(readCell(font, vram, cell.cell));
-      codepoints.push_back(cell.button != 0 ? glyphs.glyph(cell.button) : cell.codepoint);
+  void drew(std::span<const OutlineFont> fonts,
+            unsigned drawn,
+            std::span<const std::uint16_t> vram,
+            const psx::input::GlyphSet &pads) {
+    if (fonts.size() > kMaxOutlineFonts) {
+      lucent::error("outline", "a title names {} fonts, more than {}", fonts.size(), kMaxOutlineFonts);
+      std::abort();
     }
-    const auto sameIndices = [](const BitmapCell &a, const BitmapCell &b) {
-      return a.indices == b.indices;
-    };
-    if (&font == font_ && codepoints == codepoints_ && std::ranges::equal(bitmaps, bitmaps_, sameIndices)) {
-      return;
+    if (fonts.data() != fonts_) {
+      fonts_ = fonts.data();
+      states_ = {};
+      layout(fonts);
     }
-    if (&font != font_) {
-      fields_.clear();
+    bool changed = false;
+    int slots = 0;
+    for (std::size_t f = 0; f < fonts.size(); f++) {
+      const OutlineFont &font = fonts[f];
+      FontState &state = states_.at(f);
+      const int firstSlot = slots;
+      slots += static_cast<int>(std::ranges::count_if(font.glyphs, [](const OutlineGlyph &glyph) {
+        return glyph.button != 0;
+      }));
+      if ((drawn & (1u << f)) == 0) {
+        continue;
+      }
+      std::vector<BitmapGlyph> bitmaps;
+      std::vector<char32_t> codepoints;
+      for (const OutlineGlyph &glyph : font.glyphs) {
+        bitmaps.push_back(readGlyph(font, vram, glyph));
+        codepoints.push_back(glyph.button != 0 ? pads.glyph(glyph.button) : glyph.codepoint);
+      }
+      const auto sameIndices = [](const BitmapGlyph &a, const BitmapGlyph &b) {
+        return a.indices == b.indices;
+      };
+      if (state.built && codepoints == state.codepoints && std::ranges::equal(bitmaps, state.bitmaps, sameIndices)) {
+        continue;
+      }
+      state.bitmaps = std::move(bitmaps);
+      state.codepoints = std::move(codepoints);
+      state.built = true;
+      draw(font, f, firstSlot);
+      changed = true;
     }
-    font_ = &font;
-    bitmaps_ = std::move(bitmaps);
-    codepoints_ = std::move(codepoints);
-    build(font);
+    if (changed) {
+      atlas_.generation++;
+      lucent::info("outline", "atlas {}: {} fonts, {} fields drawn", atlas_.generation, fonts.size(), drawn_);
+      drawn_ = 0;
+    }
   }
 
   const OutlineAtlas *atlas() const {
@@ -184,10 +236,45 @@ public:
   }
 
 private:
-  struct CellField {
+  struct GlyphField {
     FieldKey key;
-    std::vector<std::uint8_t> rgba; // the cell's tile, cellWidth x cellHeight texels at kFieldScale
+    std::vector<std::uint8_t> rgba; // the glyph's tile, width x height texels at kFieldScale
   };
+
+  struct FontState {
+    bool built = false;
+    std::vector<BitmapGlyph> bitmaps;
+    std::vector<char32_t> codepoints;
+    std::map<std::size_t, GlyphField> fields;
+  };
+
+  // Each font's place, one under another; every glyph field and index empty.
+  void layout(std::span<const OutlineFont> fonts) {
+    OutlineAtlas next;
+    next.scale = kFieldScale;
+    std::size_t buttons = 0;
+    for (std::size_t f = 0; f < fonts.size(); f++) {
+      OutlineAtlasFont place = placeOf(fonts[f]);
+      place.atlasY = next.height;
+      next.fonts.at(f) = place;
+      next.width = std::max(next.width, place.width);
+      next.height += place.height;
+      for (const OutlineGlyph &glyph : fonts[f].glyphs) {
+        if (glyph.button == 0) {
+          continue;
+        }
+        if (buttons == next.buttons.size()) {
+          lucent::error("outline", "fonts name more than {} button glyphs", next.buttons.size());
+          std::abort();
+        }
+        next.buttons.at(buttons++) = glyph.button;
+      }
+    }
+    next.fields.assign(offsetOf(0, next.height * kFieldScale, next.width * kFieldScale, 4), 0);
+    next.indices.assign(offsetOf(0, next.height, next.width, 4), 0);
+    next.generation = atlas_.generation;
+    atlas_ = std::move(next);
+  }
 
   msdfgen::FontHandle *face(const OutlineFont &font, OutlineFace which) {
     const std::string name = which == OutlineFace::Prompt ? "promptfont.ttf" : font.textFace;
@@ -212,10 +299,11 @@ private:
     return at->second;
   }
 
-  // The cell's tile: RGB the glyph's field fitted to the bitmap glyph's box, A the shadow's.
-  bool drawField(const OutlineFont &font, int cell, const FieldKey &key, std::vector<std::uint8_t> &rgba) {
-    const int w = font.cellWidth * kFieldScale;
-    const int h = font.cellHeight * kFieldScale;
+  // The glyph's tile: RGB its outline's field fitted to the bitmap glyph's box, A the shadow's.
+  bool
+  drawField(const OutlineFont &font, const OutlineGlyph &glyph, const FieldKey &key, std::vector<std::uint8_t> &rgba) {
+    const int w = glyph.width * kFieldScale;
+    const int h = glyph.height * kFieldScale;
     rgba.assign(offsetOf(0, h, w, 4), 0);
     msdfgen::FontHandle *handle = face(font, key.face);
     msdfgen::Shape shape;
@@ -225,8 +313,9 @@ private:
         glyphIndex.getIndex() == 0 ||
         !msdfgen::loadGlyph(shape, handle, glyphIndex, msdfgen::FONT_SCALING_EM_NORMALIZED) || shape.contours.empty()) {
       lucent::error("outline",
-                    "no outline for cell {} (U+{:04X}); it draws nothing",
-                    cell,
+                    "no outline for the glyph at ({}, {}) (U+{:04X}); it draws nothing",
+                    glyph.u,
+                    glyph.v,
                     static_cast<std::uint32_t>(key.codepoint));
       return false;
     }
@@ -248,10 +337,10 @@ private:
     generate.errorCorrection.mode = msdfgen::ErrorCorrectionConfig::DISABLED;
     msdfgen::MSDFGeneratorConfig correct;
     correct.errorCorrection.distanceCheckMode = msdfgen::ErrorCorrectionConfig::DO_NOT_CHECK_DISTANCE;
-    msdfgen::Bitmap<float, 3> glyph(w, h);
-    msdfgen::generateMSDF(glyph, shape, placed, generate);
-    msdfgen::distanceSignCorrection(glyph, shape, placed, msdfgen::FILL_NONZERO);
-    msdfgen::msdfErrorCorrection(glyph, shape, placed, correct);
+    msdfgen::Bitmap<float, 3> field(w, h);
+    msdfgen::generateMSDF(field, shape, placed, generate);
+    msdfgen::distanceSignCorrection(field, shape, placed, msdfgen::FILL_NONZERO);
+    msdfgen::msdfErrorCorrection(field, shape, placed, correct);
     msdfgen::Bitmap<float, 1> shadow(w, h);
     if (key.shadowed) {
       const msdfgen::Vector2 shifted(translate.x + font.shadowX * kFieldScale / scale.x,
@@ -263,7 +352,7 @@ private:
     for (int y = 0; y < h; y++) {
       for (int x = 0; x < w; x++) {
         std::uint8_t *pixel = &rgba[offsetOf(x, h - 1 - y, w, 4)];
-        const float *channels = glyph(x, y);
+        const float *channels = field(x, y);
         pixel[0] = fieldByte(channels[0]);
         pixel[1] = fieldByte(channels[1]);
         pixel[2] = fieldByte(channels[2]);
@@ -273,88 +362,75 @@ private:
     return true;
   }
 
-  void build(const OutlineFont &font) {
-    int columns = 0;
-    int rows = 0;
-    for (const OutlineCell &cell : font.cells) {
-      columns = std::max(columns, cell.cell % font.columns + 1);
-      rows = std::max(rows, cell.cell / font.columns + 1);
+  // Font `f`'s place in the atlas from its glyphs as last read; its button glyphs take slots from `firstSlot` on.
+  void draw(const OutlineFont &font, std::size_t f, int firstSlot) {
+    FontState &state = states_.at(f);
+    const OutlineAtlasFont &place = atlas_.fonts.at(f);
+    const int pageX0 = place.originX - (font.page.x << (2 - static_cast<int>(font.page.depth)));
+    const int pageY0 = place.originY - font.page.y;
+    const int fieldWidth = atlas_.width * kFieldScale;
+    for (int y = 0; y < place.height; y++) {
+      std::fill_n(&atlas_.indices[offsetOf(0, place.atlasY + y, atlas_.width, 4)], place.width * 4, 0);
     }
-    OutlineAtlas next;
-    next.scale = kFieldScale;
-    next.width = columns * font.cellWidth;
-    next.height = rows * font.cellHeight;
-    next.originX = font.page.x << (2 - static_cast<int>(font.page.depth));
-    next.originY = font.page.y;
-    const int fieldWidth = next.width * kFieldScale;
-    next.fields.assign(offsetOf(0, next.height * kFieldScale, fieldWidth, 4), 0);
-    next.indices.assign(offsetOf(0, next.height, next.width, 4), 0);
-    int drawn = 0;
-    std::size_t buttons = 0;
-    for (std::size_t i = 0; i < font.cells.size(); i++) {
-      const OutlineCell &cell = font.cells[i];
-      const BitmapCell &bitmap = bitmaps_[i];
-      int slot = 0;
-      if (cell.button != 0) {
-        if (buttons == next.buttons.size()) {
-          lucent::error("outline", "font names more than {} button cells", next.buttons.size());
-          std::abort();
-        }
-        next.buttons.at(buttons) = cell.button;
-        slot = static_cast<int>(++buttons);
-      }
+    for (int y = 0; y < place.height * kFieldScale; y++) {
+      std::fill_n(&atlas_.fields[offsetOf(0, (place.atlasY * kFieldScale) + y, fieldWidth, 4)],
+                  place.width * kFieldScale * 4,
+                  0);
+    }
+    int slot = firstSlot;
+    for (std::size_t i = 0; i < font.glyphs.size(); i++) {
+      const OutlineGlyph &glyph = font.glyphs[i];
+      const BitmapGlyph &bitmap = state.bitmaps[i];
+      const int glyphSlot = glyph.button != 0 ? ++slot : 0;
       if (bitmap.empty()) {
         continue;
       }
-      const FieldKey key{codepoints_[i],
-                         cell.button != 0 ? OutlineFace::Prompt : cell.face,
+      const FieldKey key{state.codepoints[i],
+                         glyph.button != 0 ? OutlineFace::Prompt : glyph.face,
                          bitmap.x0,
                          bitmap.y0,
                          bitmap.x1,
                          bitmap.y1,
                          bitmap.shadowed};
-      CellField &field = fields_[cell.cell];
+      GlyphField &field = state.fields[i];
       if (field.rgba.empty() || !(field.key == key)) {
         field.key = key;
-        if (!drawField(font, cell.cell, key, field.rgba)) {
+        if (!drawField(font, glyph, key, field.rgba)) {
+          field.rgba.clear();
           continue;
         }
-        ++drawn;
+        ++drawn_;
       }
-      const int tileX = (cell.cell % font.columns) * font.cellWidth;
-      const int tileY = (cell.cell / font.columns) * font.cellHeight;
-      const int tileWidth = font.cellWidth * kFieldScale;
-      for (int y = 0; y < font.cellHeight * kFieldScale; y++) {
+      const int tileX = glyph.u - pageX0;
+      const int tileY = place.atlasY + glyph.v - pageY0;
+      const int tileWidth = glyph.width * kFieldScale;
+      for (int y = 0; y < glyph.height * kFieldScale; y++) {
         std::copy_n(&field.rgba[offsetOf(0, y, tileWidth, 4)],
                     tileWidth * 4,
-                    &next.fields[offsetOf(tileX * kFieldScale, (tileY * kFieldScale) + y, fieldWidth, 4)]);
+                    &atlas_.fields[offsetOf(tileX * kFieldScale, (tileY * kFieldScale) + y, fieldWidth, 4)]);
       }
-      const std::vector<int> glyphRows = rowIndices(font, bitmap, [&](int index) {
+      const std::vector<int> glyphRows = rowIndices(bitmap, [&](int index) {
         return glyphInk(font, bitmap, index);
       });
-      const std::vector<int> shadowRows = rowIndices(font, bitmap, [&](int index) {
+      const std::vector<int> shadowRows = rowIndices(bitmap, [&](int index) {
         return bitmap.shadowed && shadowTexel(font, index);
       });
       for (std::size_t y = 0; y < glyphRows.size(); y++) {
-        for (int x = 0; x < font.cellWidth; x++) {
-          std::uint8_t *texel = &next.indices[offsetOf(tileX + x, tileY + static_cast<int>(y), next.width, 4)];
+        for (int x = 0; x < glyph.width; x++) {
+          std::uint8_t *texel = &atlas_.indices[offsetOf(tileX + x, tileY + static_cast<int>(y), atlas_.width, 4)];
           texel[0] = static_cast<std::uint8_t>(glyphRows[y]);
           texel[1] = static_cast<std::uint8_t>(shadowRows[y]);
-          texel[2] = static_cast<std::uint8_t>(slot);
+          texel[2] = static_cast<std::uint8_t>(glyphSlot);
         }
       }
     }
-    next.generation = atlas_.generation + 1;
-    atlas_ = std::move(next);
-    lucent::info("outline", "atlas {}: {} cells, {} fields drawn", atlas_.generation, font.cells.size(), drawn);
   }
 
   msdfgen::FreetypeHandle *freetype_ = nullptr;
   std::map<std::string, msdfgen::FontHandle *> faces_;
-  const OutlineFont *font_ = nullptr;
-  std::vector<BitmapCell> bitmaps_;
-  std::vector<char32_t> codepoints_;
-  std::map<std::uint16_t, CellField> fields_;
+  const OutlineFont *fonts_ = nullptr;
+  std::array<FontState, kMaxOutlineFonts> states_;
+  int drawn_ = 0;
   OutlineAtlas atlas_;
 };
 
@@ -362,10 +438,11 @@ OutlineText::OutlineText() : builder_(std::make_unique<Builder>()) {}
 
 OutlineText::~OutlineText() = default;
 
-void OutlineText::drew(const OutlineFont &font,
+void OutlineText::drew(std::span<const OutlineFont> fonts,
+                       unsigned drawn,
                        std::span<const std::uint16_t> vram,
-                       const psx::input::GlyphSet &glyphs) {
-  builder_->drew(font, vram, glyphs);
+                       const psx::input::GlyphSet &pads) {
+  builder_->drew(fonts, drawn, vram, pads);
 }
 
 const OutlineAtlas *OutlineText::atlas() const {
@@ -382,24 +459,31 @@ std::array<std::uint32_t, 4> buttonFaceColours(const OutlineAtlas &atlas, const 
   return colours;
 }
 
-void markGlyphs(const OutlineFont *font,
+void markGlyphs(std::span<const OutlineFont> fonts,
                 const OutlineGlyphs *glyphs,
                 std::span<RecordEntry> entries,
                 OutlineText &text,
                 std::span<const std::uint16_t> vram,
                 const psx::input::GlyphSet &pads) {
-  if (font == nullptr || glyphs == nullptr) {
+  if (fonts.empty() || glyphs == nullptr) {
     return;
   }
-  bool any = false;
+  unsigned drawn = 0;
   for (RecordEntry &entry : entries) {
     if (auto *primitive = std::get_if<DrawPrimitive>(&entry)) {
-      primitive->outline = primitive->textured && glyphs->glyphPacket(primitive->packet);
-      any = any || primitive->outline;
+      primitive->outlineFont = primitive->textured ? glyphs->glyphFont(primitive->packet) : std::nullopt;
+      if (primitive->outlineFont) {
+        if (*primitive->outlineFont >= fonts.size()) {
+          lucent::error(
+              "outline", "packet {:08X} names font {} of {}", primitive->packet, *primitive->outlineFont, fonts.size());
+          std::abort();
+        }
+        drawn |= 1u << *primitive->outlineFont;
+      }
     }
   }
-  if (any) {
-    text.drew(*font, vram, pads);
+  if (drawn != 0) {
+    text.drew(fonts, drawn, vram, pads);
   }
 }
 

@@ -84,13 +84,13 @@ bool ReplayFrame::replay(Core &core, float t, Capture &capture) {
   capture.windows = frameWindows(core);
   capture.uiPackets.clear();
   capture.glyphPackets.clear();
-  const OutlineGlyphs *glyphs = core.runtime.outlineFont() != nullptr ? core.runtime.outlineGlyphs(core) : nullptr;
+  const OutlineGlyphs *glyphs = !core.runtime.outlineFonts().empty() ? core.runtime.outlineGlyphs(core) : nullptr;
   for (const gpu::CapturedPacket &packet : capture.packets) {
     if (cropShowsUi(core, packet.address)) {
       capture.uiPackets.push_back(packet.address);
     }
-    if (glyphs != nullptr && glyphs->glyphPacket(packet.address)) {
-      capture.glyphPackets.push_back(packet.address);
+    if (const std::optional<std::uint8_t> font = glyphs != nullptr ? glyphs->glyphFont(packet.address) : std::nullopt) {
+      capture.glyphPackets.emplace_back(packet.address, *font);
     }
   }
   std::ranges::sort(capture.uiPackets);
@@ -200,7 +200,11 @@ const FrameRecord *ReplayFrame::assemble(const FrameRecord &shown,
   for (RecordEntry &entry : spliced) {
     if (auto *primitive = std::get_if<DrawPrimitive>(&entry)) {
       primitive->ui = std::ranges::binary_search(capture.uiPackets, primitive->packet);
-      primitive->outline = primitive->textured && std::ranges::binary_search(capture.glyphPackets, primitive->packet);
+      const auto glyph = std::ranges::lower_bound(capture.glyphPackets, primitive->packet, {}, [](const auto &named) {
+        return named.first;
+      });
+      const bool named = glyph != capture.glyphPackets.end() && glyph->first == primitive->packet;
+      primitive->outlineFont = primitive->textured && named ? std::optional(glyph->second) : std::nullopt;
     }
   }
   return &assembled;

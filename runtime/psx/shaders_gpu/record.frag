@@ -20,9 +20,11 @@ layout(std430, set = 2, binding = 5) readonly buffer Ops { uint ops[]; };
 layout(std430, set = 2, binding = 6) readonly buffer Cluts { uint cluts[]; };
 layout(std430, set = 2, binding = 7) readonly buffer Pixels { uint pixels[]; };
 // plane: scale, origin x, origin y (native), the VRAM image's scale; ui: scale, origin x, origin y (UI pixels);
-// outline: the atlas's field pixels a texel (0 for none) and its first texel; faces: each button slot's face colour, 0
-// for the CLUT's.
-layout(set = 3, binding = 0) uniform Params { ivec4 plane; ivec4 ui; ivec4 outline; ivec4 faces; } params;
+// outline: the atlas's field pixels a texel (0 for none); faces: each button slot's face colour, 0 for the CLUT's;
+// fontPlaces: each outline font's first texel across VRAM and its atlas row; fontSizes: its width and height.
+layout(set = 3, binding = 0) uniform Params {
+    ivec4 plane; ivec4 ui; ivec4 outline; ivec4 faces; ivec4 fontPlaces[4]; ivec4 fontSizes[4];
+} params;
 
 uint op;
 int S;  // target pixels per native pixel of this fragment's mapping
@@ -79,12 +81,14 @@ float median(vec3 d) { return max(min(d.r, d.g), min(max(d.r, d.g), d.b)); }
 
 // The font cell texel at (u, v) + (fu, fv) / 256 from the outline atlas: inside the glyph's field the CLUT index of
 // the bitmap glyph's row, inside its shadow's the shadow's, else transparent.
-uint outlineTexel(uint u, uint v, uint fu, uint fv) {
-    ivec2 at = ivec2(int(windowedU(u)), int(windowedV(v))) - params.outline.yz;
-    ivec2 size = textureSize(u_outlineIndices, 0);
+uint outlineTexel(uint u, uint v, uint fu, uint fv, uint font) {
+    ivec4 place = params.fontPlaces[font];
+    ivec2 at = ivec2(int(windowedU(u)), int(windowedV(v))) - place.xy;
+    ivec2 size = params.fontSizes[font].xy;
     if (at.x < 0 || at.y < 0 || at.x >= size.x || at.y >= size.y) {
         return 0u;
     }
+    at.y += place.z;
     vec2 field = (vec2(at) + vec2(fu, fv) / 256.0) * float(params.outline.x);
     vec4 distance = texture(u_outlineFields, field / vec2(textureSize(u_outlineFields, 0)));
     vec3 indices = texelFetch(u_outlineIndices, at, 0).rgb;
@@ -273,7 +277,7 @@ void main() {
             if ((flags & kOpReadBack) != 0u) {
                 fore = readBackTexel(p);
             } else if ((flags & kOpOutline) != 0u && params.outline.x > 0) {
-                fore = outlineTexel(u, v, fu, fv);
+                fore = outlineTexel(u, v, fu, fv, (flags >> kOpOutlineFontShift) & 3u);
             } else {
                 fore = texel(u, v, fu, fv, flags);
             }

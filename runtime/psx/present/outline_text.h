@@ -1,11 +1,12 @@
 // outline_text.h — a title's bitmap font drawn from outline fonts at the target's resolution (plan 0207).
 //
-// The title names its font page (OutlineFont) and the packets its text drawer filled with font cells
-// (OutlineGlyphs). Each sealed frame that drew such packets brings the atlas up to date with the page's cells in
-// VRAM and the pad family in the player's hand: every cell gets its codepoint's glyph from the outline face, fitted
-// to the box of the cell's own bitmap glyph, as a multi-channel distance field (msdfgen), and keeps the bitmap's CLUT
-// indices for its colours. The record rasterizer samples the atlas for those packets' primitives (kOpOutline)
-// instead of VRAM, so a glyph keeps its ordering-table slot, its widescreen place and its replay.
+// The title names its fonts (OutlineFont: a page and its glyph rectangles) and, for each packet its text drawers
+// filled with glyphs, the font it drew from (OutlineGlyphs). Each sealed frame that drew such packets brings the
+// atlas up to date with those fonts' glyphs in VRAM and the pad family in the player's hand: every glyph gets its
+// codepoint's outline, fitted to the box of its own bitmap glyph, as a multi-channel distance field (msdfgen), and
+// keeps the bitmap's CLUT indices for its colours. The record rasterizer samples the atlas for those packets'
+// primitives (kOpOutline) instead of VRAM, so a glyph keeps its ordering-table slot, its widescreen place and its
+// replay.
 #pragma once
 
 #include "frame_record.h"
@@ -14,6 +15,7 @@
 #include <array>
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <span>
 #include <vector>
 
@@ -28,50 +30,85 @@ enum class OutlineFace : std::uint8_t {
   Prompt, // PromptFont, the face of the pad glyphs
 };
 
-// One cell of the page and what it shows: `codepoint` of `face`, or the glyph of PSX button `button` (kButton*) for
-// the pad the player holds.
-struct OutlineCell {
-  std::uint16_t cell = 0; // row-major in the page's grid
+// One glyph of a font page: the rectangle its text drawer samples, in texels of the page, and what it shows:
+// `codepoint` of `face`, or the glyph of PSX button `button` (kButton*) for the pad the player holds.
+struct OutlineGlyph {
+  std::uint16_t u = 0;
+  std::uint16_t v = 0;
+  std::uint16_t width = 0;
+  std::uint16_t height = 0;
   char32_t codepoint = 0;
   OutlineFace face = OutlineFace::Text;
   std::uint16_t button = 0;
 };
 
-// A title's bitmap font as its text drawer samples it.
+// Equal cells across a page from (u, v), `columns` a row, numbered row-major: one way to name a font's glyphs.
+struct OutlineGrid {
+  int u = 0;
+  int v = 0;
+  int cellWidth = 0;
+  int cellHeight = 0;
+  int columns = 0;
+
+  [[nodiscard]] constexpr OutlineGlyph glyph(int cell, char32_t codepoint, OutlineFace face = OutlineFace::Text) const {
+    return {.u = static_cast<std::uint16_t>(u + ((cell % columns) * cellWidth)),
+            .v = static_cast<std::uint16_t>(v + ((cell / columns) * cellHeight)),
+            .width = static_cast<std::uint16_t>(cellWidth),
+            .height = static_cast<std::uint16_t>(cellHeight),
+            .codepoint = codepoint,
+            .face = face};
+  }
+  [[nodiscard]] constexpr OutlineGlyph button(int cell, std::uint16_t psxButton) const {
+    OutlineGlyph named = glyph(cell, 0, OutlineFace::Prompt);
+    named.button = psxButton;
+    return named;
+  }
+};
+
+// A bitmap font of a title as its text drawer samples it.
 struct OutlineFont {
   psx::gpu::TexPage page; // indexed
-  int cellWidth = 0;      // texels
-  int cellHeight = 0;
-  int columns = 0; // cells per grid row
-  std::span<const OutlineCell> cells;
+  std::span<const OutlineGlyph> glyphs;
   const char *textFace = ""; // asset file under assets/rml
   double weight = 0;         // the text face's wght axis, 0 for its default
   // The CLUT indices of the drop shadow the bitmap glyphs carry, and the texels it lies right of and below its glyph.
-  // A cell holding only those indices has no shadow.
+  // A glyph holding only those indices has no shadow.
   std::span<const int> shadowIndices;
   int shadowX = 0;
   int shadowY = 0;
 };
 
-// A title's naming of the packets that drew its font's cells.
+// The fonts a title's text drawers sample, at most this many (record_raster_setup.h kOpOutlineFontShift).
+inline constexpr std::size_t kMaxOutlineFonts = 4;
+
+// A title's naming of the packets that drew its fonts' glyphs.
 class OutlineGlyphs {
 public:
   virtual ~OutlineGlyphs() = default;
-  // Asked as the draw that linked it has just run: whether the ordering-table packet at `packet` draws a font cell.
-  [[nodiscard]] virtual bool glyphPacket(std::uint32_t packet) const = 0;
+  // Asked as the draw that linked it has just run: the font (an index into GameRuntime::outlineFonts) whose glyph the
+  // ordering-table packet at `packet` draws, or none.
+  [[nodiscard]] virtual std::optional<std::uint8_t> glyphFont(std::uint32_t packet) const = 0;
 };
 
-// What record.frag samples for kOpOutline. `fields` is `scale` pixels a texel over the page's cell rows: RGB a
-// multi-channel distance field of each cell's glyph, A a distance field of its shadow. `indices` is one pixel a texel,
-// R and G the CLUT indices of its row of the bitmap glyph and of its shadow, B a button cell's slot in `buttons`
-// plus one.
+// Where one font lies in the atlas: its page texels from `originX`, `originY` (in texels of the page's mode across
+// VRAM), `width` x `height`, at atlas texel (0, atlasY).
+struct OutlineAtlasFont {
+  int originX = 0;
+  int originY = 0;
+  int width = 0;
+  int height = 0;
+  int atlasY = 0;
+};
+
+// What record.frag samples for kOpOutline. `fields` is `scale` pixels a texel over the fonts' glyphs: RGB a
+// multi-channel distance field of each glyph, A a distance field of its shadow. `indices` is one pixel a texel, R and
+// G the CLUT indices of its row of the bitmap glyph and of its shadow, B a button glyph's slot in `buttons` plus one.
 struct OutlineAtlas {
   int scale = 0;
   int width = 0; // texels
   int height = 0;
-  int originX = 0; // the first texel, in texels of the page's mode across VRAM
-  int originY = 0;
-  std::array<std::uint16_t, 4> buttons{}; // the PSX button (kButton*) of each button cell, in cell order
+  std::array<OutlineAtlasFont, kMaxOutlineFonts> fonts{};
+  std::array<std::uint16_t, 4> buttons{}; // the PSX button (kButton*) of each button glyph, in font and glyph order
   std::vector<std::uint8_t> fields;       // RGBA8
   std::vector<std::uint8_t> indices;      // RGBA8
   std::uint64_t generation = 0;
@@ -84,8 +121,12 @@ public:
   OutlineText(const OutlineText &) = delete;
   OutlineText &operator=(const OutlineText &) = delete;
 
-  // A sealed frame drew `font`'s cells: the atlas follows the page's cells in `vram` and the pad family of `glyphs`.
-  void drew(const OutlineFont &font, std::span<const std::uint16_t> vram, const psx::input::GlyphSet &glyphs);
+  // A sealed frame drew glyphs of the fonts `drawn` flags (bit i: fonts[i]): the atlas follows their glyphs in `vram`
+  // and the pad family of `pads`.
+  void drew(std::span<const OutlineFont> fonts,
+            unsigned drawn,
+            std::span<const std::uint16_t> vram,
+            const psx::input::GlyphSet &pads);
   // Null until a font's atlas is built.
   [[nodiscard]] const OutlineAtlas *atlas() const;
 
@@ -98,9 +139,9 @@ private:
 // semi-transparency bit; 0 where the game's own colour stands.
 std::array<std::uint32_t, 4> buttonFaceColours(const OutlineAtlas &atlas, const psx::input::GlyphSet &pads);
 
-// Marks the primitives among a sealed frame's `entries` whose packets `glyphs` names; when any, `text`'s atlas follows
-// `font`'s cells in `vram` and the pad family of `pads`. Nothing without both a font and its naming.
-void markGlyphs(const OutlineFont *font,
+// Tags the primitives among a sealed frame's `entries` whose packets `glyphs` names with their font; when any, `text`'s
+// atlas follows those fonts' glyphs in `vram` and the pad family of `pads`. Nothing without both fonts and naming.
+void markGlyphs(std::span<const OutlineFont> fonts,
                 const OutlineGlyphs *glyphs,
                 std::span<RecordEntry> entries,
                 OutlineText &text,

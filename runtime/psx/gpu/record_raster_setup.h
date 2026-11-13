@@ -110,6 +110,7 @@ enum RecordOpFlag : std::uint32_t {
   kOpDepthGroup = 1u << 27,
   kOpDepthModel = 1u << 28, // DepthOrder::Model: tests against all but its own model's parts, then writes its depth
   kOpOutline = 1u << 29,    // texels from the outline font atlas (present::OutlineAtlas), not VRAM; above native scale
+  kOpOutlineFontShift = 30, // two bits: the outline font (present::OutlineAtlas::fonts)
 };
 
 // One rectangle of a plane's pixels belonging to an op, scaled, half open. Op origins are in VRAM space,

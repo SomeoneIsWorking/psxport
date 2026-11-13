@@ -96,7 +96,7 @@ struct DrawPrimitive {
   std::uint32_t owner = 0;         // OwnerLedger handle of the packet's first command word, or the port it came through
   std::uint8_t command = 0;        // the packet's GP0 command byte
   bool ui = false;                 // crop widescreen: shown at its 4:3 size and place (cropShowsUi)
-  bool outline = false;            // a font cell drawn from the title's outline font (OutlineGlyphs)
+  std::optional<std::uint8_t> outlineFont; // the title's outline font whose glyph it draws (OutlineGlyphs)
 
   bool operator==(const DrawPrimitive &) const = default;
 };

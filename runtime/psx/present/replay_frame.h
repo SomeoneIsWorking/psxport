@@ -16,6 +16,7 @@
 #include <cstdint>
 #include <optional>
 #include <span>
+#include <utility>
 #include <vector>
 
 class Core;
@@ -82,9 +83,10 @@ private:
     std::vector<gpu::CapturedPacket> packets;
     std::vector<std::uint32_t> words;
     std::vector<gte::WordPlace> places;
-    RecordWindows windows;                   // frameWindows inside the replay, so the in-between frames its own view
-    std::vector<std::uint32_t> uiPackets;    // the packets the replay drew as crop UI (cropShowsUi), ascending
-    std::vector<std::uint32_t> glyphPackets; // the packets the replay drew font cells with (OutlineGlyphs), ascending
+    RecordWindows windows;                // frameWindows inside the replay, so the in-between frames its own view
+    std::vector<std::uint32_t> uiPackets; // the packets the replay drew as crop UI (cropShowsUi), ascending
+    // The packets the replay drew outline-font glyphs with and each one's font (OutlineGlyphs), by packet.
+    std::vector<std::pair<std::uint32_t, std::uint8_t>> glyphPackets;
   };
   struct Set {
     std::optional<std::uint64_t> shown;

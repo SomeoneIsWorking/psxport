@@ -670,7 +670,9 @@ RecordOp RecordPlanner::Builder::primitiveOp(const DrawPrimitive &primitive, Rec
   flags |= primitive.flipX ? kOpFlipX : 0u;
   flags |= primitive.flipY ? kOpFlipY : 0u;
   // At native scale the font's own bitmap is exact.
-  flags |= primitive.outline && scale_ > 1 ? kOpOutline : 0u;
+  if (primitive.outlineFont && scale_ > 1) {
+    flags |= kOpOutline | (static_cast<std::uint32_t>(*primitive.outlineFont) << kOpOutlineFontShift);
+  }
   op[kOpFlags] = flags;
   const present::RecordVertex &v0 = primitive.vertices[0];
   op[kOpColour] = static_cast<std::uint32_t>(v0.r) | (static_cast<std::uint32_t>(v0.g) << 8) |

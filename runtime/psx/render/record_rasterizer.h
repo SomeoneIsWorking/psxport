@@ -257,8 +257,7 @@ private:
   SDL_GPUTexture *outlineIndices_ = nullptr;
   std::uint64_t outlineGeneration_ = 0;
   int outlineScale_ = 0;
-  int outlineOriginX_ = 0;
-  int outlineOriginY_ = 0;
+  std::array<present::OutlineAtlasFont, present::kMaxOutlineFonts> outlineFonts_{};
   std::array<std::uint32_t, 4> outlineFaces_{};
 
   Buffer quads_;

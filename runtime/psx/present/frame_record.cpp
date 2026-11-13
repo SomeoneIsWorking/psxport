@@ -293,8 +293,7 @@ void writeEntry(BlobWriter &out, const DrawPrimitive &primitive) {
                           primitive.modulate,
                           primitive.flipX,
                           primitive.flipY,
-                          primitive.ui,
-                          primitive.outline}) {
+                          primitive.ui}) {
     out.boolean(flag);
   }
   out.i32(primitive.width);
@@ -311,6 +310,8 @@ void writeEntry(BlobWriter &out, const DrawPrimitive &primitive) {
   writeSlot(out, primitive.slot);
   out.u32(primitive.owner);
   out.u8(primitive.command);
+  out.boolean(primitive.outlineFont.has_value());
+  out.u8(primitive.outlineFont.value_or(0));
 }
 
 DrawPrimitive readPrimitive(BlobReader &in) {
@@ -323,8 +324,7 @@ DrawPrimitive readPrimitive(BlobReader &in) {
                      &primitive.modulate,
                      &primitive.flipX,
                      &primitive.flipY,
-                     &primitive.ui,
-                     &primitive.outline}) {
+                     &primitive.ui}) {
     *flag = in.boolean();
   }
   primitive.width = in.i32();
@@ -341,6 +341,9 @@ DrawPrimitive readPrimitive(BlobReader &in) {
   primitive.slot = readSlot(in);
   primitive.owner = in.u32();
   primitive.command = in.u8();
+  const bool outlined = in.boolean();
+  const std::uint8_t outlineFont = in.u8();
+  primitive.outlineFont = outlined ? std::optional(outlineFont) : std::nullopt;
   return primitive;
 }
 

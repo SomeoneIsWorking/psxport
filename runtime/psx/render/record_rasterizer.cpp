@@ -44,10 +44,11 @@ struct ParamsUniform {
   std::int32_t uiOriginY = 0;
   std::int32_t unused = 0;
   std::int32_t outlineScale = 0;
-  std::int32_t outlineOriginX = 0;
-  std::int32_t outlineOriginY = 0;
-  std::int32_t unusedOutline = 0;
+  std::array<std::int32_t, 3> unusedOutline{};
   std::array<std::int32_t, 4> outlineFaces{};
+  // Each outline font's first texel across VRAM and its atlas row, then its size (present::OutlineAtlasFont).
+  std::array<std::array<std::int32_t, 4>, present::kMaxOutlineFonts> outlineFontPlaces{};
+  std::array<std::array<std::int32_t, 4>, present::kMaxOutlineFonts> outlineFontSizes{};
 };
 
 std::uint64_t coveredPixels(std::span<const gpu::RecordQuad> quads) {
@@ -228,8 +229,7 @@ void RecordRasterizer::useOutline(const present::OutlineAtlas *atlas, const std:
   outlineIndices_ = device_.makeFilledTexture({atlas->width, atlas->height}, atlas->indices);
   outlineGeneration_ = atlas->generation;
   outlineScale_ = atlas->scale;
-  outlineOriginX_ = atlas->originX;
-  outlineOriginY_ = atlas->originY;
+  outlineFonts_ = atlas->fonts;
 }
 
 void RecordRasterizer::releaseImage() {
@@ -811,8 +811,11 @@ void RecordRasterizer::execute(SDL_GPUCommandBuffer *cmd, const gpu::RecordRaste
       ParamsUniform params{.scale = s, .originX = target.originX, .originY = target.originY, .imageScale = plan.scale};
       if (outlineFields_ != nullptr) {
         params.outlineScale = outlineScale_;
-        params.outlineOriginX = outlineOriginX_;
-        params.outlineOriginY = outlineOriginY_;
+        for (std::size_t f = 0; f < outlineFonts_.size(); f++) {
+          const present::OutlineAtlasFont &font = outlineFonts_.at(f);
+          params.outlineFontPlaces.at(f) = {font.originX, font.originY, font.atlasY, 0};
+          params.outlineFontSizes.at(f) = {font.width, font.height, 0, 0};
+        }
         for (std::size_t slot = 0; slot < outlineFaces_.size(); slot++) {
           params.outlineFaces.at(slot) = static_cast<std::int32_t>(outlineFaces_.at(slot));
         }

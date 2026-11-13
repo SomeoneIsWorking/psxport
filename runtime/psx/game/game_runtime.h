@@ -180,10 +180,10 @@ public:
     (void)core;
     return nullptr;
   }
-  // The title's bitmap font and its naming of the packets that draw it, drawn from outline fonts above native scale
-  // (plan 0207); a title without both draws its bitmap.
-  virtual const psx::present::OutlineFont *outlineFont() const {
-    return nullptr;
+  // The title's bitmap fonts and its naming of the packets that draw them, drawn from outline fonts above native scale
+  // (plan 0207); a title without both draws its bitmaps.
+  virtual std::span<const psx::present::OutlineFont> outlineFonts() const {
+    return {};
   }
   virtual const psx::present::OutlineGlyphs *outlineGlyphs(Core &core) const {
     (void)core;
