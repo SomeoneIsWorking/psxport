@@ -28,6 +28,7 @@ void announceOnChange(Core &core, int presentedFramebufferWidth);
 enum class WideOutcome : std::uint8_t {
   NotRequested,        // 4:3: nothing to say
   Widened,             // render_width > native_width
+  Cropped,             // crop shows a 16:9 band of the native picture; nothing renders wider
   RefusedNoProjection, // the title declares no guest widescreen projection
   RefusedDevice,       // RenderPath::Device presents the device's own 4:3 picture
   RefusedAuto,         // ASPECT_AUTO resolves to the sink, and this run had no wide sink
@@ -35,10 +36,14 @@ enum class WideOutcome : std::uint8_t {
 };
 
 // `aspect` is the requested aspect: the title's own, else the player's setting.
-WideOutcome
-classifyWide(present::PresentationAspect aspect, bool titleProjects, bool recordPath, int nativeWidth, int renderWidth);
+WideOutcome classifyWide(present::PresentationAspect aspect,
+                         bool crops,
+                         bool titleProjects,
+                         bool recordPath,
+                         int nativeWidth,
+                         int renderWidth);
 
-// The reason for a refused outcome in one sentence; empty for the two quiet outcomes.
+// The reason for a refused outcome in one sentence; empty for the quiet outcomes.
 const char *wideOutcomeReason(WideOutcome outcome);
 
 } // namespace psx::picture

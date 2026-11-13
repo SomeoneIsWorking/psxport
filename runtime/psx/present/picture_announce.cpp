@@ -10,10 +10,17 @@
 
 namespace psx::picture {
 
-WideOutcome classifyWide(
-    present::PresentationAspect aspect, bool titleProjects, bool recordPath, int nativeWidth, int renderWidth) {
+WideOutcome classifyWide(present::PresentationAspect aspect,
+                         bool crops,
+                         bool titleProjects,
+                         bool recordPath,
+                         int nativeWidth,
+                         int renderWidth) {
   if (renderWidth > nativeWidth) {
     return WideOutcome::Widened;
+  }
+  if (crops) {
+    return WideOutcome::Cropped;
   }
   if (aspect == present::PresentationAspect::Standard4x3) {
     return WideOutcome::NotRequested;
@@ -35,6 +42,7 @@ const char *wideOutcomeReason(WideOutcome outcome) {
   switch (outcome) {
   case WideOutcome::NotRequested:
   case WideOutcome::Widened:
+  case WideOutcome::Cropped:
     return "";
   case WideOutcome::RefusedNoProjection:
     return "this title declares no guest widescreen projection";
@@ -67,6 +75,7 @@ void announceOnChange(Core &core, int presentedFramebufferWidth) {
                now.nativeWidth,
                now.renderWidth);
   const WideOutcome outcome = classifyWide(now.aspect,
+                                           core.game->mods.crops(),
                                            projection != nullptr,
                                            core.rsub.mode.path() == present::RenderPath::Record,
                                            nativeWidth,
