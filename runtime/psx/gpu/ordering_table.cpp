@@ -139,12 +139,18 @@ void submitOrderingTable(Core &core, GpuDevice &device, std::uint32_t rootGuestA
   device.noteDrawEntry(static_cast<std::uint32_t>(core.game->timing.displayField()));
   core.otTables.beginWalk();
   const OtTables &tables = core.otTables;
+  HostPackets &hostPackets = core.hostPackets;
+  const bool hostDraws = hostPackets.beginWalk(rootGuestAddress);
   device.enterSlot(std::nullopt, true);
   device.beginChain(rootGuestAddress);
   do {
     // A walk is milliseconds of host work inside one executor segment; a present due meanwhile lands now.
     core.game->display.showIfDue();
     const OtNode &node = walk.node();
+    if (hostDraws) {
+      // Drawn in the bucket the previous node left open, as a guest link before this node would be.
+      hostPackets.drawBefore(device, node.guestAddress());
+    }
     std::optional<present::OtSlot> slot = tables.slotOf(node.guestAddress());
     if (!slot && node.carriesPrimitive()) {
       slot = tables.assigned(node.guestAddress());
@@ -173,6 +179,7 @@ void submitOrderingTable(Core &core, GpuDevice &device, std::uint32_t rootGuestA
   device.endChain();
   device.enterSlot(std::nullopt, true);
   core.otTables.endWalk();
+  hostPackets.endWalk(core);
 }
 
 } // namespace psx::gpu

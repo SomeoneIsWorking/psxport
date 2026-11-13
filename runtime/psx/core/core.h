@@ -25,6 +25,7 @@
 #include "guest_call_attribution.h"
 #include "guest_call_census.h"
 #include "guest_writer_latch.h"
+#include "host_packets.h"
 #include "ordering_table.h"
 #include "owner_ledger.h"
 #include "vertex_places.h"
@@ -91,6 +92,8 @@ public:
   psx::present::OwnerLedger owners{*this};
   // The ordering tables the title named; the walk tags each recorded primitive with its bucket.
   psx::gpu::OtTables otTables;
+  // Packets the title draws inside a walk without guest RAM.
+  psx::gpu::HostPackets hostPackets;
   // The producers whose opaque polygons test depth against each other.
   psx::present::DepthTest depthTest;
 

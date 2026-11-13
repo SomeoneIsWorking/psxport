@@ -60,7 +60,7 @@ Dependency direction: title repo → `runtime/psx/game/` (the title interface) �
 - `runtime/psx/frame/frame_pacer.*`, `pace_plan.h`, `field_cadence.h`, `field_rate.h`, `timing.*`, `emulated_time.*` — frame pacing, NTSC / PAL field rate, field cadence, emulated CPU clock, root counters 1 and 2
 - `runtime/psx/frame/frame_time_histogram.*` — frame time percentiles
 - `runtime/psx/gpu/gpu_device.*`, `gpu_display_mode.h`, `gpu_ports.*` — GPU device (Beetle gpu.c): VRAM, GP0 / GP1, display area and mode, DMA2 blocks and ordering-table walk
-- `runtime/psx/gpu/ordering_table.*` — ordering table / OT / DrawOTag node decode and walk
+- `runtime/psx/gpu/ordering_table.*`, `host_packets.*` — ordering table / OT / DrawOTag node decode and walk; packets a title draws inside a walk without guest RAM
 - `runtime/psx/gpu/draw_list_cycle.*` — a draw list that revisits a node, refused before the GPU (latches the presentation fault); the linked-walk cycle check
 - `runtime/psx/gpu/gp0_draw_state.*` — GP0 draw environment (E1-E6, polygon texpage) decoded from command words as gpu.c keeps it; captured chain packets decoded under it
 - `runtime/psx/gpu/gp0_record_tap.*`, `texture_feedback.*` — GP0 work recorded per logic frame, texture cache feedback / stale VRAM reads
