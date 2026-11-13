@@ -2,6 +2,9 @@
 // gamepads, and the PSX active-low button mask they add up to.
 #include "host_input.h"
 #include "diagnostic_config.h" // PSXPORT_PAD_NOPAD
+#ifdef PSXPORT_SDL
+#include "input_binding.h"
+#endif
 #include "rmlui_overlay.h"
 #include <lucent/log.h>
 
@@ -15,6 +18,31 @@
 #include <SDL3/SDL.h>
 #include <stdlib.h> // atoi (PSXPORT_PAD_NOPAD parse)
 #endif
+
+std::uint16_t psx::input::buttonNamed(std::string_view name) {
+  struct ButtonName {
+    std::string_view name;
+    std::uint16_t bit;
+  };
+  constexpr std::array kNames{
+      ButtonName{"select", kButtonSelect}, ButtonName{"l3", kButtonL3},
+      ButtonName{"r3", kButtonR3},         ButtonName{"start", kButtonStart},
+      ButtonName{"up", kButtonUp},         ButtonName{"right", kButtonRight},
+      ButtonName{"down", kButtonDown},     ButtonName{"left", kButtonLeft},
+      ButtonName{"l2", kButtonL2},         ButtonName{"r2", kButtonR2},
+      ButtonName{"l1", kButtonL1},         ButtonName{"r1", kButtonR1},
+      ButtonName{"t", kButtonTriangle},    ButtonName{"triangle", kButtonTriangle},
+      ButtonName{"o", kButtonCircle},      ButtonName{"circle", kButtonCircle},
+      ButtonName{"x", kButtonCross},       ButtonName{"cross", kButtonCross},
+      ButtonName{"sq", kButtonSquare},     ButtonName{"square", kButtonSquare},
+  };
+  for (const ButtonName &entry : kNames) {
+    if (entry.name == name) {
+      return entry.bit;
+    }
+  }
+  return 0;
+}
 
 #ifdef PSXPORT_SDL
 psx::input::HostInput::HostInput() {
@@ -67,6 +95,13 @@ RmlOverlay *psx::input::HostInput::liveOverlay() const {
   return nullptr;
 }
 
+#ifdef PSXPORT_SDL
+namespace {
+// A stick or trigger pushed this far is the player using that pad, not drift.
+constexpr int kDeliberateAxis = 22000;
+} // namespace
+#endif
+
 void psx::input::HostInput::drainEvents() {
 #ifdef PSXPORT_SDL
   SDL_PumpEvents();
@@ -74,6 +109,16 @@ void psx::input::HostInput::drainEvents() {
   while (SDL_PollEvent(&event)) {
     if (event.type == SDL_EVENT_KEY_DOWN || event.type == SDL_EVENT_KEY_UP) {
       noteHostKey(static_cast<int>(event.key.scancode), event.type == SDL_EVENT_KEY_DOWN);
+    }
+    if (event.type == SDL_EVENT_KEY_DOWN && !event.key.repeat) {
+      mGlyphs.noteKeyboard();
+    }
+    if (event.type == SDL_EVENT_GAMEPAD_BUTTON_DOWN) {
+      mGlyphs.noteGamepad(SDL_GetGamepadTypeForID(event.gbutton.which));
+    }
+    if (event.type == SDL_EVENT_GAMEPAD_AXIS_MOTION &&
+        std::abs(static_cast<int>(event.gaxis.value)) > kDeliberateAxis) {
+      mGlyphs.noteGamepad(SDL_GetGamepadTypeForID(event.gaxis.which));
     }
     if (event.type == SDL_EVENT_GAMEPAD_ADDED || event.type == SDL_EVENT_GAMEPAD_REMOVED) {
       mPadsChanged = true;
@@ -114,38 +159,10 @@ namespace {
 
 // OR one controller's buttons and analog sticks into the active-low PSX mask.
 //
-// Button mapping (Sony layout, natural for a PSX title): A -> Cross, B -> Circle, X -> Square,
-// Y -> Triangle (SDL's A/B/X/Y are positional SNES-style); shoulders -> L1/R1; the analog triggers
-// thresholded -> L2/R2; Start -> Start, Back -> Select, stick clicks -> L3/R3. The d-pad AND the left
-// stick are directions.
+// Buttons through kGamepadBindings, the analog triggers thresholded; the d-pad AND the left stick are directions.
 //
 // Only a deliberate push registers; a resting or stale stick must not hold a direction.
-constexpr Sint16 kDirectionalDeflection = 22000; // ~67% of 32767
-
-// Each PSX button on an SDL gamepad: a button, or for L2/R2 a trigger axis.
-struct GamepadBinding {
-  std::uint16_t bit;
-  SDL_GamepadButton button;
-  SDL_GamepadAxis trigger;
-};
-constexpr std::array kGamepadBindings{
-    GamepadBinding{psx::input::kButtonUp, SDL_GAMEPAD_BUTTON_DPAD_UP, SDL_GAMEPAD_AXIS_INVALID},
-    GamepadBinding{psx::input::kButtonRight, SDL_GAMEPAD_BUTTON_DPAD_RIGHT, SDL_GAMEPAD_AXIS_INVALID},
-    GamepadBinding{psx::input::kButtonDown, SDL_GAMEPAD_BUTTON_DPAD_DOWN, SDL_GAMEPAD_AXIS_INVALID},
-    GamepadBinding{psx::input::kButtonLeft, SDL_GAMEPAD_BUTTON_DPAD_LEFT, SDL_GAMEPAD_AXIS_INVALID},
-    GamepadBinding{psx::input::kButtonStart, SDL_GAMEPAD_BUTTON_START, SDL_GAMEPAD_AXIS_INVALID},
-    GamepadBinding{psx::input::kButtonSelect, SDL_GAMEPAD_BUTTON_BACK, SDL_GAMEPAD_AXIS_INVALID},
-    GamepadBinding{psx::input::kButtonCross, SDL_GAMEPAD_BUTTON_SOUTH, SDL_GAMEPAD_AXIS_INVALID},
-    GamepadBinding{psx::input::kButtonCircle, SDL_GAMEPAD_BUTTON_EAST, SDL_GAMEPAD_AXIS_INVALID},
-    GamepadBinding{psx::input::kButtonSquare, SDL_GAMEPAD_BUTTON_WEST, SDL_GAMEPAD_AXIS_INVALID},
-    GamepadBinding{psx::input::kButtonTriangle, SDL_GAMEPAD_BUTTON_NORTH, SDL_GAMEPAD_AXIS_INVALID},
-    GamepadBinding{psx::input::kButtonL1, SDL_GAMEPAD_BUTTON_LEFT_SHOULDER, SDL_GAMEPAD_AXIS_INVALID},
-    GamepadBinding{psx::input::kButtonR1, SDL_GAMEPAD_BUTTON_RIGHT_SHOULDER, SDL_GAMEPAD_AXIS_INVALID},
-    GamepadBinding{psx::input::kButtonL3, SDL_GAMEPAD_BUTTON_LEFT_STICK, SDL_GAMEPAD_AXIS_INVALID},
-    GamepadBinding{psx::input::kButtonR3, SDL_GAMEPAD_BUTTON_RIGHT_STICK, SDL_GAMEPAD_AXIS_INVALID},
-    GamepadBinding{psx::input::kButtonL2, SDL_GAMEPAD_BUTTON_INVALID, SDL_GAMEPAD_AXIS_LEFT_TRIGGER},
-    GamepadBinding{psx::input::kButtonR2, SDL_GAMEPAD_BUTTON_INVALID, SDL_GAMEPAD_AXIS_RIGHT_TRIGGER},
-};
+constexpr Sint16 kDirectionalDeflection = kDeliberateAxis;
 
 // Two pads on one port: each axis takes the farther-pushed stick.
 std::int16_t fartherAxis(std::int16_t held, std::int16_t read) {
@@ -158,7 +175,7 @@ void applyRightStick(SDL_Gamepad *gamepad, psx::input::StickAxes &stick) {
 }
 
 void applyGamepad(SDL_Gamepad *gamepad, std::uint16_t &mask) {
-  for (const GamepadBinding &binding : kGamepadBindings) {
+  for (const psx::input::GamepadBinding &binding : psx::input::kGamepadBindings) {
     const bool down = binding.button != SDL_GAMEPAD_BUTTON_INVALID
                           ? SDL_GetGamepadButton(gamepad, binding.button)
                           : SDL_GetGamepadAxis(gamepad, binding.trigger) > kDirectionalDeflection;
@@ -186,12 +203,10 @@ void applyGamepad(SDL_Gamepad *gamepad, std::uint16_t &mask) {
 
 std::string
 psx::input::HostInput::padButton(std::uint16_t bit, InjectedPress press, int holdFrames, std::uint32_t port) {
-  for (const GamepadBinding &binding : kGamepadBindings) {
-    if (binding.bit == bit) {
-      return binding.button != SDL_GAMEPAD_BUTTON_INVALID
-                 ? mInjection.gamepadButton(binding.button, press, holdFrames, TapClock::PadFrames, port)
-                 : mInjection.gamepadTrigger(binding.trigger, press, holdFrames, TapClock::PadFrames, port);
-    }
+  if (const std::optional<GamepadBinding> binding = gamepadBinding(bit)) {
+    return binding->button != SDL_GAMEPAD_BUTTON_INVALID
+               ? mInjection.gamepadButton(binding->button, press, holdFrames, TapClock::PadFrames, port)
+               : mInjection.gamepadTrigger(binding->trigger, press, holdFrames, TapClock::PadFrames, port);
   }
   return lucent::format("pad: 0x{:04X} is not one PSX button", bit);
 }
@@ -242,6 +257,7 @@ void psx::input::HostInput::rescanControllers(bool shown) {
           mGamepadInstance[slot] = static_cast<int>(SDL_GetGamepadID(opened));
           lucent::info("pad", "controller {} opened in slot {}: {}", instance, slot, SDL_GetGamepadName(opened));
           mInjection.afterGamepadOpened(instance);
+          mGlyphs.noteGamepad(SDL_GetGamepadType(opened));
         }
         break;
       }
@@ -271,52 +287,14 @@ psx::input::HostPads psx::input::HostInput::poll(bool shown, std::uint32_t ports
 
   std::uint16_t mask = kNoButtons;
 
-  // While the overlay is actively TYPING into a text widget it owns the keyboard, so a character the
-  // player typed into a text field does not also move the guest. The overlay reports that itself; this
-  // is where the answer gates the gamepad-like keyboard read below.
-  const bool gameOwnsKeyboard = overlay == nullptr || !overlay->wantsKeyboard();
-  if (gameOwnsKeyboard) {
-    if (keyDown(SDL_SCANCODE_UP) || keyDown(SDL_SCANCODE_W)) {
-      mask &= static_cast<std::uint16_t>(~psx::input::kButtonUp);
-    }
-    if (keyDown(SDL_SCANCODE_RIGHT) || keyDown(SDL_SCANCODE_D)) {
-      mask &= static_cast<std::uint16_t>(~psx::input::kButtonRight);
-    }
-    if (keyDown(SDL_SCANCODE_DOWN) || keyDown(SDL_SCANCODE_S)) {
-      mask &= static_cast<std::uint16_t>(~psx::input::kButtonDown);
-    }
-    if (keyDown(SDL_SCANCODE_LEFT) || keyDown(SDL_SCANCODE_A)) {
-      mask &= static_cast<std::uint16_t>(~psx::input::kButtonLeft);
-    }
-    if (keyDown(SDL_SCANCODE_RETURN)) {
-      mask &= static_cast<std::uint16_t>(~kButtonStart);
-    }
-    if (keyDown(SDL_SCANCODE_RSHIFT) || keyDown(SDL_SCANCODE_TAB)) {
-      mask &= static_cast<std::uint16_t>(~psx::input::kButtonSelect);
-    }
-    if (keyDown(SDL_SCANCODE_K)) {
-      mask &= static_cast<std::uint16_t>(~psx::input::kButtonCross);
-    }
-    if (keyDown(SDL_SCANCODE_L)) {
-      mask &= static_cast<std::uint16_t>(~psx::input::kButtonCircle);
-    }
-    if (keyDown(SDL_SCANCODE_I)) {
-      mask &= static_cast<std::uint16_t>(~psx::input::kButtonTriangle);
-    }
-    if (keyDown(SDL_SCANCODE_J)) {
-      mask &= static_cast<std::uint16_t>(~psx::input::kButtonSquare);
-    }
-    if (keyDown(SDL_SCANCODE_Q)) {
-      mask &= static_cast<std::uint16_t>(~psx::input::kButtonL1);
-    }
-    if (keyDown(SDL_SCANCODE_E)) {
-      mask &= static_cast<std::uint16_t>(~psx::input::kButtonR1);
-    }
-    if (keyDown(SDL_SCANCODE_1)) {
-      mask &= static_cast<std::uint16_t>(~psx::input::kButtonL2);
-    }
-    if (keyDown(SDL_SCANCODE_3)) {
-      mask &= static_cast<std::uint16_t>(~psx::input::kButtonR2);
+  // While the overlay holds input (its menu open, or a text field typing) the keyboard and the pads are its, so a
+  // key or a button that moves the menu does not also move the guest.
+  const bool gameOwnsInput = overlay == nullptr || !overlay->holdsInput();
+  if (gameOwnsInput) {
+    for (const KeyBinding &binding : kKeyboardBindings) {
+      if (keyDown(binding.key) || (binding.alternate != SDL_SCANCODE_UNKNOWN && keyDown(binding.alternate))) {
+        mask &= static_cast<std::uint16_t>(~binding.bit);
+      }
     }
   }
 
@@ -337,8 +315,10 @@ psx::input::HostPads psx::input::HostInput::poll(bool shown, std::uint32_t ports
           mInjection.virtualPadPort(static_cast<std::uint32_t>(mGamepadInstance[slot]));
       port = virtualPort ? *virtualPort : std::min(physical++, ports - 1);
     }
-    applyGamepad(mGamepads[slot], pads.masks[port]);
-    applyRightStick(mGamepads[slot], pads.rightSticks[port]);
+    if (gameOwnsInput) {
+      applyGamepad(mGamepads[slot], pads.masks[port]);
+      applyRightStick(mGamepads[slot], pads.rightSticks[port]);
+    }
     pads.port2Present = pads.port2Present || port == 1;
   }
   mask = pads.masks[0];

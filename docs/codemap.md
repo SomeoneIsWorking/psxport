@@ -86,8 +86,9 @@ Dependency direction: title repo → `runtime/psx/game/` (the title interface) �
 - `runtime/psx/present/guest_widescreen_projection.*`, `crop_band.h`, `crop_ui_layers.h`, `viewport_layout.h`, `proj_params.*`, `picture_announce.*` — widescreen / 16:9: aspect policy, canvas margins, crop band and layer classification, projection constants, picture geometry announce
 - `runtime/psx/present/screen_cull.h` — the retail screen-edge cull (some corner unsigned-inside each axis) over the record canvas's columns
 - `runtime/psx/present/pane_host.h`, `rgb24_picture.h` — a session presenting into a host screen's pane, host pictures
-- `runtime/psx/input/host_input.*` — the process's one SDL event drain, keyboard state, gamepads (buttons, and the right stick for title features) and the one PSX-to-SDL button binding (pad verbs `tap`/`press`/`release`/`hold`), quit scope, event routing to the live overlay
-- `runtime/psx/input/input_injection.*` — control-channel input pushed as SDL events: keys, text, mouse, touch, virtual gamepad
+- `runtime/psx/input/host_input.*`, `input_binding.h` — the process's one SDL event drain, keyboard state, gamepads (buttons, and the right stick for title features), PSX button names and the one PSX button binding of the keyboard and SDL gamepads (pad verbs `tap`/`press`/`release`/`hold`), quit scope, event routing to the live overlay, which holds the keyboard and pads while open
+- `runtime/psx/input/glyph_set.*` — button prompts / controller glyphs: the active pad family (keyboard, Xbox, PlayStation, Nintendo) from the device last pressed and its SDL gamepad type, each PSX button's PromptFont glyph
+- `runtime/psx/input/input_injection.*` — control-channel input pushed as SDL events: keys, text, mouse, touch, virtual gamepad and its make (`gamepad make xbox|playstation|nintendo|generic`, the USB ids SDL types it by)
 - `runtime/psx/input/pad_input.*`, `sio_pad.*`, `pad_delivery.h`, `stock_pad_buffers.*` — controller / pad as the guest sees it: SIO0, digital packet, fixed pad buffers; `Pad::rightStick()` for a title's host feature, centred in a replay
 - `runtime/psx/input/pad_recording.*`, `pad_record_replay.*`, `pad_phase_replay.*`, `input_phase.h` — `.pad` record and replay keyed on input phase
 - `runtime/psx/audio/spu_*` — SPU (Beetle spu.c) device, register file, mixer, field cadence, per-field host feed
@@ -105,7 +106,7 @@ Dependency direction: title repo → `runtime/psx/game/` (the title interface) �
 - `runtime/psx/debug/ot_attr.*` — OT / GTE submission attribution
 - `runtime/psx/debug/gpu_debug.*`, `gpu_perf.*`, `memcensus.*`, `field_digest.*`, `image_writer.*`, `snapshot.*`, `store_watch.*`, `pad_frame_probes.*`, `frame_schedule.*`, `host_backtrace.*` — diagnostics: scene dump, cost and cadence meter (CPU work per phase, GPU work per present, planned 60 Hz cadence, play-check presents; `presentation.md` Cost and cadence; counters and percentiles from `lucent::perf`), memmove census, per-field digest, PNG / APNG / PPM capture, RAM snapshot, store watch, pad-frame probes, host backtrace
 - `runtime/psx/debug/bug_report_session.*` — in-app bug report: reference frame at the next sealed frame, motion clip, reproduction command
-- `runtime/ui/` — RmlUi overlay menu: library (one Rml::Initialise per device), document, tabs, rows, readouts, toggles, wrapped stepping, Debug and About tabs generated from the title debug menu (`title_debug_rows`), SDL_GPU render interface, assets
+- `runtime/ui/` — RmlUi overlay menu: library (one Rml::Initialise per device), document, tabs, rows, readouts, `<glyph>` button prompts (`menu_prompts`), pad navigation, toggles, wrapped stepping, Debug and About tabs generated from the title debug menu (`title_debug_rows`), SDL_GPU render interface, assets
 - `assets/rml/` — overlay menu markup, styles, fonts
 - `bios/`, `scripts/build_openbios.py`, `patches/openbios/` — fast-boot OpenBIOS image
 - `testprog/`, `tools/testprog/`, `cmake/testprog.cmake` — framework test program: freestanding mipsel guest EXE built with clang, its host title `psxtest_port`, planted owner-journal rows

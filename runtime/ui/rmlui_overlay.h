@@ -53,8 +53,8 @@ public:
     mOptionsMode = v;
   }
 
-  // pad_input suppresses gameplay keyboard input while this returns true.
-  bool wantsKeyboard() const;
+  // The menu is open or a form is up: HostInput then keeps the keyboard and the pads from the guest.
+  bool holdsInput() const;
   // A text field has the keyboard (the bug report form, or a focused input): HostInput then treats
   // P / '.' / B as letters rather than debug commands.
   bool typingText() const;

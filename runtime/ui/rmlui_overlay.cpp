@@ -2,6 +2,7 @@
 // the menu; F1 toggles RmlUi's debugger.
 #include "rmlui_overlay.h"
 #include "game.h"
+#include "input_binding.h"
 #include "render.h"
 #include "rml_text.h"
 #include "rmlui_library.h"
@@ -127,6 +128,13 @@ void RmlOverlay::event(const SDL_Event *e) {
     setVisible(!mMenu->visible());
     return;
   }
+  // The pad's guide button is its Esc: nothing a PSX title reads is bound to it.
+  if (!mOptionsMode && e->type == SDL_EVENT_GAMEPAD_BUTTON_DOWN && e->gbutton.button == SDL_GAMEPAD_BUTTON_GUIDE) {
+    if (hasMenu()) {
+      setVisible(!mMenu->visible());
+    }
+    return;
+  }
   if (e->type == SDL_EVENT_KEY_DOWN && !e->key.repeat && e->key.scancode == SDL_SCANCODE_F1) {
     mLibrary->toggleDebugger(c);
     return;
@@ -138,6 +146,10 @@ void RmlOverlay::event(const SDL_Event *e) {
   // Menu open: the document takes arrows / Enter / Space; anything it does not claim falls
   // through to the SDL platform shim (hover, clicks, wheel, text).
   if (e->type == SDL_EVENT_KEY_DOWN && mMenu->handle_key(e->key.key)) {
+    return;
+  }
+  if (e->type == SDL_EVENT_GAMEPAD_BUTTON_DOWN &&
+      mMenu->handle_button(psx::input::psxButtonOf(static_cast<SDL_GamepadButton>(e->gbutton.button)))) {
     return;
   }
 
@@ -166,10 +178,8 @@ void RmlOverlay::dumpMenu() const {
   }
 }
 
-// pad_input.cpp suppresses gameplay keyboard input while this returns true. The menu uses arrow/Enter
-// nav (not typing), so we suppress whenever the menu is OPEN — otherwise arrow keys would also drive
-// the game. (No text fields exist in this menu; the input/textarea checks are kept for completeness.)
-bool RmlOverlay::wantsKeyboard() const {
+// The menu's arrows and buttons would also drive the game, so an open menu holds the input.
+bool RmlOverlay::holdsInput() const {
   if (mBugReport) {
     return true;
   }

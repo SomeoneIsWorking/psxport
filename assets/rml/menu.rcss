@@ -7,8 +7,8 @@
      them draws a red error placeholder / corrupts the frame. Dimming is done with rgba colors,
      which blend correctly. border-radius (plain geometry), gradients (decorators), font-effect
      glow (baked into the font texture) and rectangular scissor clipping all work and are used.
-   - The bundled Fira family provides "Fira Sans" and "Fira Sans Condensed". Unicode
-     arrows/glyphs are used in the markup instead of a separate icon font.
+   - The bundled Fira family provides "Fira Sans" and "Fira Sans Condensed"; PromptFont provides the
+     controller and keyboard glyphs of <glyph> prompts.
    - Lengths are dp, so the menu keeps its physical size on a scaled display. */
 
 /* Fonts are loaded via the C++ API (Rml::LoadFontFace in the RmlUi overlay setup), NOT via @font-face:
@@ -204,6 +204,19 @@ scrollbarvertical sliderarrowinc {
 	display: block;
 	margin-top: 12dp;
 	font-size: 15dp;
+	color: rgba(224, 219, 200, 45%);
+}
+
+/* A button prompt: the pad's glyph from PromptFont, or the keyboard's key text. */
+glyph {
+	font-family: PromptFont;
+	font-size: 1.3em;
+	color: #E0DBC8;
+}
+
+glyph.text {
+	font-family: "Fira Sans";
+	font-size: 1em;
 	color: rgba(224, 219, 200, 45%);
 }
 

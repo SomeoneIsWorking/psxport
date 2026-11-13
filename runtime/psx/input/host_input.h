@@ -4,6 +4,7 @@
 //   * the SDL event queue drain — every pump site goes through the same function;
 //   * the delivered host key state, one bit per SDL scancode;
 //   * the SDL gamepads: open, hotswap, close, and their contribution to the button mask;
+//   * the button glyphs of the device last pressed (GlyphSet);
 //   * which overlay takes the events: the one of the Game holding the player's input;
 //   * whether the GAME or the overlay currently owns the keyboard;
 //   * the P / '.' / B debug-key edges, latched here and acted on by whoever owns the action;
@@ -15,11 +16,13 @@
 // the window whose queue it drains: every Game of the process (the picker and its panels, a title)
 // reads this one, so a key's press and release always land in the same state.
 #pragma once
+#include "glyph_set.h"
 #include "input_injection.h"
 #include "pad_delivery.h"
 
 #include <cstdint>
 #include <string>
+#include <string_view>
 #include <vector>
 
 class RmlOverlay;
@@ -47,6 +50,9 @@ inline constexpr std::uint16_t kButtonCircle = 0x2000u;
 inline constexpr std::uint16_t kButtonCross = 0x4000u;
 inline constexpr std::uint16_t kButtonSquare = 0x8000u;
 inline constexpr std::uint16_t kButtonDirections = kButtonUp | kButtonRight | kButtonDown | kButtonLeft;
+
+// One PSX button by name (select, l3, start, up, triangle or t, circle or o, cross or x, square or sq, ...), or 0.
+std::uint16_t buttonNamed(std::string_view name);
 
 class QuitScope;
 
@@ -110,6 +116,10 @@ public:
   InputInjection &injection() {
     return mInjection;
   }
+  // The prompts' glyphs, of the keyboard or gamepad the player last pressed.
+  const GlyphSet &glyphs() const {
+    return mGlyphs;
+  }
   // Take the P (pause / resume) edge a poll detected, and the '.' (freeze, advance one frame) edge.
   // Latched until taken, so one press is one action whichever Game's poll saw it. Taking is separate from asking
   // because the ACTION is not this owner's: the debug channel owns pause and step state (DbgServer::togglePause /
@@ -155,6 +165,7 @@ private:
 
   std::vector<AttachedOverlay> mOverlays;
   InputInjection mInjection;
+  GlyphSet mGlyphs;
 
 #ifdef PSXPORT_SDL
   // The delivered host key state, fed from the events themselves rather than from SDL's keyboard array

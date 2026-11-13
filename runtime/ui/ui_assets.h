@@ -22,7 +22,7 @@
 // WHAT IT DELIBERATELY DOES NOT DO: abort. The overlay is developer/mod UI, and killing the port
 // because a debug menu's font is missing would be a worse failure than the one being fixed. "Loud"
 // here means an `error`-level line naming the path (always printed, not channel-gated) plus
-// `RmlOverlay::hasMenu()` going false so every downstream question — ESC, `wantsKeyboard()`, the
+// `RmlOverlay::hasMenu()` going false so every downstream question — ESC, `holdsInput()`, the
 // REPL `menu` command — answers honestly instead of pretending.
 #ifndef PSXPORT_UI_ASSETS_H
 #define PSXPORT_UI_ASSETS_H

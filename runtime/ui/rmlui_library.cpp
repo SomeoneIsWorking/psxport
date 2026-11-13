@@ -27,6 +27,7 @@ RmlUiLibrary::RmlUiLibrary(render::RenderDevice &device)
       "FiraSans-Regular.ttf",
       "FiraSans-Bold.ttf",
       "FiraSansCondensed-Bold.ttf",
+      "promptfont.ttf",
   };
   AssetSet assets;
   assets.open();

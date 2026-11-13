@@ -56,6 +56,9 @@ public:
   std::optional<std::uint32_t> virtualPadPort(std::uint32_t id) const;
   // `name` is an SDL gamepad axis name (leftx, lefttrigger); `value` is the raw axis value.
   std::string gamepadAxis(std::string_view name, int value);
+  // The virtual pads' make (xbox, playstation, nintendo, generic) as the USB ids SDL types a pad by; a pad
+  // already attached is attached again as the new make.
+  std::string gamepadMake(std::string_view name);
   // Down and tap need the finger up, up needs it down.
   std::string touch(WindowId windowId, int finger, InjectedPress press, WindowXY at, int holdTurns);
   std::string touchMove(WindowId windowId, int finger, WindowXY at);
@@ -87,6 +90,11 @@ private:
     std::uint32_t id = 0;
     std::int16_t axes[kAxes] = {};
   };
+  // USB vendor and product ids; zero is SDL's generic gamepad.
+  struct PadMake {
+    std::uint16_t vendor = 0;
+    std::uint16_t product = 0;
+  };
 
   void pushKey(WindowId windowId, int scancode, bool down);
   void pushMouseButton(WindowId windowId, int button, bool down);
@@ -97,10 +105,12 @@ private:
   // Window coordinates as the 0..1 a touch event carries.
   static std::optional<WindowXY> normalise(WindowId windowId, WindowXY at);
   bool ensureVirtualPad(std::uint32_t port);
+  void detachVirtualPad(VirtualPad &pad);
   void schedule(Device device, int code, WindowId windowId, int hold, TapClock clock, std::uint32_t port = 0);
   void releaseExpired(TapClock clock);
 
   std::vector<PendingRelease> releases_;
+  PadMake padMake_;
   // An SDL text event points at its text; each string lives here until the next drain has taken it.
   std::deque<std::string> texts_;
   WindowXY mouse_;

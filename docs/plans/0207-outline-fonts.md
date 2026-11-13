@@ -25,4 +25,15 @@ timing and colours are the game's.
 ## Phases
 
 1. `outline_text` and Tomba 2's dialogue and menu font.
-2. Spyro 1/2/3 (one shared font owner in psx-spyro `game/`), then each title as it is worked.
+2. Spyro 2/3 (one shared font owner in psx-spyro `game/`), then each title as it is worked. Spyro 1 has
+   nothing to replace: its text is mesh letters the record rasterizes at the internal resolution
+   (`spyro1.text-glyphs`, open-spyro).
+
+## Spyro 2/3 seam
+
+The text layouts (S2 `0x8004A374`/`0x8004A59C`, S3 `0x8002E748`/`0x8002E970`) already run as overrides
+(`game/render/overlay_pair`). Each reports the packets it wrote with their character code; the record op for
+such a packet samples the MSDF atlas instead of VRAM, as `kOpReadBack` samples the read-back capture, so
+it stays in its ordering-table slot, its widescreen place and its replay. Glyph metrics come from the guest
+cell (12x9 at the cell's place), colour from the packet; MSDF generation is msdfgen (MIT) over the
+FreeType the UI already links.

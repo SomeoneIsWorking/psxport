@@ -11,6 +11,7 @@
 #define PSXPORT_UI_MENU_DOCUMENT_H
 
 #include "menu_pane.h"
+#include "menu_prompts.h"
 #include "menu_readouts.h"
 #include "menu_row.h"
 #include "menu_tab_bar.h"
@@ -55,6 +56,9 @@ public:
   // Handle one menu key. Returns false when the key is not ours, so the caller can fall through
   // to RmlUi's SDL input translation (hover, text, wheel).
   bool handle_key(SDL_Keycode key);
+  // Handle one PSX button pressed on a gamepad (kButton*, active high), through the same actions: the
+  // directions move and switch tab, Cross runs the row, Circle closes the menu. False when not ours.
+  bool handle_button(std::uint16_t button);
 
   // Every tab, pane and row with its kind, id, label and the text in the DOM, to the log.
   void dump() const;
@@ -84,6 +88,7 @@ private:
   void on_tab_selected(int index); // MenuTabBar's callback; call mTabBar->select() to change tab
   void focus_step(int dir);        // Down/Up, via RmlUi's own TAB navigation
   void activate_focused(int dir);
+  void step_sideways(int dir); // Left/Right: a row that steps with arrows, else the tab
   MenuRow *focused_row() const;
   void run_action(const std::string &id);
 

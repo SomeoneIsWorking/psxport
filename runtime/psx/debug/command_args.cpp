@@ -3,8 +3,6 @@
 #include "host_input.h"
 #include "number_text.h"
 
-#include <array>
-
 namespace psx::debug {
 
 namespace {
@@ -13,31 +11,11 @@ bool isSpace(char c) {
   return c == ' ' || c == '\t' || c == '\n' || c == '\r';
 }
 
-struct PadButtonName {
-  std::string_view name;
-  std::uint16_t bit;
-};
-
-inline constexpr std::array<PadButtonName, 20> kPadButtonNames{{
-    {"select", input::kButtonSelect}, {"l3", input::kButtonL3},
-    {"r3", input::kButtonR3},         {"start", input::kButtonStart},
-    {"up", input::kButtonUp},         {"right", input::kButtonRight},
-    {"down", input::kButtonDown},     {"left", input::kButtonLeft},
-    {"l2", input::kButtonL2},         {"r2", input::kButtonR2},
-    {"l1", input::kButtonL1},         {"r1", input::kButtonR1},
-    {"t", input::kButtonTriangle},    {"triangle", input::kButtonTriangle},
-    {"o", input::kButtonCircle},      {"circle", input::kButtonCircle},
-    {"x", input::kButtonCross},       {"cross", input::kButtonCross},
-    {"sq", input::kButtonSquare},     {"square", input::kButtonSquare},
-}};
-
 } // namespace
 
 std::uint16_t padButtonBit(std::string_view name) {
-  for (const PadButtonName &entry : kPadButtonNames) {
-    if (entry.name == name) {
-      return entry.bit;
-    }
+  if (const std::uint16_t bit = input::buttonNamed(name)) {
+    return bit;
   }
   return static_cast<std::uint16_t>(config::parseUnsigned(name, 16).value_or(0));
 }

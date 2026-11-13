@@ -40,7 +40,7 @@ public:
   int fontsLoaded() const {
     return fontsLoaded_;
   }
-  static constexpr int kFontCount = 3;
+  static constexpr int kFontCount = 4;
   // Shows or hides RmlUi's debugger over `context`; it starts on first use, never for a player.
   void toggleDebugger(Rml::Context *context);
 

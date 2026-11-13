@@ -705,6 +705,10 @@ void mouse(const Call &call) {
 }
 
 void gamepad(const Call &call) {
+  if (call.args.word(1) == "make") {
+    call.reply(injection(call).gamepadMake(call.args.word(2)));
+    return;
+  }
   if (call.args.word(1) == "axis") {
     const std::optional<int> value = call.args.integer(3);
     call.reply(value ? injection(call).gamepadAxis(call.args.word(2), *value)
@@ -713,7 +717,8 @@ void gamepad(const Call &call) {
   }
   const PressWords words = pressWords(call, 2);
   if (call.args.word(1).empty() || !words.press) {
-    call.reply("usage: gamepad <button> [down|up|tap] [frames] | gamepad axis <name> <value>");
+    call.reply("usage: gamepad <button> [down|up|tap] [frames] | gamepad axis <name> <value> | gamepad make "
+               "<xbox|playstation|nintendo|generic>");
     return;
   }
   call.reply(injection(call).gamepadButton(call.args.word(1), *words.press, words.holdTurns));
@@ -830,8 +835,8 @@ inline constexpr std::array kVerbs{
          &mouse,
          Reach::Host},
     Verb{"gamepad",
-         "gamepad <button> [down|up|tap] [frames] | axis <name> <value>",
-         "an SDL virtual gamepad, attached on first use",
+         "gamepad <button> [down|up|tap] [frames] | axis <name> <value> | make <xbox|playstation|nintendo|generic>",
+         "an SDL virtual gamepad, attached on first use, of a make SDL types by its USB ids",
          &gamepad,
          Reach::Host},
     Verb{"touch",

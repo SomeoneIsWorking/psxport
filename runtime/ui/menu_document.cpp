@@ -1,6 +1,7 @@
 #include "menu_document.h"
 
 #include "game.h"
+#include "host_input.h"
 #include "mod_row_model.h"
 #include "rml_text.h"
 #include "ui_component.h"
@@ -55,6 +56,7 @@ MenuDocument::MenuDocument(Rml::Context *ctx, Rml::ElementDocument *doc, Game *g
 
   // Before the first tab selection below, which refreshes them.
   mReadouts = &adopt<MenuReadouts>(mDoc, mGame);
+  adopt<MenuPrompts>(mDoc, mGame != nullptr ? &mGame->hostInput.glyphs() : nullptr);
 
   if (Rml::Element *bar = mDoc->QuerySelector("tab-bar")) {
     mTabBar = &adopt<MenuTabBar>(bar, [this](int index) {
@@ -340,17 +342,9 @@ bool MenuDocument::handle_key(SDL_Keycode sdl_keycode) {
     focus_step(-1);
     return true;
   case SDLK_RIGHT:
-  case SDLK_LEFT: {
-    const int dir = sdl_keycode == SDLK_RIGHT ? +1 : -1;
-    MenuRow *r = focused_row();
-    // A row that steps with arrows takes them; otherwise they change tab.
-    if (r && r->steps_with_arrows()) {
-      r->step(dir);
-    } else if (mTabBar) {
-      mTabBar->select(mTabBar->active() + dir);
-    }
+  case SDLK_LEFT:
+    step_sideways(sdl_keycode == SDLK_RIGHT ? +1 : -1);
     return true;
-  }
   case SDLK_RETURN:
   case SDLK_KP_ENTER:
   case SDLK_SPACE:
@@ -358,6 +352,42 @@ bool MenuDocument::handle_key(SDL_Keycode sdl_keycode) {
     return true;
   default:
     return false;
+  }
+}
+
+bool MenuDocument::handle_button(std::uint16_t button) {
+  if (!mVisible) {
+    return false;
+  }
+  switch (button) {
+  case psx::input::kButtonDown:
+    focus_step(+1);
+    return true;
+  case psx::input::kButtonUp:
+    focus_step(-1);
+    return true;
+  case psx::input::kButtonRight:
+  case psx::input::kButtonLeft:
+    step_sideways(button == psx::input::kButtonRight ? +1 : -1);
+    return true;
+  case psx::input::kButtonCross:
+    activate_focused(+1);
+    return true;
+  case psx::input::kButtonCircle:
+    hide();
+    return true;
+  default:
+    return false;
+  }
+}
+
+void MenuDocument::step_sideways(int dir) {
+  MenuRow *r = focused_row();
+  // A row that steps with arrows takes them; otherwise they change tab.
+  if (r && r->steps_with_arrows()) {
+    r->step(dir);
+  } else if (mTabBar) {
+    mTabBar->select(mTabBar->active() + dir);
   }
 }
 

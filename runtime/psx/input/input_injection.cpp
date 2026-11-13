@@ -5,6 +5,7 @@
 #include <SDL3/SDL.h>
 #include <lucent/log.h>
 
+#include <array>
 #include <string>
 
 namespace psx::input {
@@ -102,12 +103,18 @@ bool push(SDL_Event &event) {
 
 InputInjection::~InputInjection() {
   for (VirtualPad &pad : virtualPads_) {
-    if (pad.joystick != nullptr) {
-      SDL_CloseJoystick(pad.joystick);
-      SDL_DetachVirtualJoystick(pad.id);
-      SDL_QuitSubSystem(SDL_INIT_GAMEPAD);
-    }
+    detachVirtualPad(pad);
   }
+}
+
+void InputInjection::detachVirtualPad(VirtualPad &pad) {
+  if (pad.joystick == nullptr) {
+    return;
+  }
+  SDL_CloseJoystick(pad.joystick);
+  SDL_DetachVirtualJoystick(pad.id);
+  SDL_QuitSubSystem(SDL_INIT_GAMEPAD);
+  pad = VirtualPad{};
 }
 
 std::string InputInjection::key(WindowId windowId, std::string_view name, InjectedPress press, int holdTurns) {
@@ -238,6 +245,36 @@ std::string InputInjection::gamepadAxis(std::string_view name, int value) {
     return lucent::format("gamepad: no virtual pad: {}", SDL_GetError());
   }
   return lucent::format("gamepad axis {} = {}", SDL_GetGamepadStringForAxis(axis), value);
+}
+
+std::string InputInjection::gamepadMake(std::string_view name) {
+  // An Xbox One pad, a DualShock 4 and a Switch Pro Controller, as SDL's own controller list names them.
+  struct Make {
+    std::string_view name;
+    PadMake ids;
+  };
+  constexpr std::array kMakes{
+      Make{"xbox", {.vendor = 0x045E, .product = 0x02EA}},
+      Make{"playstation", {.vendor = 0x054C, .product = 0x09CC}},
+      Make{"nintendo", {.vendor = 0x057E, .product = 0x2009}},
+      Make{"generic", {}},
+  };
+  for (const Make &make : kMakes) {
+    if (make.name != name) {
+      continue;
+    }
+    padMake_ = make.ids;
+    for (std::uint32_t port = 0; port < kVirtualPads; ++port) {
+      if (virtualPads_[port].joystick != nullptr) {
+        detachVirtualPad(virtualPads_[port]);
+        if (!ensureVirtualPad(port)) {
+          return lucent::format("gamepad make: no virtual pad: {}", SDL_GetError());
+        }
+      }
+    }
+    return lucent::format("gamepad make {} ({:04x}:{:04x})", name, padMake_.vendor, padMake_.product);
+  }
+  return lucent::format("gamepad make: \"{}\" is not one of xbox, playstation, nintendo, generic", name);
 }
 
 std::string InputInjection::touch(WindowId windowId, int finger, InjectedPress press, WindowXY at, int holdTurns) {
@@ -417,6 +454,8 @@ bool InputInjection::ensureVirtualPad(std::uint32_t port) {
   desc.axis_mask = (1u << SDL_GAMEPAD_AXIS_COUNT) - 1u;
   desc.button_mask = (1u << SDL_GAMEPAD_BUTTON_COUNT) - 1u;
   desc.name = port == 0 ? "psxport injected gamepad" : "psxport injected gamepad 2";
+  desc.vendor_id = padMake_.vendor;
+  desc.product_id = padMake_.product;
   const SDL_JoystickID id = SDL_AttachVirtualJoystick(&desc);
   SDL_Joystick *pad = id != 0 ? SDL_OpenJoystick(id) : nullptr;
   if (pad == nullptr) {

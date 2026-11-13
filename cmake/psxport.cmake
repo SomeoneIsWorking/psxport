@@ -103,6 +103,7 @@ set(PSXPORT_FRAMEWORK_SRC
   ${PSXPORT_ROOT}/runtime/psx/audio/spu_audio.cpp
   ${PSXPORT_ROOT}/runtime/psx/audio/host_audio_output.cpp
   ${PSXPORT_ROOT}/runtime/psx/audio/wav_writer.cpp
+  ${PSXPORT_ROOT}/runtime/psx/input/glyph_set.cpp
   ${PSXPORT_ROOT}/runtime/psx/input/host_input.cpp
   ${PSXPORT_ROOT}/runtime/psx/input/input_injection.cpp
   ${PSXPORT_ROOT}/runtime/psx/input/pad_input.cpp
@@ -254,6 +255,7 @@ set(PSXPORT_FRAMEWORK_SRC
   ${PSXPORT_ROOT}/runtime/ui/menu_row.cpp           # one <select-button> + its binding
   ${PSXPORT_ROOT}/runtime/ui/menu_pane.cpp          # one tab's page of rows
   ${PSXPORT_ROOT}/runtime/ui/menu_tab_bar.cpp       # the <tab> row and which one is selected
+  ${PSXPORT_ROOT}/runtime/ui/menu_prompts.cpp       # the button prompts in the active pad's glyphs
   ${PSXPORT_ROOT}/runtime/ui/menu_readouts.cpp      # the live video, debug status and title readout lines
   ${PSXPORT_ROOT}/runtime/ui/menu_document.cpp      # the tree over assets/rml/menu.rml
   ${PSXPORT_ROOT}/vendor/rmlui/Backends/RmlUi_Platform_SDL.cpp)
