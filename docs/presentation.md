@@ -499,7 +499,9 @@ buffer, windows and drawn columns at native pixels (`RecordRasterizer::margins`,
 A load drops every canvas and resyncs the image from the device; a canvas made for a carried buffer before the next
 record applies starts with its margins and windows (`RecordRasterizer::restore`, `seedRestored`). A double-buffered
 title shows two buffers drawn before the save, so without them its first two presents after a load have black
-margins (psx-mega-man-x4 issue 0044). The first present after a load equals the saving run's present at the save.
+margins (psx-mega-man-x4 issue 0044). The first presents after a load show the saving run's pictures and margins
+at native detail: the resynced image is the device's VRAM, so internal-resolution detail returns with the first
+record rasterised after the load.
 
 The present shows the canvas at the display's per-column aspect, so 4:3 (M = 0) presents the VRAM
 image itself. Known differences: a canvas reaching past column 1023 does not wrap, and a third
