@@ -27,8 +27,8 @@ IT NEEDS NO DECOMPILER. It reads the image, the inventory and the emitted C, so 
 against output from any source -- including output this pipeline produced a week ago.
 
     uv run --frozen python tools/decomp/verify_body.py \
-        --inventory scratch/decomp/spyro1/inventory.json \
-        --c scratch/decomp/spyro1/c/800122A8.c \
+        --inventory env-assets/decomp/spyro1/inventory.json \
+        --c env-assets/decomp/spyro1/c/800122A8.c \
         --address 0x800122A8 \
         --image scratch/assets/spyro1/SCUS_942.28
 """

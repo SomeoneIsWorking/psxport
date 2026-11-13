@@ -5,21 +5,21 @@ THE ONE COMMAND a per-title agent needs::
 
     uv run --frozen python external/psxport/tools/decomp_pipeline.py \
         --image-name spyro1 --image scratch/assets/spyro1/SCUS_942.28 \
-        --target 0x800258F0 --target 0x800259FC --out scratch/decomp/spyro1
+        --target 0x800258F0 --target 0x800259FC --out env-assets/decomp/spyro1
 
     # and, once the image has been analyzed once, the questions -- many per run, one Ghidra launch:
     uv run --frozen python external/psxport/tools/decomp_pipeline.py \
         --image-name spyro2 --image scratch/assets/spyro2/SCUS_944.25 \
         --callers 0x80044AE0 --refs 0x800A11E4 --function-at 0x80044B00 \
-        --out scratch/decomp/spyro2
+        --out env-assets/decomp/spyro2
 
 `external/psxport` is the framework (a link to the one writable tree), so the path is the same in
 every port. The image is the admitted PS-X EXE or overlay, provisioned by that title's own tooling;
 `--target` names guest entry addresses to decompile, the query flags name addresses to ask about, and
-the output lands under a git-ignored `scratch/`.
+the output lands under the repo's git-ignored `env-assets/`.
 
 ANALYSIS IS CACHED, and that is what makes the second command cheap. The Ghidra project for an image
-is kept under the CONSUMING repository's ``build/ghidra/<image>/<sha256>/``, keyed by the image's
+is kept under the CONSUMING repository's ``env-assets/ghidra/<image>/<sha256>/``, keyed by the image's
 SHA-256, so a different region or revision can never be answered by the wrong analysis. The first run
 imports and analyzes; later runs open that project with ``-noanalysis`` and ask. The mode and the wall
 time of every run are printed, because "it is faster now" is a claim and a stopwatch is the evidence.
@@ -64,10 +64,10 @@ def build_parser() -> argparse.ArgumentParser:
                         help="which function contains this PC, and whether it is an entry or a label "
                              "inside a body; repeatable")
     parser.add_argument("--out", type=Path,
-                        help="a git-ignored output directory, normally scratch/decomp/<title>")
+                        help="a git-ignored output directory, normally env-assets/decomp/<title>")
     parser.add_argument("--project-dir", type=Path, default=None,
                         help="where the analyzed Ghidra project lives. Defaults to the consuming "
-                             "repository's build/ghidra/<image>/<sha256>. A directory named here is "
+                             "repository's env-assets/ghidra/<image>/<sha256>. A directory named here is "
                              "yours: --fresh will refuse to delete it.")
     parser.add_argument("--fresh", action="store_true",
                         help="discard the cached analysis for this image and analyze it again")

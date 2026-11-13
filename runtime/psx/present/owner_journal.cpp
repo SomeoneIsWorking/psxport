@@ -235,7 +235,7 @@ std::string OwnerJournal::decompCommand(Core &core, const OwnerRow &row) const {
     queries += " --function-at " + hex(row.writer.blockPc);
   }
   return lucent::format("uv run --frozen python external/psxport/tools/decomp_pipeline.py --image-name {} --image {}{} "
-                        "--out scratch/decomp/{}",
+                        "--out env-assets/decomp/{}",
                         image->manifestName,
                         file.string(),
                         queries,

@@ -11,7 +11,7 @@ document names, and the failure is invisible: Ghidra opens a project, analyzes h
 addresses that are plausible and wrong. The full digest is in the directory name, so two images with
 the same name never share a directory and a reader can see which bytes a project holds.
 
-THE DIRECTORY IS UNDER ``<repo>/build/ghidra/``, which is git-ignored build output by policy, and
+THE DIRECTORY IS UNDER ``<repo>/env-assets/ghidra/``, the repo's git-ignored long-lived asset directory, and
 that is CHECKED rather than assumed -- the same ``git check-ignore`` question the decompile output
 directory already asks, for the same reason: an analyzed guest program is derived data and must never
 be committed.
@@ -86,8 +86,8 @@ class ProjectSlot:
 
 
 def project_root(repo_root: Path) -> Path:
-    """``<repo>/build/ghidra`` -- build output, git-ignored, owned by the build, not by a scratch run."""
-    return Path(repo_root) / "build" / "ghidra"
+    """``<repo>/env-assets/ghidra`` -- git-ignored and long-lived: an analysis costs minutes, so it is an asset, not scratch."""
+    return Path(repo_root) / "env-assets" / "ghidra"
 
 
 def slot_for(spec, image_path: Path, repo_root: Path, *, directory: Path | None = None) -> ProjectSlot:
@@ -139,7 +139,7 @@ def assert_ignored(directory: Path, repo_root: Path) -> None:
         return
     raise CacheRefusal(
         f"{directory} is NOT git-ignored. Derived guest data (decompiled C, an analyzed project) must "
-        f"never be committed. Put it under {repo_root}/build/ or the repo's scratch/ (both ignored). "
+        f"never be committed. Put it under {repo_root}/env-assets/ (ignored). "
         "Refusing before anything is written."
     )
 
@@ -218,7 +218,7 @@ def recorded_preseed(slot: ProjectSlot) -> dict | None:
 def discard(slot: ProjectSlot) -> None:
     """Remove this slot's directory, for a forced re-analysis. Scoped, and guarded.
 
-    Only a directory whose own name is a 64-hex digest under a ``build/ghidra`` tree is removed. That
+    Only a directory whose own name is a 64-hex digest under a ``env-assets/ghidra`` tree is removed. That
     is deliberately narrow: a computed path that has become something else -- a symlink, a
     mis-keyed join, a future change to the layout -- must raise rather than delete.
     """
@@ -235,9 +235,9 @@ def discard(slot: ProjectSlot) -> None:
             f"{directory} is not named as an image digest ({DIGEST_LENGTH} hex characters), so it is "
             "not a cache slot this tool created and it will not be removed."
         )
-    if len(directory.parts) < 5 or directory.parts[-3] != "ghidra" or directory.parts[-4] != "build":
+    if len(directory.parts) < 5 or directory.parts[-3] != "ghidra" or directory.parts[-4] != "env-assets":
         raise CacheRefusal(
-            f"{directory} is not a <repo>/build/ghidra/<image>/<digest> cache slot, so it was not "
+            f"{directory} is not a <repo>/env-assets/ghidra/<image>/<digest> cache slot, so it was not "
             "created by this tool and it will not be removed. A --project-dir outside that shape is "
             "the caller's to delete."
         )

@@ -48,7 +48,7 @@ class DecompRun:
     # in the SAME Ghidra launch as any --target, because a launch costs minutes and the questions
     # cost nothing once the program is open.
     queries: list[queries_module.Query] = field(default_factory=list)
-    # Where the analyzed project lives. None means the consuming repo's build/ghidra/<name>/<sha256>,
+    # Where the analyzed project lives. None means the consuming repo's env-assets/ghidra/<name>/<sha256>,
     # resolved against `repo_root`; a Path is the caller's explicit directory.
     project_dir: Path | None = None
     fresh: bool = False

@@ -175,7 +175,7 @@ and the refusals. Three obligations belong to that tool and are not re-derived p
     T=external/psxport/tools/decomp_pipeline.py; I=scratch/assets/<title>/<image>
     uv run --frozen python $T --image-name spyro2 --image $I \
         --target 0x80044504 --callers 0x80044504 --refs 0x800A11E4 \
-        --function-at 0x80044AE0 --out scratch/decomp/spyro2
+        --function-at 0x80044AE0 --out env-assets/decomp/spyro2
 
 Many addresses per run; one Ghidra launch. `--list-titles` prints the images the manifest knows
 (Spyro 1/2/3, Toy Story 2 and its `LEVEL*`/`MEMORY`/`FMV` overlays, Vagrant's `.PRG`s and the rest),
@@ -184,7 +184,7 @@ not a code change.
 
 - **The first run for an image ANALYZES it (tens of seconds to minutes); later runs REUSE it**
   (`-process -noanalysis`) and take seconds. The analyzed project is kept under the CONSUMING
-  repository's `build/ghidra/<image>/<sha256>/`, keyed by the image's SHA-256 so a different region
+  repository's `env-assets/ghidra/<image>/<sha256>/`, keyed by the image's SHA-256 so a different region
   or revision can never answer as if it were this one. Every run prints its mode and its wall time;
   `--fresh` discards and re-analyzes. Reading a title address by address with `tools/disasm.py` costs
   what the first analysis costs, once per question.

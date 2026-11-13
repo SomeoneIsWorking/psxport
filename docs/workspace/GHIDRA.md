@@ -16,7 +16,7 @@ uv run --frozen python external/psxport/tools/decomp_pipeline.py \
     --image-name spyro1 \
     --image scratch/assets/spyro1/SCUS_942.28 \
     --target 0x800258F0 \
-    --out scratch/decomp/spyro1
+    --out env-assets/decomp/spyro1
 ```
 
 Ghidra and its PyGhidra environment come from `uv run --frozen python tools/decomp/install.py`
@@ -35,7 +35,7 @@ uv run --frozen python external/psxport/tools/decomp_pipeline.py \
     --callers 0x80044504 \        # who CALLS it
     --refs 0x800A11E4 \           # what READS or WRITES it, with the access and the function
     --function-at 0x80044AE0 \    # which function contains this PC
-    --out scratch/decomp/spyro2
+    --out env-assets/decomp/spyro2
 ```
 
 Each flag is repeatable, all of them are answered in the same launch as any `--target`, and each line
@@ -61,16 +61,16 @@ Three things the answers will NOT do, because each would be a confident answer a
 ## The analysis is cached, and the run says which mode it was
 
 The Ghidra project for an image is kept under the **consuming repository's**
-`build/ghidra/<image>/<sha256>/` — keyed by the image's SHA-256, so a different region or revision
+`env-assets/ghidra/<image>/<sha256>/` — keyed by the image's SHA-256, so a different region or revision
 cannot answer as if it were this one. The first run imports and analyses; later runs open it with
 `-process -noanalysis`:
 
-    [decomp] analyze run in 19.4 s; project <repo>/build/ghidra/spyro2/7b54002… (7b54002789ab379e), analyzed=True
-    [decomp] reuse   run in  3.8 s; project <repo>/build/ghidra/spyro2/7b54002… (7b54002789ab379e), analyzed=True
+    [decomp] analyze run in 19.4 s; project <repo>/env-assets/ghidra/spyro2/7b54002… (7b54002789ab379e), analyzed=True
+    [decomp] reuse   run in  3.8 s; project <repo>/env-assets/ghidra/spyro2/7b54002… (7b54002789ab379e), analyzed=True
 
 A directory with **no recorded state** is a run that died, not an analysis: it is re-analyzed rather
 than opened. `--fresh` discards the slot and analyzes again, and it removes only a directory this tool
-created under `build/ghidra/`. A warm run passes **no pre-script** — re-seeding overwrites the analysis
+created under `env-assets/ghidra/`. A warm run passes **no pre-script** — re-seeding overwrites the analysis
 run's record with a different number (Spyro 2's entry reaches 4,753 instructions before analysis and
 11,674 after) and both print as "the pre-script seed"; the recorded seed is replayed instead, labelled
 as replayed.
@@ -91,7 +91,7 @@ uv run --frozen python external/psxport/tools/decomp_pipeline.py \
     --image-name vagrant_battle \
     --image scratch/bin/overlays/BATTLE.BIN \
     --target 0x800760CC \
-    --out scratch/decomp/vagrant_battle
+    --out env-assets/decomp/vagrant_battle
 ```
 
 Measured on `BATTLE.BIN` (577,828 B, SHA-1 `d53aaccc…`, the decomp's own declared target):
@@ -361,8 +361,8 @@ claim from outside:
 
 ```sh
 uv run --frozen python external/psxport/tools/decomp/verify_body.py \
-    --inventory scratch/decomp/spyro1/inventory.json \
-    --c scratch/decomp/spyro1/c/800122A8.c \
+    --inventory env-assets/decomp/spyro1/inventory.json \
+    --c env-assets/decomp/spyro1/c/800122A8.c \
     --address 0x800122A8 \
     --image scratch/assets/spyro1/SCUS_942.28
 ```
