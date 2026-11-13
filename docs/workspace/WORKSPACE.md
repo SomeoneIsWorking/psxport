@@ -13,20 +13,20 @@ A map. The workspace directory is not a repo; `AGENTS.md`/`CLAUDE.md` here are s
 
 All public under `github.com/SomeoneIsWorking`, side by side, no superproject.
 
-| path | what |
-|---|---|
-| `psxport/` | the framework — the one writable framework checkout |
-| `psx-spyro/` | Spyro 1/2/3 (`titles/<t>/` over a shared `game/`), one process with an in-window picker |
-| `psx-toy-story-2/` | Toy Story 2 (`SLUS_008.93`) |
-| `psx-crash-bash/` | Crash Bash |
-| `psx-crash/` | Crash 1/2/3 (one architecture) |
-| `psx-crash-team-racing/` | Crash Team Racing |
-| `psx-tomba/` | Tomba! 2 (`SCUS_944.54` → `MAIN.EXE`) and Tomba! 1 |
-| `psx-spider-man/` | Spider-Man 1/2 |
-| `psx-vagrant-story/` | Vagrant Story (vendors the CC0 `rood-reverse` decomp) |
-| `psx-mega-man-x4/` | Mega Man X4 (vendors the AGPL `mmx4` decomp — never lift it into psxport) |
-| `psx-tekken-3/` | Tekken 3 |
-| `psx-c12/` | C-12: Final Resistance (`SCUS_946.66`) |
+| path | what | decomp (`decomp-split` skill) |
+|---|---|---|
+| `psxport/` | the framework — the one writable framework checkout | — |
+| `psx-spyro/` | Spyro 1/2/3 (`titles/<t>/` over a shared `game/`), one process with an in-window picker | split: forks `open-spyro`, `spyro-2`, `spyro-3` |
+| `psx-toy-story-2/` | Toy Story 2 (`SLUS_008.93`) | not split (`toystory2-decomp` in progress) |
+| `psx-crash-bash/` | Crash Bash | not split (`crash_bash_decomp`, MIT, pinned) |
+| `psx-crash/` | Crash 1/2/3 (one architecture) | not split (forks and `crash3-decomp` in progress) |
+| `psx-crash-team-racing/` | Crash Team Racing | not split (`ctr-native`, GPL-3, evidence) |
+| `psx-tomba/` | Tomba! 2 (`SCUS_944.54` → `MAIN.EXE`) and Tomba! 1 | Tomba 2 split: `tomba2-decomp` (ours); Tomba 1 not split (`tombi-decomp`, MIT) |
+| `psx-spider-man/` | Spider-Man 1/2 | not split (none exists: ours to create) |
+| `psx-vagrant-story/` | Vagrant Story (vendors the CC0 `rood-reverse` decomp) | not split (`rood-reverse`, CC0) |
+| `psx-mega-man-x4/` | Mega Man X4 (vendors the AGPL `mmx4` decomp — never lift it into psxport) | not split (`mmx4`, AGPL) |
+| `psx-tekken-3/` | Tekken 3 | not split (`tekken3-xport`, MIT) |
+| `psx-c12/` | C-12: Final Resistance (`SCUS_946.66`) | not split (none exists: ours to create) |
 
 Fresh machine: `git clone https://github.com/SomeoneIsWorking/psxport.git ~/repo/psx/psxport && cd ~/repo/psx/psxport && uv run --frozen python scripts/bootstrap_workspace.py`.
 
