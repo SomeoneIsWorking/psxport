@@ -323,8 +323,11 @@ private:
     const double right = key.x1 * kFieldScale;
     const double bottom = h - (key.y1 * kFieldScale);
     const double top = h - (key.y0 * kFieldScale);
-    const msdfgen::Vector2 scale((right - left) / (bounds.r - bounds.l), (top - bottom) / (bounds.t - bounds.b));
-    const msdfgen::Vector2 translate(left / scale.x - bounds.l, bottom / scale.y - bounds.b);
+    const double fillX = (right - left) / (bounds.r - bounds.l);
+    const double fillY = (top - bottom) / (bounds.t - bounds.b);
+    const msdfgen::Vector2 scale(font.proportional ? std::min(fillX, fillY) : fillX, fillY);
+    const double inset = ((right - left) - ((bounds.r - bounds.l) * scale.x)) / 2;
+    const msdfgen::Vector2 translate((left + inset) / scale.x - bounds.l, bottom / scale.y - bounds.b);
     const msdfgen::DistanceMapping mapping(msdfgen::Range(kFieldRange / std::min(scale.x, scale.y)));
     // Variable faces keep overlapping contours: the fields take their sign from the nonzero fill, then the MSDF its
     // error correction, as msdfgen's scanline pass does.

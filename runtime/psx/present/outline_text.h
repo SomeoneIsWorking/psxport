@@ -71,6 +71,9 @@ struct OutlineFont {
   std::span<const OutlineGlyph> glyphs;
   const char *textFace = ""; // asset file under assets/rml
   double weight = 0;         // the text face's wght axis, 0 for its default
+  // Whether an outline keeps its proportions at its bitmap glyph's height, centred across the glyph's box and no
+  // wider than it, rather than filling the box: for a bitmap font whose glyph shapes the face does not share (serifs).
+  bool proportional = false;
   // The CLUT indices of the drop shadow the bitmap glyphs carry, and the texels it lies right of and below its glyph.
   // A glyph holding only those indices has no shadow.
   std::span<const int> shadowIndices;

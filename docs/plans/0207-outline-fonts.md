@@ -28,7 +28,9 @@ timing and colours are the game's.
    (`spyro1.text-glyphs`, open-spyro).
 2. Next, in this order:
    a. Glyph-rectangle fonts: built (see As built).
-   b. Tomba 2's dialogue and menu font on that model.
+   b. Tomba 2's text fonts on that model: built (psx-tomba `game/ui/text_fonts.h`, tomba2-decomp
+      `docs/notes/text-fonts.md`): the 8x16 and 8x8 letter fonts and the 16x16 button icons of page (960, 256), named by
+      `Font::glyphEmit` (drawText, drawTextSmall), `Font::iconGlyphEmit`, `DialogGlyphs::emit` and `prompt`.
    c. Spyro 3's Atlas book font (spyro-3 `spyro3.atlas-font`): 12x9 semi-transparent quads (0x2E), a shadow
       pass modulated 0x202020 then the text modulated 0x78898C, from DR_TPAGE 0x0009 (x 576 y 0, 4bpp)
       through CLUT 0x09F2; glyphs packed at varying u/v with the Triangle, Square, Circle and Cross icons
@@ -55,7 +57,8 @@ timing and colours are the game's.
   VRAM, and a glyph whose bitmap or codepoint changed gets a new field: the codepoint's outline (the title's face, or
   PromptFont for a button glyph, whose codepoint the pad in hand picks through `GlyphSet`) fitted to the box of the
   glyph's ink texels, as an MSDF in RGB and the shadow's SDF, moved by the shadow offset, in A, eight field pixels a
-  texel. Fields take their sign from the outline's nonzero fill, then msdfgen's error correction (its scanline pass):
+  texel; a `proportional` font keeps the outline's proportions at the ink box's height instead, centred across it and
+  no wider (Tomba 2's serifed I, 1 and l in a sans face). Fields take their sign from the outline's nonzero fill, then msdfgen's error correction (its scanline pass):
   variable faces keep overlapping contours. The atlas holds the fonts one under another, each over the box of its
   glyph rectangles (`OutlineAtlasFont`); a font not drawn keeps its last fields. A texel of a font's box that no named
   glyph with an outline covers (index A 0) draws its bitmap from VRAM, so a font names only the glyphs it has faces for.
