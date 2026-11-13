@@ -17,6 +17,7 @@ void Pad::pollHostInput() {
   buttons = pads.masks[0];
   mPort2Buttons = pads.masks[1];
   mPort2Present = pads.port2Present;
+  mRightStick = mPlayerInputSuppressed || replaying() ? psx::input::StickAxes{} : pads.rightSticks[0];
   // The debug keys act on the one Game the host gave the player's input.
   if (mPlayerInputSuppressed) {
     return;

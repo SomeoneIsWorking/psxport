@@ -37,6 +37,12 @@ public:
     return mPort2Buttons;
   }
 
+  // Port 1's right stick for a title's host feature (a camera), never delivered to the guest. Centred while a pad
+  // replay feeds the guest or another Game holds the player's input; the .pad recording does not carry it.
+  psx::input::StickAxes rightStick() const {
+    return mRightStick;
+  }
+
   // Edges of the final mask; consumers decide what an edge means.
   void resetButtonEdges(uint16_t current = psx::input::kNoButtons) {
     mButtonEdges.reset(current);
@@ -86,6 +92,7 @@ private:
   uint32_t mFc = 0; // pad frames serviced, the forced pulse's clock
   uint16_t mHostButtons = psx::input::kNoButtons;
   uint16_t mPort2Buttons = psx::input::kNoButtons;
+  psx::input::StickAxes mRightStick;
   bool mPort2Present = false;
   psx::input::PadRecordReplay mSession;
   bool mLiveInputOnly = false;

@@ -50,9 +50,17 @@ inline constexpr std::uint16_t kButtonDirections = kButtonUp | kButtonRight | kB
 
 class QuitScope;
 
-// One poll's active-low mask per controller port, and whether any device sits on port 2.
+// A host controller's right stick, raw SDL axis values (-32768..32767, +x right, +y down); zero is centred.
+// The PSX digital pad has no such stick: it is host input for title features, never delivered to the guest.
+struct StickAxes {
+  std::int16_t x = 0;
+  std::int16_t y = 0;
+};
+
+// One poll's active-low mask and right stick per controller port, and whether any device sits on port 2.
 struct HostPads {
   std::uint16_t masks[kPadPorts] = {kNoButtons, kNoButtons};
+  StickAxes rightSticks[kPadPorts] = {};
   bool port2Present = false;
 };
 

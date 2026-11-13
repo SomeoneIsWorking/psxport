@@ -7,6 +7,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cstdlib>
 #include <optional>
 #include <string>
 
@@ -145,6 +146,16 @@ constexpr std::array kGamepadBindings{
     GamepadBinding{psx::input::kButtonL2, SDL_GAMEPAD_BUTTON_INVALID, SDL_GAMEPAD_AXIS_LEFT_TRIGGER},
     GamepadBinding{psx::input::kButtonR2, SDL_GAMEPAD_BUTTON_INVALID, SDL_GAMEPAD_AXIS_RIGHT_TRIGGER},
 };
+
+// Two pads on one port: each axis takes the farther-pushed stick.
+std::int16_t fartherAxis(std::int16_t held, std::int16_t read) {
+  return std::abs(static_cast<int>(read)) > std::abs(static_cast<int>(held)) ? read : held;
+}
+
+void applyRightStick(SDL_Gamepad *gamepad, psx::input::StickAxes &stick) {
+  stick.x = fartherAxis(stick.x, SDL_GetGamepadAxis(gamepad, SDL_GAMEPAD_AXIS_RIGHTX));
+  stick.y = fartherAxis(stick.y, SDL_GetGamepadAxis(gamepad, SDL_GAMEPAD_AXIS_RIGHTY));
+}
 
 void applyGamepad(SDL_Gamepad *gamepad, std::uint16_t &mask) {
   for (const GamepadBinding &binding : kGamepadBindings) {
@@ -327,6 +338,7 @@ psx::input::HostPads psx::input::HostInput::poll(bool shown, std::uint32_t ports
       port = virtualPort ? *virtualPort : std::min(physical++, ports - 1);
     }
     applyGamepad(mGamepads[slot], pads.masks[port]);
+    applyRightStick(mGamepads[slot], pads.rightSticks[port]);
     pads.port2Present = pads.port2Present || port == 1;
   }
   mask = pads.masks[0];
