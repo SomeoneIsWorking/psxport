@@ -57,8 +57,9 @@ GTE aspect; neither crops gameplay height to 16:9 and relocates the HUD
 
 ## State
 
-- Done: setting, band, planner, rasteriser, present, classification hooks; Spyro 1 (`psx-spyro`
-  `titles/spyro1/render/crop_layers.h`). Guest RAM equals the 4:3 run's in Spyro 1 and Tomba 2.
-- Titles without a `CropUiLayers` (Tomba 2, Spyro 2/3 and the rest today) are not offered Crop.
+- Done: setting, band, planner, rasteriser, present, classification hooks; Spyro 1/2/3 (`psx-spyro`
+  `game/render/crop_layers.*`, `game/render/overlay_pair.*`). Guest RAM equals the 4:3 run's in Spyro 1/2/3
+  and Tomba 2.
+- Titles without a `CropUiLayers` (Tomba 2 and the rest today) are not offered Crop.
 - Open: Tomba 2's classification (UI through native emitters and guest leaves across buckets 1..4, 0x7FF and
-  attribute-chosen ones); Spyro 2/3 and the other titles; a band anchor from RE'd camera state.
+  attribute-chosen ones); the other titles; a band anchor from RE'd camera state.
