@@ -44,6 +44,29 @@ timing and colours are the game's.
       table of which rect shows which string (the message tables are at 0x80063B74 and 0x80061B70), and the
       outline lays the string out in that rect.
 
+## Next steps
+
+Phases 2a and 2b are built and shown (Spyro 2/3 pixel-identical before and after; Tomba 2 pause menu and opening
+narration at `ires=0`, moving halfway on in-betweens). Continue with 2c, 2d and 2e in that order, each on the
+glyph-rectangle model: RE the drawer and its glyph table into the title's decomp first, then a title font table
+(`OutlineFont` with `OutlineGlyph`s, `OutlineGrid` where cells are equal) and the drawer naming each glyph packet's
+font through the title's `OutlineGlyphs`.
+
+- 2c, Spyro 3's Atlas font: a second Spyro 3 font beside `spyro::textFont`; its glyphs are packed rectangles, not
+  a grid, so list each rect. Its 0x2E quads are semi-transparent and drawn twice (shadow modulated 0x202020, then the
+  text 0x78898C): name both passes' packets with the same font.
+- 2d, the HUD counters: the digit pages and tables first (Spyro 3 0x800291B8/0x800289C8, Spyro 2 0x8005251C/
+  0x800520CC).
+- 2e, Spyro 2's pre-rendered string images: whole strings, not glyphs; this needs a layout of the string into its
+  rect rather than an `OutlineGlyph` per cell, so it is new framework work.
+- Tomba 2 leftovers: the `*` cell (a reference mark), the arrows and symbols, the thin font at v 152 and the
+  `FUN_80078988` token strings (0x80016DA0-0x80016DAC, table 0x800A55E0) still draw their bitmaps
+  (tomba2-decomp `docs/notes/text-fonts.md`). Its 16x16 button icons are multicoloured; PromptFont glyphs take one
+  CLUT index a row, so under a PlayStation pad they lose the ring colours.
+- Proof routes: Spyro `ally_text.sh` (Ally, `warp 0/0/0`, start, downs, cross; Spyro 3 Help is three downs);
+  Tomba 2 `psx-tomba/scratch/outline-text/tools/` (`drive.py` with the REPL files: title New Game, `warp 8/0`,
+  start; the narration dump is mid-route).
+
 ## As built
 
 - `runtime/psx/present/outline_text` owns it. A title's `GameRuntime::outlineFonts()` names up to four fonts
