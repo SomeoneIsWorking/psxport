@@ -19,6 +19,16 @@ OtNode readNode(Core &core, std::uint32_t mainRamOffset) {
   return OtNode(mainRamOffset, OtHeaderWord{core.mem_r32(mainRamOffset)});
 }
 
+[[noreturn]] void refuseReplacement(Core &core, const OtNode &node, std::size_t words) {
+  lucent::error("host-packets",
+                "node 0x{:08X} at field {} holds {} word(s) and was replaced by {}",
+                node.guestAddress(),
+                core.game->timing.displayField(),
+                node.gp0WordCount(),
+                words);
+  std::abort();
+}
+
 [[noreturn]] void refuseUnmovable(Core &core, const OtNode &node) {
   lucent::error("host-packets",
                 "node 0x{:08X} at field {} was given a move, but its {} word(s) hold a poly-line or a cut command",
@@ -64,8 +74,13 @@ OrderingTableWalk::OrderingTableWalk(Core &core, std::uint32_t rootGuestAddress)
 
 void OrderingTableWalk::readNode() {
   const OtNode &node = cursor_.node();
+  const std::span<const std::uint32_t> replaced =
+      node.carriesPrimitive() ? hostPackets_.replaced(node.guestAddress()) : std::span<const std::uint32_t>{};
+  if (!replaced.empty() && replaced.size() != node.gp0WordCount()) {
+    refuseReplacement(core_, node, replaced.size());
+  }
   for (unsigned i = 0; i < node.gp0WordCount(); i++) {
-    words_[i] = core_.mem_r32(node.gp0WordRamOffset(i));
+    words_[i] = replaced.empty() ? core_.mem_r32(node.gp0WordRamOffset(i)) : replaced[i];
   }
   movedX_ = node.carriesPrimitive() ? hostPackets_.movedX(node.guestAddress()) : 0;
   if (movedX_ != 0 && !moveVerticesX(std::span(words_.data(), node.gp0WordCount()), movedX_)) {

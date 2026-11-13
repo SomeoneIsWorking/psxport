@@ -193,10 +193,12 @@ the `motion` debug channel counts each track's paired records.
   from `root` draws them, in insertion order, right before it enters `node`, in the slot the previous node left
   open, as a guest link there would be. A title that moves what the guest drew (X4's parallax layer shift and
   HUD anchor) names the packet with `moveX(root, node, dx)`: the walk draws its vertices `dx` columns over
-  (`moveVerticesX`; a poly-line is refused) and the record keeps no GTE place for them. Guest RAM holds only what
-  the guest wrote. `discard(root)` drops a table the title is rebuilding unwalked; what a walk drew stays readable
-  by the debug views until the next walk begins. Storage is 4,096 packets, 16,384 words and 8,192 moves, reserved
-  once; an insert or move past it, or into a walk, aborts naming the node, table and field, and so does a walk
+  (`moveVerticesX`; a poly-line is refused) and the record keeps no GTE place for them. A title that changes more
+  than x (X4's co-op player 2 gauge: its rows, tiles, CLUT and texture page) gives the node's words with
+  `replace(root, node, words)`, as many as the node holds (otherwise the walk aborts); the walk draws them in place
+  of the guest's, moved by the node's moves. Guest RAM holds only what the guest wrote. `discard(root)` drops a table the title is rebuilding unwalked; what a walk drew stays readable
+  by the debug views until the next walk begins. Storage is 4,096 packets, 4,096 replacements, 16,384 words and 8,192 moves, reserved
+  once; an insert, replacement or move past it, or into a walk, aborts naming the node, table and field, and so does a walk
   that ends without entering a node it was given (the title linked to a node off the chain). The machine state
   carries the store in the GPU section: the table built before a save is drawn by the first walk after a load.
 - **Guest redraw.** A title whose objects are drawn by guest code it does not port can run that code
