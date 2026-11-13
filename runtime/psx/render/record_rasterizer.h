@@ -26,6 +26,16 @@ struct RecordPicture {
   int scale = 1;
 };
 
+// A margin canvas's picture beside its buffer in native pixels, as a machine state carries it: the windows of the
+// record that last drew it and the drawn columns of each side, row-major over the buffer's rows.
+struct CanvasMargins {
+  gpu::RecordRect buffer;
+  present::HorizontalMargins view;
+  present::HorizontalMargins drawn;
+  std::vector<std::uint16_t> left;
+  std::vector<std::uint16_t> right;
+};
+
 // What a present shows: the guest display (native VRAM pixels) and the widest margin either side can take, or the
 // band of it a crop keeps.
 struct RecordView {
@@ -40,8 +50,9 @@ struct RecordView {
 // drawn window of the record's own windows (FrameRecord::windows), and a present shows the view window of the record
 // that last drew that canvas, black where that record drew nothing;
 // the VRAM image stays exactly the device's, and textures and copies read only it, except a declared
-// read-back page, which is read from the canvas pixels captured for it (gpu::RecordReadBack). With a crop, each displayed
-// buffer instead has a crop canvas (gpu::cropCanvas) holding the band at its own scale, and a present shows it whole.
+// read-back page, which is read from the canvas pixels captured for it (gpu::RecordReadBack). With a crop, each
+// displayed buffer instead has a crop canvas (gpu::cropCanvas) holding the band at its own scale, and a present shows
+// it whole.
 class RecordRasterizer {
 public:
   explicit RecordRasterizer(RenderDevice &device);
@@ -88,6 +99,14 @@ public:
 
   // `picture` at the image scale as row-major halfwords, after everything submitted before it.
   MappedTransfer download(const RecordPicture &picture);
+
+  // Each margin canvas's drawn columns, each scaled block read at its top-left texel, as the device's VRAM holds
+  // the buffer; none when the GPU refused a download.
+  std::optional<std::vector<CanvasMargins>> margins();
+  // A state load: the canvases and the image are the replaced run's, so the canvases go and the next present
+  // uploads the device's VRAM; a canvas made for one of `restored`'s buffers before a record is applied starts
+  // with its margins and windows.
+  void restore(std::vector<CanvasMargins> restored);
 
   SDL_GPUTexture *image() const {
     return vram_.image;
@@ -150,6 +169,10 @@ private:
   void showCanvas(SDL_GPUCommandBuffer *cmd, const RecordView &view, const present::RecordWindows &windows);
   // The buffer's columns from the image; a new canvas is cleared first, a kept one keeps its margins.
   void seedCanvas(SDL_GPUCommandBuffer *cmd, Canvas &canvas, bool fresh);
+  // A new canvas whose buffer a state load restored: its margins into every plane texture and its windows.
+  void seedRestored(SDL_GPUCommandBuffer *cmd, Canvas &canvas);
+  // `rect` of `plane` in native pixels, each block's top-left texel.
+  std::optional<std::vector<std::uint16_t>> nativePixels(const Plane &plane, const gpu::RecordRect &rect);
   // A new crop canvas: its band copied from the image at the canvas's scale.
   void seedCrop(SDL_GPUCommandBuffer *cmd, Canvas &canvas);
   // The canvas `view` shows at this image scale.
@@ -210,6 +233,8 @@ private:
   std::vector<Canvas> canvases_;
   std::array<gpu::RecordCanvas, gpu::kRecordMaxCanvases> shapes_{};
   std::uint64_t shows_ = 0;
+  // A state load's margins, until a record is applied.
+  std::vector<CanvasMargins> restored_;
   RecordPicture presented_;
   RecordPicture woven_;
   int wovenOriginY_ = 0; // VRAM row of the woven picture's first row

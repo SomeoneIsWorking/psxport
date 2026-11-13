@@ -97,12 +97,7 @@ constexpr SectionCodec kSections[] = {
        return true;
      },
      readGteSection},
-    {section::kGpu,
-     [](Game &g, BlobWriter &out, std::string &) {
-       writeGpuSection(g, out);
-       return true;
-     },
-     readGpuSection},
+    {section::kGpu, writeGpuSection, readGpuSection},
     {section::kBeetleSpu,
      [](Game &g, BlobWriter &out, std::string &error) {
        return writeBeetle(g, BeetleDevice::Spu, out, error);

@@ -312,10 +312,10 @@ void RecordRasterizer::showCanvas(SDL_GPUCommandBuffer *cmd,
   const RecordCanvas shape = viewShape(view);
   // A widening, crop or display width change makes every canvas another shape; a split change keeps them.
   std::erase_if(canvases_, [&](Canvas &canvas) {
-    const bool stale = crop ? !(canvas.shape.crop() && canvas.shape.worldScale == shape.worldScale &&
-                                canvas.shape.uiScale == shape.uiScale &&
-                                canvas.shape.buffer.x1 - canvas.shape.buffer.x0 == width)
-                            : !gpu::canvasSurvives(canvas.shape, width, view.reach);
+    const bool stale =
+        crop ? !(canvas.shape.crop() && canvas.shape.worldScale == shape.worldScale &&
+                 canvas.shape.uiScale == shape.uiScale && canvas.shape.buffer.x1 - canvas.shape.buffer.x0 == width)
+             : !gpu::canvasSurvives(canvas.shape, width, view.reach);
     if (stale) {
       releasePlane(canvas.plane);
     }
@@ -346,6 +346,7 @@ void RecordRasterizer::showCanvas(SDL_GPUCommandBuffer *cmd,
       seedCrop(cmd, *canvas);
     } else {
       seedCanvas(cmd, *canvas, true);
+      seedRestored(cmd, *canvas);
     }
   }
   canvas->shown = ++shows_;
@@ -369,6 +370,78 @@ void RecordRasterizer::seedCanvas(SDL_GPUCommandBuffer *cmd, Canvas &canvas, boo
                                                canvas.shape.reach + canvas.shape.buffer.x1 - canvas.shape.buffer.x0,
                                                canvas.plane.height};
   copyTexture(cmd, canvas.plane.image, seeded, canvas.plane.snapshot, seeded.x0, 0, scale_);
+}
+
+void RecordRasterizer::seedRestored(SDL_GPUCommandBuffer *cmd, Canvas &canvas) {
+  RecordCanvas &shape = canvas.shape;
+  const auto found = std::find_if(restored_.begin(), restored_.end(), [&shape](const CanvasMargins &margins) {
+    return margins.buffer == shape.buffer;
+  });
+  if (found == restored_.end()) {
+    return;
+  }
+  const int s = scale_;
+  const int rows = shape.height();
+  const int width = shape.buffer.x1 - shape.buffer.x0;
+  const int left = std::clamp(found->drawn.left, 0, shape.reach);
+  const int right = std::clamp(found->drawn.right, 0, shape.reach);
+  struct Side {
+    const std::vector<std::uint16_t> &pixels;
+    int savedColumns;
+    int firstColumn; // of the saved row; a narrower reach keeps the columns nearest the buffer
+    int columns;
+    int canvasX;
+  };
+  const std::array<Side, 2> sides{
+      Side{found->left, found->drawn.left, found->drawn.left - left, left, shape.reach - left},
+      Side{found->right, found->drawn.right, 0, right, shape.reach + width}};
+  const std::uint32_t bytes = static_cast<std::uint32_t>(left + right) * static_cast<std::uint32_t>(s) *
+                              static_cast<std::uint32_t>(rows) * static_cast<std::uint32_t>(s) *
+                              static_cast<std::uint32_t>(sizeof(std::uint16_t));
+  if (bytes > 0) {
+    ensureTransfer(upload_, uploadSize_, SDL_GPU_TRANSFERBUFFERUSAGE_UPLOAD, bytes);
+    auto *staging = static_cast<std::uint16_t *>(SDL_MapGPUTransferBuffer(device_.handle(), upload_, true));
+    GPUCHK(staging, "restored margins map");
+    std::uint16_t *out = staging;
+    for (const Side &side : sides) {
+      for (int y = 0; y < rows * s; y++) {
+        const std::uint16_t *row = side.pixels.data() + static_cast<std::size_t>((y / s) * side.savedColumns);
+        for (int x = 0; x < side.columns * s; x++) {
+          *out++ = row[side.firstColumn + x / s];
+        }
+      }
+    }
+    SDL_UnmapGPUTransferBuffer(device_.handle(), upload_);
+    SDL_GPUCopyPass *copy = SDL_BeginGPUCopyPass(cmd);
+    std::uint32_t offset = 0;
+    for (const Side &side : sides) {
+      if (side.columns <= 0 || rows <= 0) {
+        continue;
+      }
+      SDL_GPUTextureTransferInfo source = {};
+      source.transfer_buffer = upload_;
+      source.offset = offset;
+      source.pixels_per_row = static_cast<Uint32>(side.columns * s);
+      source.rows_per_layer = static_cast<Uint32>(rows * s);
+      SDL_GPUTextureRegion destination = {};
+      destination.texture = canvas.plane.image;
+      destination.x = static_cast<Uint32>(side.canvasX * s);
+      destination.w = static_cast<Uint32>(side.columns * s);
+      destination.h = static_cast<Uint32>(rows * s);
+      destination.d = 1;
+      SDL_UploadToGPUTexture(copy, &source, &destination, false);
+      offset += static_cast<std::uint32_t>(side.columns * s * rows * s) * sizeof(std::uint16_t);
+    }
+    SDL_EndGPUCopyPass(copy);
+    for (const Side &side : sides) {
+      const RecordRect rect{side.canvasX, 0, side.canvasX + side.columns, rows};
+      copyTexture(cmd, canvas.plane.image, rect, canvas.plane.before, rect.x0, 0, s);
+      copyTexture(cmd, canvas.plane.image, rect, canvas.plane.snapshot, rect.x0, 0, s);
+    }
+  }
+  setWindow(shape, found->drawn);
+  canvas.view = found->view;
+  restored_.erase(found);
 }
 
 void RecordRasterizer::seedCrop(SDL_GPUCommandBuffer *cmd, Canvas &canvas) {
@@ -438,10 +511,8 @@ void RecordRasterizer::selectField(SDL_GPUCommandBuffer *cmd, const present::Fra
     work_.copyPixels += static_cast<std::uint64_t>(width) * static_cast<std::uint64_t>(scale_ * scale_);
   }
   SDL_EndGPUCopyPass(copy);
-  presented_ = {field_,
-                {0, 0, width, height},
-                {woven_.drawn.x0 - source.x0, 0, woven_.drawn.x1 - source.x0, height},
-                scale_};
+  presented_ = {
+      field_, {0, 0, width, height}, {woven_.drawn.x0 - source.x0, 0, woven_.drawn.x1 - source.x0, height}, scale_};
 }
 
 void RecordRasterizer::update(SDL_GPUCommandBuffer *cmd,
@@ -467,6 +538,7 @@ void RecordRasterizer::advance(SDL_GPUCommandBuffer *cmd,
   if (chained_ && record.complete() && record.sequence() == applied_ + 1) {
     applied_ = record.sequence();
     replayed_++;
+    restored_.clear();
     if (record.entries().empty()) {
       return;
     }
@@ -486,7 +558,8 @@ void RecordRasterizer::advance(SDL_GPUCommandBuffer *cmd,
   }
   // Every canvas is a crop canvas or none is: a crop canvas takes the upload, a margin canvas the image's columns.
   const bool crops = !canvases_.empty() && canvases_.front().shape.crop();
-  execute(cmd, planner_.planVramUpload(vram, scale_, crops ? canvasShapes({}) : std::span<const RecordCanvas>{}), false);
+  execute(
+      cmd, planner_.planVramUpload(vram, scale_, crops ? canvasShapes({}) : std::span<const RecordCanvas>{}), false);
   readBack_.reset();
   for (Canvas &canvas : canvases_) {
     if (crops) {
@@ -854,6 +927,59 @@ MappedTransfer RecordRasterizer::download(const RecordPicture &picture) {
                  SDL_GPU_TRANSFERBUFFERUSAGE_DOWNLOAD,
                  static_cast<std::uint32_t>(region.w) * static_cast<std::uint32_t>(region.h) * 2);
   return device_.download(picture.texture, region, readback_, "record download");
+}
+
+std::optional<std::vector<std::uint16_t>> RecordRasterizer::nativePixels(const Plane &plane, const RecordRect &rect) {
+  const int width = rect.x1 - rect.x0;
+  const int height = rect.y1 - rect.y0;
+  std::vector<std::uint16_t> pixels;
+  if (width <= 0 || height <= 0) {
+    return pixels;
+  }
+  const MappedTransfer scaled = download({plane.image, rect, rect, plane.scale});
+  if (!scaled) {
+    return std::nullopt;
+  }
+  const int s = plane.scale;
+  pixels.resize(static_cast<std::size_t>(width) * static_cast<std::size_t>(height));
+  for (int y = 0; y < height; y++) {
+    for (int x = 0; x < width; x++) {
+      const std::size_t texel = (static_cast<std::size_t>(y) * s * width * s + static_cast<std::size_t>(x) * s) * 2;
+      pixels[static_cast<std::size_t>(y) * width + x] =
+          static_cast<std::uint16_t>(scaled.bytes()[texel] | (scaled.bytes()[texel + 1] << 8));
+    }
+  }
+  return pixels;
+}
+
+std::optional<std::vector<CanvasMargins>> RecordRasterizer::margins() {
+  std::vector<CanvasMargins> margins;
+  for (const Canvas &canvas : canvases_) {
+    const RecordCanvas &shape = canvas.shape;
+    if (shape.crop()) {
+      continue;
+    }
+    const int width = shape.buffer.x1 - shape.buffer.x0;
+    const int rows = shape.height();
+    auto left = nativePixels(canvas.plane, {shape.reach - shape.left, 0, shape.reach, rows});
+    auto right = nativePixels(canvas.plane, {shape.reach + width, 0, shape.reach + width + shape.right, rows});
+    if (!left || !right) {
+      return std::nullopt;
+    }
+    margins.push_back({shape.buffer, canvas.view, {shape.left, shape.right}, std::move(*left), std::move(*right)});
+  }
+  return margins;
+}
+
+void RecordRasterizer::restore(std::vector<CanvasMargins> restored) {
+  for (Canvas &canvas : canvases_) {
+    releasePlane(canvas.plane);
+  }
+  canvases_.clear();
+  chained_ = false;
+  beforeHeld_ = false;
+  readBack_.reset();
+  restored_ = std::move(restored);
 }
 
 } // namespace psx::render

@@ -31,6 +31,24 @@ void RenderState::latchDisplay(gpu::VramRect display) {
   present::latchRecordDisplay(game_.core, {shown.x1 - shown.x0, shown.y1 - shown.y0});
 }
 
+std::optional<std::vector<CanvasMargins>> RenderState::canvasMargins() {
+  if (restoredMargins_) {
+    return restoredMargins_;
+  }
+  if (!record_) {
+    return std::vector<CanvasMargins>{};
+  }
+  return record_->margins();
+}
+
+void RenderState::restoreCanvasMargins(std::vector<CanvasMargins> margins) {
+  if (record_) {
+    record_->restore(std::move(margins));
+    return;
+  }
+  restoredMargins_ = std::move(margins);
+}
+
 void RenderState::presentRecord(present::PresentInputs &inputs) {
   presentsRecord_ = false;
   Core &core = game_.core;
@@ -40,6 +58,10 @@ void RenderState::presentRecord(present::PresentInputs &inputs) {
   const int scale = videoStatus(core).ires;
   if (!record_) {
     record_ = std::make_unique<RecordRasterizer>(device_);
+  }
+  if (restoredMargins_) {
+    record_->restore(std::move(*restoredMargins_));
+    restoredMargins_.reset();
   }
   const gpu::RecordRect display = gpu::clampedVramRect({inputs.sx, inputs.sy, inputs.native_w, inputs.disp_h});
   const present::GuestProjectionPlan &plan = core.game->guestDisplay.plan();

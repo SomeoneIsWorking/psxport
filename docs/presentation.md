@@ -492,6 +492,13 @@ psx-mega-man-x4 issue 0044). Each record entry is planned once per plane:
   write into the page, a resync or a scale change ends it; at 4:3 nothing is captured; an in-between
   samples but never captures. User: Spyro 1's pause backdrop (psx-spyro issue 0212).
 
+A canvas's margins exist only on the host, so the machine state's GPU section carries them: each margin canvas's
+buffer, windows and drawn columns at native pixels (`RecordRasterizer::margins`, each scaled block's top-left texel).
+A load drops every canvas and resyncs the image from the device; a canvas made for a carried buffer before the next
+record applies starts with its margins and windows (`RecordRasterizer::restore`, `seedRestored`). A double-buffered
+title shows two buffers drawn before the save, so without them its first two presents after a load have black
+margins (psx-mega-man-x4 issue 0044). The first present after a load equals the saving run's present at the save.
+
 The present shows the canvas at the display's per-column aspect, so 4:3 (M = 0) presents the VRAM
 image itself. Known differences: a canvas reaching past column 1023 does not wrap, and a third
 displayed buffer evicts one canvas, whose margins are black until redrawn.

@@ -11,7 +11,9 @@
 
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <span>
+#include <vector>
 
 class Game;
 
@@ -68,6 +70,11 @@ public:
   // REPL `preseq`: the next `count` presents written as numbered PPMs.
   void preseqArm(int count, const char *dir);
   void preseqCapture();
+
+  // The record canvases' margins for a machine state (RecordRasterizer::margins); none when a download failed.
+  std::optional<std::vector<CanvasMargins>> canvasMargins();
+  // A state load's margins, handed to the rasterizer now or when it is made (RecordRasterizer::restore).
+  void restoreCanvasMargins(std::vector<CanvasMargins> margins);
 
   // Where a present goes: the window, or this Game's own image for a host compositing several sessions.
   enum class PresentTarget : std::uint8_t { Swapchain, Pane };
@@ -146,6 +153,8 @@ private:
 
   // RenderPath::Record's rasterizer and what the last present took from it.
   std::unique_ptr<RecordRasterizer> record_;
+  // A state load's margins while there is no rasterizer to take them.
+  std::optional<std::vector<CanvasMargins>> restoredMargins_;
   bool presentsRecord_ = false;
   int recordFade_[4] = {}; // mode, r, g, b
   // The last present's display rect in VRAM, for a Device-path shot.

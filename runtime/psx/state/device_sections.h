@@ -27,8 +27,8 @@ bool readScratchpadSection(Core &core, psx::platform::BlobReader &in, std::strin
 void writeGteSection(Game &game, psx::platform::BlobWriter &out);
 bool readGteSection(Game &game, psx::platform::BlobReader &in, std::string &error);
 
-// --- the native GPU's guest-visible state and VRAM (device_gpu.cpp)
-void writeGpuSection(Game &game, psx::platform::BlobWriter &out);
+// --- the native GPU's guest-visible state and VRAM, host packets and record canvas margins (device_gpu.cpp)
+bool writeGpuSection(Game &game, psx::platform::BlobWriter &out, std::string &error);
 bool readGpuSection(Game &game, psx::platform::BlobReader &in, std::string &error);
 
 // --- the device bus: CD controller, display clock, DMA controller, BIOS HLE/interrupt state,
