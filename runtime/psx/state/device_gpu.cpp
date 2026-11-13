@@ -1,4 +1,4 @@
-// device_gpu.cpp — the GPU section: the GPU device's own Beetle state stream, the VRAM and registers
+// device_gpu.cpp — the GPU section: the GPU device's own Beetle state stream and scanline clock, the VRAM and registers
 // the guest observes, the host packets of tables built but not yet walked, the record tap's record in progress, the
 // record canvases' windows and the presenter's records, which a load draws again at scale so the first presents show
 // what the saving run's would have. The present counters are run-local and not captured.
@@ -11,12 +11,13 @@
 #include "render_state.h"
 #include "vram_rect.h"
 
+#include <optional>
 #include <vector>
 
 namespace psx::state {
 namespace {
 
-constexpr std::uint8_t kGpuLayoutVersion = 7;
+constexpr std::uint8_t kGpuLayoutVersion = 8;
 
 void writeMargins(psx::platform::BlobWriter &out, const present::HorizontalMargins &margins) {
   out.i32(margins.left);
@@ -60,6 +61,9 @@ bool writeGpuSection(Game &game, psx::platform::BlobWriter &out, std::string &) 
   out.u8(kGpuLayoutVersion);
   const std::vector<std::uint8_t> device = game.core.gpuDevice().saveState();
   out.blob(device);
+  const std::optional<std::uint64_t> clock = game.core.gpuDevice().clockTicks();
+  out.boolean(clock.has_value());
+  out.u64(clock.value_or(0));
   game.core.hostPackets.save(out);
   game.core.gpuDevice().saveRecord(out);
   const std::vector<render::CanvasWindows> canvases = game.render().canvasWindows();
@@ -79,7 +83,12 @@ bool readGpuSection(Game &game, psx::platform::BlobReader &in, std::string &erro
   if (!in.blob(device)) {
     return in.decoded("gpu", error);
   }
-  if (!game.core.gpuDevice().loadState(device)) {
+  const bool clocked = in.boolean();
+  const std::uint64_t clockTicks = in.u64();
+  if (!in.ok()) {
+    return in.decoded("gpu", error);
+  }
+  if (!game.core.gpuDevice().loadState(device, clocked ? std::optional<std::uint64_t>(clockTicks) : std::nullopt)) {
     error = "the GPU device did not accept its " + std::to_string(device.size()) + "-byte state stream";
     return false;
   }

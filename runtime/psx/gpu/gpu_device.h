@@ -75,7 +75,10 @@ public:
 
   // Beetle's own state stream for this device.
   std::vector<uint8_t> saveState();
-  bool loadState(std::span<const uint8_t> bytes);
+  // The CPU tick the scanline clock has reached; none before its first access.
+  std::optional<uint64_t> clockTicks() const;
+  // `clockTicks` resumes the scanline clock where the saving machine left it.
+  bool loadState(std::span<const uint8_t> bytes, std::optional<uint64_t> clockTicks);
   // The record tap's sequences and record in progress, carried beside saveState(); resumeRecord follows loadState().
   void saveRecord(psx::platform::BlobWriter &out) const {
     mTap.save(out);

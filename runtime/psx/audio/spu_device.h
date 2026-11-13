@@ -6,7 +6,13 @@
 #include <array>
 #include <cstdint>
 #include <optional>
+#include <string>
 class Core;
+
+namespace psx::platform {
+class BlobReader;
+class BlobWriter;
+} // namespace psx::platform
 
 class SpuDevice : public psx::platform::BeetleDeviceInstance<SPU_NewState, SPU_FreeState, SPU_BindState, SPU_Power> {
 public:
@@ -28,6 +34,10 @@ public:
   int32_t fieldRun = 0;
   // Beetle's clocks to its next sample as of the last run; 0 when unknown.
   int32_t untilSample = 0;
+
+  // The field run and key latches, carried beside Beetle's own state so a load resumes the SPU's clock.
+  void saveField(psx::platform::BlobWriter &out) const;
+  bool loadField(psx::platform::BlobReader &in, std::string &error);
 
   // Make this instance the live SPU with `core` its interrupt target, powering it at first use.
   void bind(Core *core) {

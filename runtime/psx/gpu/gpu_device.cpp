@@ -430,14 +430,19 @@ std::vector<uint8_t> GpuDevice::saveState() {
   return captureBeetleState();
 }
 
-bool GpuDevice::loadState(std::span<const uint8_t> bytes) {
+std::optional<uint64_t> GpuDevice::clockTicks() const {
+  return mClockStarted ? std::optional<uint64_t>(mClockTicks) : std::nullopt;
+}
+
+bool GpuDevice::loadState(std::span<const uint8_t> bytes, std::optional<uint64_t> clockTicks) {
   bind();
   if (!restoreBeetleState(bytes)) {
     return false;
   }
   GPU_StartFrame(&mScanout->spec);
   mFieldEnded = false;
-  mClockStarted = false; // the restored machine's clock anchors at its next access
+  mClockStarted = clockTicks.has_value();
+  mClockTicks = clockTicks.value_or(0);
   mTap.onStateReplaced(probe(censusMark()));
   return true;
 }

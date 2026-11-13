@@ -504,7 +504,9 @@ then chains from the last of them. A double-buffered title shows the two buffers
 presents after a load are the saving run's at full detail and full width (psx-mega-man-x4 issue 0044); an incomplete
 carried record leaves the image resynced, at native detail until the next complete record. The load also relatches
 the guest display plan (`RenderState::latchRestoredDisplay`), since the records sealed before the first present
-after it stamp their windows from that plan. The carry adds about 1.3 MB to a Tomba! 2 state.
+after it stamp their windows from that plan. The carry adds about 1.3 MB to a Tomba! 2 state. The section also carries the CPU tick the
+device's scanline clock had reached (`GpuDevice::clockTicks`), so the first access after a load runs the beam on from
+there rather than from the access, as the SPU section carries `SpuDevice`'s run through its field.
 
 The present shows the canvas at the display's per-column aspect, so 4:3 (M = 0) presents the VRAM
 image itself. Known differences: a canvas reaching past column 1023 does not wrap, and a third

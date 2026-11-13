@@ -42,6 +42,32 @@ bool writeBeetle(Game &game, BeetleDevice device, BlobWriter &out, std::string &
   return true;
 }
 
+constexpr std::uint8_t kSpuLayoutVersion = 1;
+
+// Beetle's SPU stream and the host's run through the current field, which together are the SPU's clock.
+bool writeSpu(Game &game, BlobWriter &out, std::string &error) {
+  BeetleDeviceState state;
+  if (!state.save(game.core, BeetleDevice::Spu, error)) {
+    return false;
+  }
+  out.u8(kSpuLayoutVersion);
+  out.blob(state.bytesOut());
+  game.spu.saveField(out);
+  return true;
+}
+
+bool readSpu(Game &game, BlobReader &in, std::string &error) {
+  if (!in.expectLayout("beetle.spu", kSpuLayoutVersion, error)) {
+    return false;
+  }
+  std::vector<std::uint8_t> payload;
+  if (!in.blob(payload)) {
+    return in.decoded("beetle.spu", error);
+  }
+  BeetleDeviceState state;
+  return state.load(game.core, BeetleDevice::Spu, payload, error) && game.spu.loadField(in, error);
+}
+
 bool readBeetle(Game &game, BeetleDevice device, BlobReader &in, std::string &error) {
   std::vector<std::uint8_t> payload(in.size());
   in.bytes(payload);
@@ -99,13 +125,7 @@ constexpr SectionCodec kSections[] = {
      },
      readGteSection},
     {section::kGpu, writeGpuSection, readGpuSection},
-    {section::kBeetleSpu,
-     [](Game &g, BlobWriter &out, std::string &error) {
-       return writeBeetle(g, BeetleDevice::Spu, out, error);
-     },
-     [](Game &g, BlobReader &in, std::string &error) {
-       return readBeetle(g, BeetleDevice::Spu, in, error);
-     }},
+    {section::kBeetleSpu, writeSpu, readSpu},
     {section::kBeetleMdec,
      [](Game &g, BlobWriter &out, std::string &error) {
        return writeBeetle(g, BeetleDevice::Mdec, out, error);
