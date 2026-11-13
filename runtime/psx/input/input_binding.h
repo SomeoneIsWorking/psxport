@@ -83,4 +83,14 @@ inline std::uint16_t psxButtonOf(SDL_GamepadButton button) {
   return 0;
 }
 
+// The PSX button a key presses, or 0.
+inline std::uint16_t psxButtonOfKey(SDL_Scancode key) {
+  for (const KeyBinding &binding : kKeyboardBindings) {
+    if (binding.key == key || binding.alternate == key) {
+      return binding.bit;
+    }
+  }
+  return 0;
+}
+
 } // namespace psx::input

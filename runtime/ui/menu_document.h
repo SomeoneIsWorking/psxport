@@ -56,8 +56,8 @@ public:
   // Handle one menu key. Returns false when the key is not ours, so the caller can fall through
   // to RmlUi's SDL input translation (hover, text, wheel).
   bool handle_key(SDL_Keycode key);
-  // Handle one PSX button pressed on a gamepad (kButton*, active high), through the same actions: the
-  // directions move and switch tab, Cross runs the row, Circle closes the menu. False when not ours.
+  // Handle one PSX button (kButton*, active high) from a pad or the keyboard's binding: the directions move
+  // and switch tab, Cross runs the row, Circle closes the menu. False when not ours.
   bool handle_button(std::uint16_t button);
 
   // Every tab, pane and row with its kind, id, label and the text in the DOM, to the log.

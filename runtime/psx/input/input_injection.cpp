@@ -241,7 +241,7 @@ std::string InputInjection::gamepadAxis(std::string_view name, int value) {
   if (value < SDL_JOYSTICK_AXIS_MIN || value > SDL_JOYSTICK_AXIS_MAX) {
     return lucent::format("gamepad axis: {} is outside {}..{}", value, SDL_JOYSTICK_AXIS_MIN, SDL_JOYSTICK_AXIS_MAX);
   }
-  if (!setGamepadAxis(axis, static_cast<std::int16_t>(value), 0)) {
+  if (!setGamepadAxis(0, axis, static_cast<std::int16_t>(value))) {
     return lucent::format("gamepad: no virtual pad: {}", SDL_GetError());
   }
   return lucent::format("gamepad axis {} = {}", SDL_GetGamepadStringForAxis(axis), value);
@@ -380,19 +380,26 @@ void InputInjection::pushMouseButton(WindowId windowId, int button, bool down) {
 }
 
 bool InputInjection::setGamepadButton(int button, bool down, std::uint32_t port) {
-  return ensureVirtualPad(port) && SDL_SetJoystickVirtualButton(virtualPads_[port].joystick, button, down);
+  if (!ensureVirtualPad(port)) {
+    return false;
+  }
+  VirtualPad &pad = virtualPads_[port];
+  pad.buttons[button] = down;
+  return !pad.opened || SDL_SetJoystickVirtualButton(pad.joystick, button, down);
 }
 
 bool InputInjection::setGamepadTrigger(int axis, bool pulled, std::uint32_t port) {
-  return setGamepadAxis(axis, pulled ? std::int16_t{SDL_JOYSTICK_AXIS_MAX} : std::int16_t{0}, port);
+  return setGamepadAxis(
+      port, static_cast<SDL_GamepadAxis>(axis), pulled ? std::int16_t{SDL_JOYSTICK_AXIS_MAX} : std::int16_t{0});
 }
 
-bool InputInjection::setGamepadAxis(int axis, std::int16_t value, std::uint32_t port) {
-  if (!ensureVirtualPad(port) || !SDL_SetJoystickVirtualAxis(virtualPads_[port].joystick, axis, value)) {
+bool InputInjection::setGamepadAxis(std::uint32_t port, SDL_GamepadAxis axis, std::int16_t value) {
+  if (!ensureVirtualPad(port)) {
     return false;
   }
-  virtualPads_[port].axes[axis] = value;
-  return true;
+  VirtualPad &pad = virtualPads_[port];
+  pad.axes[axis] = value;
+  return !pad.opened || SDL_SetJoystickVirtualAxis(pad.joystick, axis, value);
 }
 
 void InputInjection::afterGamepadOpened(std::uint32_t id) {
@@ -401,8 +408,14 @@ void InputInjection::afterGamepadOpened(std::uint32_t id) {
     return;
   }
   VirtualPad &pad = virtualPads_[*port];
+  pad.opened = true;
   for (int axis = 0; axis < kAxes; ++axis) {
     SDL_SetJoystickVirtualAxis(pad.joystick, axis, pad.axes[axis]);
+  }
+  for (int button = 0; button < SDL_GAMEPAD_BUTTON_COUNT; ++button) {
+    if (pad.buttons[button]) {
+      SDL_SetJoystickVirtualButton(pad.joystick, button, true);
+    }
   }
 }
 
@@ -448,7 +461,6 @@ bool InputInjection::ensureVirtualPad(std::uint32_t port) {
   SDL_VirtualJoystickDesc desc;
   SDL_INIT_INTERFACE(&desc);
   desc.type = SDL_JOYSTICK_TYPE_GAMEPAD;
-  static_assert(kAxes == SDL_GAMEPAD_AXIS_COUNT);
   desc.naxes = kAxes;
   desc.nbuttons = SDL_GAMEPAD_BUTTON_COUNT;
   desc.axis_mask = (1u << SDL_GAMEPAD_AXIS_COUNT) - 1u;

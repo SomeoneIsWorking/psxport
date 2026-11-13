@@ -8,12 +8,13 @@
 #pragma once
 
 #include <cstdint>
-#include <string>
 #include <string_view>
 
 namespace psx::input {
 
 enum class PadFamily : std::uint8_t { Keyboard, Xbox, PlayStation, Nintendo };
+
+inline constexpr char32_t kNoGlyph = 0;
 
 std::string_view padFamilyName(PadFamily family);
 
@@ -26,9 +27,9 @@ public:
   std::uint32_t generation() const {
     return generation_;
   }
-  // The glyph, UTF-8, of one PSX button bit (kButton*, active high) for the active family; empty for a bit
-  // that is not one button.
-  std::string glyph(std::uint16_t button) const;
+  // The PromptFont codepoint of one PSX button bit (kButton*, active high) for the active family; kNoGlyph
+  // for a bit that is not one bound button.
+  char32_t glyph(std::uint16_t button) const;
 
   // A key went down: the keyboard's glyphs.
   void noteKeyboard();

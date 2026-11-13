@@ -1,8 +1,5 @@
-// psx::ui::MenuPrompts — the document's `<glyph button="cross" key="Enter"/>` prompts drawn in the glyphs of the
-// device the player last pressed (psx::input::GlyphSet).
-//
-// A pad shows the PSX button's glyph in its family's art (PromptFont); the keyboard shows the `key` text when the
-// prompt names one, the menu's own key for that action, else the keyboard key bound to the button.
+// psx::ui::MenuPrompts — the document's `<glyph button="cross"/>` prompts drawn in the glyphs of the device the
+// player last pressed (psx::input::GlyphSet): the bound key on the keyboard, the button in its pad family's art.
 #ifndef PSXPORT_UI_MENU_PROMPTS_H
 #define PSXPORT_UI_MENU_PROMPTS_H
 
@@ -19,15 +16,19 @@ namespace psx::ui {
 
 class MenuPrompts : public Component {
 public:
-  // `root` is the document body; `glyphs` may be null (the prompts then show their keyboard text).
+  // `root` is the document body; `glyphs` may be null (the prompts then stay empty).
   MenuPrompts(Rml::Element *root, const psx::input::GlyphSet *glyphs);
 
   // Redraws every prompt when the family changed since the last draw.
   void update() override;
 
 private:
+  struct Prompt {
+    Rml::Element *element;
+    std::uint16_t button;
+  };
   const psx::input::GlyphSet *mGlyphs = nullptr;
-  std::vector<Rml::Element *> mPrompts;
+  std::vector<Prompt> mPrompts;
   std::uint32_t mDrawn = 0;
   bool mEverDrawn = false;
 };

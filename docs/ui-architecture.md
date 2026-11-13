@@ -111,15 +111,16 @@ absences.
 
 ## Pads and button prompts
 
-The menu takes a pad through the one PSX button binding (`input/input_binding.h`): the guide button opens
-and closes it as ESC does, the directions move and step, Cross runs a row and Circle closes. While it is
-open (`RmlOverlay::holdsInput`) `HostInput` keeps the keyboard and the pads from the guest.
+The menu takes PSX buttons from the keyboard and the pads through the one binding (`input/input_binding.h`):
+the directions move and step, Cross runs a row and Circle closes; the pad's guide button opens and closes it
+as ESC does, and Return and Space still run a row. While it is open (`RmlOverlay::holdsInput`) `HostInput`
+keeps the keyboard and the pads from the guest.
 
-A prompt is `<glyph button="cross" key="Enter"/>`: it names a PSX button. `psx::ui::MenuPrompts` draws it
-from `psx::input::GlyphSet`, which `HostInput` keeps on the device the player last pressed: a pad shows the
-button's PromptFont glyph in its family's art (Xbox, PlayStation or Nintendo, from SDL's gamepad type, the
-face buttons labelled by SDL for that type), the keyboard shows the `key` text, or the bound key's glyph
-when the prompt names none. The glyphs change only when the family does. Check it headless with
+A prompt is `<glyph button="cross"/>`: it names a PSX button. `psx::ui::MenuPrompts` draws it from
+`psx::input::GlyphSet`, which `HostInput` keeps on the device the player last pressed: the bound key's
+PromptFont glyph on the keyboard, the button in its family's art on a pad (Xbox, PlayStation or Nintendo,
+from SDL's gamepad type, the face buttons labelled by SDL for that type). The glyphs change only when the
+family does. Check it headless with
 `gamepad make xbox` (or `playstation`), `gamepad guide tap` and `pshot`.
 
 ## The bug report form

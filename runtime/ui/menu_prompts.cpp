@@ -5,6 +5,7 @@
 #include "rml_text.h"
 
 #include <RmlUi/Core/Element.h>
+#include <RmlUi/Core/StringUtilities.h>
 #include <lucent/log.h>
 
 #include <string>
@@ -16,28 +17,26 @@ MenuPrompts::MenuPrompts(Rml::Element *root, const psx::input::GlyphSet *glyphs)
   root->GetElementsByTagName(prompts, "glyph");
   for (Rml::Element *prompt : prompts) {
     const std::string name = rmlAttributeText(*prompt, "button", "");
-    if (psx::input::buttonNamed(name) == 0) {
+    const std::uint16_t button = psx::input::buttonNamed(name);
+    if (button == 0) {
       lucent::error("rmlui", "menu prompt button=\"{}\" names no PSX button; it shows nothing", name);
       continue;
     }
-    mPrompts.push_back(prompt);
+    mPrompts.push_back({prompt, button});
   }
 }
 
 void MenuPrompts::update() {
-  const std::uint32_t generation = mGlyphs != nullptr ? mGlyphs->generation() : 0;
-  if (mEverDrawn && generation == mDrawn) {
+  if (mGlyphs == nullptr || (mEverDrawn && mGlyphs->generation() == mDrawn)) {
     return;
   }
   mEverDrawn = true;
-  mDrawn = generation;
-  const bool keyboard = mGlyphs == nullptr || mGlyphs->family() == psx::input::PadFamily::Keyboard;
-  for (Rml::Element *prompt : mPrompts) {
-    const std::string key = rmlAttributeText(*prompt, "key", "");
-    const bool asText = keyboard && !key.empty();
-    prompt->SetClass("text", asText);
-    const std::uint16_t button = psx::input::buttonNamed(rmlAttributeText(*prompt, "button", ""));
-    set_text(prompt, asText || mGlyphs == nullptr ? key : mGlyphs->glyph(button));
+  mDrawn = mGlyphs->generation();
+  for (const Prompt &prompt : mPrompts) {
+    const char32_t glyph = mGlyphs->glyph(prompt.button);
+    set_text(prompt.element,
+             glyph == psx::input::kNoGlyph ? std::string()
+                                           : Rml::StringUtilities::ToUTF8(static_cast<Rml::Character>(glyph)));
   }
 }
 

@@ -207,17 +207,11 @@ scrollbarvertical sliderarrowinc {
 	color: rgba(224, 219, 200, 45%);
 }
 
-/* A button prompt: the pad's glyph from PromptFont, or the keyboard's key text. */
+/* A button prompt: the key's or the pad button's glyph from PromptFont. */
 glyph {
 	font-family: PromptFont;
 	font-size: 1.3em;
 	color: #E0DBC8;
-}
-
-glyph.text {
-	font-family: "Fira Sans";
-	font-size: 1em;
-	color: rgba(224, 219, 200, 45%);
 }
 
 /* Read-only status line (video/world readout). */

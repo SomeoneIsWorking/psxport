@@ -2,14 +2,14 @@
 // into the one event queue, so a hidden run drives the player's own input path.
 #pragma once
 
+#include <SDL3/SDL_gamepad.h>
+
 #include <cstdint>
 #include <deque>
 #include <optional>
 #include <string>
 #include <string_view>
 #include <vector>
-
-struct SDL_Joystick; // opaque; only held as a pointer
 
 namespace psx::input {
 
@@ -70,7 +70,8 @@ public:
   void afterPadFrame();
   // After a drain: the queue no longer holds a text event that points into this owner.
   void afterDrain();
-  // A gamepad was opened: the virtual pad's axes set before then did not reach it, so they are set again.
+  // A gamepad was opened: a virtual pad's buttons and axes are held here until HostInput opens it, so a press
+  // made as the pad attaches reaches it as an event rather than as state it was opened with.
   void afterGamepadOpened(std::uint32_t id);
 
 private:
@@ -83,12 +84,15 @@ private:
     int ticksLeft;
     std::uint32_t port;
   };
-  static constexpr int kAxes = 6;
+  static constexpr int kAxes = SDL_GAMEPAD_AXIS_COUNT;
+  static constexpr int kButtons = SDL_GAMEPAD_BUTTON_COUNT;
   // One virtual pad per controller port, attached on first use.
   struct VirtualPad {
     SDL_Joystick *joystick = nullptr;
     std::uint32_t id = 0;
+    bool opened = false; // HostInput has opened it as a gamepad
     std::int16_t axes[kAxes] = {};
+    bool buttons[kButtons] = {};
   };
   // USB vendor and product ids; zero is SDL's generic gamepad.
   struct PadMake {
@@ -100,7 +104,7 @@ private:
   void pushMouseButton(WindowId windowId, int button, bool down);
   bool setGamepadButton(int button, bool down, std::uint32_t port);
   bool setGamepadTrigger(int axis, bool pulled, std::uint32_t port);
-  bool setGamepadAxis(int axis, std::int16_t value, std::uint32_t port);
+  bool setGamepadAxis(std::uint32_t port, SDL_GamepadAxis axis, std::int16_t value);
   void pushFinger(WindowId windowId, int finger, bool down, WindowXY normalised);
   // Window coordinates as the 0..1 a touch event carries.
   static std::optional<WindowXY> normalise(WindowId windowId, WindowXY at);

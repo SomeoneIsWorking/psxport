@@ -17,22 +17,6 @@ namespace {
 
 #ifdef PSXPORT_SDL
 
-// UTF-8 of one codepoint.
-std::string utf8(char32_t codepoint) {
-  std::string out;
-  if (codepoint < 0x80) {
-    out += static_cast<char>(codepoint);
-  } else if (codepoint < 0x800) {
-    out += static_cast<char>(0xC0 | (codepoint >> 6));
-    out += static_cast<char>(0x80 | (codepoint & 0x3F));
-  } else {
-    out += static_cast<char>(0xE0 | (codepoint >> 12));
-    out += static_cast<char>(0x80 | ((codepoint >> 6) & 0x3F));
-    out += static_cast<char>(0x80 | (codepoint & 0x3F));
-  }
-  return out;
-}
-
 // PromptFont's glyphs for the controls a family names in its own way.
 struct FamilyGlyphs {
   PadFamily family;
@@ -206,15 +190,15 @@ std::string_view padFamilyName(PadFamily family) {
   return "keyboard";
 }
 
-std::string GlyphSet::glyph(std::uint16_t button) const {
+char32_t GlyphSet::glyph(std::uint16_t button) const {
 #ifdef PSXPORT_SDL
   const std::optional<char32_t> codepoint = family_ == PadFamily::Keyboard
                                                 ? keyboardGlyph(button)
                                                 : gamepadGlyph(static_cast<SDL_GamepadType>(sdlType_), button);
-  return codepoint ? utf8(*codepoint) : std::string();
+  return codepoint.value_or(kNoGlyph);
 #else
   (void)button;
-  return {};
+  return kNoGlyph;
 #endif
 }
 

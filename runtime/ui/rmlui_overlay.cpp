@@ -145,7 +145,8 @@ void RmlOverlay::event(const SDL_Event *e) {
 
   // Menu open: the document takes arrows / Enter / Space; anything it does not claim falls
   // through to the SDL platform shim (hover, clicks, wheel, text).
-  if (e->type == SDL_EVENT_KEY_DOWN && mMenu->handle_key(e->key.key)) {
+  if (e->type == SDL_EVENT_KEY_DOWN &&
+      (mMenu->handle_key(e->key.key) || mMenu->handle_button(psx::input::psxButtonOfKey(e->key.scancode)))) {
     return;
   }
   if (e->type == SDL_EVENT_GAMEPAD_BUTTON_DOWN &&

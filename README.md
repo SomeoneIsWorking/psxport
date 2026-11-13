@@ -67,4 +67,11 @@ evidence does not qualify either AArch64 platform.
 Framework code is provided for research and preservation. Vendored components retain their own
 licenses. No copyrighted game assets are distributed.
 
+Third-party assets:
+
+| asset | source | licence |
+|---|---|---|
+| `assets/rml/FiraSans-*.ttf`, `FiraSansCondensed-Bold.ttf` | Fira Sans, Mozilla Foundation and Telefonica S.A. | SIL OFL 1.1, `assets/rml/FiraSans-OFL.txt` |
+| `assets/rml/promptfont.ttf` | PromptFont v1.10, Yukari Hafner and Severin Meyer (github.com/Shinmera/promptfont) | SIL OFL 1.1, `assets/rml/PromptFont-OFL.txt` |
+
 Built with AI assistance (Claude and other LLMs).
