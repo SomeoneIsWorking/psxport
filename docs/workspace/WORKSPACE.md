@@ -17,9 +17,9 @@ All public under `github.com/SomeoneIsWorking`, side by side, no superproject.
 |---|---|---|
 | `psxport/` | the framework — the one writable framework checkout | — |
 | `psx-spyro/` | Spyro 1/2/3 (`titles/<t>/` over a shared `game/`), one process with an in-window picker | split: forks `open-spyro`, `spyro-2`, `spyro-3` |
-| `psx-toy-story-2/` | Toy Story 2 (`SLUS_008.93`) | not split (`toystory2-decomp` in progress) |
+| `psx-toy-story-2/` | Toy Story 2 (`SLUS_008.93`) | split: `toystory2-decomp` (ours) |
 | `psx-crash-bash/` | Crash Bash | not split (`crash_bash_decomp`, MIT, pinned) |
-| `psx-crash/` | Crash 1/2/3 (one architecture) | not split (forks and `crash3-decomp` in progress) |
+| `psx-crash/` | Crash 1/2/3 (one architecture) | split: forks `crash-bandicoot-decomp`, `crash2-decomp`; `crash3-decomp` (ours) |
 | `psx-crash-team-racing/` | Crash Team Racing | not split (`ctr-native`, GPL-3, evidence) |
 | `psx-tomba/` | Tomba! 2 (`SCUS_944.54` → `MAIN.EXE`) and Tomba! 1 | Tomba 2 split: `tomba2-decomp` (ours); Tomba 1 not split (`tombi-decomp`, MIT) |
 | `psx-spider-man/` | Spider-Man 1/2 | not split (none exists: ours to create) |
