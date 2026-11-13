@@ -1,6 +1,7 @@
 // frame_record.h — one logic frame's GPU work.
 #pragma once
 
+#include "blob_codec.h"
 #include "horizontal_margins.h"
 
 #include <array>
@@ -8,6 +9,7 @@
 #include <cstdint>
 #include <optional>
 #include <span>
+#include <string>
 #include <variant>
 #include <vector>
 
@@ -299,6 +301,11 @@ public:
   // Becomes `other` without its entries, slot starts and table exits, in this record's storage.
   void assignPools(const FrameRecord &other);
 
+  // The whole record, as a machine state carries it; `load` refuses a record whose counts or references are out of
+  // range, leaving this one empty.
+  void save(psx::platform::BlobWriter &out) const;
+  bool load(psx::platform::BlobReader &in, std::string &error);
+
   bool operator==(const FrameRecord &) const = default;
 
 private:
@@ -312,6 +319,9 @@ private:
   std::vector<ChainRun> chainRuns_;
   std::optional<std::uint32_t> drawEntryField_;
   RecordWindows windows_;
+
+  // A loaded record's pool offsets and entry indices are inside it; false resets it with `error` set.
+  bool validate(std::string &error);
 };
 
 } // namespace psx::present

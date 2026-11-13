@@ -25,6 +25,10 @@ public:
   // Marks what `primitive` writes; true when the texels it samples overlap a written pixel.
   bool drawn(const present::DrawPrimitive &primitive);
 
+  // The written pixels and the last texture page, as a machine state carries them.
+  void save(psx::platform::BlobWriter &out) const;
+  bool load(psx::platform::BlobReader &in);
+
 private:
   // Whether the VRAM the primitive's texture coordinates reach overlaps a written pixel.
   bool overlapsSampled(const present::DrawPrimitive &primitive) const;

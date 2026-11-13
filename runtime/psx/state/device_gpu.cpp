@@ -1,22 +1,22 @@
 // device_gpu.cpp — the GPU section: the GPU device's own Beetle state stream, the VRAM and registers
-// the guest observes, the host packets of tables built but not yet walked, and the record canvases'
-// margins, which hold the picture beside the displayed buffers that VRAM does not. The present
-// counters are run-local and not captured.
+// the guest observes, the host packets of tables built but not yet walked, the record tap's record in progress, the
+// record canvases' windows and the presenter's records, which a load draws again at scale so the first presents show
+// what the saving run's would have. The present counters are run-local and not captured.
 #include "device_sections.h"
 
 #include "core.h"
+#include "frame_presenter.h"
 #include "game.h"
 #include "gpu_device.h"
 #include "render_state.h"
 #include "vram_rect.h"
 
-#include <optional>
 #include <vector>
 
 namespace psx::state {
 namespace {
 
-constexpr std::uint8_t kGpuLayoutVersion = 6;
+constexpr std::uint8_t kGpuLayoutVersion = 7;
 
 void writeMargins(psx::platform::BlobWriter &out, const present::HorizontalMargins &margins) {
   out.i32(margins.left);
@@ -29,38 +29,26 @@ present::HorizontalMargins readMargins(psx::platform::BlobReader &in) {
   return {left, right};
 }
 
-void writeCanvas(psx::platform::BlobWriter &out, const render::CanvasMargins &canvas) {
+void writeCanvas(psx::platform::BlobWriter &out, const render::CanvasWindows &canvas) {
   out.i32(canvas.buffer.x0);
   out.i32(canvas.buffer.y0);
   out.i32(canvas.buffer.x1);
   out.i32(canvas.buffer.y1);
   writeMargins(out, canvas.view);
   writeMargins(out, canvas.drawn);
-  out.array(canvas.left.data(), canvas.left.size());
-  out.array(canvas.right.data(), canvas.right.size());
 }
 
-bool readColumns(psx::platform::BlobReader &in, int columns, int rows, std::vector<std::uint16_t> &pixels) {
-  pixels.resize(static_cast<std::size_t>(columns) * static_cast<std::size_t>(rows));
-  return in.array(pixels.data(), pixels.size());
-}
-
-bool readCanvas(psx::platform::BlobReader &in, render::CanvasMargins &canvas, std::string &error) {
+bool readCanvas(psx::platform::BlobReader &in, render::CanvasWindows &canvas, std::string &error) {
   canvas.buffer.x0 = in.i32();
   canvas.buffer.y0 = in.i32();
   canvas.buffer.x1 = in.i32();
   canvas.buffer.y1 = in.i32();
   canvas.view = readMargins(in);
   canvas.drawn = readMargins(in);
-  const int rows = canvas.buffer.y1 - canvas.buffer.y0;
-  if (!in.ok() || rows <= 0 || rows > gpu::kVramHeight || canvas.drawn.left < 0 || canvas.drawn.right < 0 ||
-      canvas.drawn.left > gpu::kVramWidth || canvas.drawn.right > gpu::kVramWidth) {
-    error = "gpu section: a record canvas's buffer or drawn margins do not decode";
-    return false;
-  }
-  if (!readColumns(in, canvas.drawn.left, rows, canvas.left) ||
-      !readColumns(in, canvas.drawn.right, rows, canvas.right)) {
-    error = "gpu section: a record canvas's margin pixels are not its drawn columns by its rows";
+  const gpu::RecordRect &buffer = canvas.buffer;
+  if (!in.ok() || buffer.x0 < 0 || buffer.y0 < 0 || buffer.x1 <= buffer.x0 || buffer.y1 <= buffer.y0 ||
+      buffer.x1 > gpu::kVramWidth || buffer.y1 > gpu::kVramHeight || canvas.drawn.left < 0 || canvas.drawn.right < 0) {
+    error = "gpu section: a record canvas's buffer or windows do not decode";
     return false;
   }
   return true;
@@ -68,20 +56,18 @@ bool readCanvas(psx::platform::BlobReader &in, render::CanvasMargins &canvas, st
 
 } // namespace
 
-bool writeGpuSection(Game &game, psx::platform::BlobWriter &out, std::string &error) {
-  const std::optional<std::vector<render::CanvasMargins>> canvases = game.render().canvasMargins();
-  if (!canvases) {
-    error = "the record canvases' margins could not be downloaded from the GPU";
-    return false;
-  }
+bool writeGpuSection(Game &game, psx::platform::BlobWriter &out, std::string &) {
   out.u8(kGpuLayoutVersion);
   const std::vector<std::uint8_t> device = game.core.gpuDevice().saveState();
   out.blob(device);
   game.core.hostPackets.save(out);
-  out.u8(static_cast<std::uint8_t>(canvases->size()));
-  for (const render::CanvasMargins &canvas : *canvases) {
+  game.core.gpuDevice().saveRecord(out);
+  const std::vector<render::CanvasWindows> canvases = game.render().canvasWindows();
+  out.u8(static_cast<std::uint8_t>(canvases.size()));
+  for (const render::CanvasWindows &canvas : canvases) {
     writeCanvas(out, canvas);
   }
+  game.presentation.save(out);
   return true;
 }
 
@@ -100,16 +86,28 @@ bool readGpuSection(Game &game, psx::platform::BlobReader &in, std::string &erro
   if (!game.core.hostPackets.load(in, error)) {
     return false;
   }
-  std::vector<render::CanvasMargins> canvases(in.u8());
-  for (render::CanvasMargins &canvas : canvases) {
+  gpu::TapResume tap;
+  if (!gpu::Gp0RecordTap::read(in, tap, error)) {
+    return false;
+  }
+  game.core.gpuDevice().resumeRecord(std::move(tap));
+  std::vector<render::CanvasWindows> canvases(in.u8());
+  for (render::CanvasWindows &canvas : canvases) {
     if (!readCanvas(in, canvas, error)) {
       return false;
     }
   }
+  if (!game.presentation.load(in, error)) {
+    return false;
+  }
   if (!in.ok()) {
     return in.decoded("gpu", error);
   }
-  game.render().restoreCanvasMargins(std::move(canvases));
+  std::vector<present::FrameRecord> records;
+  for (const present::FrameRecord *record : game.presentation.heldRecords()) {
+    records.push_back(*record);
+  }
+  game.render().restoreRecords(std::move(canvases), std::move(records));
   return true;
 }
 

@@ -71,10 +71,13 @@ public:
   void preseqArm(int count, const char *dir);
   void preseqCapture();
 
-  // The record canvases' margins for a machine state (RecordRasterizer::margins); none when a download failed.
-  std::optional<std::vector<CanvasMargins>> canvasMargins();
-  // A state load's margins, handed to the rasterizer now or when it is made (RecordRasterizer::restore).
-  void restoreCanvasMargins(std::vector<CanvasMargins> margins);
+  // The record canvases' buffers and windows for a machine state.
+  std::vector<CanvasWindows> canvasWindows() const;
+  // A state load's canvases and the records drawn again at scale, handed to the rasterizer now or when it is made
+  // (RecordRasterizer::restore).
+  void restoreRecords(std::vector<CanvasWindows> canvases, std::vector<present::FrameRecord> records);
+  // A state load: the guest display plan relatched for the restored display, before any frame seals its windows.
+  void latchRestoredDisplay();
 
   // Where a present goes: the window, or this Game's own image for a host compositing several sessions.
   enum class PresentTarget : std::uint8_t { Swapchain, Pane };
@@ -153,8 +156,12 @@ private:
 
   // RenderPath::Record's rasterizer and what the last present took from it.
   std::unique_ptr<RecordRasterizer> record_;
-  // A state load's margins while there is no rasterizer to take them.
-  std::optional<std::vector<CanvasMargins>> restoredMargins_;
+  // A state load's canvases and records while there is no rasterizer to take them.
+  struct RestoredPicture {
+    std::vector<CanvasWindows> canvases;
+    std::vector<present::FrameRecord> records;
+  };
+  std::optional<RestoredPicture> restored_;
   bool presentsRecord_ = false;
   int recordFade_[4] = {}; // mode, r, g, b
   // The last present's display rect in VRAM, for a Device-path shot.

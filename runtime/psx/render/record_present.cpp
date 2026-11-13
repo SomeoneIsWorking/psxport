@@ -1,5 +1,6 @@
 // record_present.cpp — RenderPath::Record's picture: the current frame record through RecordRasterizer.
 #include "core.h"
+#include "display_presenter.h"
 #include "game.h"
 #include "gpu_device.h"
 #include "guest_widescreen_projection.h"
@@ -31,22 +32,23 @@ void RenderState::latchDisplay(gpu::VramRect display) {
   present::latchRecordDisplay(game_.core, {shown.x1 - shown.x0, shown.y1 - shown.y0});
 }
 
-std::optional<std::vector<CanvasMargins>> RenderState::canvasMargins() {
-  if (restoredMargins_) {
-    return restoredMargins_;
+std::vector<CanvasWindows> RenderState::canvasWindows() const {
+  if (restored_) {
+    return restored_->canvases;
   }
-  if (!record_) {
-    return std::vector<CanvasMargins>{};
-  }
-  return record_->margins();
+  return record_ ? record_->canvasWindows() : std::vector<CanvasWindows>{};
 }
 
-void RenderState::restoreCanvasMargins(std::vector<CanvasMargins> margins) {
+void RenderState::latchRestoredDisplay() {
+  latchDisplay(present::DisplayPresenter::presentedRect(game_.core));
+}
+
+void RenderState::restoreRecords(std::vector<CanvasWindows> canvases, std::vector<present::FrameRecord> records) {
   if (record_) {
-    record_->restore(std::move(margins));
+    record_->restore(std::move(canvases), std::move(records));
     return;
   }
-  restoredMargins_ = std::move(margins);
+  restored_ = RestoredPicture{std::move(canvases), std::move(records)};
 }
 
 void RenderState::presentRecord(present::PresentInputs &inputs) {
@@ -59,9 +61,9 @@ void RenderState::presentRecord(present::PresentInputs &inputs) {
   if (!record_) {
     record_ = std::make_unique<RecordRasterizer>(device_);
   }
-  if (restoredMargins_) {
-    record_->restore(std::move(*restoredMargins_));
-    restoredMargins_.reset();
+  if (restored_) {
+    record_->restore(std::move(restored_->canvases), std::move(restored_->records));
+    restored_.reset();
   }
   const gpu::RecordRect display = gpu::clampedVramRect({inputs.sx, inputs.sy, inputs.native_w, inputs.disp_h});
   const present::GuestProjectionPlan &plan = core.game->guestDisplay.plan();

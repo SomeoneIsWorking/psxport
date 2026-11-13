@@ -117,4 +117,23 @@ bool TextureFeedback::drawn(const present::DrawPrimitive &primitive) {
   return primitive.textured && overlapsSampled(primitive);
 }
 
+void TextureFeedback::save(psx::platform::BlobWriter &out) const {
+  written_.save(out);
+  out.i32(pageX_);
+  out.i32(pageY_);
+  out.boolean(nonFourBit_);
+  out.boolean(texDisable_);
+}
+
+bool TextureFeedback::load(psx::platform::BlobReader &in) {
+  if (!written_.load(in)) {
+    return false;
+  }
+  pageX_ = in.i32();
+  pageY_ = in.i32();
+  nonFourBit_ = in.boolean();
+  texDisable_ = in.boolean();
+  return in.ok();
+}
+
 } // namespace psx::gpu

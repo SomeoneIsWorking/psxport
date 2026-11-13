@@ -1,6 +1,7 @@
 // frame_presenter.h — the logic frame's sealed record, its presents and the cadence fence.
 #pragma once
 
+#include "blob_codec.h"
 #include "field_cadence.h"
 #include "frame_record.h"
 #include "ownership_verdict.h"
@@ -10,6 +11,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <optional>
+#include <string>
 #include <vector>
 
 class Core;
@@ -66,12 +68,21 @@ public:
   // The stability counts, once, at run end.
   void reportStability() const;
 
+  // What a machine state carries: the current record, the newest drawing records a display can show (the newest on a
+  // single-buffered title, the one before it on a double-buffered one) and what the next present decides from.
+  void save(psx::platform::BlobWriter &out) const;
+  bool load(psx::platform::BlobReader &in, std::string &error);
+  // The records the presenter holds, oldest first: after a load, what the rasterizer draws again at scale.
+  std::vector<const present::FrameRecord *> heldRecords() const;
+
 private:
   // The last three records that drew: a double-buffered display shows the one before the newest, whose
   // in-between blends from the one before that. Records that drew nothing are not pictures.
   static constexpr std::size_t kRecordHistory = 3;
   // A longer gap between two draw entries is a pause or a load, not a logic frame.
   static constexpr std::uint32_t kMaxIntervalFields = 8;
+  // Drawing records a machine state carries.
+  static constexpr std::size_t kCarriedDrawing = 2;
   struct SealedRecord {
     const present::FrameRecord *record = nullptr;
     bool cut = false;         // a cut was sealed since the drawing record before it

@@ -163,6 +163,48 @@ void Gp0RecordTap::onStateReplaced(const DeviceProbe &probe) {
   resyncIfIdle(probe);
 }
 
+void Gp0RecordTap::save(psx::platform::BlobWriter &out) const {
+  out.u64(record_.sequence());
+  out.u64(nextSequence_);
+  const bool resumable = synced_ && mode_ == Mode::Command && words_.empty() && record_.complete();
+  out.boolean(resumable);
+  if (resumable) {
+    record_.save(out);
+    feedback_.save(out);
+  }
+}
+
+bool Gp0RecordTap::read(psx::platform::BlobReader &in, TapResume &resume, std::string &error) {
+  resume.recordSequence = in.u64();
+  resume.nextSequence = in.u64();
+  if (!in.ok() || resume.nextSequence <= resume.recordSequence) {
+    error = "record tap: its sequences do not decode";
+    return false;
+  }
+  if (!in.boolean()) {
+    return in.ok();
+  }
+  present::FrameRecord &record = resume.record.emplace();
+  if (!record.load(in, error)) {
+    return false;
+  }
+  if (record.sequence() != resume.recordSequence || !resume.feedback.load(in)) {
+    error = "record tap: the record in progress or its texture writes do not decode";
+    return false;
+  }
+  return true;
+}
+
+void Gp0RecordTap::resume(TapResume &&resume) {
+  nextSequence_ = resume.nextSequence;
+  if (resume.record && synced_) {
+    record_ = std::move(*resume.record);
+    feedback_ = resume.feedback;
+    return;
+  }
+  record_.reset(resume.recordSequence, false);
+}
+
 void Gp0RecordTap::seal(present::FrameRecord &into) {
   std::swap(into, record_);
   if (mode_ == Mode::Upload && !uploadPixels_.empty()) {

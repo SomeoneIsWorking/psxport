@@ -76,6 +76,13 @@ public:
   // Beetle's own state stream for this device.
   std::vector<uint8_t> saveState();
   bool loadState(std::span<const uint8_t> bytes);
+  // The record tap's sequences and record in progress, carried beside saveState(); resumeRecord follows loadState().
+  void saveRecord(psx::platform::BlobWriter &out) const {
+    mTap.save(out);
+  }
+  void resumeRecord(TapResume &&resume) {
+    mTap.resume(std::move(resume));
+  }
 
   // The GP0 work executed since the previous call, in execution order, into `into`, whose storage the next
   // record reuses.

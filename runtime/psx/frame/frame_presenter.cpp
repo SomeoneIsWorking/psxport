@@ -447,4 +447,127 @@ void FramePresenter::reportStability() const {
                stability_.stalled);
 }
 
+void FramePresenter::save(psx::platform::BlobWriter &out) const {
+  std::vector<const SealedRecord *> carried;
+  for (auto it = history_.rbegin(); it != history_.rend() && carried.size() < kCarriedDrawing; ++it) {
+    if (it->record != nullptr) {
+      carried.insert(carried.begin(), &*it);
+    }
+  }
+  out.u8(static_cast<std::uint8_t>(carried.size()));
+  for (const SealedRecord *entry : carried) {
+    out.boolean(entry->cut);
+    out.boolean(entry->follows);
+    out.u64(entry->screen);
+    entry->record->save(out);
+  }
+  const bool currentHeld = !carried.empty() && carried.back()->record == current_;
+  out.boolean(currentHeld);
+  if (!currentHeld) {
+    current_->save(out);
+  }
+  const auto optional = [&out](const std::optional<std::uint64_t> &value) {
+    out.boolean(value.has_value());
+    out.u64(value.value_or(0));
+  };
+  optional(lastSequence_);
+  optional(shownSequence_);
+  out.boolean(shownMoment_.has_value());
+  out.i64(shownMoment_.value_or(0));
+  out.i32(latency_);
+  out.boolean(pendingCut_);
+  out.boolean(pendingBreak_);
+  out.u32(static_cast<std::uint32_t>(undrawnWrites_.size()));
+  for (const UndrawnWrite &write : undrawnWrites_) {
+    for (const int value : {write.area.x0, write.area.y0, write.area.x1, write.area.y1}) {
+      out.i32(value);
+    }
+    out.u64(write.sequence);
+  }
+}
+
+bool FramePresenter::load(psx::platform::BlobReader &in, std::string &error) {
+  const std::size_t count = in.u8();
+  if (!in.ok() || count > kCarriedDrawing) {
+    error = "presenter: its drawing record count does not decode";
+    return false;
+  }
+  history_ = {};
+  undrawnWrites_.clear();
+  std::size_t slot = 0;
+  for (std::size_t i = 0; i < count; i++) {
+    SealedRecord &entry = history_[kRecordHistory - count + i];
+    entry.cut = in.boolean();
+    entry.follows = in.boolean();
+    entry.screen = in.u64();
+    if (!slots_[slot].load(in, error)) {
+      return false;
+    }
+    entry.record = &slots_[slot++];
+  }
+  const bool currentHeld = in.boolean();
+  if (currentHeld && count == 0) {
+    error = "presenter: the current record is held with no drawing record";
+    return false;
+  }
+  if (currentHeld) {
+    current_ = history_.back().record;
+  } else {
+    if (!slots_[slot].load(in, error)) {
+      return false;
+    }
+    current_ = &slots_[slot];
+  }
+  const auto optional = [&in]() -> std::optional<std::uint64_t> {
+    const bool present = in.boolean();
+    const std::uint64_t value = in.u64();
+    return present ? std::optional(value) : std::nullopt;
+  };
+  lastSequence_ = optional();
+  shownSequence_ = optional();
+  const bool moment = in.boolean();
+  const std::int64_t shown = in.i64();
+  shownMoment_ = moment ? std::optional(shown) : std::nullopt;
+  latency_ = in.i32();
+  pendingCut_ = in.boolean();
+  pendingBreak_ = in.boolean();
+  const std::uint32_t writes = in.u32();
+  if (!in.ok() || writes > in.size() - in.offset()) {
+    error = "presenter: its undrawn writes do not decode";
+    return false;
+  }
+  for (std::uint32_t i = 0; i < writes; i++) {
+    UndrawnWrite write;
+    write.area.x0 = in.i32();
+    write.area.y0 = in.i32();
+    write.area.x1 = in.i32();
+    write.area.y1 = in.i32();
+    write.sequence = in.u64();
+    undrawnWrites_.push_back(write);
+  }
+  composed_ = nullptr;
+  composedAdvances_ = false;
+  if (!in.ok()) {
+    error = "presenter: its state is truncated";
+    return false;
+  }
+  return true;
+}
+
+std::vector<const present::FrameRecord *> FramePresenter::heldRecords() const {
+  std::vector<const present::FrameRecord *> held;
+  for (const SealedRecord &entry : history_) {
+    if (entry.record != nullptr) {
+      held.push_back(entry.record);
+    }
+  }
+  if (std::find(held.begin(), held.end(), current_) == held.end()) {
+    held.push_back(current_);
+  }
+  std::sort(held.begin(), held.end(), [](const present::FrameRecord *a, const present::FrameRecord *b) {
+    return a->sequence() < b->sequence();
+  });
+  return held;
+}
+
 } // namespace psx::frame

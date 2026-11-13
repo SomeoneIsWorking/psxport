@@ -9,6 +9,7 @@
 #include "game_runtime.h"
 #include "guest_memory_map.h"
 #include "invalidation.h"
+#include "render_state.h"
 #include "replay_frame.h"
 #include "timing.h"
 
@@ -285,6 +286,9 @@ std::optional<StateOutcome> MachineState::restore(std::span<const std::uint8_t> 
   if (present::ReplayFrame *replay = mGame.runtime.replayFrame(core)) {
     replay->forget();
   }
+  // The latched projection plan is the replaced guest's; frames sealed before the next present stamp their windows
+  // from it.
+  mGame.render().latchRestoredDisplay();
   outcome.loaded = true;
   return outcome;
 }

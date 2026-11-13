@@ -12,6 +12,7 @@
 #include <cstdint>
 #include <optional>
 #include <span>
+#include <string>
 #include <vector>
 
 namespace psx::gpu {
@@ -44,6 +45,15 @@ struct Gp0Origin {
 // Gp0Command, and checks after every word that the device agrees. A framing disagreement marks the
 // record incomplete until the device and the tap are both idle again; a draw environment that differs
 // from the device's is a fault.
+// The tap as a machine state carries it: the next sequences and, when the tap stood between packets with its record
+// complete, the record in progress and the texture writes it tracks.
+struct TapResume {
+  std::uint64_t recordSequence = 0;
+  std::uint64_t nextSequence = 1;
+  std::optional<present::FrameRecord> record;
+  TextureFeedback feedback;
+};
+
 class Gp0RecordTap {
 public:
   Gp0RecordTap();
@@ -74,6 +84,10 @@ public:
   void onCommandReset(const DeviceProbe &probe);
   // The device's whole state was replaced; nothing recorded so far describes it.
   void onStateReplaced(const DeviceProbe &probe);
+  void save(psx::platform::BlobWriter &out) const;
+  static bool read(psx::platform::BlobReader &in, TapResume &resume, std::string &error);
+  // After onStateReplaced: the saved sequences, and the saved record in progress when the device is idle.
+  void resume(TapResume &&resume);
 
   // Seals the current record into `into` and starts the next in `into`'s old storage.
   void seal(present::FrameRecord &into);

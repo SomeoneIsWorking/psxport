@@ -26,14 +26,11 @@ struct RecordPicture {
   int scale = 1;
 };
 
-// A margin canvas's picture beside its buffer in native pixels, as a machine state carries it: the windows of the
-// record that last drew it and the drawn columns of each side, row-major over the buffer's rows.
-struct CanvasMargins {
+// A margin canvas's buffer and the windows of the record that last drew it, as a machine state carries it.
+struct CanvasWindows {
   gpu::RecordRect buffer;
   present::HorizontalMargins view;
   present::HorizontalMargins drawn;
-  std::vector<std::uint16_t> left;
-  std::vector<std::uint16_t> right;
 };
 
 // What a present shows: the guest display (native VRAM pixels) and the widest margin either side can take, or the
@@ -100,13 +97,12 @@ public:
   // `picture` at the image scale as row-major halfwords, after everything submitted before it.
   MappedTransfer download(const RecordPicture &picture);
 
-  // Each margin canvas's drawn columns, each scaled block read at its top-left texel, as the device's VRAM holds
-  // the buffer; none when the GPU refused a download.
-  std::optional<std::vector<CanvasMargins>> margins();
-  // A state load: the canvases and the image are the replaced run's, so the canvases go and the next present
-  // uploads the device's VRAM; a canvas made for one of `restored`'s buffers before a record is applied starts
-  // with its margins and windows.
-  void restore(std::vector<CanvasMargins> restored);
+  // Each margin canvas's buffer and windows.
+  std::vector<CanvasWindows> canvasWindows() const;
+  // A state load: the image and canvases are the replaced run's. The next show uploads the device's VRAM, makes a
+  // canvas for each of `canvases` and draws `records` (oldest first) again at scale on top, then continues the chain
+  // from the last of them, so the pictures they drew show as the saving run showed them.
+  void restore(std::vector<CanvasWindows> canvases, std::vector<present::FrameRecord> records);
 
   SDL_GPUTexture *image() const {
     return vram_.image;
@@ -169,10 +165,12 @@ private:
   void showCanvas(SDL_GPUCommandBuffer *cmd, const RecordView &view, const present::RecordWindows &windows);
   // The buffer's columns from the image; a new canvas is cleared first, a kept one keeps its margins.
   void seedCanvas(SDL_GPUCommandBuffer *cmd, Canvas &canvas, bool fresh);
-  // A new canvas whose buffer a state load restored: its margins into every plane texture and its windows.
-  void seedRestored(SDL_GPUCommandBuffer *cmd, Canvas &canvas);
-  // `rect` of `plane` in native pixels, each block's top-left texel.
-  std::optional<std::vector<std::uint16_t>> nativePixels(const Plane &plane, const gpu::RecordRect &rect);
+  // A new canvas of `shape` and `windows`, seeded from the image; the least recently shown goes when all are taken.
+  Canvas &addCanvas(SDL_GPUCommandBuffer *cmd, const gpu::RecordCanvas &shape, const present::RecordWindows &windows);
+  // `record` rasterized on top of the image and canvases, the state before it kept.
+  void apply(SDL_GPUCommandBuffer *cmd, const present::FrameRecord &record);
+  // The restore(): the device's VRAM, the carried canvases and the carried records drawn again.
+  void redrawRestored(SDL_GPUCommandBuffer *cmd, std::span<const std::uint16_t> vram, const RecordView &view);
   // A new crop canvas: its band copied from the image at the canvas's scale.
   void seedCrop(SDL_GPUCommandBuffer *cmd, Canvas &canvas);
   // The canvas `view` shows at this image scale.
@@ -220,7 +218,6 @@ private:
   // With a depth target: slot order (no test, no write); a depth group's test, colour where it passes, marked in
   // stencil; the group's depth written where marked, moved back by its bin; an object over the scene, writing its
   // depth.
-  SDL_GPUTextureFormat depthFormat_ = SDL_GPU_TEXTUREFORMAT_INVALID;
   SDL_GPUGraphicsPipeline *slotPipeline_ = nullptr;
   SDL_GPUGraphicsPipeline *groupTestPipeline_ = nullptr;
   SDL_GPUGraphicsPipeline *groupMarkPipeline_ = nullptr;
@@ -235,15 +232,16 @@ private:
   std::vector<Canvas> canvases_;
   std::array<gpu::RecordCanvas, gpu::kRecordMaxCanvases> shapes_{};
   std::uint64_t shows_ = 0;
-  // A state load's margins, until a record is applied.
-  std::vector<CanvasMargins> restored_;
+  // A state load's canvases and records, until the next show draws them.
+  std::vector<CanvasWindows> restoredCanvases_;
+  std::vector<present::FrameRecord> restoredRecords_;
   RecordPicture presented_;
   RecordPicture woven_;
-  int wovenOriginY_ = 0; // VRAM row of the woven picture's first row
   SDL_GPUTexture *field_ = nullptr;
   int fieldWidth_ = 0; // native pixels, at scale_
   int fieldHeight_ = 0;
   int scale_ = 0;
+  int wovenOriginY_ = 0; // VRAM row of the woven picture's first row
   // The read-back texture records sample (gpu::RecordReadBack) and the canvas pixels captured for it.
   std::optional<gpu::RecordReadBack> readBack_;
   SDL_GPUTexture *capture_ = nullptr;
@@ -255,17 +253,19 @@ private:
   Buffer cluts_;
   Buffer pixels_;
   SDL_GPUTransferBuffer *upload_ = nullptr;
-  std::uint32_t uploadSize_ = 0;
   SDL_GPUTransferBuffer *readback_ = nullptr;
+  std::uint32_t uploadSize_ = 0;
   std::uint32_t readbackSize_ = 0;
 
-  bool chained_ = false; // the image holds the device's VRAM after record `applied_`
   std::uint64_t applied_ = 0;
-  bool beforeHeld_ = false;    // every plane's `before` holds it before record `beforeOf_`
   std::uint64_t beforeOf_ = 0; // the last applied record with entries; those after it changed nothing
   std::uint64_t replayed_ = 0;
   std::uint64_t resynced_ = 0;
   GpuWork work_;
+  SDL_GPUTextureFormat depthFormat_ = SDL_GPU_TEXTUREFORMAT_INVALID;
+  bool chained_ = false;    // the image holds the device's VRAM after record `applied_`
+  bool beforeHeld_ = false; // every plane's `before` holds it before record `beforeOf_`
+  bool restorePending_ = false;
   bool countPixels_ = false;
 };
 

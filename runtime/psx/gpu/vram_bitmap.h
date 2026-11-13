@@ -1,6 +1,7 @@
 // vram_bitmap.h — one bit per VRAM pixel, marked and tested a row's column run at a time.
 #pragma once
 
+#include "blob_codec.h"
 #include "vram_rect.h"
 
 #include <algorithm>
@@ -37,6 +38,15 @@ public:
     return forEachWord(words_, row, run, [](const std::uint64_t &word, std::uint64_t mask) {
       return (word & mask) != 0;
     });
+  }
+
+  // Every bit, as a machine state carries it.
+  void save(psx::platform::BlobWriter &out) const {
+    out.array(words_.data(), words_.size());
+    out.array(markedRows_.data(), markedRows_.size());
+  }
+  bool load(psx::platform::BlobReader &in) {
+    return in.array(words_.data(), words_.size()) && in.array(markedRows_.data(), markedRows_.size());
   }
 
   // Every pixel set.

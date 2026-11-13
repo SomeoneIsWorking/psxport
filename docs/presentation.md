@@ -81,7 +81,8 @@ name is refused with a warning and the Core stays on `record`.
   decoded from the words; GP1(09) and the interlaced field are taken at GP1 and status steps), and every word
   checks it against the device's registers: a difference is a named fault. The CLUT attribute comes from the
   packet words and is checked against the device's CLUT cache tag; the CLUT entries are still copied from the
-  device's cache. After a desync or a state load the tap reseeds from the device.
+  device's cache. After a desync the tap reseeds from the device; a state load resumes the record in progress the
+  save carried (`Gp0RecordTap::resume`), or reseeds when the saving tap was not synced.
 - **Chain decode.** `gpu::decodePackets` decodes captured chain packets (`PacketChainWalker::capture`) with the
   same `Gp0DrawState`, so a chain that never reached the device yields the entries the tap would have recorded,
   with the CLUT left unresolved (`clutWord` only). Seeded from a `RecordDrawState`, it starts with E1's flip,
@@ -494,14 +495,16 @@ psx-mega-man-x4 issue 0044). Each record entry is planned once per plane:
   write into the page, a resync or a scale change ends it; at 4:3 nothing is captured; an in-between
   samples but never captures. User: Spyro 1's pause backdrop (psx-spyro issue 0212).
 
-A canvas's margins exist only on the host, so the machine state's GPU section carries them: each margin canvas's
-buffer, windows and drawn columns at native pixels (`RecordRasterizer::margins`, each scaled block's top-left texel).
-A load drops every canvas and resyncs the image from the device; a canvas made for a carried buffer before the next
-record applies starts with its margins and windows (`RecordRasterizer::restore`, `seedRestored`). A double-buffered
-title shows two buffers drawn before the save, so without them its first two presents after a load have black
-margins (psx-mega-man-x4 issue 0044). The first presents after a load show the saving run's pictures and margins
-at native detail: the resynced image is the device's VRAM, so internal-resolution detail returns with the first
-record rasterised after the load.
+Internal-resolution pictures and margins exist only on the host, so the machine state's GPU section carries what
+draws them again: the tap's record in progress, each margin canvas's buffer and windows
+(`RecordRasterizer::canvasWindows`), and the presenter's newest two sealed records with their cut and screen
+(`FramePresenter::save`). A load drops every canvas; the next show uploads the device's VRAM, makes the carried
+canvases at the current reach and applies the carried records over it at scale (`RecordRasterizer::redrawRestored`),
+then chains from the last of them. A double-buffered title shows the two buffers those records drew, so the first
+presents after a load are the saving run's at full detail and full width (psx-mega-man-x4 issue 0044); an incomplete
+carried record leaves the image resynced, at native detail until the next complete record. The load also relatches
+the guest display plan (`RenderState::latchRestoredDisplay`), since the records sealed before the first present
+after it stamp their windows from that plan. The carry adds about 1.3 MB to a Tomba! 2 state.
 
 The present shows the canvas at the display's per-column aspect, so 4:3 (M = 0) presents the VRAM
 image itself. Known differences: a canvas reaching past column 1023 does not wrap, and a third
