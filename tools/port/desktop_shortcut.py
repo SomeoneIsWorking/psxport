@@ -21,8 +21,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from automation.process import ToolError  # noqa: E402
-from port import launcher as launcher_module  # noqa: E402
+from automation.process import ToolError
+from port import launcher as launcher_module
 
 PACKAGING = Path("packaging") / "linux"
 LAUNCHER = Path("run.sh")
@@ -128,12 +128,17 @@ def launcher_exec(root: Path) -> str:
                     ("env", f"PATH={search}", f"{launcher_module.RUN_BUILT}=1", str(launcher)))
 
 
+def entry_text(shortcut: Shortcut, exec_line: str, try_exec: str, path: str) -> str:
+    """The committed entry with its launch fields pointed at one install."""
+    text = shortcut.source.read_text(encoding="utf-8")
+    text = with_field(text, "Exec", exec_line)
+    text = with_field(text, "TryExec", try_exec)
+    return with_field(text, "Path", path)
+
+
 def install_entry(shortcut: Shortcut) -> Path:
     """Write the icon and the menu entry; returns the installed entry's path."""
-    text = shortcut.source.read_text(encoding="utf-8")
-    text = with_field(text, "Exec", launcher_exec(shortcut.root))
-    text = with_field(text, "TryExec", str(shortcut.root / LAUNCHER))
-    text = with_field(text, "Path", str(shortcut.root))
+    text = entry_text(shortcut, launcher_exec(shortcut.root), str(shortcut.root / LAUNCHER), str(shortcut.root))
     data = data_home()
     icons = data / "icons" / "hicolor" / "scalable" / "apps"
     icons.mkdir(parents=True, exist_ok=True)
@@ -151,10 +156,15 @@ def install_entry(shortcut: Shortcut) -> Path:
     return entry
 
 
+def cache_commands(data: str) -> list[list[str]]:
+    """The menu and icon-theme refreshes for the data home ``data``; either tool may be absent."""
+    return [["update-desktop-database", f"{data}/applications"],
+            ["gtk-update-icon-cache", "-q", "-t", "-f", f"{data}/icons/hicolor"]]
+
+
 def refresh_caches(data: Path) -> None:
     """Refresh the menus and the icon theme when their tools are installed; neither is required."""
-    for command in (["update-desktop-database", str(data / "applications")],
-                    ["gtk-update-icon-cache", "-q", "-t", "-f", str(data / "icons" / "hicolor")]):
+    for command in cache_commands(str(data)):
         if shutil.which(command[0]):
             subprocess.run(command, check=False, capture_output=True)
 

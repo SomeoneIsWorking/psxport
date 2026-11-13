@@ -8,6 +8,7 @@ puts this checkout's `tools/` on `sys.path`; a refusal is an `automation.process
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import platform
 import shutil
@@ -22,9 +23,12 @@ TOOLS = Path(__file__).resolve().parents[1]
 if str(TOOLS) not in sys.path:
     sys.path.insert(0, str(TOOLS))
 
-import psxport_fetch  # noqa: E402
-from automation.process import ToolError, cpu_jobs  # noqa: E402
-from project import lightning_cmake_definitions, lightrec_cmake_definitions  # noqa: E402
+import psxport_fetch
+from automation.process import ToolError, cpu_jobs
+from project import (
+    lightning_cmake_definitions,
+    lightrec_cmake_definitions,
+)
 
 FRAMEWORK = TOOLS.parent
 PLAYER_BUILD = Path("build/player")
@@ -35,6 +39,8 @@ MAINTAINER_BUILDS = (AGENT_BUILD, CI_BUILD)
 FRAMEWORK_TOOLS_BUILD = Path("build/player-tools")
 # Set by the desktop shortcut: launch the newest product already built instead of building.
 RUN_BUILT = "PSXPORT_RUN_BUILT"
+# Set by remote_install.py: write the product exec as JSON to this path instead of running it.
+LAUNCH_PLAN = "PSXPORT_LAUNCH_PLAN"
 CMAKE_STATE = ("CMakeCache.txt", "CMakeFiles", "build.ninja", "rules.ninja", ".ninja_deps", ".ninja_log",
                "cmake_install.cmake", "CPackConfig.cmake", "CPackSourceConfig.cmake")
 
@@ -338,6 +344,13 @@ def exec_product(program: Path, arguments: Sequence[str], environment: Mapping[s
     """Replace this process with the product."""
     if not os.access(program, os.X_OK):
         raise ToolError(f"the build produced no executable at {program}")
+    if plan := environment.get(LAUNCH_PLAN):
+        exec_environment = {key: value for key, value in environment.items() if key != LAUNCH_PLAN}
+        Path(plan).write_text(json.dumps({"program": str(program.resolve()), "arguments": list(arguments),
+                                          "environment": exec_environment, "cwd": str(cwd.resolve())}),
+                              encoding="utf-8")
+        say(f"wrote the {program.name} launch plan to {plan}")
+        raise SystemExit(0)
     say(f"launching {program.name}…")
     os.chdir(cwd)
     os.execve(program, [str(program), *arguments], dict(environment))
