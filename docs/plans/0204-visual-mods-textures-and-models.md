@@ -23,6 +23,10 @@ HTTP" … "We can make our own tools like texture editor and model editor with H
 - Daemeous's rood-boi fork (CC0) loads HD texture packs for Vagrant Story: its loader may be copied.
 - VS Reimagined's 4K texture pack forbids use with other ports or emulators without written permission
   from HDRcade.
+- Existing online packs (user, 2026-11-13: "most of them are upscales so maybe not"): none found for
+  Spyro 1 or Tomba 2 (searched 2026-11-13); the Emulation General list has no Tomba entry, and most PS1
+  packs target Beetle PSX HW. Whether to load third-party packs at all is open; the loader's keying
+  decides which existing packs could load.
 
 ## Phases
 
