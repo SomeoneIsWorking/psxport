@@ -18,7 +18,7 @@
 
 namespace psx::config {
 
-Registration::Registration(std::initializer_list<std::reference_wrapper<lucent::cvar::VarBase>> vars) {
+Registration::Registration(std::initializer_list<std::reference_wrapper<lucent::cvar::VarBase>> vars) noexcept {
   for (lucent::cvar::VarBase &var : vars) {
     lucent::cvar::register_var(var);
   }
@@ -60,7 +60,7 @@ Var<long> cv_override_diff_dead_stack("PSXPORT_OVERRIDE_DIFF_DEAD_STACK",
                                       static_cast<long>(psx::cpu::kDefaultDifferentialDeadStackBytes),
                                       kRunOnly);
 Var<std::string> cv_override_diff_report("PSXPORT_OVERRIDE_DIFF_REPORT",
-                                         std::string(psx::cpu::kDefaultDifferentialReportPath),
+                                         psx::cpu::kDefaultDifferentialReportPath,
                                          kRunOnly);
 Var<std::string> cv_reach_report("PSXPORT_REACH_REPORT", "", kRunOnly);
 Var<std::string> cv_owners_dir("PSXPORT_OWNERS_DIR", "scratch/owners", kRunOnly);

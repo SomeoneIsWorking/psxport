@@ -17,7 +17,8 @@ inline const lucent::cvar::Options kSaved{lucent::cvar::Persistence::Saved, {}};
 // Registers one translation unit's knobs; defined right after them so none is read unregistered.
 class Registration {
 public:
-  Registration(std::initializer_list<std::reference_wrapper<lucent::cvar::VarBase>> vars);
+  // Built before main: a registration failure can only terminate.
+  Registration(std::initializer_list<std::reference_wrapper<lucent::cvar::VarBase>> vars) noexcept;
 };
 
 } // namespace psx::config
