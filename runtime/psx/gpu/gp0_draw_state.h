@@ -75,7 +75,8 @@ struct CapturedPacket {
 
 // Each command of each packet as the device runs it from `start`: environment commands set the state, and every
 // polygon, line, sprite, fill and copy goes into `into` under the state then in effect, vertices past the draw
-// offset, `sourceAddress` its first word's guest address, `site` its packet's, no slot, key or owner, and its CLUT
+// offset, `sourceAddress` its first word's guest address, `packet` and `site` its packet's, no slot, key or owner, and
+// its CLUT
 // unresolved
 // (`clutWord` only). `places`, one per word or empty, gives each vertex the place stored with its word. A poly-line
 // ends its packet. False, having decoded the commands before it, at any other command or one its packet ends inside.

@@ -83,6 +83,7 @@ private:
     std::vector<std::uint32_t> words;
     std::vector<gte::WordPlace> places;
     RecordWindows windows; // frameWindows inside the replay, so the in-between frames its own view
+    std::vector<std::uint32_t> uiPackets; // the packets the replay drew as crop UI (cropShowsUi), ascending
   };
   struct Set {
     std::optional<std::uint64_t> shown;

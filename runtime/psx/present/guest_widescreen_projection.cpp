@@ -10,6 +10,7 @@
 #include <lucent/log.h>
 
 #include <cstdlib>
+#include <variant>
 
 namespace psx::present {
 
@@ -50,6 +51,7 @@ GuestProjectionPlan latch(Core &core, PixelSize nativePresentation, GuestProject
       .nativeProjection = nativeProjection,
       .sink = core.game->renderDevice.sinkSize(),
       .vramWidth = gpu::kVramWidth,
+      .crop = core.game->mods.widescreen == WIDESCREEN_CROP,
   });
   core.game->guestDisplay.latch(plan);
   return plan;
@@ -92,6 +94,25 @@ RecordWindows frameWindows(Core &core) {
   const PictureBeyondBuffer beyond =
       projection != nullptr ? projection->pictureBeyondBuffer(core) : PictureBeyondBuffer{};
   return fitWindows(beyond, plan.presentationHorizontalMargin);
+}
+
+bool cropShowsUi(Core &core, std::uint32_t packet) {
+  const GuestWidescreenProjection *projection = core.runtime.guestWidescreenProjection();
+  if (projection == nullptr || !core.game->guestDisplay.plan().crop.active()) {
+    return false;
+  }
+  return projection->cropWholeFrameUi(core) || (packet != 0 && projection->cropUiPacket(core, packet));
+}
+
+void classifyCropLayers(Core &core, std::span<RecordEntry> entries) {
+  if (!core.game->guestDisplay.plan().crop.active()) {
+    return;
+  }
+  for (RecordEntry &entry : entries) {
+    if (auto *primitive = std::get_if<DrawPrimitive>(&entry)) {
+      primitive->ui = cropShowsUi(core, primitive->packet);
+    }
+  }
 }
 
 GuestProjectionPlan latchRecordDisplay(Core &core, PixelSize display) {

@@ -2,6 +2,7 @@
 #extension GL_GOOGLE_include_directive : require
 // Record rasterizer: one PSX pixel per fragment, by gpu.c's rules; record_raster_setup.h sets up each op.
 // The target is a plane: the VRAM image or a display canvas, whose pixel p is VRAM-space pixel p + origin * scale.
+// A crop canvas's UI quads (kMappingCropUi) map instead at the UI scale from the UI origin.
 #include "record_op.glsl"
 // A draw that leaves its depth moved back by the plane's kDepthBin (RecordRasterizer::drawQuads).
 #ifdef RECORD_DEPTH_BACK
@@ -16,10 +17,12 @@ layout(set = 2, binding = 2) uniform sampler2D u_readBack; // the read-back capt
 layout(std430, set = 2, binding = 3) readonly buffer Ops { uint ops[]; };
 layout(std430, set = 2, binding = 4) readonly buffer Cluts { uint cluts[]; };
 layout(std430, set = 2, binding = 5) readonly buffer Pixels { uint pixels[]; };
-layout(set = 3, binding = 0) uniform Params { ivec4 scaleOrigin; } params; // scale, origin x, origin y
+// plane: scale, origin x, origin y (native), the VRAM image's scale; ui: scale, origin x, origin y (UI pixels).
+layout(set = 3, binding = 0) uniform Params { ivec4 plane; ivec4 ui; } params;
 
 uint op;
-int S;
+int S;  // target pixels per native pixel of this fragment's mapping
+int Sv; // the VRAM image's
 
 uint word(uint index) { return ops[op * kRecordOpWords + index]; }
 
@@ -43,9 +46,9 @@ uint texel(uint u, uint v, uint fu, uint fv, uint flags) {
     uint k = 2u - tm;
     int fx = int((uext >> k) & uint(kVramWidth - 1));
     int fy = int(((v & word(kOpWindowYAnd)) + word(kOpWindowYAdd)) & uint(kVramHeight - 1));
-    int sx = int(((((uext & ((1u << k) - 1u)) << 8) | fu) * uint(S)) >> (8u + k));
-    int sy = int((fv * uint(S)) >> 8);
-    uint t = fetch(ivec2(fx * S + sx, fy * S + sy));
+    int sx = int(((((uext & ((1u << k) - 1u)) << 8) | fu) * uint(Sv)) >> (8u + k));
+    int sy = int((fv * uint(Sv)) >> 8);
+    uint t = fetch(ivec2(fx * Sv + sx, fy * Sv + sy));
     if (tm == 0u) {
         t = clutEntry(word(kOpClut) + ((t >> ((uext & 3u) * 4u)) & 0xFu));
     } else if (tm == 1u) {
@@ -131,9 +134,11 @@ void write(uint value) {
 
 void main() {
     op = v_info.x;
-    S = params.scaleOrigin.x;
+    bool ui = v_info.z == kMappingCropUi;
+    S = ui ? params.ui.x : params.plane.x;
+    Sv = params.plane.w;
     ivec2 target = ivec2(gl_FragCoord.xy);
-    ivec2 p = target + params.scaleOrigin.yz * S;
+    ivec2 p = target + (ui ? params.ui.yz : params.plane.yz * S);
     // Integer floor division (a float divide is inexact at S = 3); biased because a canvas reaches left of VRAM.
     ivec2 n = (p + kVramWidth * S) / S - kVramWidth;
     uint flags = word(kOpFlags);
@@ -142,7 +147,9 @@ void main() {
     // Only depth-tested ops reach this variant.
     gl_FragDepth = fragmentDepth((vec2(p) + 0.5) / float(S));
 #endif
-    if ((flags & kOpSkipRows) != 0u && uint(n.y & 1) == ((flags & kOpSkipParity) != 0u ? 1u : 0u)) {
+    // A crop canvas shows every row; a transfer's op carries the image's field weave.
+    if ((flags & kOpSkipRows) != 0u && v_info.z == kMappingPlane &&
+        uint(n.y & 1) == ((flags & kOpSkipParity) != 0u ? 1u : 0u)) {
         discard;
     }
     uint dst = halfword(texelFetch(u_target, target, 0).rg);
@@ -157,10 +164,11 @@ void main() {
     if (kind == kRecordOpKindCopy) {
         int rx = wrap(p.x - int(word(kOpOriginX)) * S, vramWidth);
         int ry = wrap(p.y - int(word(kOpOriginY)) * S, vramHeight);
-        // A placed copy reads its source shifted by the target pixels its place moved against its destination.
-        ivec2 shift = ivec2(int(word(kOpShiftX)), int(word(kOpShiftY)));
-        ivec2 src = ivec2(wrap(int(word(kOpSourceX)) * S + rx + shift.x, vramWidth),
-                          wrap(int(word(kOpSourceY)) * S + ry + shift.y, vramHeight));
+        // A placed copy reads its source shifted by the target pixels its place moved against its destination; a crop
+        // canvas takes its whole pixels, at the image's scale.
+        ivec2 shift = v_info.z == kMappingPlane ? ivec2(int(word(kOpShiftX)), int(word(kOpShiftY))) : ivec2(0);
+        ivec2 src = ivec2(wrap(int(word(kOpSourceX)) * Sv + rx * Sv / S + shift.x, kVramWidth * Sv),
+                          wrap(int(word(kOpSourceY)) * Sv + ry * Sv / S + shift.y, kVramHeight * Sv));
         if (maskCheck && (dst & 0x8000u) != 0u) {
             discard;
         }

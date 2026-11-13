@@ -8,10 +8,13 @@
 
 // Widescreen means a wider FOV, never a stretch; AUTO matches the live window aspect.
 enum : std::uint8_t { ASPECT_4_3 = 0, ASPECT_16_9 = 1, ASPECT_21_9 = 2, ASPECT_AUTO = 3 };
+// How a wide aspect is reached: the guest widens its view, or the 4:3 picture is cropped to the aspect (plan 0203).
+enum : std::uint8_t { WIDESCREEN_EXTEND = 0, WIDESCREEN_CROP = 1 };
 
 class Mods {
 public:
   int aspect = ASPECT_4_3;
+  int widescreen = WIDESCREEN_EXTEND;
   int ires = 1; // 0 = AUTO (from the window height), 1..4 = fixed 1x..4x
   int fps60 = 0;
   int depth = 0; // 1: the title's marked world geometry tests depth (present::DepthTest); 0 draws slot order only

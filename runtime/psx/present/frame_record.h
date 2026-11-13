@@ -88,10 +88,12 @@ struct DrawPrimitive {
   std::uint16_t clutWord = 0; // the command's raw CLUT attribute, when a CLUT was sampled
   RecordDrawState state;
   std::uint32_t sourceAddress = 0; // guest address of the packet's first word, 0 when not from RAM
+  std::uint32_t packet = 0;        // guest address of the ordering-table packet that carried it, 0 when none
   std::uint32_t site = 0;          // the guest function whose SWC2 stored every vertex, 0 when not one
   std::optional<OtSlot> slot;      // the bucket the OT walk was in when it reached the packet
   std::uint32_t owner = 0;         // OwnerLedger handle of the packet's first command word, or the port it came through
   std::uint8_t command = 0;        // the packet's GP0 command byte
+  bool ui = false;                 // crop widescreen: shown at its 4:3 size and place (cropShowsUi)
 
   bool operator==(const DrawPrimitive &) const = default;
 };

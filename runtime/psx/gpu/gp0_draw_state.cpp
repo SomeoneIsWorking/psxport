@@ -34,6 +34,7 @@ bool decodePacket(const CapturedPacket &packet,
       return decodePolyLine({.words = rest, .places = restPlaces}, [&](present::DrawPrimitive segment) {
         state.apply(segment);
         segment.sourceAddress = source;
+        segment.packet = packet.address;
         segment.site = packet.site;
         into.emplace_back(segment);
       });
@@ -54,6 +55,7 @@ bool decodePacket(const CapturedPacket &packet,
       state.execute(command);
       state.apply(*primitive);
       primitive->sourceAddress = source;
+      primitive->packet = packet.address;
       primitive->site = packet.site;
       into.emplace_back(*primitive);
     } else if (head.opcode() == Gp0Opcode::FillRect) {

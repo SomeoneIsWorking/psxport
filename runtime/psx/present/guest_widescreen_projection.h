@@ -1,12 +1,15 @@
 // guest_widescreen_projection.h — title-owned projection matched to a host presentation extent.
 #pragma once
 
+#include "crop_band.h"
+#include "frame_record.h"
 #include "horizontal_margins.h"
 #include "pixel_size.h"
 #include "render_mode.h"
 #include "video_plan.h"
 
 #include <cstdint>
+#include <span>
 
 class Core;
 struct Mods;
@@ -32,6 +35,18 @@ public:
   virtual ~GuestWidescreenProjection() = default;
   // The player's aspect setting; a title overrides this only to hold 4:3 in some state.
   virtual PresentationAspect presentationAspect(const Core &core) const;
+  // Crop widescreen, asked as the draw that linked it has just run: whether the ordering-table packet at `packet` is
+  // UI, shown at its 4:3 size and place over the cropped world, and whether the whole frame is (a menu authored for
+  // 4:3).
+  virtual bool cropUiPacket(Core &core, std::uint32_t packet) const {
+    (void)core;
+    (void)packet;
+    return false;
+  }
+  virtual bool cropWholeFrameUi(Core &core) const {
+    (void)core;
+    return false;
+  }
   // Native columns the frame being sealed reaches beyond the display buffer, each side: a title whose view stops at
   // a camera bound or whose picture stops at its world's edge says so here. fitWindows turns it into the record's
   // windows.
@@ -64,6 +79,8 @@ struct GuestProjectionPlan {
   int projectionClipRight = 0;
   int guestClipLeft = 0;
   int guestClipRight = 0;
+  // Crop widescreen: the guest stays 4:3 and the present shows this band of it at `aspect`.
+  CropBand crop;
 
   bool widescreen() const {
     return presentationExtent.width > nativeExtent.width;
@@ -134,7 +151,24 @@ struct GuestProjectionInputs {
   GuestProjectionGeometry nativeProjection;
   PixelSize sink;
   int vramWidth = 0;
+  // The player chose to crop the 4:3 picture to the aspect rather than widen the guest's view.
+  bool crop = false;
 };
+
+// The band a crop to `aspect` keeps; none at 4:3 or for a sink no wider than it.
+inline CropBand cropBandFor(PresentationAspect aspect, PixelSize sink) {
+  switch (aspect) {
+  case PresentationAspect::Wide16x9:
+    return {3, 4};
+  case PresentationAspect::UltraWide21x9:
+    return {4, 7};
+  case PresentationAspect::MatchSink:
+    return cropBandForSink(sink);
+  case PresentationAspect::Standard4x3:
+    return {};
+  }
+  return {};
+}
 
 inline GuestProjectionPlan guestProjectionPlan(const GuestProjectionInputs &inputs) {
   GuestProjectionPlan plan;
@@ -142,7 +176,13 @@ inline GuestProjectionPlan guestProjectionPlan(const GuestProjectionInputs &inpu
   plan.nativeProjectionExtent = inputs.nativeProjection.extent;
   plan.nativeGuestDrawWidth = inputs.nativeProjection.drawWidth;
   plan.aspect = inputs.path == RenderPath::Record ? inputs.requested : PresentationAspect::Standard4x3;
-  const WideningTarget target{.sink = inputs.sink, .aspect = plan.aspect, .vramWidth = inputs.vramWidth};
+  if (inputs.crop) {
+    plan.crop = cropBandFor(plan.aspect, inputs.sink);
+  }
+  // A crop leaves the guest's projection, cull and layout at 4:3.
+  const WideningTarget target{.sink = inputs.sink,
+                              .aspect = plan.crop.active() ? PresentationAspect::Standard4x3 : plan.aspect,
+                              .vramWidth = inputs.vramWidth};
   plan.presentationExtent = guestPresentationExtent(inputs.nativePresentation, target);
   plan.projectionExtent = guestPresentationExtent(inputs.nativeProjection.extent, target);
   // The record canvas adds the margins around the buffer, so the guest keeps its retail centre and width.
@@ -179,6 +219,10 @@ int widePresentationWidth(const Core &core);
 GuestProjectionPlan latchGuestProjection(Core &core, GuestProjectionGeometry geometry);
 // The windows of the frame sealed now: the title's picture beyond the buffer fitted to the latched widening.
 RecordWindows frameWindows(Core &core);
+// Crop widescreen: whether the title shows a primitive carried by `packet` (0: by none) at its 4:3 size and place.
+bool cropShowsUi(Core &core, std::uint32_t packet);
+// Marks the primitives among `entries` that cropShowsUi, for the frame just drawn.
+void classifyCropLayers(Core &core, std::span<RecordEntry> entries);
 // The guest's display size, 320x240 before it programmed one.
 PixelSize nativeDisplaySize(Core &core);
 // RenderPath::Record: latches the plan for a guest display of `display` at the title's declared

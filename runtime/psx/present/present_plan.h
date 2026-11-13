@@ -34,6 +34,9 @@ struct PresentInputs {
   // Columns of disp_w that hold picture, from sx + drawn_x; the others are black (a pillarbox in place). 0 = all.
   int drawn_x = 0;
   int drawn_w = 0;
+  // The picture's shape, width to height, when it is not 4:3 widened by disp_w / native_w (a crop's band). 0 = that.
+  int picture_w = 0;
+  int picture_h = 0;
 };
 
 struct PresentPlan {
@@ -103,8 +106,14 @@ inline PresentPlan planPresent(const PresentInputs &in) {
   // A fill crop is taken from the rendered source, so the compositor does not resample it again.
   const int window_h = in.window_h > 0 ? in.window_h : in.disp_h;
   const int window_top = in.window_h > 0 ? in.window_top : 0;
-  const PictureFit fit =
-      fitPicture(4LL * aspect_w, 3LL * aspect_h, content_w, window_h, in.sink_w, in.sink_h, in.fill != 0);
+  const bool shaped = in.picture_w > 0 && in.picture_h > 0;
+  const PictureFit fit = fitPicture(shaped ? in.picture_w : 4LL * aspect_w,
+                                    shaped ? in.picture_h : 3LL * aspect_h,
+                                    content_w,
+                                    window_h,
+                                    in.sink_w,
+                                    in.sink_h,
+                                    in.fill != 0);
   p.viewport = fit.viewport;
   // The window keeps one line pitch whatever the range; its rows the display does not scan out are black.
   const int windowRow = in.sy - window_top;

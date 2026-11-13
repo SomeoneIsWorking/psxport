@@ -44,7 +44,7 @@ void RenderState::presentRecord(present::PresentInputs &inputs) {
   const gpu::RecordRect display = gpu::clampedVramRect({inputs.sx, inputs.sy, inputs.native_w, inputs.disp_h});
   const present::GuestProjectionPlan &plan = core.game->guestDisplay.plan();
   // Either side may take the whole widening, so a canvas reaches twice the symmetric margin.
-  const RecordView view{display, plan.widescreen() ? 2 * plan.presentationHorizontalMargin : 0};
+  const RecordView view{display, plan.widescreen() ? 2 * plan.presentationHorizontalMargin : 0, plan.crop};
   const present::FrameRecord &record = game_.presentation.currentRecord();
   const present::FrameRecord *composed = game_.presentation.composedRecord();
   const bool advances = game_.presentation.composedAdvances();
@@ -79,7 +79,15 @@ void RenderState::presentRecord(present::PresentInputs &inputs) {
   inputs.drawn_x = presented.drawn.x0 - shown.x0;
   inputs.drawn_w = presented.drawn.x1 - presented.drawn.x0;
   inputs.content_w = 0;
-  inputs.present_ires = scale > 1 ? scale : 0;
+  inputs.present_ires = presented.scale > 1 ? presented.scale : 0;
+  // A crop canvas has its own scale, never the image's.
+  if (view.crop.active() && presented.scale != scale) {
+    // The band of the 4:3 display: its full width over its share of the rows, the scanout window being the band.
+    inputs.picture_w = 4 * (display.y1 - display.y0);
+    inputs.picture_h = 3 * inputs.disp_h;
+    inputs.window_h = 0;
+    inputs.window_top = 0;
+  }
   lucent::debug("recordcheck",
                 "composed seq={} over current seq={} final={} drawn={}",
                 composed != nullptr ? composed->sequence() : 0,
@@ -99,7 +107,8 @@ void RenderState::presentRecord(present::PresentInputs &inputs) {
 void RenderState::checkRecord(const present::FrameRecord &record, bool drewComposed, bool deviceAhead, int scale) {
   const gpu::DisplayArea area = game_.core.gpuDevice().displayArea();
   const gpu::RecordRect rect = gpu::clampedVramRect({area.x, area.y, area.width, area.height});
-  const MappedTransfer image = record_->download({drewComposed ? record_->woven().texture : record_->image(), rect});
+  const MappedTransfer image =
+      record_->download({drewComposed ? record_->woven().texture : record_->image(), rect, rect, scale});
   if (!image) {
     return;
   }
@@ -158,7 +167,7 @@ bool RenderState::recordShot(const char *path) {
   if (!image) {
     return false;
   }
-  const int scale = record_->scale();
+  const int scale = picture.scale;
   const int width = (picture.rect.x1 - picture.rect.x0) * scale;
   const int height = (picture.rect.y1 - picture.rect.y0) * scale;
   const int drawnFirst = (picture.drawn.x0 - picture.rect.x0) * scale;

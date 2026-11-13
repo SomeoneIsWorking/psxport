@@ -433,6 +433,9 @@ public:
              bool declares,
              const present::DepthTest *depthTest) {
     plan_.scale = scale;
+    scale_ = scale;
+    pass_ = Pass::Main;
+    cropUi_ = false;
     depthTest_ = depthTest;
     plan_.capture.reset();
     readBack_ = readBack;
@@ -447,6 +450,9 @@ public:
     plan_.clutPool = clutPool;
     plan_.uploadPool = uploadPool;
     canvases_ = canvases;
+    crops_ = std::ranges::any_of(canvases, [](const RecordCanvas &canvas) {
+      return canvas.crop();
+    });
     batchStart_ = {};
     lines_ = 0;
     depthGroups_ = 0;
@@ -458,6 +464,8 @@ public:
   void addFill(const present::VramFill &fill);
   void addCopy(const present::VramCopy &copy);
   void addUpload(const present::VramUpload &upload);
+  // Each crop canvas's band copied from the image.
+  void addCropSeed();
   void addReadBack(const present::ReadBackTexture &texture);
 
   // `sequence` is the planned record's, 0 for a VRAM upload.
@@ -536,11 +544,34 @@ private:
   std::uint32_t modelId(std::uint32_t model);
   void closeBatch();
 
+  // A primitive reaching a crop canvas is planned twice: first at its layer's scale onto the crop canvases alone, then
+  // at the plan scale onto the image and any margin canvas. The crop op comes first so it reads what the plan op does.
+  enum class Pass : std::uint8_t { Main, Crop };
+  // Whether `plane` is a crop canvas.
+  bool cropPlane(int plane) const {
+    return plane != 0 && canvases_[static_cast<std::size_t>(plane - 1)].crop();
+  }
+  // A margin canvas continues the picture past VRAM's columns; the image and a crop canvas wrap as VRAM does.
+  bool unwraps(int plane) const {
+    return plane != 0 && !cropPlane(plane);
+  }
+  // The planned primitive drawn in its kind's way (polygon, sprite or line).
+  void addShape(const DrawPrimitive &primitive);
+  // VRAM rects a transfer writes into a crop canvas: `ui` maps them as the UI layer, else as the world.
+  void emitCropTransferRects(const WrappedRects &rects, bool ui);
+
   RecordRasterPlan plan_;
   std::span<const RecordCanvas> canvases_;
+  bool crops_ = false;
+  Pass pass_ = Pass::Main;
+  bool cropUi_ = false; // the crop pass draws the UI layer
+  int scale_ = 1;       // the scale the op being planned is set up at
   int plane_ = 0;
-  int originX_ = 0;
+  int originX_ = 0; // native, VRAM-space position of the target plane's pixel (0, 0)
   int originY_ = 0;
+  int scaledOriginX_ = 0; // the same at scale_, in its target pixels
+  int scaledOriginY_ = 0;
+  std::uint32_t mapping_ = kMappingPlane;
   std::array<WrittenMap, kRecordPlanes> written_;
   std::array<WrittenMap, kRecordPlanes> grouped_; // pixels the open depth group's polygons cover
   std::uint32_t groupParity_ = 0;
@@ -563,9 +594,29 @@ private:
 PlaneClips RecordPlanner::Builder::planeClips(const RecordDrawState &state) const {
   const Clip area = nativeClip(state);
   PlaneClips clips;
+  if (pass_ == Pass::Crop) {
+    for (std::size_t i = 0; i < canvases_.size(); i++) {
+      const RecordCanvas &canvas = canvases_[i];
+      if (!canvas.crop()) {
+        continue;
+      }
+      const RecordRect &shown = cropUi_ ? canvas.uiBuffer : canvas.buffer;
+      const Clip clip{std::max(area.x0, shown.x0),
+                      std::max(area.y0, shown.y0),
+                      std::min(area.x1, shown.x1 - 1),
+                      std::min(area.y1, shown.y1 - 1)};
+      if (clip.x0 <= clip.x1 && clip.y0 <= clip.y1) {
+        clips.push_back(PlaneClip{1 + static_cast<int>(i), clip});
+      }
+    }
+    return clips;
+  }
   clips.push_back({0, area});
   for (std::size_t i = 0; i < canvases_.size(); i++) {
     const RecordCanvas &canvas = canvases_[i];
+    if (canvas.crop()) {
+      continue;
+    }
     const RecordRect &buffer = canvas.buffer;
     const bool drawsBuffer = drawAreaSpansBuffer(state, buffer);
     Clip clip{std::max(area.x0, buffer.x0),
@@ -587,6 +638,17 @@ void RecordPlanner::Builder::target(int plane) {
   plane_ = plane;
   originX_ = plane == 0 ? 0 : canvases_[static_cast<std::size_t>(plane - 1)].originX();
   originY_ = plane == 0 ? 0 : canvases_[static_cast<std::size_t>(plane - 1)].originY();
+  scaledOriginX_ = originX_ * scale_;
+  scaledOriginY_ = originY_ * scale_;
+  mapping_ = kMappingPlane;
+  if (cropPlane(plane)) {
+    const RecordCanvas &canvas = canvases_[static_cast<std::size_t>(plane - 1)];
+    mapping_ = cropUi_ ? kMappingCropUi : kMappingCropWorld;
+    if (cropUi_) {
+      scaledOriginX_ = canvas.uiOriginX;
+      scaledOriginY_ = canvas.uiOriginY;
+    }
+  }
 }
 
 RecordOp RecordPlanner::Builder::primitiveOp(const DrawPrimitive &primitive, RecordOpKind kind) const {
@@ -601,7 +663,8 @@ RecordOp RecordPlanner::Builder::primitiveOp(const DrawPrimitive &primitive, Rec
   flags |= state.maskSet ? kOpMaskSet : 0u;
   flags |= static_cast<std::uint32_t>(state.blendMode & 3) << kOpBlendShift;
   flags |= static_cast<std::uint32_t>(state.texMode & 3) << kOpTexModeShift;
-  if (state.skipRowParity >= 0) {
+  // A crop canvas shows the record's picture whole; the field weave stays in the image.
+  if (state.skipRowParity >= 0 && pass_ == Pass::Main) {
     flags |= kOpSkipRows | (state.skipRowParity != 0 ? kOpSkipParity : 0u);
   }
   flags |= primitive.flipX ? kOpFlipX : 0u;
@@ -707,21 +770,31 @@ void RecordPlanner::Builder::textureReads(const RecordDrawState &state, const Te
 }
 
 void RecordPlanner::Builder::place(RecordQuad quad) {
-  const int s = plan_.scale;
-  quad.x0 -= originX_ * s;
-  quad.y0 -= originY_ * s;
-  quad.x1 -= originX_ * s;
-  quad.y1 -= originY_ * s;
+  quad.x0 -= scaledOriginX_;
+  quad.y0 -= scaledOriginY_;
+  quad.x1 -= scaledOriginX_;
+  quad.y1 -= scaledOriginY_;
+  quad.mapping = mapping_;
   opQuads_.push_back(PlaneQuad{plane_, quad});
 }
 
 void RecordPlanner::Builder::markWritten(const RecordRect &rect) {
+  if (mapping_ == kMappingCropUi) {
+    // A crop canvas counts its pixels in world pixels; a UI rect covers every one it touches.
+    const int cell = canvases_[static_cast<std::size_t>(plane_ - 1)].worldScale;
+    opWrites_.push_back(PlaneRect{plane_,
+                                  {floorDivide(rect.x0 * scale_ - scaledOriginX_, cell),
+                                   floorDivide(rect.y0 * scale_ - scaledOriginY_, cell),
+                                   floorDivide(rect.x1 * scale_ - scaledOriginX_ + cell - 1, cell),
+                                   floorDivide(rect.y1 * scale_ - scaledOriginY_ + cell - 1, cell)}});
+    return;
+  }
   opWrites_.push_back(
       PlaneRect{plane_, {rect.x0 - originX_, rect.y0 - originY_, rect.x1 - originX_, rect.y1 - originY_}});
 }
 
 void RecordPlanner::Builder::emit(const RecordRect &rect, std::uint32_t param) {
-  const int s = plan_.scale;
+  const int s = scale_;
   emit(rect, {.x0 = rect.x0 * s, .y0 = rect.y0 * s, .x1 = rect.x1 * s, .y1 = rect.y1 * s, .param = param});
 }
 
@@ -737,6 +810,9 @@ void RecordPlanner::Builder::emitTransferRects(const WrappedRects &rects) {
     emit(rect);
   }
   for (std::size_t i = 0; i < canvases_.size(); i++) {
+    if (canvases_[i].crop()) {
+      continue;
+    }
     const RecordRect &buffer = canvases_[i].buffer;
     target(1 + static_cast<int>(i));
     for (const RecordRect &rect : rects) {
@@ -752,11 +828,39 @@ void RecordPlanner::Builder::emitTransferRects(const WrappedRects &rects) {
   target(0);
 }
 
+void RecordPlanner::Builder::emitCropTransferRects(const WrappedRects &rects, bool ui) {
+  cropUi_ = ui;
+  for (std::size_t i = 0; i < canvases_.size(); i++) {
+    const RecordCanvas &canvas = canvases_[i];
+    if (!canvas.crop()) {
+      continue;
+    }
+    scale_ = ui ? canvas.uiScale : canvas.worldScale;
+    target(1 + static_cast<int>(i));
+    const RecordRect &shown = ui ? canvas.uiBuffer : canvas.buffer;
+    for (const RecordRect &rect : rects) {
+      const RecordRect inside{std::max(rect.x0, shown.x0),
+                              std::max(rect.y0, shown.y0),
+                              std::min(rect.x1, shown.x1),
+                              std::min(rect.y1, shown.y1)};
+      if (inside.x0 < inside.x1 && inside.y0 < inside.y1) {
+        emit(inside);
+      }
+    }
+  }
+  cropUi_ = false;
+  scale_ = plan_.scale;
+  target(0);
+}
+
 void RecordPlanner::Builder::emitPlacedTransfer(const RecordRect &written, const RecordQuad &quad) {
   const int s = plan_.scale;
   target(0);
   emit(written, quad);
   for (std::size_t i = 0; i < canvases_.size(); i++) {
+    if (canvases_[i].crop()) {
+      continue;
+    }
     const RecordRect &buffer = canvases_[i].buffer;
     target(1 + static_cast<int>(i));
     const RecordRect inside{std::max(written.x0, buffer.x0),
@@ -803,11 +907,13 @@ void RecordPlanner::Builder::commit(const RecordOp &op, bool readsDestination, c
   if (plane != nullptr) {
     plan_.ops.push_back(*plane);
   }
-  const int s = plan_.scale;
   for (PlaneQuad &pending : opQuads_) {
     pending.quad.op = opIndex;
     plan_.quads[static_cast<std::size_t>(pending.plane)].push_back(pending.quad);
     const RecordQuad &quad = pending.quad;
+    // A plane's pixels per native pixel of its written map.
+    const int s = cropPlane(pending.plane) ? canvases_[static_cast<std::size_t>(pending.plane - 1)].worldScale
+                                           : plan_.scale;
     written_[static_cast<std::size_t>(pending.plane)].extend(
         {quad.x0 / s, quad.y0 / s, (quad.x1 + s - 1) / s, (quad.y1 + s - 1) / s});
   }
@@ -878,7 +984,27 @@ void RecordPlanner::Builder::closeBatch() {
 }
 
 void RecordPlanner::Builder::addPrimitive(const DrawPrimitive &primitive) {
+  if (crops_) {
+    // The crop canvas reads VRAM, never a capture; each crop canvas of a record shares one layer scale.
+    pass_ = Pass::Crop;
+    cropUi_ = primitive.ui;
+    for (const RecordCanvas &canvas : canvases_) {
+      if (canvas.crop()) {
+        scale_ = cropUi_ ? canvas.uiScale : canvas.worldScale;
+      }
+    }
+    addShape(primitive);
+    pass_ = Pass::Main;
+    cropUi_ = false;
+    scale_ = plan_.scale;
+  }
   sampling_ = readBackShift(primitive);
+  addShape(primitive);
+  addCanvasMargins(primitive);
+  sampling_.reset();
+}
+
+void RecordPlanner::Builder::addShape(const DrawPrimitive &primitive) {
   switch (primitive.kind) {
   case PrimitiveKind::Polygon:
     addPolygon(primitive);
@@ -890,12 +1016,10 @@ void RecordPlanner::Builder::addPrimitive(const DrawPrimitive &primitive) {
     addLine(primitive);
     break;
   }
-  addCanvasMargins(primitive);
-  sampling_.reset();
 }
 
 void RecordPlanner::Builder::addPolygon(const DrawPrimitive &primitive) {
-  const int s = plan_.scale;
+  const int s = scale_;
   TriVertex scaled[4];
   TriVertex native[4];
   for (std::size_t i = 0; i < 4; i++) {
@@ -925,7 +1049,7 @@ void RecordPlanner::Builder::addTriangle(const TriVertex scaled[3],
                                          int firstVertex,
                                          bool offU,
                                          bool offV) {
-  const int s = plan_.scale;
+  const int s = scale_;
   const std::optional<TriangleWalk> walk = walkTriangle(scaled, s);
   if (!walk || !withinVramSpan(native, 1)) {
     return;
@@ -971,7 +1095,7 @@ void RecordPlanner::Builder::addTriangle(const TriVertex scaled[3],
       const int rowHigh = std::min(part.rowHigh, (clip.y1 + 1) * s);
       if (rowLow < rowHigh) {
         const RecordRect covered =
-            coveredColumns(part, {clip.x0 * s, rowLow, (clip.x1 + 1) * s, rowHigh}, planeClip.plane != 0);
+            coveredColumns(part, {clip.x0 * s, rowLow, (clip.x1 + 1) * s, rowHigh}, unwraps(planeClip.plane));
         if (covered.x0 < covered.x1) {
           place({.x0 = covered.x0,
                  .y0 = covered.y0,
@@ -993,7 +1117,7 @@ void RecordPlanner::Builder::addTriangle(const TriVertex scaled[3],
       reaches_ = reaches_ || nativeLow < nativeHigh;
       for (int row = nativeLow; row < nativeHigh; row++) {
         const RecordRect covered =
-            coveredColumns(nativePart, {clip.x0, row, clip.x1 + 1, row + 1}, planeClip.plane != 0);
+            coveredColumns(nativePart, {clip.x0, row, clip.x1 + 1, row + 1}, unwraps(planeClip.plane));
         if (covered.x0 < covered.x1) {
           markWritten(covered);
         }
@@ -1020,7 +1144,8 @@ void RecordPlanner::Builder::addTriangle(const TriVertex scaled[3],
     storeWords(op, words + kPartRightStep, part.step[1]);
   }
   std::optional<RecordOp> plane;
-  if (depthTest_ != nullptr) {
+  // The UI layer has its own scale, so it never meets the world's depth.
+  if (depthTest_ != nullptr && !(pass_ == Pass::Crop && cropUi_)) {
     if (const std::optional<present::DepthMark> mark = depthTest_->tests(primitive)) {
       op[kOpFlags] |= kOpDepthTest | (mark->order == present::DepthOrder::Object  ? kOpDepthObject
                                       : mark->order == present::DepthOrder::Model ? kOpDepthModel
@@ -1090,14 +1215,14 @@ void RecordPlanner::Builder::addSprite(const DrawPrimitive &primitive) {
     }
   };
   // The sprite moves whole by its place; native scale keeps the guest's pixels.
-  const int s = plan_.scale;
+  const int s = scale_;
   const std::int32_t shiftX = placeOffset(vertex.subX, s);
   const std::int32_t shiftY = placeOffset(vertex.subY, s);
   for (const PlaneClip &planeClip : planeClips(primitive.state)) {
     const Clip &clip = planeClip.clip;
     // A canvas continues the picture past VRAM's columns, where the 11-bit position wrapped; u repeats every 256.
     const int unwrapped = vertex.x + 2 * kVramWidth;
-    const int x = planeClip.plane != 0 && unwrapped <= clip.x1 ? unwrapped : vertex.x;
+    const int x = unwraps(planeClip.plane) && unwrapped <= clip.x1 ? unwrapped : vertex.x;
     const RecordRect covered{std::max(x * s + shiftX, clip.x0 * s),
                              std::max(vertex.y * s + shiftY, clip.y0 * s),
                              std::min((x + primitive.width) * s + shiftX, (clip.x1 + 1) * s),
@@ -1170,7 +1295,7 @@ void RecordPlanner::Builder::addLine(const DrawPrimitive &primitive) {
   std::uint32_t g = (static_cast<std::uint32_t>(p0.g) << 12) | 2048u;
   std::uint32_t b = (static_cast<std::uint32_t>(p0.b) << 12) | 2048u;
   const PlaneClips clips = planeClips(primitive.state);
-  const int s = plan_.scale;
+  const int s = scale_;
   for (int i = 0; i <= k; i++) {
     // Each native pixel of the walk drawn at the line's place there.
     const float along = k == 0 ? 0.0f : static_cast<float>(i) / static_cast<float>(k);
@@ -1179,15 +1304,15 @@ void RecordPlanner::Builder::addLine(const DrawPrimitive &primitive) {
     const int px = static_cast<int>((x >> 32) & 2047u);
     const auto unwrappedX = static_cast<int>(static_cast<std::int64_t>(x) >> 32);
     const int py = static_cast<int>((y >> 32) & 2047u);
-    if (!skipsRow(primitive.state, py)) {
+    if (pass_ == Pass::Crop || !skipsRow(primitive.state, py)) {
       const std::uint32_t cr = primitive.gouraud ? static_cast<std::uint8_t>(r >> 12) : p0.r;
       const std::uint32_t cg = primitive.gouraud ? static_cast<std::uint8_t>(g >> 12) : p0.g;
       const std::uint32_t cb = primitive.gouraud ? static_cast<std::uint8_t>(b >> 12) : p0.b;
       const std::uint32_t colour = cr | (cg << 8) | (cb << 16);
       for (const PlaneClip &planeClip : clips) {
         // A canvas continues the picture past VRAM's columns, where the 11-bit position would wrap.
-        const int nx = planeClip.plane == 0 ? px : unwrappedX;
-        const int ny = planeClip.plane == 0 ? py : ((py ^ 1024) - 1024);
+        const int nx = unwraps(planeClip.plane) ? unwrappedX : px;
+        const int ny = unwraps(planeClip.plane) ? ((py ^ 1024) - 1024) : py;
         const Clip &clip = planeClip.clip;
         if (nx >= clip.x0 && nx <= clip.x1 && ny >= clip.y0 && ny <= clip.y1) {
           target(planeClip.plane);
@@ -1224,7 +1349,7 @@ void RecordPlanner::Builder::addCanvasMargins(const DrawPrimitive &primitive) {
   const RecordRect &rect = flat->rect;
   const int s = plan_.scale;
   for (const PlaneClip &planeClip : planeClips(primitive.state)) {
-    if (planeClip.plane == 0) {
+    if (planeClip.plane == 0 || cropPlane(planeClip.plane)) {
       continue;
     }
     const RecordCanvas &canvas = canvases_[static_cast<std::size_t>(planeClip.plane - 1)];
@@ -1266,9 +1391,13 @@ void RecordPlanner::Builder::addCanvasMargins(const DrawPrimitive &primitive) {
 void RecordPlanner::Builder::addFill(const present::VramFill &fill) {
   const WrappedRects rects = wrappedRects({fill.x, fill.y, fill.width, fill.height});
   emitTransferRects(rects);
+  emitCropTransferRects(rects, false);
   // A fill across the buffer's columns clears the canvas's whole width on those rows.
   for (std::size_t i = 0; i < canvases_.size(); i++) {
     const RecordCanvas &canvas = canvases_[i];
+    if (canvas.crop()) {
+      continue;
+    }
     target(1 + static_cast<int>(i));
     for (const RecordRect &rect : rects) {
       const int y0 = std::max(rect.y0, canvas.buffer.y0);
@@ -1298,6 +1427,7 @@ void RecordPlanner::Builder::addCopy(const present::VramCopy &copy) {
   // `dst` is the written rect; `src` the origin it reads from.
   const auto copyPart = [&](VramPoint src, VramRect dst) {
     emitTransferRects(wrappedRects(dst));
+    emitCropTransferRects(wrappedRects(dst), false);
     for (const RecordRect &rect : wrappedRects({src.x, src.y, dst.width, dst.height})) {
       opReads_.push_back(rect);
     }
@@ -1326,6 +1456,8 @@ void RecordPlanner::Builder::addCopy(const present::VramCopy &copy) {
       return;
     }
     emitPlacedTransfer(written, quad);
+    // A crop canvas takes the copy's whole pixels.
+    emitCropTransferRects(wrappedRects({copy.dstX, copy.dstY, copy.width, copy.height}), false);
     opReads_.push_back(read);
     op[kOpOriginX] = static_cast<std::uint32_t>(copy.dstX);
     op[kOpOriginY] = static_cast<std::uint32_t>(copy.dstY);
@@ -1352,6 +1484,9 @@ void RecordPlanner::Builder::addCopy(const present::VramCopy &copy) {
 
 void RecordPlanner::Builder::addUpload(const present::VramUpload &upload) {
   emitTransferRects(wrappedRects({upload.x, upload.y, upload.width, upload.height}));
+  // An uploaded picture (a movie frame) was authored for 4:3; a resync's whole-VRAM upload is the world's.
+  emitCropTransferRects(wrappedRects({upload.x, upload.y, upload.width, upload.height}),
+                        upload.width < kVramWidth || upload.height < kVramHeight);
   RecordOp op{};
   op[kOpFlags] = static_cast<std::uint32_t>(RecordOpKind::Upload) | (upload.maskCheck ? kOpMaskCheck : 0u) |
                  (upload.maskSet ? kOpMaskSet : 0u);
@@ -1363,6 +1498,25 @@ void RecordPlanner::Builder::addUpload(const present::VramUpload &upload) {
   commit(op, upload.maskCheck);
 }
 
+void RecordPlanner::Builder::addCropSeed() {
+  for (const RecordCanvas &canvas : canvases_) {
+    if (!canvas.crop()) {
+      continue;
+    }
+    const RecordRect &band = canvas.buffer;
+    RecordOp op{};
+    op[kOpFlags] = static_cast<std::uint32_t>(RecordOpKind::Copy);
+    op[kOpOriginX] = static_cast<std::uint32_t>(band.x0);
+    op[kOpOriginY] = static_cast<std::uint32_t>(band.y0);
+    op[kOpSourceX] = static_cast<std::uint32_t>(band.x0);
+    op[kOpSourceY] = static_cast<std::uint32_t>(band.y0);
+    WrappedRects rects;
+    rects.push_back(band);
+    emitCropTransferRects(rects, false);
+    commit(op, false);
+  }
+}
+
 void RecordPlanner::Builder::addReadBack(const present::ReadBackTexture &texture) {
   if (!declares_ || texture.texMode < 0 || texture.texMode > 2) {
     return;
@@ -1371,7 +1525,7 @@ void RecordPlanner::Builder::addReadBack(const present::ReadBackTexture &texture
       texture.readX, texture.readY, texture.readX + texture.readWidth, texture.readY + texture.readHeight};
   for (std::size_t i = 0; i < canvases_.size(); i++) {
     const RecordCanvas &canvas = canvases_[i];
-    if (read.x1 <= read.x0 || read.y1 <= read.y0 || !containsRect(canvas.buffer, read)) {
+    if (canvas.crop() || read.x1 <= read.x0 || read.y1 <= read.y0 || !containsRect(canvas.buffer, read)) {
       continue;
     }
     RecordRect captured = read;
@@ -1407,6 +1561,21 @@ bool canvasSurvives(const RecordCanvas &canvas, int displayWidth, int reach) {
   return reach > 0 && canvas.reach == reach && canvas.buffer.x1 - canvas.buffer.x0 == displayWidth;
 }
 
+RecordCanvas cropCanvas(const RecordRect &display, int p, int q, int unit) {
+  const int width = display.x1 - display.x0;
+  const int height = display.y1 - display.y0;
+  const int rows = height * p / q;
+  const int top = display.y0 + (height - rows) / 2;
+  RecordCanvas canvas{.buffer = {display.x0, top, display.x1, top + rows},
+                      .worldScale = q * unit,
+                      .uiScale = p * unit,
+                      .uiBuffer = display};
+  // The UI's whole display spans the target's height, centred across its width.
+  canvas.uiOriginX = display.x0 * canvas.uiScale - (width * canvas.worldScale - width * canvas.uiScale) / 2;
+  canvas.uiOriginY = display.y0 * canvas.uiScale;
+  return canvas;
+}
+
 RecordPlanner::RecordPlanner() : builder_(std::make_unique<Builder>()) {}
 
 RecordPlanner::~RecordPlanner() = default;
@@ -1435,12 +1604,20 @@ const RecordRasterPlan &RecordPlanner::plan(const FrameRecord &record,
   return builder_->finish(record.sequence());
 }
 
-const RecordRasterPlan &RecordPlanner::planVramUpload(std::span<const std::uint16_t> vram, int scale) {
-  builder_->begin(std::max(scale, 1), {}, vram, {}, std::nullopt, false, nullptr);
+const RecordRasterPlan &RecordPlanner::planVramUpload(std::span<const std::uint16_t> vram,
+                                                      int scale,
+                                                      std::span<const RecordCanvas> canvases) {
+  builder_->begin(std::max(scale, 1), {}, vram, canvases, std::nullopt, false, nullptr);
   present::VramUpload upload;
   upload.width = kVramWidth;
   upload.height = kVramHeight;
   builder_->addUpload(upload);
+  return builder_->finish(0);
+}
+
+const RecordRasterPlan &RecordPlanner::planCropSeed(int scale, std::span<const RecordCanvas> canvases) {
+  builder_->begin(std::max(scale, 1), {}, {}, canvases, std::nullopt, false, nullptr);
+  builder_->addCropSeed();
   return builder_->finish(0);
 }
 

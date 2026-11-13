@@ -119,8 +119,16 @@ struct RecordQuad {
   std::int32_t x1 = 0;
   std::int32_t y1 = 0;
   std::uint32_t op = 0;
-  std::uint32_t param = 0; // triangle: its part; line pixel: its colour r | g << 8 | b << 16
-  std::uint32_t unused[2] = {};
+  std::uint32_t param = 0;   // triangle: its part; line pixel: its colour r | g << 8 | b << 16
+  std::uint32_t mapping = 0; // RecordMapping: how the plane's pixels map to the op's VRAM space
+  std::uint32_t unused = 0;
+};
+
+// A quad's mapping: the plane's own scale and origin, or a crop canvas's world or UI layer (RecordCanvas).
+enum RecordMapping : std::uint32_t {
+  kMappingPlane = 0,
+  kMappingCropWorld = 1,
+  kMappingCropUi = 2,
 };
 
 // The draw area is the buffer: its columns exactly, its rows covered.
@@ -129,11 +137,24 @@ bool drawAreaSpansBuffer(const present::RecordDrawState &state, const RecordRect
 // A display buffer's wide canvas: `buffer` (native VRAM pixels) with `reach` more columns allocated each side, of
 // which the window `left` and `right` (each at most `reach`) is drawn and shown.
 // Its pixel (x, y) is VRAM-space pixel (originX() + x, originY() + y), which may lie outside VRAM.
+//
+// A crop canvas (plan 0203) has no reach: `buffer` is the band of the display it shows, its pixels `worldScale`
+// target pixels per native pixel, and the primitives the title marks UI draw the whole display `uiBuffer` at
+// `uiScale`, its target pixel (x, y) being UI-scaled VRAM-space pixel (uiOriginX + x, uiOriginY + y).
 struct RecordCanvas {
   RecordRect buffer;
   int reach = 0;
   int left = 0;
   int right = 0;
+  int worldScale = 0;
+  int uiScale = 0;
+  RecordRect uiBuffer;
+  int uiOriginX = 0;
+  int uiOriginY = 0;
+
+  bool crop() const {
+    return uiScale > 0;
+  }
 
   int originX() const {
     return buffer.x0 - reach;
@@ -157,6 +178,10 @@ struct RecordCanvas {
 // Whether a kept canvas still serves displays of this width at this reach. The two buffers of a double-buffered
 // title may differ in height, so each keeps its own canvas and only a widening or width change retires one.
 bool canvasSurvives(const RecordCanvas &canvas, int displayWidth, int reach);
+
+// The crop canvas of `display` keeping `p`/`q` of its rows at unit `unit` (present::CropBand, present::cropUnit): the
+// world at q * unit, the UI at p * unit, centred over it.
+RecordCanvas cropCanvas(const RecordRect &display, int p, int q, int unit);
 
 // Plane 0 is the VRAM image; plane 1 + i is canvas i.
 inline constexpr int kRecordMaxCanvases = 2;
@@ -227,8 +252,13 @@ public:
                                const std::optional<RecordReadBack> &readBack,
                                bool declares,
                                const present::DepthTest *depthTest);
-  // The whole of `vram` written over the image, for a record that cannot be replayed; ends any read-back texture.
-  const RecordRasterPlan &planVramUpload(std::span<const std::uint16_t> vram, int scale);
+  // The whole of `vram` written over the image and the band of each crop canvas, for a record that cannot be
+  // replayed; ends any read-back texture.
+  const RecordRasterPlan &planVramUpload(std::span<const std::uint16_t> vram,
+                                         int scale,
+                                         std::span<const RecordCanvas> canvases);
+  // The band of each crop canvas among `canvases` copied from the image, for a canvas just made.
+  const RecordRasterPlan &planCropSeed(int scale, std::span<const RecordCanvas> canvases);
 
 private:
   class Builder;

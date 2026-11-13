@@ -33,10 +33,15 @@ struct TargetUniform {
   float unused[2] = {};
 };
 
+// record.frag Params.
 struct ParamsUniform {
   std::int32_t scale = 1;
   std::int32_t originX = 0;
   std::int32_t originY = 0;
+  std::int32_t imageScale = 1;
+  std::int32_t uiScale = 0;
+  std::int32_t uiOriginX = 0;
+  std::int32_t uiOriginY = 0;
   std::int32_t unused = 0;
 };
 
@@ -181,8 +186,8 @@ RecordRasterizer::~RecordRasterizer() {
   device_.release(modelClearPipeline_);
 }
 
-RecordRasterizer::Plane RecordRasterizer::makePlane(const RecordCanvas &shape) {
-  const PixelSize scaled{shape.width() * scale_, shape.height() * scale_};
+RecordRasterizer::Plane RecordRasterizer::makePlane(const RecordCanvas &shape, int scale) {
+  const PixelSize scaled{shape.width() * scale, shape.height() * scale};
   constexpr SDL_GPUTextureUsageFlags kTarget = SDL_GPU_TEXTUREUSAGE_COLOR_TARGET | SDL_GPU_TEXTUREUSAGE_SAMPLER;
   Plane plane;
   plane.image = device_.makeTexture(scaled, kVramFormat, kTarget);
@@ -191,6 +196,7 @@ RecordRasterizer::Plane RecordRasterizer::makePlane(const RecordCanvas &shape) {
   plane.before = device_.makeTexture(scaled, kVramFormat, kTarget);
   plane.width = shape.width();
   plane.height = shape.height();
+  plane.scale = scale;
   plane.originX = shape.originX();
   plane.originY = shape.originY();
   return plane;
@@ -224,14 +230,27 @@ void RecordRasterizer::ensureImage(int scale) {
   }
   releaseImage();
   scale_ = scale;
-  vram_ = makePlane(RecordCanvas{.buffer = {0, 0, gpu::kVramWidth, gpu::kVramHeight}});
+  vram_ = makePlane(RecordCanvas{.buffer = {0, 0, gpu::kVramWidth, gpu::kVramHeight}}, scale_);
   chained_ = false;
   beforeHeld_ = false;
 }
 
+RecordCanvas RecordRasterizer::viewShape(const RecordView &view) const {
+  if (view.crop.active()) {
+    return gpu::cropCanvas(view.display, view.crop.p, view.crop.q, present::cropUnit(view.crop, scale_));
+  }
+  return RecordCanvas{.buffer = view.display, .reach = view.reach};
+}
+
 RecordRasterizer::Canvas *RecordRasterizer::canvasFor(const RecordView &view) {
+  if (view.reach <= 0 && !view.crop.active()) {
+    return nullptr;
+  }
+  const RecordCanvas shape = viewShape(view);
   for (Canvas &canvas : canvases_) {
-    if (canvas.shape.buffer == view.display && canvas.shape.reach == view.reach) {
+    // A margin canvas's window changes with the records drawing it; its allocation does not.
+    if (canvas.shape.crop() ? canvas.shape == shape
+                            : canvas.shape.buffer == shape.buffer && canvas.shape.reach == shape.reach) {
       return &canvas;
     }
   }
@@ -289,15 +308,20 @@ void RecordRasterizer::showCanvas(SDL_GPUCommandBuffer *cmd,
                                   const present::RecordWindows &windows) {
   const int width = view.display.x1 - view.display.x0;
   const int height = view.display.y1 - view.display.y0;
-  // A widening or display width change makes every canvas another shape; a split change keeps them.
+  const bool crop = view.crop.active();
+  const RecordCanvas shape = viewShape(view);
+  // A widening, crop or display width change makes every canvas another shape; a split change keeps them.
   std::erase_if(canvases_, [&](Canvas &canvas) {
-    const bool stale = !gpu::canvasSurvives(canvas.shape, width, view.reach);
+    const bool stale = crop ? !(canvas.shape.crop() && canvas.shape.worldScale == shape.worldScale &&
+                                canvas.shape.uiScale == shape.uiScale &&
+                                canvas.shape.buffer.x1 - canvas.shape.buffer.x0 == width)
+                            : !gpu::canvasSurvives(canvas.shape, width, view.reach);
     if (stale) {
       releasePlane(canvas.plane);
     }
     return stale;
   });
-  if (view.reach <= 0 || width <= 0 || height <= 0) {
+  if ((view.reach <= 0 && !crop) || width <= 0 || height <= 0 || shape.height() <= 0) {
     return;
   }
   Canvas *canvas = canvasFor(view);
@@ -310,13 +334,19 @@ void RecordRasterizer::showCanvas(SDL_GPUCommandBuffer *cmd,
       canvases_.erase(oldest);
     }
     Canvas added;
-    added.shape = RecordCanvas{.buffer = view.display, .reach = view.reach};
-    setWindow(added.shape, windows.drawn);
-    added.view = windows.view;
-    added.plane = makePlane(added.shape);
+    added.shape = shape;
+    if (!crop) {
+      setWindow(added.shape, windows.drawn);
+      added.view = windows.view;
+    }
+    added.plane = makePlane(added.shape, crop ? shape.worldScale : scale_);
     canvases_.push_back(added);
     canvas = &canvases_.back();
-    seedCanvas(cmd, *canvas, true);
+    if (crop) {
+      seedCrop(cmd, *canvas);
+    } else {
+      seedCanvas(cmd, *canvas, true);
+    }
   }
   canvas->shown = ++shows_;
 }
@@ -331,26 +361,41 @@ void RecordRasterizer::seedCanvas(SDL_GPUCommandBuffer *cmd, Canvas &canvas, boo
       SDL_EndGPURenderPass(SDL_BeginGPURenderPass(cmd, &clear, 1, nullptr));
       ++work_.renderPasses;
     }
-    copyTexture(cmd, from, canvas.shape.buffer, to, canvas.shape.reach, 0);
+    copyTexture(cmd, from, canvas.shape.buffer, to, canvas.shape.reach, 0, scale_);
   }
   const RecordRect seeded = fresh ? RecordRect{0, 0, canvas.plane.width, canvas.plane.height}
                                   : RecordRect{canvas.shape.reach,
                                                0,
                                                canvas.shape.reach + canvas.shape.buffer.x1 - canvas.shape.buffer.x0,
                                                canvas.plane.height};
-  copyTexture(cmd, canvas.plane.image, seeded, canvas.plane.snapshot, seeded.x0, 0);
+  copyTexture(cmd, canvas.plane.image, seeded, canvas.plane.snapshot, seeded.x0, 0, scale_);
+}
+
+void RecordRasterizer::seedCrop(SDL_GPUCommandBuffer *cmd, Canvas &canvas) {
+  const auto index = static_cast<std::size_t>(&canvas - canvases_.data());
+  std::array<RecordCanvas, gpu::kRecordMaxCanvases> shapes{};
+  shapes[index] = canvas.shape;
+  execute(cmd, planner_.planCropSeed(scale_, std::span(shapes.data(), canvases_.size())), false);
+  const RecordRect whole{0, 0, canvas.plane.width, canvas.plane.height};
+  copyTexture(cmd, canvas.plane.image, whole, canvas.plane.before, 0, 0, canvas.plane.scale);
 }
 
 void RecordRasterizer::present(const RecordView &view, bool inBetween, const present::RecordWindows *windows) {
-  if (Canvas *canvas = view.reach > 0 ? canvasFor(view) : nullptr) {
+  Canvas *canvas = canvasFor(view);
+  if (canvas != nullptr && canvas->shape.crop()) {
+    const RecordRect whole{0, 0, canvas->plane.width, canvas->plane.height};
+    presented_ = {inBetween ? canvas->plane.inBetween : canvas->plane.image, whole, whole, canvas->plane.scale};
+    wovenOriginY_ = canvas->plane.originY;
+  } else if (canvas != nullptr) {
     const present::RecordWindows shown =
         windows != nullptr ? *windows : present::RecordWindows{canvas->view, {canvas->shape.left, canvas->shape.right}};
     presented_ = {inBetween ? canvas->plane.inBetween : canvas->plane.image,
                   windowOf(canvas->shape, shown.view),
-                  windowOf(canvas->shape, shown.drawn)};
+                  windowOf(canvas->shape, shown.drawn),
+                  scale_};
     wovenOriginY_ = canvas->plane.originY;
   } else {
-    presented_ = {inBetween ? vram_.inBetween : vram_.image, view.display, view.display};
+    presented_ = {inBetween ? vram_.inBetween : vram_.image, view.display, view.display, scale_};
     wovenOriginY_ = view.display.y0;
   }
   woven_ = presented_;
@@ -361,7 +406,8 @@ void RecordRasterizer::selectField(SDL_GPUCommandBuffer *cmd, const present::Fra
   const RecordRect source = woven_.rect;
   const int width = source.x1 - source.x0;
   const int height = source.y1 - source.y0;
-  if (!undrawn || woven_.texture == nullptr || width <= 0 || height <= 0) {
+  // A crop canvas draws every row of a record, so it holds one field already.
+  if (!undrawn || woven_.texture == nullptr || woven_.scale != scale_ || width <= 0 || height <= 0) {
     return;
   }
   if (field_ == nullptr || fieldWidth_ != width || fieldHeight_ != height) {
@@ -370,7 +416,7 @@ void RecordRasterizer::selectField(SDL_GPUCommandBuffer *cmd, const present::Fra
     fieldWidth_ = width;
     fieldHeight_ = height;
   }
-  copyTexture(cmd, woven_.texture, source, field_, 0, 0);
+  copyTexture(cmd, woven_.texture, source, field_, 0, 0, scale_);
   // Each undrawn row repeats the drawn row of its pair, so the picture is one field and never two moments.
   SDL_GPUCopyPass *copy = SDL_BeginGPUCopyPass(cmd);
   for (int row = 0; row < height; row++) {
@@ -392,7 +438,10 @@ void RecordRasterizer::selectField(SDL_GPUCommandBuffer *cmd, const present::Fra
     work_.copyPixels += static_cast<std::uint64_t>(width) * static_cast<std::uint64_t>(scale_ * scale_);
   }
   SDL_EndGPUCopyPass(copy);
-  presented_ = {field_, {0, 0, width, height}, {woven_.drawn.x0 - source.x0, 0, woven_.drawn.x1 - source.x0, height}};
+  presented_ = {field_,
+                {0, 0, width, height},
+                {woven_.drawn.x0 - source.x0, 0, woven_.drawn.x1 - source.x0, height},
+                scale_};
 }
 
 void RecordRasterizer::update(SDL_GPUCommandBuffer *cmd,
@@ -424,7 +473,7 @@ void RecordRasterizer::advance(SDL_GPUCommandBuffer *cmd,
     for (int index = 0; index <= static_cast<int>(canvases_.size()); index++) {
       const Plane &target = plane(index);
       const RecordRect copied = copiedRect(index, record.windows().drawn);
-      copyTexture(cmd, target.image, copied, target.before, copied.x0, 0);
+      copyTexture(cmd, target.image, copied, target.before, copied.x0, 0, target.scale);
     }
     const gpu::RecordRasterPlan &plan =
         planner_.plan(record, scale_, canvasShapes(record.windows().drawn), readBack_, true, depthTest_);
@@ -435,10 +484,17 @@ void RecordRasterizer::advance(SDL_GPUCommandBuffer *cmd,
     beforeHeld_ = true;
     return;
   }
-  execute(cmd, planner_.planVramUpload(vram, scale_), false);
+  // Every canvas is a crop canvas or none is: a crop canvas takes the upload, a margin canvas the image's columns.
+  const bool crops = !canvases_.empty() && canvases_.front().shape.crop();
+  execute(cmd, planner_.planVramUpload(vram, scale_, crops ? canvasShapes({}) : std::span<const RecordCanvas>{}), false);
   readBack_.reset();
   for (Canvas &canvas : canvases_) {
-    seedCanvas(cmd, canvas, false);
+    if (crops) {
+      const RecordRect whole{0, 0, canvas.plane.width, canvas.plane.height};
+      copyTexture(cmd, canvas.plane.image, whole, canvas.plane.before, 0, 0, canvas.plane.scale);
+    } else {
+      seedCanvas(cmd, canvas, false);
+    }
   }
   applied_ = record.sequence();
   beforeHeld_ = false;
@@ -452,7 +508,7 @@ bool RecordRasterizer::drawInBetween(SDL_GPUCommandBuffer *cmd,
                                      int scale,
                                      const RecordView &view) {
   if (vram_.image == nullptr || std::max(scale, 1) != scale_ || !chained_ || !record.complete() ||
-      (view.reach > 0 && canvasFor(view) == nullptr)) {
+      ((view.reach > 0 || view.crop.active()) && canvasFor(view) == nullptr)) {
     return false;
   }
   const bool onImage = record.sequence() == applied_ + 1;
@@ -464,9 +520,9 @@ bool RecordRasterizer::drawInBetween(SDL_GPUCommandBuffer *cmd,
   for (int index = 0; index <= static_cast<int>(canvases_.size()); index++) {
     const Plane &target = plane(index);
     const RecordRect copied = copiedRect(index, margins);
-    copyTexture(cmd, onImage ? target.image : target.before, copied, target.inBetween, copied.x0, 0);
+    copyTexture(cmd, onImage ? target.image : target.before, copied, target.inBetween, copied.x0, 0, target.scale);
     if (!onImage) {
-      copyTexture(cmd, target.before, copied, target.snapshot, copied.x0, 0);
+      copyTexture(cmd, target.before, copied, target.snapshot, copied.x0, 0, target.scale);
     }
   }
   const gpu::RecordRasterPlan &plan =
@@ -475,9 +531,9 @@ bool RecordRasterizer::drawInBetween(SDL_GPUCommandBuffer *cmd,
   for (int index = 0; index <= static_cast<int>(canvases_.size()); index++) {
     const Plane &target = plane(index);
     const RecordRect copied = copiedRect(index, margins);
-    copyTexture(cmd, target.image, copied, target.snapshot, copied.x0, 0);
+    copyTexture(cmd, target.image, copied, target.snapshot, copied.x0, 0, target.scale);
   }
-  const Canvas *shown = view.reach > 0 ? canvasFor(view) : nullptr;
+  const Canvas *shown = canvasFor(view);
   const bool drewShown =
       shown != nullptr && !plan.quads[1 + static_cast<std::size_t>(shown - canvases_.data())].empty();
   present(view, true, drewShown ? &windows : nullptr);
@@ -506,9 +562,14 @@ bool RecordRasterizer::show(SDL_GPUCommandBuffer *cmd,
   return false;
 }
 
-void RecordRasterizer::copyTexture(
-    SDL_GPUCommandBuffer *cmd, SDL_GPUTexture *from, const RecordRect &source, SDL_GPUTexture *to, int toX, int toY) {
-  const int s = scale_;
+void RecordRasterizer::copyTexture(SDL_GPUCommandBuffer *cmd,
+                                   SDL_GPUTexture *from,
+                                   const RecordRect &source,
+                                   SDL_GPUTexture *to,
+                                   int toX,
+                                   int toY,
+                                   int scale) {
+  const int s = scale;
   if (source.x1 <= source.x0 || source.y1 <= source.y0) {
     return;
   }
@@ -575,7 +636,8 @@ void RecordRasterizer::capture(SDL_GPUCommandBuffer *cmd, const gpu::RecordCaptu
               {rect.x0 - source.originX, rect.y0 - source.originY, rect.x1 - source.originX, rect.y1 - source.originY},
               capture_,
               0,
-              0);
+              0,
+              source.scale);
 }
 
 void RecordRasterizer::execute(SDL_GPUCommandBuffer *cmd, const gpu::RecordRasterPlan &plan, bool inBetween) {
@@ -635,7 +697,6 @@ void RecordRasterizer::execute(SDL_GPUCommandBuffer *cmd, const gpu::RecordRaste
   SDL_EndGPUCopyPass(copy);
   work_.uploadBytes += quadBytes + opBytes + clutBytes + pixelBytes;
 
-  const int s = plan.scale;
   const int planes = 1 + static_cast<int>(canvases_.size());
   // A plane any depth-tested quad lands on draws every pass of this record against its depth, cleared first.
   std::array<bool, gpu::kRecordPlanes> depthCleared{};
@@ -647,8 +708,9 @@ void RecordRasterizer::execute(SDL_GPUCommandBuffer *cmd, const gpu::RecordRaste
     });
     Plane &target = plane(p);
     if (usesDepth[static_cast<std::size_t>(p)] && target.depth == nullptr) {
-      target.depth = device_.makeTexture(
-          {target.width * s, target.height * s}, depthFormat_, SDL_GPU_TEXTUREUSAGE_DEPTH_STENCIL_TARGET);
+      target.depth = device_.makeTexture({target.width * target.scale, target.height * target.scale},
+                                         depthFormat_,
+                                         SDL_GPU_TEXTUREUSAGE_DEPTH_STENCIL_TARGET);
     }
   }
   for (std::size_t b = 0; b < plan.batches.size(); b++) {
@@ -660,8 +722,15 @@ void RecordRasterizer::execute(SDL_GPUCommandBuffer *cmd, const gpu::RecordRaste
         continue;
       }
       const Plane &target = plane(p);
+      const int s = target.scale;
       const TargetUniform extent{static_cast<float>(target.width * s), static_cast<float>(target.height * s), {}};
-      const ParamsUniform params{s, target.originX, target.originY, 0};
+      ParamsUniform params{.scale = s, .originX = target.originX, .originY = target.originY, .imageScale = plan.scale};
+      if (p > 0 && canvases_[static_cast<std::size_t>(p - 1)].shape.crop()) {
+        const RecordCanvas &shape = canvases_[static_cast<std::size_t>(p - 1)].shape;
+        params.uiScale = shape.uiScale;
+        params.uiOriginX = shape.uiOriginX;
+        params.uiOriginY = shape.uiOriginY;
+      }
       SDL_PushGPUVertexUniformData(cmd, 0, &extent, sizeof(extent));
       SDL_PushGPUFragmentUniformData(cmd, 0, &params, sizeof(params));
       SDL_GPUColorTargetInfo colour = {};
@@ -711,7 +780,8 @@ void RecordRasterizer::execute(SDL_GPUCommandBuffer *cmd, const gpu::RecordRaste
                   range.dirty,
                   target.snapshot,
                   range.dirty.x0,
-                  range.dirty.y0);
+                  range.dirty.y0,
+                  target.scale);
     }
   }
   captureBefore(plan.batches.size());
@@ -774,7 +844,7 @@ void RecordRasterizer::drawQuads(SDL_GPURenderPass *pass,
 
 MappedTransfer RecordRasterizer::download(const RecordPicture &picture) {
   const RecordRect &rect = picture.rect;
-  const int s = std::max(scale_, 1);
+  const int s = std::max(picture.scale, 1);
   const SDL_Rect region{rect.x0 * s, rect.y0 * s, (rect.x1 - rect.x0) * s, (rect.y1 - rect.y0) * s};
   if (picture.texture == nullptr || region.w <= 0 || region.h <= 0) {
     return {};

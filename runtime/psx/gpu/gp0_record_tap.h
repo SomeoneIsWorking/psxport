@@ -35,6 +35,7 @@ struct DeviceProbe {
 // belongs to.
 struct Gp0Origin {
   std::uint32_t sourceAddress = 0;
+  std::uint32_t packet = 0; // guest address of the ordering-table packet carrying the word, 0 when none
   present::OwnerHandle owner = present::kNoOwner;
   std::optional<cpu::NotedPlace> place; // where a draw site stored this word's vertex (VertexPlaces)
 };
@@ -128,6 +129,7 @@ private:
   std::array<std::uint32_t, 16> placingSites_{}; // the draw site that stored each, 0 for none
   unsigned need_ = 0;
   std::uint32_t packetSource_ = 0;
+  std::uint32_t packetNode_ = 0;
   present::OwnerHandle packetOwner_ = present::kNoOwner;
   std::uint8_t packetCommand_ = 0;
   std::optional<present::OtSlot> slot_;
@@ -142,6 +144,7 @@ private:
   std::uint32_t polyLineOpcode_ = 0;
   std::uint32_t polyLineSource_ = 0;
   present::OwnerHandle polyLineOwner_ = present::kNoOwner;
+  std::uint32_t polyLineNode_ = 0;
 
   present::VramUpload upload_{};
   std::uint32_t uploadRemaining_ = 0;

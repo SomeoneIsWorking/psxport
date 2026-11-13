@@ -66,6 +66,7 @@ void FramePresenter::commit(Core *core, int guestFields) {
   present::FrameRecord &slot = freeSlot();
   core->gpuDevice().sealRecord(slot);
   slot.setWindows(present::frameWindows(*core));
+  present::classifyCropLayers(*core, slot.entries());
   core->game->bugReport.frameSealed(*core, slot.sequence());
   commitSealed(*core, slot, guestFields);
 }

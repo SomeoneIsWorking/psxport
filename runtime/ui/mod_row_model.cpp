@@ -16,6 +16,7 @@ struct ToggleRow {
 
 const char *const kOnOff[] = {"Off", "On"};
 const char *const kAspect[] = {"Vanilla", "16:9", "21:9", "Auto"};
+const char *const kWidescreen[] = {"Extend", "Crop"};
 // 0 = Auto, 1..4 = Vanilla(1x)/X2/X3/X4.
 const char *const kIres[] = {"Auto", "Vanilla", "X2", "X3", "X4"};
 
@@ -26,6 +27,13 @@ const ToggleRow kToggleRows[] = {
      },
      kAspect,
      4,
+     0},
+    {"widescreen",
+     [](Mods &m) {
+       return &m.widescreen;
+     },
+     kWidescreen,
+     2,
      0},
     {"ires",
      [](Mods &m) {

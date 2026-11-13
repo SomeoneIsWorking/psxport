@@ -159,7 +159,11 @@ void submitOrderingTable(Core &core, GpuDevice &device, std::uint32_t rootGuestA
         const std::uint32_t offset = node.gp0WordRamOffset(i);
         const std::uint32_t word = core.mem_r32(offset);
         const std::uint32_t address = guestAddressOf(offset);
-        device.gp0(word, {.sourceAddress = address, .owner = owner, .place = core.vertexPlaces.at(address, word)});
+        device.gp0(word,
+                   {.sourceAddress = address,
+                    .packet = node.guestAddress(),
+                    .owner = owner,
+                    .place = core.vertexPlaces.at(address, word)});
       }
     }
     if (const std::optional<present::OtSlot> empty = tables.emptyAfter(node.guestAddress())) {

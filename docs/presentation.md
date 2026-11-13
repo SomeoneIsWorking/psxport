@@ -484,6 +484,15 @@ The present shows the canvas at the display's per-column aspect, so 4:3 (M = 0) 
 image itself. Known differences: a canvas reaching past column 1023 does not wrap, and a third
 displayed buffer evicts one canvas, whose margins are black until redrawn.
 
+### Crop
+
+`widescreen = Crop` keeps the guest at 4:3 and shows the band of its picture the aspect keeps (`present::CropBand`), the
+world at `q * m` and the title's UI at `p * m` over the whole display, centred (plan 0203). The image stays the device's
+at S; each displayed buffer has a crop canvas (`gpu::cropCanvas`) that each primitive is planned onto first, at its
+layer's scale, before the image. The title names UI packets through `GuestWidescreenProjection::cropUiPacket`, asked at
+the seal and inside each replayed in-between; anything it does not name is world. Check: guest RAM after a warp equals
+the 4:3 run's, and `pshot` shows the HUD at its 4:3 size and place over the filled 16:9 world.
+
 ### The guest projection latch
 
 A runtime may return a `GuestWidescreenProjection`. Declaring an aspect widens nothing: the title calls

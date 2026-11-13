@@ -13,6 +13,7 @@ using psx::config::Layer;
 using psx::config::Var;
 
 Var<long> cv_aspect("aspect", ASPECT_4_3, {lucent::cvar::Persistence::Saved, "PSXPORT_ASPECT"});
+Var<long> cv_widescreen("widescreen", WIDESCREEN_EXTEND, {lucent::cvar::Persistence::Saved, "PSXPORT_WIDESCREEN"});
 Var<long> cv_ires("ires", 1, {lucent::cvar::Persistence::Saved, "PSXPORT_IRES"});
 // PSXPORT_FPS60 is this run's choice at the Override layer; the saved one stays in the file.
 Var<bool> cv_fps60("fps60", false, {lucent::cvar::Persistence::Saved, "PSXPORT_FPS60"});
@@ -25,7 +26,7 @@ Var<double> cv_picker_width_response("picker_width_response",
                                      0.25,
                                      {lucent::cvar::Persistence::Saved, "PSXPORT_PICKER_WIDTH_RESPONSE"});
 const psx::config::Registration kRegistration{
-    cv_aspect, cv_ires, cv_fps60, cv_depth, cv_picker_selected_share, cv_picker_slant, cv_picker_width_response};
+    cv_aspect, cv_widescreen, cv_ires, cv_fps60, cv_depth, cv_picker_selected_share, cv_picker_slant, cv_picker_width_response};
 
 constexpr long kMaxIres = 4;
 
@@ -58,6 +59,7 @@ void Mods::init(bool interpolates) {
 void Mods::reload() {
   aspect =
       static_cast<int>(cv_aspect.get() >= ASPECT_4_3 && cv_aspect.get() <= ASPECT_AUTO ? cv_aspect.get() : ASPECT_4_3);
+  widescreen = cv_widescreen.get() == WIDESCREEN_CROP ? WIDESCREEN_CROP : WIDESCREEN_EXTEND;
   ires = static_cast<int>(std::clamp(cv_ires.get(), 0L, kMaxIres));
   pickerSelectedShare = static_cast<float>(cv_picker_selected_share.get());
   pickerSlantPerWidth = static_cast<float>(cv_picker_slant.get());
@@ -74,6 +76,7 @@ void Mods::save() const {
     }
   };
   keep(cv_aspect, static_cast<long>(aspect));
+  keep(cv_widescreen, static_cast<long>(widescreen));
   keep(cv_ires, static_cast<long>(ires));
   keep(cv_depth, depth != 0);
   keep(cv_picker_selected_share, pickerSelectedShare);

@@ -39,6 +39,7 @@
 
 				<div class="section-heading">Display</div>
 				<select-button toggle="aspect"><key>Aspect Ratio</key><value>Vanilla</value></select-button>
+				<select-button toggle="widescreen"><key>Widescreen</key><value>Extend</value></select-button>
 				<select-button toggle="ires"><key>Internal Resolution</key><value>Vanilla</value></select-button>
 				<select-button toggle="fps60"><key>60fps Interpolation</key><value>Off</value></select-button>
 				<select-button toggle="depth"><key>Native Depth</key><value>On</value></select-button>

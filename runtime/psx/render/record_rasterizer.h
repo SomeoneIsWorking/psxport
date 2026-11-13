@@ -17,18 +17,21 @@
 
 namespace psx::render {
 
-// A texture and the rect of it to show, in native pixels; the texture holds them at the image scale. Only the
-// columns of `drawn` (inside `rect`, same rows) hold picture; the rest of `rect` shows black.
+// A texture and the rect of it to show, in its native pixels, each `scale` texels a side. Only the columns of `drawn`
+// (inside `rect`, same rows) hold picture; the rest of `rect` shows black.
 struct RecordPicture {
   SDL_GPUTexture *texture = nullptr;
   gpu::RecordRect rect;
   gpu::RecordRect drawn;
+  int scale = 1;
 };
 
-// What a present shows: the guest display (native VRAM pixels) and the widest margin either side can take.
+// What a present shows: the guest display (native VRAM pixels) and the widest margin either side can take, or the
+// band of it a crop keeps.
 struct RecordView {
   gpu::RecordRect display;
   int reach = 0;
+  present::CropBand crop;
 };
 
 // The image is VRAM at an integer scale, RG8 holding 1555 halfwords. Each record applies on top of
@@ -37,7 +40,8 @@ struct RecordView {
 // drawn window of the record's own windows (FrameRecord::windows), and a present shows the view window of the record
 // that last drew that canvas, black where that record drew nothing;
 // the VRAM image stays exactly the device's, and textures and copies read only it, except a declared
-// read-back page, which is read from the canvas pixels captured for it (gpu::RecordReadBack).
+// read-back page, which is read from the canvas pixels captured for it (gpu::RecordReadBack). With a crop, each displayed
+// buffer instead has a crop canvas (gpu::cropCanvas) holding the band at its own scale, and a present shows it whole.
 class RecordRasterizer {
 public:
   explicit RecordRasterizer(RenderDevice &device);
@@ -122,6 +126,7 @@ private:
     SDL_GPUTexture *depth = nullptr; // made when a record first depth-tests on this plane; cleared per record
     int width = 0;                   // native pixels
     int height = 0;
+    int scale = 0;   // texels per native pixel
     int originX = 0; // VRAM-space position of pixel (0, 0)
     int originY = 0;
   };
@@ -139,12 +144,16 @@ private:
                const present::FrameRecord &record,
                bool deviceAhead,
                std::span<const std::uint16_t> vram);
-  Plane makePlane(const gpu::RecordCanvas &shape);
+  Plane makePlane(const gpu::RecordCanvas &shape, int scale);
   void releasePlane(Plane &plane);
   // Keeps a canvas for `view`'s display, created from the image with empty margins and `windows`.
   void showCanvas(SDL_GPUCommandBuffer *cmd, const RecordView &view, const present::RecordWindows &windows);
   // The buffer's columns from the image; a new canvas is cleared first, a kept one keeps its margins.
   void seedCanvas(SDL_GPUCommandBuffer *cmd, Canvas &canvas, bool fresh);
+  // A new crop canvas: its band copied from the image at the canvas's scale.
+  void seedCrop(SDL_GPUCommandBuffer *cmd, Canvas &canvas);
+  // The canvas `view` shows at this image scale.
+  gpu::RecordCanvas viewShape(const RecordView &view) const;
   Canvas *canvasFor(const RecordView &view);
   // The shapes the planner draws `margins` into, in plane order.
   std::span<const gpu::RecordCanvas> canvasShapes(present::HorizontalMargins margins);
@@ -166,12 +175,14 @@ private:
                  bool depthTarget);
   // Copies the capture's canvas pixels into capture_, sized to them.
   void capture(SDL_GPUCommandBuffer *cmd, const gpu::RecordCapture &capture);
+  // `source` and the destination in native pixels of two textures at `scale`.
   void copyTexture(SDL_GPUCommandBuffer *cmd,
                    SDL_GPUTexture *from,
                    const gpu::RecordRect &source,
                    SDL_GPUTexture *to,
                    int toX,
-                   int toY);
+                   int toY,
+                   int scale);
   void ensureBuffer(Buffer &buffer, std::uint32_t bytes);
   void ensureTransfer(SDL_GPUTransferBuffer *&transfer,
                       std::uint32_t &size,

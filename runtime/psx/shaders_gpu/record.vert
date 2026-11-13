@@ -2,7 +2,7 @@
 // Record rasterizer: one rectangle of target pixels per RecordQuad, six vertices each.
 struct Quad {
     ivec4 rect; // x0, y0, x1, y1 in target pixels, half open
-    uvec4 info; // op index, param, row offset
+    uvec4 info; // op index, param, mapping (RecordMapping)
 };
 layout(std430, set = 0, binding = 0) readonly buffer Quads { Quad quads[]; };
 layout(set = 1, binding = 0) uniform Target { vec4 size; } target;

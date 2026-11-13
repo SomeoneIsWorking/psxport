@@ -74,6 +74,13 @@ bool ReplayFrame::replay(Core &core, float t, Capture &capture) {
   PacketChainWalker(EmitMemory(core), PacketBound::anywhere())
       .capture(*head, capture.packets, capture.words, capture.places);
   capture.windows = frameWindows(core);
+  capture.uiPackets.clear();
+  for (const gpu::CapturedPacket &packet : capture.packets) {
+    if (cropShowsUi(core, packet.address)) {
+      capture.uiPackets.push_back(packet.address);
+    }
+  }
+  std::ranges::sort(capture.uiPackets);
   return true;
 }
 
@@ -174,6 +181,12 @@ const FrameRecord *ReplayFrame::assemble(const FrameRecord &shown,
     if (primitive != nullptr && !cluts_.resolve(assembled, *primitive, vram)) {
       lucent::warn("replay", "record {}'s in-between {} filled the CLUT pool", shown.sequence(), k);
       return nullptr;
+    }
+  }
+  // The replay drew these as its own frame, so they take the layers it gave their packets.
+  for (RecordEntry &entry : spliced) {
+    if (auto *primitive = std::get_if<DrawPrimitive>(&entry)) {
+      primitive->ui = std::ranges::binary_search(capture.uiPackets, primitive->packet);
     }
   }
   return &assembled;

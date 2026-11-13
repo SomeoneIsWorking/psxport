@@ -105,6 +105,7 @@ void Gp0RecordTap::onGp0(std::uint32_t word, const Gp0Origin &origin, const Devi
   case Mode::Command:
     if (words_.empty()) {
       packetSource_ = origin.sourceAddress;
+      packetNode_ = origin.packet;
       packetOwner_ = origin.owner;
       packetCommand_ = static_cast<std::uint8_t>(word >> 24);
       need_ = firstDispatchWords(word);
@@ -236,6 +237,7 @@ void Gp0RecordTap::placeVertex(present::DrawPrimitive &primitive,
 
 void Gp0RecordTap::stampPacket(present::DrawPrimitive &primitive) {
   primitive.slot = slot_;
+  primitive.packet = packetNode_;
   primitive.owner = packetOwner_;
   primitive.command = packetCommand_;
 }
@@ -325,6 +327,7 @@ void Gp0RecordTap::executeCommand(const DeviceProbe &probe) {
       polyLineOpcode_ = words_[0];
       polyLineSource_ = packetSource_;
       polyLineOwner_ = packetOwner_;
+      polyLineNode_ = packetNode_;
       need_ = gouraud ? 2u : 1u;
     }
     words_.clear();
@@ -463,6 +466,7 @@ void Gp0RecordTap::consumePolyLineWord(std::uint32_t word, const DeviceProbe &pr
   expectedDispatches_ = 1;
   packetSource_ = polyLineSource_;
   packetOwner_ = polyLineOwner_;
+  packetNode_ = polyLineNode_;
   packetCommand_ = static_cast<std::uint8_t>(polyLineOpcode_ >> 24);
   recordLineSegment(polyLinePoint_, to, gouraud, command.flags().semiTransparent, probe);
   polyLinePoint_ = to;
