@@ -162,7 +162,8 @@ addresses**. Empty (the default) disarms. For each selected override it shadows 
 `PSXPORT_OVERRIDE_DIFF_FIRST` calls (default 16) and every `PSXPORT_OVERRIDE_DIFF_EVERY`th call after
 that (default 64; 0 = none): the original runs live, the native runs against the restored entry state
 with the original's device traffic replayed to it, the two post-states are compared under the MIPS O32
-contract, and the run continues from the **original's** state. `PSXPORT_OVERRIDE_DIFF_DEAD_STACK`
+contract, and the run continues from the **original's** state. An override registered with
+`NativeReturn::Void` (the guest function returns nothing) is not judged on v0/v1. `PSXPORT_OVERRIDE_DIFF_DEAD_STACK`
 (default 8192) bounds the callee-frame window below the entry `sp` whose differences are counted but not
 judged. The log line of a mismatch lists up to eight further differences after the first. `PSXPORT_OVERRIDE_DIFF_REPORT` (default `scratch/override_differential.json`, cwd-relative) is the
 JSON report, read by hand after the run. An unparsable list is refused by name and arms nothing, so

@@ -151,7 +151,7 @@ bool OverrideDifferential::samples(const DifferentialKeyStats &stats) const {
 }
 
 std::optional<ExecutionResult>
-OverrideDifferential::intercept(NativeKey key, std::string_view name, NativeFunction function) {
+OverrideDifferential::intercept(NativeKey key, std::string_view name, NativeFunction function, NativeReturn returns) {
   if (shadowing_ || !selects(key, name)) {
     return std::nullopt;
   }
@@ -161,10 +161,11 @@ OverrideDifferential::intercept(NativeKey key, std::string_view name, NativeFunc
     return std::nullopt;
   }
   ++stats.sampled;
-  return shadow(stats, function);
+  return shadow(stats, function, returns);
 }
 
-ExecutionResult OverrideDifferential::shadow(DifferentialKeyStats &stats, NativeFunction function) {
+ExecutionResult
+OverrideDifferential::shadow(DifferentialKeyStats &stats, NativeFunction function, NativeReturn returns) {
   const ShadowingScope shadowing(shadowing_);
   const NativeKey key = stats.key;
   const std::uint32_t entrySp = core_.r[kSp];
@@ -245,7 +246,8 @@ ExecutionResult OverrideDifferential::shadow(DifferentialKeyStats &stats, Native
     record(stats,
            judgeCompletedCall({afterOriginal, original, live.effects()},
                               {afterNative, native, replay.effects()},
-                              DeadStack{entrySp, config_.deadStackBytes}));
+                              DeadStack{entrySp, config_.deadStackBytes},
+                              returns));
   }
   return original;
 }

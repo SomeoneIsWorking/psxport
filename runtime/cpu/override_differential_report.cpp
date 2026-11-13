@@ -14,7 +14,8 @@ namespace {
 
 inline constexpr std::string_view kSchema = "psxport.override-differential/1";
 inline constexpr std::string_view kCompared =
-    "MIPS O32 results and callee-saved registers (v0 v1 s0-s7 gp sp s8 ra), the continuation pc, COP0 "
+    "MIPS O32 results and callee-saved registers (v0 v1 s0-s7 gp sp s8 ra; v0 v1 not for an override "
+    "registered as NativeReturn::Void), the continuation pc, COP0 "
     "status, all 64 GTE registers, every main-RAM and scratchpad byte outside the dead-stack window below "
     "the entry sp, and the ordered log of device accesses and host services made through Core's memory API "
     "and guest dispatch";

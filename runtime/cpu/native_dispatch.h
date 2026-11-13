@@ -27,6 +27,7 @@ struct NativeRegistration {
   NativeKey key;
   std::string_view name;
   NativeFunction function = nullptr;
+  NativeReturn returns = NativeReturn::Value;
 };
 
 class NativeDispatcher {
@@ -60,6 +61,7 @@ private:
   struct Entry {
     std::string name;
     NativeFunction function = nullptr;
+    NativeReturn returns = NativeReturn::Value;
   };
 
   GuestHostDispatchKind classifyUncached(std::uint32_t guestAddress);
@@ -78,10 +80,17 @@ private:
 
 // The one way an override is registered: the key's image identity is resolved here. Refuses a null
 // handler, an address no active image owns, and a key that already has an owner.
-std::optional<NativeKey>
-tryInstallNativeOverride(Core &core, std::uint32_t guestAddress, std::string_view name, NativeFunction function);
+std::optional<NativeKey> tryInstallNativeOverride(Core &core,
+                                                  std::uint32_t guestAddress,
+                                                  std::string_view name,
+                                                  NativeFunction function,
+                                                  NativeReturn returns = NativeReturn::Value);
 // The same refusal, then an abort, for a boot-time override catalog.
-void installNativeOverride(Core &core, std::uint32_t guestAddress, std::string_view name, NativeFunction function);
+void installNativeOverride(Core &core,
+                           std::uint32_t guestAddress,
+                           std::string_view name,
+                           NativeFunction function,
+                           NativeReturn returns = NativeReturn::Value);
 // Removes the override the active image identity resolves at `guestAddress`; refuses an unowned address.
 bool removeNativeOverride(Core &core, std::uint32_t guestAddress);
 ExecutionResult dispatchGuestHostService(Core &core, std::uint32_t guestAddress);

@@ -78,12 +78,18 @@ void noteFirst(DifferentialOutcome &outcome, DifferentialDifference difference) 
   }
 }
 
-void compareRegisters(const CallObservation &original, const CallObservation &native, DifferentialOutcome &outcome) {
+void compareRegisters(const CallObservation &original,
+                      const CallObservation &native,
+                      NativeReturn returns,
+                      DifferentialOutcome &outcome) {
   if (original.result.guestPc != native.result.guestPc) {
     ++outcome.registersDiffering;
     noteFirst(outcome, {"continuation pc", hexWord(original.result.guestPc), hexWord(native.result.guestPc)});
   }
   for (const std::uint32_t index : kO32PreservedOrResultRegisters) {
+    if (returns == NativeReturn::Void && (index == kV0 || index == kV1)) {
+      continue;
+    }
     const std::uint32_t a = original.state.gpr[index];
     const std::uint32_t b = native.state.gpr[index];
     if (a != b) {
@@ -171,12 +177,14 @@ void compareSideEffects(const CallObservation &original, const CallObservation &
 
 } // namespace
 
-DifferentialOutcome
-judgeCompletedCall(const CallObservation &original, const CallObservation &native, DeadStack deadStack) {
+DifferentialOutcome judgeCompletedCall(const CallObservation &original,
+                                       const CallObservation &native,
+                                       DeadStack deadStack,
+                                       NativeReturn returns) {
   DifferentialOutcome outcome;
   outcome.sideEffectsOriginal = original.effects.size();
   outcome.sideEffectsNative = native.effects.size();
-  compareRegisters(original, native, outcome);
+  compareRegisters(original, native, returns, outcome);
   compareMemory(original, native, deadStackWindow(deadStack), outcome);
   compareSideEffects(original, native, outcome);
   outcome.verdict = outcome.difference ? DifferentialVerdict::Mismatch : DifferentialVerdict::Match;

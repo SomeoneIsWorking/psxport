@@ -85,7 +85,8 @@ public:
   // The dispatcher's hook for one call of an installed override. Returns the call's result when this
   // call was shadowed (the run continues from the ORIGINAL's state), or nullopt when the key is not
   // selected or this call is not sampled — the dispatcher then invokes the native as usual.
-  std::optional<ExecutionResult> intercept(NativeKey key, std::string_view name, NativeFunction function);
+  std::optional<ExecutionResult>
+  intercept(NativeKey key, std::string_view name, NativeFunction function, NativeReturn returns);
 
   const OverrideDifferentialConfig &config() const;
   const std::vector<DifferentialKeyStats> &keys() const;
@@ -99,7 +100,7 @@ private:
   bool selects(NativeKey key, std::string_view name) const;
   DifferentialKeyStats &statsFor(NativeKey key, std::string_view name);
   bool samples(const DifferentialKeyStats &stats) const;
-  ExecutionResult shadow(DifferentialKeyStats &stats, NativeFunction function);
+  ExecutionResult shadow(DifferentialKeyStats &stats, NativeFunction function, NativeReturn returns);
   void record(DifferentialKeyStats &stats, DifferentialOutcome outcome);
   void logSummary() const;
 

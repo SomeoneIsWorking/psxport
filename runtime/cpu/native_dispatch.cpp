@@ -50,8 +50,8 @@ bool NativeDispatcher::install(NativeRegistration registration) {
     lucent::error("native-dispatch", "refused incomplete native override registration");
     return false;
   }
-  const auto [entry, inserted] =
-      entries_.try_emplace(registration.key, Entry{std::string(registration.name), registration.function});
+  const auto [entry, inserted] = entries_.try_emplace(
+      registration.key, Entry{std::string(registration.name), registration.function, registration.returns});
   if (!inserted) {
     lucent::error("native-dispatch",
                   "refused duplicate override '{}' at image {}:{} address 0x{:08X}; owned by '{}'",
@@ -336,7 +336,8 @@ std::optional<ExecutionResult> NativeDispatcher::invoke(NativeKey key) {
     return std::nullopt;
   }
   if (differential_) {
-    if (auto shadowed = differential_->intercept(key, entry->second.name, entry->second.function)) {
+    if (auto shadowed =
+            differential_->intercept(key, entry->second.name, entry->second.function, entry->second.returns)) {
       return shadowed;
     }
   }
@@ -419,8 +420,8 @@ void takePendingInterrupts(Core &core) {
   core.active_native_address = active;
 }
 
-std::optional<NativeKey>
-tryInstallNativeOverride(Core &core, std::uint32_t guestAddress, std::string_view name, NativeFunction function) {
+std::optional<NativeKey> tryInstallNativeOverride(
+    Core &core, std::uint32_t guestAddress, std::string_view name, NativeFunction function, NativeReturn returns) {
   if (function == nullptr) {
     lucent::error(
         "native-dispatch", "cannot install '{}' at 0x{:08X}: it has no native implementation", name, guestAddress);
@@ -436,14 +437,15 @@ tryInstallNativeOverride(Core &core, std::uint32_t guestAddress, std::string_vie
     return std::nullopt;
   }
   const NativeKey key{*image, guestAddress};
-  if (!core.nativeDispatcher().install(NativeRegistration{key, name, function})) {
+  if (!core.nativeDispatcher().install(NativeRegistration{key, name, function, returns})) {
     return std::nullopt;
   }
   return key;
 }
 
-void installNativeOverride(Core &core, std::uint32_t guestAddress, std::string_view name, NativeFunction function) {
-  if (!tryInstallNativeOverride(core, guestAddress, name, function)) {
+void installNativeOverride(
+    Core &core, std::uint32_t guestAddress, std::string_view name, NativeFunction function, NativeReturn returns) {
+  if (!tryInstallNativeOverride(core, guestAddress, name, function, returns)) {
     std::abort();
   }
 }

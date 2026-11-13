@@ -31,8 +31,10 @@ struct DeadStack {
 };
 
 // Judges a call both paths COMPLETED (both returned, neither performed an unreplayable effect): Match, or
-// Mismatch with the first difference and the difference counts.
-DifferentialOutcome
-judgeCompletedCall(const CallObservation &original, const CallObservation &native, DeadStack deadStack);
+// Mismatch with the first difference and the difference counts. A Void function's v0/v1 are not judged.
+DifferentialOutcome judgeCompletedCall(const CallObservation &original,
+                                       const CallObservation &native,
+                                       DeadStack deadStack,
+                                       NativeReturn returns);
 
 } // namespace psx::cpu
