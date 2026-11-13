@@ -198,14 +198,16 @@ private:
                  bool depthTarget);
   // Copies the capture's canvas pixels into capture_, sized to them.
   void capture(SDL_GPUCommandBuffer *cmd, const gpu::RecordCapture &capture);
-  // `source` and the destination in native pixels of two textures at `scale`.
-  void copyTexture(SDL_GPUCommandBuffer *cmd,
-                   SDL_GPUTexture *from,
-                   const gpu::RecordRect &source,
-                   SDL_GPUTexture *to,
-                   int toX,
-                   int toY,
-                   int scale);
+  // `source` of `from` to (`toX`, `toY`) of `to`, both in native pixels of textures at `scale`.
+  struct TextureCopy {
+    SDL_GPUTexture *from = nullptr;
+    gpu::RecordRect source;
+    SDL_GPUTexture *to = nullptr;
+    int toX = 0;
+    int toY = 0;
+    int scale = 1;
+  };
+  void copyTexture(SDL_GPUCommandBuffer *cmd, const TextureCopy &copy);
   void ensureBuffer(Buffer &buffer, std::uint32_t bytes);
   void ensureTransfer(SDL_GPUTransferBuffer *&transfer,
                       std::uint32_t &size,
