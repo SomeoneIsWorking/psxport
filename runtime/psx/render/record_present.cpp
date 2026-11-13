@@ -76,6 +76,7 @@ void RenderState::presentRecord(present::PresentInputs &inputs) {
   const bool depth = game_.mods.depth != 0;
   // Vertex places are kept only while presents draw them: above native scale or testing depth.
   core.vertexPlaces.track(depth || scale > 1);
+  record_->useOutline(game_.outlineText.atlas());
   SDL_GPUCommandBuffer *cmd = device_.acquire();
   presentsRecord_ = true;
   recordFade_[0] = inputs.fade_mode;

@@ -27,6 +27,8 @@ struct StockReadLanding;
 namespace psx::present {
 class CropUiLayers;
 class GuestWidescreenProjection;
+struct OutlineFont;
+class OutlineGlyphs;
 class ReplayFrame;
 } // namespace psx::present
 namespace psx::state {
@@ -175,6 +177,15 @@ public:
   }
   // The title's UI naming for crop widescreen; a title without one is not offered Crop.
   virtual const psx::present::CropUiLayers *cropUiLayers(Core &core) const {
+    (void)core;
+    return nullptr;
+  }
+  // The title's bitmap font and its naming of the packets that draw it, drawn from outline fonts above native scale
+  // (plan 0207); a title without both draws its bitmap.
+  virtual const psx::present::OutlineFont *outlineFont() const {
+    return nullptr;
+  }
+  virtual const psx::present::OutlineGlyphs *outlineGlyphs(Core &core) const {
     (void)core;
     return nullptr;
   }

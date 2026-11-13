@@ -16,3 +16,6 @@
 [submodule "vendor/setup-ui"]
 	path = vendor/setup-ui
 	url = https://github.com/SomeoneIsWorking/setup-ui.git
+[submodule "vendor/msdfgen"]
+	path = vendor/msdfgen
+	url = https://github.com/Chlumsky/msdfgen.git

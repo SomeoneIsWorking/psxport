@@ -17,7 +17,7 @@
 namespace psx::state {
 namespace {
 
-constexpr std::uint8_t kGpuLayoutVersion = 8;
+constexpr std::uint8_t kGpuLayoutVersion = 9;
 
 void writeMargins(psx::platform::BlobWriter &out, const present::HorizontalMargins &margins) {
   out.i32(margins.left);

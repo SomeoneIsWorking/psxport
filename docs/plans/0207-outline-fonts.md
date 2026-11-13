@@ -11,29 +11,48 @@ timing and colours are the game's.
 
 ## Design
 
-- One framework owner, `runtime/psx/present/outline_text`, renders a run of codepoints at a guest
-  screen position, scale and colour as MSDF glyphs in the record's own ordering-table slot, so it
-  layers exactly where the bitmap text did and follows widescreen anchoring and 60 fps blending.
+- One framework owner, `runtime/psx/present/outline_text`, keeps an MSDF atlas of the title's font
+  page; the record rasterizer samples it instead of VRAM for the primitives that drew font cells, so
+  each glyph stays in its ordering-table slot, widescreen place and 60 fps replay.
 - Each title declares its font: the texture page and cell grid of its bitmap font and the
   cell-to-codepoint table, RE'd from its text drawer and recorded in its decomp. The title's text
-  drawer is the seam: it reports each string it draws; the guest still builds its primitives, and the
-  presenter replaces those cells with outline glyphs.
+  drawer is the seam: it names the packets it linked; the guest still builds its primitives.
 - Fonts are permissive (SIL OFL or more permissive), one per title chosen to match the original's
   shape, shipped with the framework; no game font is redistributed.
 - The port's own UI already uses outline fonts (RmlUi with Fira Sans).
 
 ## Phases
 
-1. `outline_text` and Tomba 2's dialogue and menu font.
-2. Spyro 2/3 (one shared font owner in psx-spyro `game/`), then each title as it is worked. Spyro 1 has
-   nothing to replace: its text is mesh letters the record rasterizes at the internal resolution
-   (`spyro1.text-glyphs`, open-spyro).
+1. Spyro 2/3 (one shared font owner in psx-spyro `game/render/text_font.h`): built. Spyro 1 has nothing to
+   replace: its text is mesh letters the record rasterizes at the internal resolution (`spyro1.text-glyphs`,
+   open-spyro).
+2. Tomba 2's dialogue and menu font, then each title as it is worked.
 
-## Spyro 2/3 seam
+## As built
 
-The text layouts (S2 `0x8004A374`/`0x8004A59C`, S3 `0x8002E748`/`0x8002E970`) already run as overrides
-(`game/render/overlay_pair`). Each reports the packets it wrote with their character code; the record op for
-such a packet samples the MSDF atlas instead of VRAM, as `kOpReadBack` samples the read-back capture, so
-it stays in its ordering-table slot, its widescreen place and its replay. Glyph metrics come from the guest
-cell (12x9 at the cell's place), colour from the packet; MSDF generation is msdfgen (MIT) over the
-FreeType the UI already links.
+- `runtime/psx/present/outline_text` owns it. A title's `GameRuntime::outlineFont()` names its page (texture
+  page, cell size and grid, the cell-to-codepoint table, the text face and its weight, the shadow's CLUT
+  indices and offset); `outlineGlyphs(core)` names the ordering-table packets its text drawer filled with
+  cells. At seal, `markGlyphs` flags those textured primitives (`DrawPrimitive::outline`); a replayed
+  in-between carries the same flags through `Capture::glyphPackets`.
+- A frame that drew flagged packets brings the atlas up to date: each cell's bitmap is read from VRAM, and a
+  cell whose bitmap or codepoint changed gets a new field: the codepoint's outline (the title's face, or
+  PromptFont for a button cell, whose codepoint the pad in hand picks through `GlyphSet`) fitted to the box of
+  the cell's glyph texels, as an MSDF in RGB and the shadow's SDF, moved by the shadow offset, in A, eight
+  field pixels a texel. Fields take their sign from the outline's nonzero fill, then msdfgen's error
+  correction (its scanline pass): variable faces keep overlapping contours.
+- Colours stay the guest's: the index texture holds per cell row the CLUT index most of the row's glyph
+  texels use (R) and its shadow's (G), so the glyph shades down the cell as the bitmap does; the packet's CLUT,
+  modulation and blending apply as for any texel.
+- The record op of a flagged primitive (`kOpOutline`, set only at internal scale above 1) samples the atlas
+  instead of VRAM in `record.frag`, so it keeps its ordering-table slot, crop UI place and replay. At scale 1
+  the bitmap draws.
+- Check: Spyro 2 Summer Forest pause and Spyro 3 Sunrise Spring pause and Help at `ires=0`, 3840x2160
+  (`warp 0/0/0`, start, down, cross): letters and button glyphs sharp, shaded and shadowed as the bitmap.
+
+## Not covered
+
+- Text Spyro 2/3 draw outside their two layouts: the title screen's memory-card text, Spyro 3's Atlas book
+  font, the HUD counters.
+- Button cells take the guest's icon colours (Cross blue, Square pink, Circle red, Triangle green) whatever the
+  family's letters.

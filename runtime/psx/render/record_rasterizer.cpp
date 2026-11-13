@@ -16,10 +16,10 @@ using gpu::RecordRect;
 
 constexpr SDL_GPUTextureFormat kVramFormat = SDL_GPU_TEXTUREFORMAT_R8G8_UNORM;
 constexpr ShaderCode kRecordVertex{spv_g_record_vert, spv_g_record_vert_len, {0, 1, 1}};
-constexpr ShaderCode kRecordFragment{spv_g_record_frag, spv_g_record_frag_len, {3, 1, 3}};
-constexpr ShaderCode kRecordDepthFragment{spv_g_record_depth_frag, spv_g_record_depth_frag_len, {3, 1, 3}};
+constexpr ShaderCode kRecordFragment{spv_g_record_frag, spv_g_record_frag_len, {5, 1, 3}};
+constexpr ShaderCode kRecordDepthFragment{spv_g_record_depth_frag, spv_g_record_depth_frag_len, {5, 1, 3}};
 constexpr ShaderCode kRecordDepthBackFragment{
-    spv_g_record_depth_back_frag, spv_g_record_depth_back_frag_len, {3, 1, 3}};
+    spv_g_record_depth_back_frag, spv_g_record_depth_back_frag_len, {5, 1, 3}};
 constexpr std::uint32_t kDepthRunFlags =
     gpu::kOpDepthTest | gpu::kOpDepthObject | gpu::kOpDepthModel | gpu::kOpDepthGroup;
 // Stencil: the high bit marks where a run's test draw passed, until its write draw clears it; the low bits name the
@@ -43,6 +43,10 @@ struct ParamsUniform {
   std::int32_t uiOriginX = 0;
   std::int32_t uiOriginY = 0;
   std::int32_t unused = 0;
+  std::int32_t outlineScale = 0;
+  std::int32_t outlineOriginX = 0;
+  std::int32_t outlineOriginY = 0;
+  std::int32_t unusedOutline = 0;
 };
 
 std::uint64_t coveredPixels(std::span<const gpu::RecordQuad> quads) {
@@ -170,6 +174,8 @@ RecordRasterizer::RecordRasterizer(RenderDevice &device)
 
 RecordRasterizer::~RecordRasterizer() {
   releaseImage();
+  device_.release(outlineFields_);
+  device_.release(outlineIndices_);
   for (Buffer *buffer : {&quads_, &ops_, &cluts_, &pixels_}) {
     device_.release(buffer->buffer);
   }
@@ -207,6 +213,21 @@ void RecordRasterizer::releasePlane(Plane &plane) {
     device_.release(*texture);
   }
   plane = {};
+}
+
+void RecordRasterizer::useOutline(const present::OutlineAtlas *atlas) {
+  if (atlas == nullptr || atlas->generation == outlineGeneration_) {
+    return;
+  }
+  device_.release(outlineFields_);
+  device_.release(outlineIndices_);
+  outlineFields_ =
+      device_.makeFilledTexture({atlas->width * atlas->scale, atlas->height * atlas->scale}, atlas->fields);
+  outlineIndices_ = device_.makeFilledTexture({atlas->width, atlas->height}, atlas->indices);
+  outlineGeneration_ = atlas->generation;
+  outlineScale_ = atlas->scale;
+  outlineOriginX_ = atlas->originX;
+  outlineOriginY_ = atlas->originY;
 }
 
 void RecordRasterizer::releaseImage() {
@@ -786,6 +807,11 @@ void RecordRasterizer::execute(SDL_GPUCommandBuffer *cmd, const gpu::RecordRaste
       const int s = target.scale;
       const TargetUniform extent{static_cast<float>(target.width * s), static_cast<float>(target.height * s), {}};
       ParamsUniform params{.scale = s, .originX = target.originX, .originY = target.originY, .imageScale = plan.scale};
+      if (outlineFields_ != nullptr) {
+        params.outlineScale = outlineScale_;
+        params.outlineOriginX = outlineOriginX_;
+        params.outlineOriginY = outlineOriginY_;
+      }
       if (p > 0 && canvases_[static_cast<std::size_t>(p - 1)].shape.crop()) {
         const RecordCanvas &shape = canvases_[static_cast<std::size_t>(p - 1)].shape;
         params.uiScale = shape.uiScale;
@@ -819,9 +845,15 @@ void RecordRasterizer::execute(SDL_GPUCommandBuffer *cmd, const gpu::RecordRaste
       SDL_GPUSampler *nearest = device_.nearestSampler();
       // With no capture the binding is never sampled: only a held read-back plans read-back ops.
       SDL_GPUTexture *readBack = capture_ != nullptr ? capture_ : vram_.snapshot;
-      const SDL_GPUTextureSamplerBinding snapshots[3] = {
-          {target.snapshot, nearest}, {vram_.snapshot, nearest}, {readBack, nearest}};
-      SDL_BindGPUFragmentSamplers(pass, 0, snapshots, 3);
+      // Likewise the atlas: with none, params.outline names no scale and no op samples it.
+      SDL_GPUTexture *fields = outlineFields_ != nullptr ? outlineFields_ : vram_.snapshot;
+      SDL_GPUTexture *indices = outlineIndices_ != nullptr ? outlineIndices_ : vram_.snapshot;
+      const SDL_GPUTextureSamplerBinding snapshots[5] = {{target.snapshot, nearest},
+                                                         {vram_.snapshot, nearest},
+                                                         {readBack, nearest},
+                                                         {fields, device_.linearSampler()},
+                                                         {indices, nearest}};
+      SDL_BindGPUFragmentSamplers(pass, 0, snapshots, 5);
       SDL_GPUBuffer *fragmentBuffers[3] = {ops_.buffer, cluts_.buffer, pixels_.buffer};
       SDL_BindGPUFragmentStorageBuffers(pass, 0, fragmentBuffers, 3);
       const auto &quads = plan.quads[static_cast<std::size_t>(p)];

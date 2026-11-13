@@ -71,6 +71,15 @@ constexpr std::uint16_t vramHalfWord(std::span<const std::uint16_t> vram, VramPo
   return vram[(row * kVramWidth) + column];
 }
 
+// The CLUT index at (u, v) of an indexed page, without the texture window. `halfWordAt(VramPoint)` reads the VRAM
+// halfword there.
+template <class HalfWordAt> constexpr int fetchIndex(const HalfWordAt &halfWordAt, TexPage page, int u, int v) {
+  const int shift = 2 - static_cast<int>(page.depth); // log2 of the texels in one halfword
+  const int bits = 16 >> shift;
+  const std::uint16_t word = halfWordAt(VramPoint{page.x + (u >> shift), page.y + v});
+  return (word >> ((u & ((1 << shift) - 1)) * bits)) & ((1 << bits) - 1);
+}
+
 // The texel at (u, v) of a page as the GPU fetches it, without the texture window; 0 is transparent.
 // `halfWordAt(VramPoint)` reads the VRAM halfword there.
 template <class HalfWordAt>
@@ -78,11 +87,7 @@ constexpr std::uint16_t fetchTexel(const HalfWordAt &halfWordAt, TexPage page, V
   if (page.depth == TexDepth::Direct15 || page.depth == TexDepth::Reserved) {
     return halfWordAt(VramPoint{page.x + u, page.y + v});
   }
-  const int shift = 2 - static_cast<int>(page.depth); // log2 of the texels in one halfword
-  const int bits = 16 >> shift;
-  const std::uint16_t word = halfWordAt(VramPoint{page.x + (u >> shift), page.y + v});
-  const int index = (word >> ((u & ((1 << shift) - 1)) * bits)) & ((1 << bits) - 1);
-  return halfWordAt(VramPoint{clut.x + index, clut.y});
+  return halfWordAt(VramPoint{clut.x + fetchIndex(halfWordAt, page, u, v), clut.y});
 }
 
 // fetchTexel over a whole VRAM image.

@@ -109,6 +109,7 @@ enum RecordOpFlag : std::uint32_t {
   // draw and then writes its depth in another; consecutive groups differ in parity.
   kOpDepthGroup = 1u << 27,
   kOpDepthModel = 1u << 28, // DepthOrder::Model: tests against all but its own model's parts, then writes its depth
+  kOpOutline = 1u << 29,    // texels from the outline font atlas (present::OutlineAtlas), not VRAM; above native scale
 };
 
 // One rectangle of a plane's pixels belonging to an op, scaled, half open. Op origins are in VRAM space,
@@ -254,9 +255,8 @@ public:
                                const present::DepthTest *depthTest);
   // The whole of `vram` written over the image and the band of each crop canvas, for a record that cannot be
   // replayed; ends any read-back texture.
-  const RecordRasterPlan &planVramUpload(std::span<const std::uint16_t> vram,
-                                         int scale,
-                                         std::span<const RecordCanvas> canvases);
+  const RecordRasterPlan &
+  planVramUpload(std::span<const std::uint16_t> vram, int scale, std::span<const RecordCanvas> canvases);
   // The band of each crop canvas among `canvases` copied from the image, for a canvas just made.
   const RecordRasterPlan &planCropSeed(int scale, std::span<const RecordCanvas> canvases);
 

@@ -4,6 +4,7 @@
 #include "frame_record.h"
 #include "gpu_work.h"
 #include "guest_widescreen_projection.h"
+#include "outline_text.h"
 #include "record_raster_setup.h"
 #include "render_device.h"
 
@@ -84,6 +85,9 @@ public:
             int scale,
             const RecordView &view,
             const present::DepthTest *depthTest);
+
+  // The outline font atlas kOpOutline ops sample from the next show() on; uploaded when its generation is new.
+  void useOutline(const present::OutlineAtlas *atlas);
 
   // Whether the next show() counts its covered pixels; every other GpuWork count is always kept.
   void countPixels(bool counting) {
@@ -247,6 +251,13 @@ private:
   SDL_GPUTexture *capture_ = nullptr;
   int captureWidth_ = 0; // native pixels, at scale_
   int captureHeight_ = 0;
+  // The outline atlas (present::OutlineAtlas) as uploaded.
+  SDL_GPUTexture *outlineFields_ = nullptr;
+  SDL_GPUTexture *outlineIndices_ = nullptr;
+  std::uint64_t outlineGeneration_ = 0;
+  int outlineScale_ = 0;
+  int outlineOriginX_ = 0;
+  int outlineOriginY_ = 0;
 
   Buffer quads_;
   Buffer ops_;

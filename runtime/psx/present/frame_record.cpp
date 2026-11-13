@@ -293,7 +293,8 @@ void writeEntry(BlobWriter &out, const DrawPrimitive &primitive) {
                           primitive.modulate,
                           primitive.flipX,
                           primitive.flipY,
-                          primitive.ui}) {
+                          primitive.ui,
+                          primitive.outline}) {
     out.boolean(flag);
   }
   out.i32(primitive.width);
@@ -322,7 +323,8 @@ DrawPrimitive readPrimitive(BlobReader &in) {
                      &primitive.modulate,
                      &primitive.flipX,
                      &primitive.flipY,
-                     &primitive.ui}) {
+                     &primitive.ui,
+                     &primitive.outline}) {
     *flag = in.boolean();
   }
   primitive.width = in.i32();

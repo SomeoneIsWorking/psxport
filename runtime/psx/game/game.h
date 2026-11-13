@@ -23,6 +23,7 @@
 #include "memcard.h"
 #include "mods.h"
 #include "native_fmv.h"
+#include "outline_text.h"
 #include "owner_journal.h"
 #include "pad_frame_probes.h"
 #include "pad_input.h"
@@ -85,6 +86,7 @@ public:
   psx::frame::FramePresenter presentation;           // non-temporal current-frame fence, present and pacing owner
   psx::present::OwnerJournal ownerJournal;           // draws with no owner and held intervals, per screen
   psx::present::GuestPresentationState guestDisplay; // latched only when the title publishes matching guest projection
+  psx::present::OutlineText outlineText;             // the title's font cells as outline glyphs (plan 0207)
   // A resume replay: the pacer does not sleep, movies run uncapped, audio is dropped.
   bool fastForwarding() const {
     return pad.fastForwarding();

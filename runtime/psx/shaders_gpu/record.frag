@@ -14,11 +14,14 @@ layout(location = 0) out vec4 o_col;
 layout(set = 2, binding = 0) uniform sampler2D u_target; // the target plane before this batch
 layout(set = 2, binding = 1) uniform sampler2D u_vram;   // the VRAM image before this batch
 layout(set = 2, binding = 2) uniform sampler2D u_readBack; // the read-back capture (RecordReadBack)
-layout(std430, set = 2, binding = 3) readonly buffer Ops { uint ops[]; };
-layout(std430, set = 2, binding = 4) readonly buffer Cluts { uint cluts[]; };
-layout(std430, set = 2, binding = 5) readonly buffer Pixels { uint pixels[]; };
-// plane: scale, origin x, origin y (native), the VRAM image's scale; ui: scale, origin x, origin y (UI pixels).
-layout(set = 3, binding = 0) uniform Params { ivec4 plane; ivec4 ui; } params;
+layout(set = 2, binding = 3) uniform sampler2D u_outlineFields;  // present::OutlineAtlas::fields, filtered
+layout(set = 2, binding = 4) uniform sampler2D u_outlineIndices; // present::OutlineAtlas::indices
+layout(std430, set = 2, binding = 5) readonly buffer Ops { uint ops[]; };
+layout(std430, set = 2, binding = 6) readonly buffer Cluts { uint cluts[]; };
+layout(std430, set = 2, binding = 7) readonly buffer Pixels { uint pixels[]; };
+// plane: scale, origin x, origin y (native), the VRAM image's scale; ui: scale, origin x, origin y (UI pixels);
+// outline: the atlas's field pixels a texel (0 for none) and its first texel.
+layout(set = 3, binding = 0) uniform Params { ivec4 plane; ivec4 ui; ivec4 outline; } params;
 
 uint op;
 int S;  // target pixels per native pixel of this fragment's mapping
@@ -38,14 +41,18 @@ int wrap(int value, int range) {
     return value - q * range;
 }
 
+// The texel column across VRAM at the op's mode and the VRAM row, after the texture window (gpu.c TWX/TWY).
+uint windowedU(uint u) { return (u & word(kOpWindowXAnd)) + word(kOpWindowXAdd); }
+uint windowedV(uint v) { return (v & word(kOpWindowYAnd)) + word(kOpWindowYAdd); }
+
 // gpu_common.h GetTexel. `fu`/`fv` (1/256 texel) pick the target pixel inside the texel's scaled block, so a
 // block drawn or copied at scale shows its detail; an uploaded block is uniform and reads as at 1x.
 uint texel(uint u, uint v, uint fu, uint fv, uint flags) {
     uint tm = (flags >> kOpTexModeShift) & 3u;
-    uint uext = (u & word(kOpWindowXAnd)) + word(kOpWindowXAdd);
+    uint uext = windowedU(u);
     uint k = 2u - tm;
     int fx = int((uext >> k) & uint(kVramWidth - 1));
-    int fy = int(((v & word(kOpWindowYAnd)) + word(kOpWindowYAdd)) & uint(kVramHeight - 1));
+    int fy = int(windowedV(v) & uint(kVramHeight - 1));
     int sx = int(((((uext & ((1u << k) - 1u)) << 8) | fu) * uint(Sv)) >> (8u + k));
     int sy = int((fv * uint(Sv)) >> 8);
     uint t = fetch(ivec2(fx * Sv + sx, fy * Sv + sy));
@@ -65,6 +72,30 @@ uint readBackTexel(ivec2 p) {
     uint index = ((t & 0x1Fu) * (w & 0xFFu) + ((t >> 5) & 0x1Fu) * ((w >> 8) & 0xFFu) +
                   ((t >> 10) & 0x1Fu) * ((w >> 16) & 0xFFu)) >> (w >> 24);
     return clutEntry(word(kOpClut) + (index & 0xFFu));
+}
+
+float median(vec3 d) { return max(min(d.r, d.g), min(max(d.r, d.g), d.b)); }
+
+// The font cell texel at (u, v) + (fu, fv) / 256 from the outline atlas: inside the glyph's field the CLUT index of
+// the bitmap glyph's row, inside its shadow's the shadow's, else transparent.
+uint outlineTexel(uint u, uint v, uint fu, uint fv) {
+    ivec2 at = ivec2(int(windowedU(u)), int(windowedV(v))) - params.outline.yz;
+    ivec2 size = textureSize(u_outlineIndices, 0);
+    if (at.x < 0 || at.y < 0 || at.x >= size.x || at.y >= size.y) {
+        return 0u;
+    }
+    vec2 field = (vec2(at) + vec2(fu, fv) / 256.0) * float(params.outline.x);
+    vec4 distance = texture(u_outlineFields, field / vec2(textureSize(u_outlineFields, 0)));
+    vec2 indices = texelFetch(u_outlineIndices, at, 0).rg;
+    uint index;
+    if (median(distance.rgb) >= 0.5) {
+        index = uint(indices.r * 255.0 + 0.5);
+    } else if (distance.a >= 0.5) {
+        index = uint(indices.g * 255.0 + 0.5);
+    } else {
+        return 0u;
+    }
+    return clutEntry(word(kOpClut) + index);
 }
 
 uint pack(int r, int g, int b) { return 0x8000u | uint(r >> 3) | (uint(g >> 3) << 5) | (uint(b >> 3) << 10); }
@@ -234,7 +265,13 @@ void main() {
             fv = uint((inside.y * 256 + 128) / S);
         }
         if (textured) {
-            fore = (flags & kOpReadBack) != 0u ? readBackTexel(p) : texel(u, v, fu, fv, flags);
+            if ((flags & kOpReadBack) != 0u) {
+                fore = readBackTexel(p);
+            } else if ((flags & kOpOutline) != 0u && params.outline.x > 0) {
+                fore = outlineTexel(u, v, fu, fv);
+            } else {
+                fore = texel(u, v, fu, fv, flags);
+            }
             if (fore == 0u) {
                 discard;
             }

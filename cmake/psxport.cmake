@@ -28,6 +28,12 @@ psxport_dependency_prefix(rmlui SOURCE "${PSXPORT_ROOT}/vendor/rmlui" PACKAGE Rm
   OPTIONS -DBUILD_SHARED_LIBS=OFF -DRMLUI_SAMPLES=OFF -DRMLUI_LUA_BINDINGS=OFF -DRMLUI_SVG_PLUGIN=OFF
           -DRMLUI_LOTTIE_PLUGIN=OFF -DRMLUI_FONT_ENGINE=freetype)
 
+# msdfgen 1.13.1 (MIT): outline glyphs as distance fields for psx::present::OutlineText, its core and FreeType font
+# import; vendor/msdfgen is the upstream release tag, unmodified.
+psxport_dependency_prefix(msdfgen SOURCE "${PSXPORT_ROOT}/vendor/msdfgen" PACKAGE msdfgen
+  OPTIONS -DBUILD_SHARED_LIBS=OFF -DMSDFGEN_USE_VCPKG=OFF -DMSDFGEN_USE_SKIA=OFF -DMSDFGEN_DISABLE_SVG=ON
+          -DMSDFGEN_DISABLE_PNG=ON -DMSDFGEN_BUILD_STANDALONE=OFF -DMSDFGEN_INSTALL=ON)
+
 # libchdr (CHD access for psx::cd::Disc), from the Beetle PSX submodule with its bundled codecs.
 psxport_dependency_prefix(libchdr SOURCE "${PSXPORT_ROOT}/vendor/beetle-psx/deps/libchdr"
   PACKAGE libchdr RECIPE)
@@ -139,6 +145,7 @@ set(PSXPORT_FRAMEWORK_SRC
   ${PSXPORT_ROOT}/runtime/psx/present/palette_cycle.cpp # the CLUT rows a title cycles, cross-faded between ticks
   ${PSXPORT_ROOT}/runtime/psx/present/record_cluts.cpp # the CLUTs a record sampled, for primitives drawn into a copy of it
   ${PSXPORT_ROOT}/runtime/psx/present/motion_set.cpp # the guest words an in-between moves, sampled and blended into a replay
+  ${PSXPORT_ROOT}/runtime/psx/present/outline_text.cpp # a title's font cells as outline glyphs (plan 0207)
   ${PSXPORT_ROOT}/runtime/psx/present/replay_frame.cpp # in-betweens drawn by replaying a title's draw section
   ${PSXPORT_ROOT}/runtime/psx/present/guest_redraw.cpp # a guest draw routine re-run for an in-between, then undone
   ${PSXPORT_ROOT}/vendor/beetle-psx/mednafen/psx/mdec.c
@@ -365,6 +372,7 @@ target_link_libraries(psxport PUBLIC
   Threads::Threads m)
 # The first-run screen is the host's own; titles never include it.
 target_link_libraries(psxport PRIVATE setup_ui::setup_ui)
+target_link_libraries(psxport PRIVATE msdfgen::msdfgen-core msdfgen::msdfgen-ext)
 # The bug report's motion clip is an animated PNG.
 find_package(ZLIB REQUIRED)
 target_link_libraries(psxport PRIVATE ZLIB::ZLIB)

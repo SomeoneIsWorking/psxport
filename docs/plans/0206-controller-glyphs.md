@@ -28,5 +28,6 @@ a dialogue, a "press START" card).
 ## Phases
 
 1. `glyph_set` and the port's own UI on Tomba 2 and Spyro: built (menu prompts, pad navigation, guide opens
-   the menu); ships with the PromptFont asset once it is vendored.
-2. Tomba 2 and Spyro in-game prompts, then each title as it is worked.
+   the menu), with the vendored PromptFont.
+2. In-game prompts: Spyro 2 and 3 built (their font's button cells through 0207); Tomba 2, then each title as
+   it is worked.

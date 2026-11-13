@@ -669,6 +669,8 @@ RecordOp RecordPlanner::Builder::primitiveOp(const DrawPrimitive &primitive, Rec
   }
   flags |= primitive.flipX ? kOpFlipX : 0u;
   flags |= primitive.flipY ? kOpFlipY : 0u;
+  // At native scale the font's own bitmap is exact.
+  flags |= primitive.outline && scale_ > 1 ? kOpOutline : 0u;
   op[kOpFlags] = flags;
   const present::RecordVertex &v0 = primitive.vertices[0];
   op[kOpColour] = static_cast<std::uint32_t>(v0.r) | (static_cast<std::uint32_t>(v0.g) << 8) |
@@ -912,8 +914,8 @@ void RecordPlanner::Builder::commit(const RecordOp &op, bool readsDestination, c
     plan_.quads[static_cast<std::size_t>(pending.plane)].push_back(pending.quad);
     const RecordQuad &quad = pending.quad;
     // A plane's pixels per native pixel of its written map.
-    const int s = cropPlane(pending.plane) ? canvases_[static_cast<std::size_t>(pending.plane - 1)].worldScale
-                                           : plan_.scale;
+    const int s =
+        cropPlane(pending.plane) ? canvases_[static_cast<std::size_t>(pending.plane - 1)].worldScale : plan_.scale;
     written_[static_cast<std::size_t>(pending.plane)].extend(
         {quad.x0 / s, quad.y0 / s, (quad.x1 + s - 1) / s, (quad.y1 + s - 1) / s});
   }
@@ -1604,9 +1606,8 @@ const RecordRasterPlan &RecordPlanner::plan(const FrameRecord &record,
   return builder_->finish(record.sequence());
 }
 
-const RecordRasterPlan &RecordPlanner::planVramUpload(std::span<const std::uint16_t> vram,
-                                                      int scale,
-                                                      std::span<const RecordCanvas> canvases) {
+const RecordRasterPlan &
+RecordPlanner::planVramUpload(std::span<const std::uint16_t> vram, int scale, std::span<const RecordCanvas> canvases) {
   builder_->begin(std::max(scale, 1), {}, vram, canvases, std::nullopt, false, nullptr);
   present::VramUpload upload;
   upload.width = kVramWidth;

@@ -6,6 +6,7 @@
 #include "gpu_device.h"
 #include "guest_redraw.h"
 #include "guest_widescreen_projection.h"
+#include "outline_text.h"
 #include "packet_chains.h"
 
 #include <lucent/log.h>
@@ -82,12 +83,18 @@ bool ReplayFrame::replay(Core &core, float t, Capture &capture) {
       .capture(*head, capture.packets, capture.words, capture.places);
   capture.windows = frameWindows(core);
   capture.uiPackets.clear();
+  capture.glyphPackets.clear();
+  const OutlineGlyphs *glyphs = core.runtime.outlineFont() != nullptr ? core.runtime.outlineGlyphs(core) : nullptr;
   for (const gpu::CapturedPacket &packet : capture.packets) {
     if (cropShowsUi(core, packet.address)) {
       capture.uiPackets.push_back(packet.address);
     }
+    if (glyphs != nullptr && glyphs->glyphPacket(packet.address)) {
+      capture.glyphPackets.push_back(packet.address);
+    }
   }
   std::ranges::sort(capture.uiPackets);
+  std::ranges::sort(capture.glyphPackets);
   return true;
 }
 
@@ -193,6 +200,7 @@ const FrameRecord *ReplayFrame::assemble(const FrameRecord &shown,
   for (RecordEntry &entry : spliced) {
     if (auto *primitive = std::get_if<DrawPrimitive>(&entry)) {
       primitive->ui = std::ranges::binary_search(capture.uiPackets, primitive->packet);
+      primitive->outline = primitive->textured && std::ranges::binary_search(capture.glyphPackets, primitive->packet);
     }
   }
   return &assembled;
