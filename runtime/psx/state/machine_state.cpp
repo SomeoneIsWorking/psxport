@@ -275,7 +275,7 @@ std::optional<StateOutcome> MachineState::restore(std::span<const std::uint8_t> 
       return std::nullopt;
     }
   }
-  outcome.fields = mGame.timing.vblank;
+  outcome.fields = mGame.timing.displayField();
   outcome.invalidationRanges = 2;
   Core &core = mGame.core;
   // Every section is in place and nothing below can refuse, so the title adopts what it staged.
@@ -309,7 +309,7 @@ bool saveToFile(Core &core, const std::string &path, std::string &error) {
                path,
                image->size(),
                std::size(kSections) + (MachineState::titlePort(*core.game) != nullptr ? 1 : 0),
-               core.game->timing.vblank);
+               core.game->timing.displayField());
   return true;
 }
 

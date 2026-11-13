@@ -26,7 +26,8 @@ public:
   // False with `error` set; a failed load restores nothing of the title's.
   virtual bool save(psx::platform::BlobWriter &out, std::string &error) const = 0;
   virtual bool load(psx::platform::BlobReader &in, std::string &error) = 0;
-  // After every section is restored; `load` runs before RAM, so state tied to guest bytes is staged there and adopted here.
+  // After every section is restored; `load` runs before RAM, so state tied to guest bytes is staged there and adopted
+  // here.
   virtual void restored(Core &) {}
 };
 
@@ -34,7 +35,7 @@ public:
 struct StateOutcome {
   std::vector<std::string> sections;    // every section the operation wrote or read, in file order
   std::size_t bytes = 0;                // total image size
-  std::uint32_t fields = 0;             // the display-field count at the moment of the operation
+  std::uint64_t fields = 0;             // the display-field count at the moment of the operation
   std::uint32_t invalidationRanges = 0; // spans reported to the invalidation owner
   bool loaded = false;
 };
