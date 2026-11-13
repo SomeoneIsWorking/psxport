@@ -2,6 +2,7 @@
 
 #include "core.h"
 #include "game.h"
+#include "gp0_primitive_decode.h"
 #include "gpu_device.h"
 
 #include <lucent/log.h>
@@ -16,6 +17,15 @@ namespace {
 
 OtNode readNode(Core &core, std::uint32_t mainRamOffset) {
   return OtNode(mainRamOffset, OtHeaderWord{core.mem_r32(mainRamOffset)});
+}
+
+[[noreturn]] void refuseUnmovable(Core &core, const OtNode &node) {
+  lucent::error("host-packets",
+                "node 0x{:08X} at field {} was given a move, but its {} word(s) hold a poly-line or a cut command",
+                node.guestAddress(),
+                core.game->timing.displayField(),
+                node.gp0WordCount());
+  std::abort();
 }
 
 } // namespace
@@ -43,6 +53,31 @@ bool OrderingTableCursor::advance() {
                                        guestWriterOf(core_, from.guestAddress())));
     return false;
   }
+  return true;
+}
+
+OrderingTableWalk::OrderingTableWalk(Core &core, std::uint32_t rootGuestAddress)
+    : core_(core), hostPackets_(core.hostPackets), cursor_(core, rootGuestAddress) {
+  hostPackets_.select(rootGuestAddress);
+  readNode();
+}
+
+void OrderingTableWalk::readNode() {
+  const OtNode &node = cursor_.node();
+  for (unsigned i = 0; i < node.gp0WordCount(); i++) {
+    words_[i] = core_.mem_r32(node.gp0WordRamOffset(i));
+  }
+  movedX_ = node.carriesPrimitive() ? hostPackets_.movedX(node.guestAddress()) : 0;
+  if (movedX_ != 0 && !moveVerticesX(std::span(words_.data(), node.gp0WordCount()), movedX_)) {
+    refuseUnmovable(core_, node);
+  }
+}
+
+bool OrderingTableWalk::advance() {
+  if (!cursor_.advance()) {
+    return false;
+  }
+  readNode();
   return true;
 }
 
@@ -135,22 +170,19 @@ void OtTables::endWalk() {
 }
 
 void submitOrderingTable(Core &core, GpuDevice &device, std::uint32_t rootGuestAddress) {
-  OrderingTableCursor walk(core, rootGuestAddress);
+  core.hostPackets.beginWalk(rootGuestAddress);
+  OrderingTableWalk walk(core, rootGuestAddress);
   device.noteDrawEntry(static_cast<std::uint32_t>(core.game->timing.displayField()));
   core.otTables.beginWalk();
   const OtTables &tables = core.otTables;
-  HostPackets &hostPackets = core.hostPackets;
-  const bool hostDraws = hostPackets.beginWalk(rootGuestAddress);
   device.enterSlot(std::nullopt, true);
   device.beginChain(rootGuestAddress);
   do {
     // A walk is milliseconds of host work inside one executor segment; a present due meanwhile lands now.
     core.game->display.showIfDue();
     const OtNode &node = walk.node();
-    if (hostDraws) {
-      // Drawn in the bucket the previous node left open, as a guest link before this node would be.
-      hostPackets.drawBefore(device, node.guestAddress());
-    }
+    // Drawn in the bucket the previous node left open, as a guest link before this node would be.
+    core.hostPackets.drawBefore(device, node.guestAddress());
     std::optional<present::OtSlot> slot = tables.slotOf(node.guestAddress());
     if (!slot && node.carriesPrimitive()) {
       slot = tables.assigned(node.guestAddress());
@@ -161,15 +193,15 @@ void submitOrderingTable(Core &core, GpuDevice &device, std::uint32_t rootGuestA
     if (node.carriesPrimitive()) {
       // The packet is its command word's writer's.
       const present::OwnerHandle owner = core.owners.ownerOf(node.guestAddress() + 4u);
-      for (unsigned i = 0; i < node.gp0WordCount(); i++) {
-        const std::uint32_t offset = node.gp0WordRamOffset(i);
-        const std::uint32_t word = core.mem_r32(offset);
-        const std::uint32_t address = guestAddressOf(offset);
-        device.gp0(word,
+      const std::span<const std::uint32_t> words = walk.words();
+      for (unsigned i = 0; i < words.size(); i++) {
+        // A moved vertex is no longer where its draw site stored it, so it keeps no place.
+        const std::uint32_t address = guestAddressOf(node.gp0WordRamOffset(i));
+        device.gp0(words[i],
                    {.sourceAddress = address,
                     .packet = node.guestAddress(),
                     .owner = owner,
-                    .place = core.vertexPlaces.at(address, word)});
+                    .place = core.vertexPlaces.at(address, words[i])});
       }
     }
     if (const std::optional<present::OtSlot> empty = tables.emptyAfter(node.guestAddress())) {
@@ -179,7 +211,7 @@ void submitOrderingTable(Core &core, GpuDevice &device, std::uint32_t rootGuestA
   device.endChain();
   device.enterSlot(std::nullopt, true);
   core.otTables.endWalk();
-  hostPackets.endWalk(core);
+  core.hostPackets.endWalk(core);
 }
 
 } // namespace psx::gpu

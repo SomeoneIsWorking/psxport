@@ -1,7 +1,9 @@
 // device_gpu.cpp — the GPU section: the GPU device's own Beetle state stream, the VRAM and registers
-// the guest observes. The present counters are run-local and not captured.
+// the guest observes, and the host packets of tables built but not yet walked. The present counters are
+// run-local and not captured.
 #include "device_sections.h"
 
+#include "core.h"
 #include "game.h"
 #include "gpu_device.h"
 
@@ -10,7 +12,7 @@
 namespace psx::state {
 namespace {
 
-constexpr std::uint8_t kGpuLayoutVersion = 3;
+constexpr std::uint8_t kGpuLayoutVersion = 4;
 
 } // namespace
 
@@ -18,6 +20,7 @@ void writeGpuSection(Game &game, psx::platform::BlobWriter &out) {
   out.u8(kGpuLayoutVersion);
   const std::vector<std::uint8_t> device = game.core.gpuDevice().saveState();
   out.blob(device);
+  game.core.hostPackets.save(out);
 }
 
 bool readGpuSection(Game &game, psx::platform::BlobReader &in, std::string &error) {
@@ -32,7 +35,7 @@ bool readGpuSection(Game &game, psx::platform::BlobReader &in, std::string &erro
     error = "the GPU device did not accept its " + std::to_string(device.size()) + "-byte state stream";
     return false;
   }
-  return true;
+  return game.core.hostPackets.load(in, error);
 }
 
 } // namespace psx::state

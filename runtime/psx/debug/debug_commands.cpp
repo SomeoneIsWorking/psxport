@@ -34,6 +34,7 @@
 #include <cstdlib>
 #include <memory>
 #include <optional>
+#include <span>
 #include <string>
 #include <strings.h>
 #include <vector>
@@ -567,9 +568,15 @@ void otWhere(const Call &call) {
   int bucket = -1;
   int position = 0;
   int hits = 0;
-  psx::gpu::OrderingTableCursor cursor(core, core.rsub.lastOrderingTable);
+  psx::gpu::OrderingTableWalk walk(core, core.rsub.lastOrderingTable);
   do {
-    const psx::gpu::OtNode &node = cursor.node();
+    const psx::gpu::OtNode &node = walk.node();
+    int hostBefore = 0;
+    walk.hostPacketsBefore([&hostBefore](std::span<const std::uint32_t> /*words*/) {
+      hostBefore++;
+    });
+    // A host packet holds a place in its bucket as a guest link would.
+    position += hostBefore;
     if (node.ramOffset() >= bucketLo && node.ramOffset() < bucketHi) {
       bucket = static_cast<int>((node.ramOffset() - bucketLo) >> 2);
       position = 0;
@@ -577,15 +584,18 @@ void otWhere(const Call &call) {
       position++;
     }
     if (node.ramOffset() == want) {
-      call.reply(lucent::format("otwhere 0x{:08X}: bucket={} posInBucket={} chainIdx={} hdr=0x{:08X}",
-                                node.guestAddress(),
-                                bucket,
-                                position,
-                                cursor.nodesEntered() - 1,
-                                node.headerWord()));
+      call.reply(lucent::format(
+          "otwhere 0x{:08X}: bucket={} posInBucket={} chainIdx={} hdr=0x{:08X} hostPacketsBefore={} movedX={}",
+          node.guestAddress(),
+          bucket,
+          position,
+          walk.nodesEntered() - 1,
+          node.headerWord(),
+          hostBefore,
+          walk.movedX()));
       hits++;
     }
-  } while (cursor.advance());
+  } while (walk.advance());
   if (hits == 0) {
     call.reply(lucent::format("otwhere 0x{:08X}: not in the last-walked ordering table", *packet));
   }

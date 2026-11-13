@@ -3,13 +3,14 @@
 
 #include "core.h"
 #include "game.h"
-#include "gpu_device.h"
 #include "gp0_command.h"
+#include "gpu_device.h"
 #include "ordering_table.h"
 
 #include <lucent/log.h>
 
 #include <cstdlib>
+#include <span>
 #include <string_view>
 
 namespace {
@@ -49,15 +50,13 @@ void writeScene(Core &core, FILE *out, uint32_t madr) {
   int ncopy = 0;
   int nup = 0;
   int nenv = 0;
+  int nhost = 0;
   fprintf(out, "[scene] f%d OT@0x%08X — classified display list:\n", frame, psx::gpu::guestAddressOf(madr));
-  psx::gpu::OrderingTableCursor cursor(core, madr);
-  do {
-    const psx::gpu::OtNode &node = cursor.node();
-    const unsigned n = node.gp0WordCount();
-    const auto word = [&core, &node, n](unsigned index) {
-      return index < n ? core.mem_r32(node.gp0WordRamOffset(index)) : 0u;
+  const auto classify = [&](std::span<const uint32_t> words) {
+    const auto word = [words](unsigned index) {
+      return index < words.size() ? words[index] : 0u;
     };
-    for (unsigned i = 0; i < n;) {
+    for (unsigned i = 0; i < words.size();) {
       const uint32_t c = word(i);
       const Gp0Command command(c);
       const uint32_t w1 = word(i + 1);
@@ -102,9 +101,17 @@ void writeScene(Core &core, FILE *out, uint32_t madr) {
       }
       i += Gp0Command::packetWordCount(c);
     }
-  } while (cursor.advance());
+  };
+  psx::gpu::OrderingTableWalk walk(core, madr);
+  do {
+    walk.hostPacketsBefore([&](std::span<const uint32_t> words) {
+      nhost++;
+      classify(words);
+    });
+    classify(walk.words());
+  } while (walk.advance());
   fprintf(out,
-          "[scene] f%d totals: poly=%d rect=%d line=%d fill=%d vramcopy=%d upload=%d env=%d\n",
+          "[scene] f%d totals: poly=%d rect=%d line=%d fill=%d vramcopy=%d upload=%d env=%d host-packets=%d\n",
           frame,
           npoly,
           nrect,
@@ -112,7 +119,8 @@ void writeScene(Core &core, FILE *out, uint32_t madr) {
           nfill,
           ncopy,
           nup,
-          nenv);
+          nenv,
+          nhost);
 }
 
 } // namespace

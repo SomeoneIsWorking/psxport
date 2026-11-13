@@ -64,6 +64,40 @@ std::size_t polygonPositionWord(std::size_t index, const Gp0PrimitiveFlags &flag
   return index + ((isFirst || flags.gouraud) ? 1u : 0u);
 }
 
+bool moveVerticesX(std::span<std::uint32_t> words, int dx) {
+  // Positions first, so a refused packet is left as it was.
+  std::array<std::size_t, 256> positions{};
+  std::size_t count = 0;
+  for (std::size_t at = 0; at < words.size();) {
+    const Gp0Command command(words[at]);
+    const std::size_t length = Gp0Command::packetWordCount(words[at]);
+    if (command.isPolyLine() || at + length > words.size()) {
+      return false;
+    }
+    if (command.isRectangleOrSprite()) {
+      positions[count++] = at + 1;
+    } else if (command.isPolygon() || command.isLineOrPolyLine()) {
+      const Gp0PrimitiveFlags flags = command.flags();
+      const int vertices = command.isPolygon() ? command.polygonVertexCount() : 2;
+      // A line carries no texture word; its shaded ends are laid out as a polygon's.
+      const bool textured = command.isPolygon() && flags.textured;
+      std::size_t index = at;
+      for (int v = 0; v < vertices; ++v) {
+        const std::size_t position = polygonPositionWord(index, flags, v == 0);
+        positions[count++] = position;
+        index = position + 1 + (textured ? 1u : 0u);
+      }
+    }
+    at += length;
+  }
+  for (std::size_t i = 0; i < count; ++i) {
+    std::uint32_t &word = words[positions[i]];
+    const auto x = static_cast<std::uint16_t>(static_cast<std::int16_t>(word & 0xFFFFu) + dx);
+    word = (word & 0xFFFF0000u) | x;
+  }
+  return true;
+}
+
 present::RecordVertex polygonVertex(std::span<const std::uint32_t> words,
                                     std::size_t &index,
                                     const Gp0PrimitiveFlags &flags,

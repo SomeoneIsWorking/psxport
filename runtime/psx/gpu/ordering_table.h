@@ -5,9 +5,12 @@
 #include "draw_list_cycle.h"
 #include "frame_record.h"
 #include "guest_memory_map.h"
+#include "host_packets.h"
 
+#include <array>
 #include <cstdint>
 #include <optional>
+#include <span>
 #include <vector>
 
 class Core;
@@ -101,6 +104,45 @@ private:
   OtNode node_;
   int nodesEntered_ = 0;
   LinkCycleCheck cycle_;
+};
+
+// The one walk of a table as the GPU draws it: each node of the chain from the root, the host packets drawn
+// right before it, and its own packet's words as drawn, with a title's move applied (HostPackets). The DrawOTag
+// submit and every debug view of a table walk through it.
+class OrderingTableWalk {
+public:
+  OrderingTableWalk(Core &core, std::uint32_t rootGuestAddress);
+
+  const OtNode &node() const {
+    return cursor_.node();
+  }
+  int nodesEntered() const {
+    return cursor_.nodesEntered();
+  }
+  // `visit(words)` for each host packet drawn right before node(), in order.
+  template <typename Visit> void hostPacketsBefore(Visit visit) const {
+    hostPackets_.forEachBefore(node().guestAddress(), visit);
+  }
+  // node()'s packet as drawn.
+  std::span<const std::uint32_t> words() const {
+    return {words_.data(), node().gp0WordCount()};
+  }
+  // node()'s columns moved, 0 when none.
+  int movedX() const {
+    return movedX_;
+  }
+  // False at the end of the chain and at a refused cycle.
+  bool advance();
+
+private:
+  void readNode();
+
+  Core &core_;
+  HostPackets &hostPackets_;
+  OrderingTableCursor cursor_;
+  // A node's packet is at most the header's 8-bit word count.
+  std::array<std::uint32_t, 255> words_{};
+  int movedX_ = 0;
 };
 
 // The order a table's buckets are walked in: a reverse-cleared table (ClearOTagR) from its last

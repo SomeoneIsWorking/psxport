@@ -14,6 +14,7 @@
 #include <format>
 #include <lucent/log.h>
 #include <optional>
+#include <span>
 #include <string_view>
 #include <vector>
 
@@ -162,26 +163,37 @@ void OtAttr::packetsCommand(Core &core, const Emit &emit) const {
     emit("no ordering table walked yet this run");
     return;
   }
-  psx::gpu::OrderingTableCursor cursor(core, core.rsub.lastOrderingTable);
+  psx::gpu::OrderingTableWalk walk(core, core.rsub.lastOrderingTable);
   do {
-    const psx::gpu::OtNode &node = cursor.node();
+    const psx::gpu::OtNode &node = walk.node();
+    walk.hostPacketsBefore([&](std::span<const uint32_t> words) {
+      const uint32_t vertex = words.size() >= 2 ? words[1] : 0u;
+      emit(std::format("  [{:4}] host packet before 0x{:08X} op=0x{:02X} n={} v0=({},{})",
+                       walk.nodesEntered() - 1,
+                       node.guestAddress(),
+                       words.empty() ? 0u : words[0] >> 24,
+                       words.size(),
+                       static_cast<int16_t>(vertex & 0xFFFFu),
+                       static_cast<int16_t>(vertex >> 16)));
+    });
     if (!node.carriesPrimitive()) {
       continue;
     }
-    const uint32_t command = core.mem_r32(node.gp0WordRamOffset(0));
-    const uint32_t vertex = node.gp0WordCount() >= 2 ? core.mem_r32(node.gp0WordRamOffset(1)) : 0u;
+    const std::span<const uint32_t> words = walk.words();
+    const uint32_t vertex = words.size() >= 2 ? words[1] : 0u;
     Span sp{};
     const bool found = lookupStore(node.gp0WordRamOffset(0), &sp);
-    emit(std::format("  [{:4}] packet=0x{:08X} op=0x{:02X} n={} v0=({},{}) fn=0x{:08X} caller=0x{:08X}",
-                     cursor.nodesEntered() - 1,
+    emit(std::format("  [{:4}] packet=0x{:08X} op=0x{:02X} n={} v0=({},{}) moved={} fn=0x{:08X} caller=0x{:08X}",
+                     walk.nodesEntered() - 1,
                      node.guestAddress(),
-                     command >> 24,
-                     node.gp0WordCount(),
+                     words[0] >> 24,
+                     words.size(),
                      static_cast<int16_t>(vertex & 0xFFFFu),
                      static_cast<int16_t>(vertex >> 16),
+                     walk.movedX(),
                      found ? sp.fn : 0u,
                      found ? sp.caller : 0u));
-  } while (cursor.advance());
+  } while (walk.advance());
   emit(
       std::format("GTE RTPS/RTPT calls this frame by fn ({} fn(s){}):", mGteCount, mGteOverflow ? ", overflowed" : ""));
   for (int i = 0; i < mGteCount; i++) {
@@ -216,15 +228,19 @@ void OtAttr::attributeTable(Core &core, const Emit &emit) const {
   std::vector<Row> rows;
   int nodes = 0;
   int attributed = 0;
+  int hostPackets = 0;
   if (core.rsub.lastOrderingTable != 0) {
-    psx::gpu::OrderingTableCursor cursor(core, core.rsub.lastOrderingTable);
+    psx::gpu::OrderingTableWalk walk(core, core.rsub.lastOrderingTable);
     do {
-      if (!cursor.node().carriesPrimitive()) {
+      walk.hostPacketsBefore([&hostPackets](std::span<const uint32_t> /*words*/) {
+        hostPackets++;
+      });
+      if (!walk.node().carriesPrimitive()) {
         continue;
       }
       nodes++;
       Span sp{};
-      if (!lookupStore(cursor.node().gp0WordRamOffset(0), &sp)) {
+      if (!lookupStore(walk.node().gp0WordRamOffset(0), &sp)) {
         continue;
       }
       attributed++;
@@ -236,18 +252,19 @@ void OtAttr::attributeTable(Core &core, const Emit &emit) const {
       } else {
         rows.push_back({sp.fn, 1});
       }
-    } while (cursor.advance());
+    } while (walk.advance());
   }
   std::sort(rows.begin(), rows.end(), [](const Row &a, const Row &b) {
     return a.packets > b.packets;
   });
-  emit(std::format("frame {} OT@0x{:08X}: {} drawing nodes, {} attributed, {} UNATTRIBUTED ({} spans{}); watch "
-                   "slots {}/{} words {}/{}",
+  emit(std::format("frame {} OT@0x{:08X}: {} drawing nodes, {} attributed, {} UNATTRIBUTED, {} host packets ({} "
+                   "spans{}); watch slots {}/{} words {}/{}",
                    mFrame,
                    0x80000000u | core.rsub.lastOrderingTable,
                    nodes,
                    attributed,
                    nodes - attributed,
+                   hostPackets,
                    mSpanCount,
                    mSpanOverflow ? ", TABLE OVERFLOWED" : "",
                    watchSlotCount(),

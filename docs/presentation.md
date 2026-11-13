@@ -40,8 +40,8 @@ present plan / sink                           viewport, letterbox, window
 | `present/frame_record.*` | ordered primitives and VRAM ops of one logic frame |
 | `gpu/gp0_record_tap.*` | executed GP0 command to `FrameRecord` entry, with its packet's writer |
 | `present/guest_redraw.*`, `core/write_rollback.h` | `GuestRedraw`: a guest draw routine run again for an in-between, every store put back, registers and GTE restored, devices and guest time held (`SideEffectMode::Discard`) |
-| `gpu/ordering_table.*` | OT node decode and the OT walk; `OtTables`, the title-named tables whose bucket heads tag each entry's slot |
-| `gpu/host_packets.*` | `HostPackets` (`Core::hostPackets`): GP0 packets a title draws inside one DrawOTag walk without guest RAM, each just before a named node of the walk from a named root; fixed storage, and running out or naming a node the walk never enters is a named fault |
+| `gpu/ordering_table.*` | OT node decode and `OrderingTableWalk`, the one walk of a table as the GPU draws it (guest nodes, host packets, moves) that the DrawOTag submit and the debug views (`scene`, `otattr`, `otwhere`) share; `OtTables`, the title-named tables whose bucket heads tag each entry's slot |
+| `gpu/host_packets.*` | `HostPackets` (`Core::hostPackets`): GP0 packets a title draws inside one DrawOTag walk without guest RAM, each just before a named node of the walk from a named root, and guest packets the walk draws moved; fixed storage, and running out or naming a node the walk never enters is a named fault |
 | `gpu/draw_list_cycle.*` | the refusal of a draw list that revisits a node, which a console's walk never leaves: the walk stops at the revisit and latches the presentation device off (`FaultCause::DrawListCycle`, one error line naming the node, the refusing walk and the writer of the edge into it), so nothing of that frame reaches the GPU and the session ends with the player told; `LinkCycleCheck`, the cycle check of every linked draw-list walk (OT walk, `PacketChainWalker`, title bin walks). A record past `FrameRecord::kMaxEntries` or its pools is port storage, not a console limit: it warns and is marked incomplete |
 | `present/packet_chains.*` | the packets of a chain a replayed section linked, captured with their words' places |
 | `frame/frame_presenter.*` | N and the last three records that drew, which record each present shows, cadence, both presents through the backend |
@@ -191,10 +191,14 @@ the `motion` debug channel counts each track's paired records.
 - **Host packets.** A title that draws more than the guest's own packet storage holds (Mega Man X4's margin
   tiles past its 1,000-sprite arena) inserts them with `HostPackets::insertBefore(root, node, words)`: the walk
   from `root` draws them, in insertion order, right before it enters `node`, in the slot the previous node left
-  open, as a guest link there would be. Guest RAM holds only what the guest wrote. `discard(root)` drops a table
-  the title is rebuilding unwalked; the walk drops what it drew. Storage is 4,096 packets and 16,384 words,
-  reserved once; an insert past it, or into a walk, aborts naming the node, table and field, and so does a walk
-  that ends without entering a node it was given (the title linked to a node off the chain).
+  open, as a guest link there would be. A title that moves what the guest drew (X4's parallax layer shift and
+  HUD anchor) names the packet with `moveX(root, node, dx)`: the walk draws its vertices `dx` columns over
+  (`moveVerticesX`; a poly-line is refused) and the record keeps no GTE place for them. Guest RAM holds only what
+  the guest wrote. `discard(root)` drops a table the title is rebuilding unwalked; what a walk drew stays readable
+  by the debug views until the next walk begins. Storage is 4,096 packets, 16,384 words and 8,192 moves, reserved
+  once; an insert or move past it, or into a walk, aborts naming the node, table and field, and so does a walk
+  that ends without entering a node it was given (the title linked to a node off the chain). The machine state
+  carries the store in the GPU section: the table built before a save is drawn by the first walk after a load.
 - **Guest redraw.** A title whose objects are drawn by guest code it does not port can run that code
   again inside the logic frame for the in-between: `GuestRedraw` saves the CPU and GTE, arms
   `Core::writeRollback` so every guest store is noted and put back newest first (such a store binds

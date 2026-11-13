@@ -60,7 +60,7 @@ Dependency direction: title repo → `runtime/psx/game/` (the title interface) �
 - `runtime/psx/frame/frame_pacer.*`, `pace_plan.h`, `field_cadence.h`, `field_rate.h`, `timing.*`, `emulated_time.*` — frame pacing, NTSC / PAL field rate, field cadence, emulated CPU clock, root counters 1 and 2
 - `runtime/psx/frame/frame_time_histogram.*` — frame time percentiles
 - `runtime/psx/gpu/gpu_device.*`, `gpu_display_mode.h`, `gpu_ports.*` — GPU device (Beetle gpu.c): VRAM, GP0 / GP1, display area and mode, DMA2 blocks and ordering-table walk
-- `runtime/psx/gpu/ordering_table.*`, `host_packets.*` — ordering table / OT / DrawOTag node decode and walk; packets a title draws inside a walk without guest RAM
+- `runtime/psx/gpu/ordering_table.*`, `host_packets.*` — ordering table / OT / DrawOTag node decode and `OrderingTableWalk`, the one walk the submit and the debug views share; packets a title draws inside a walk, or moves, without guest RAM
 - `runtime/psx/gpu/draw_list_cycle.*` — a draw list that revisits a node, refused before the GPU (latches the presentation fault); the linked-walk cycle check
 - `runtime/psx/gpu/gp0_draw_state.*` — GP0 draw environment (E1-E6, polygon texpage) decoded from command words as gpu.c keeps it; captured chain packets decoded under it
 - `runtime/psx/gpu/gp0_record_tap.*`, `texture_feedback.*` — GP0 work recorded per logic frame, texture cache feedback / stale VRAM reads
@@ -79,7 +79,7 @@ Dependency direction: title repo → `runtime/psx/game/` (the title interface) �
 - `runtime/psx/present/owner_ledger.*` — owner ledger: the writer of every main-RAM word (guest function, block PC, dispatched entry) and port writers (block DMA, MMIO GP0, LoadImage)
 - `runtime/psx/present/ownership_verdict.*` — verdict at seal for an interval no replay draws: draw groups by writer and OT table, picture hash, moving / port findings
 - `runtime/psx/present/owner_journal.*` — owner journal: moving writers, ports, refused replays and held intervals as rows with screen and warp, `owners` verb, JSONL
-- `runtime/psx/present/gp0_command.h`, `gp0_primitive_decode.*` — GP0 command and primitive decode: opcodes, libgpu polygon, line and poly-line segments, packet tags and sizes, draw mode E1
+- `runtime/psx/present/gp0_command.h`, `gp0_primitive_decode.*` — GP0 command and primitive decode: opcodes, libgpu polygon, line and poly-line segments, packet tags and sizes, vertex x moves, draw mode E1
 - `runtime/psx/present/vram_rect.h`, `vram_pixel.h` — VRAM size, points and rects, 555 pixel and 5-to-8 expand, texpage and CLUT words, CLUT entry count, texel sampler
 - `runtime/psx/present/guest_redraw.*`, `runtime/psx/core/write_rollback.h` — guest draw routine re-run for an in-between / redraw (a body to its device tail, stepping over applied calls and host-owned stretches): store undo log, registers and GTE restored, devices held
 - `runtime/psx/present/gte_control.*` — GTE control registers saved, blended (rotation through `lucent::rotation::between`) and restored around a render
