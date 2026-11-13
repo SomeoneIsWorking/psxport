@@ -23,10 +23,26 @@ timing and colours are the game's.
 
 ## Phases
 
-1. Spyro 2/3 (one shared font owner in psx-spyro `game/render/text_font.h`): built. Spyro 1 has nothing to
-   replace: its text is mesh letters the record rasterizes at the internal resolution (`spyro1.text-glyphs`,
-   open-spyro).
-2. Tomba 2's dialogue and menu font, then each title as it is worked.
+1. Spyro 2/3's 2D font (one shared font owner in psx-spyro `game/render/text_font.h`): built. Spyro 1 has
+   nothing to replace: its text is mesh letters the record rasterizes at the internal resolution
+   (`spyro1.text-glyphs`, open-spyro).
+2. Next, in this order:
+   a. Glyph-rectangle fonts: `OutlineFont` names each glyph's rect on its page (u, v, width, height) with its
+      codepoint or button, and the fixed grid becomes one way to fill that table. A title names several fonts;
+      `OutlineGlyphs` tags each packet with the font it drew from, and the atlas holds every font's cells.
+   b. Tomba 2's dialogue and menu font on that model.
+   c. Spyro 3's Atlas book font (spyro-3 `spyro3.atlas-font`): 12x9 semi-transparent quads (0x2E), a shadow
+      pass modulated 0x202020 then the text modulated 0x78898C, from DR_TPAGE 0x0009 (x 576 y 0, 4bpp)
+      through CLUT 0x09F2; glyphs packed at varying u/v with the Triangle, Square, Circle and Cross icons
+      below them. Still to RE: the Atlas text drawer and its glyph table.
+   d. The HUD counters: Spyro 3's value emitter 0x800291B8 drawing each digit through the icon emitter
+      0x800289C8, Spyro 2's HUD counter and sprite sites 0x8005251C and 0x800520CC; their digit pages and
+      tables are still to RE.
+   e. Last, Spyro 2's pre-rendered string images (spyro-2 `spyro2.title-strings`): the title screen's
+      memory-card and language messages are whole strings in 8bpp pages at (512,256) and (640,256), drawn as
+      160x104 sprites (0x64, DR_TPAGE 0xE1000498/0xE100049A); neither text layout runs there. Each needs a
+      table of which rect shows which string (the message tables are at 0x80063B74 and 0x80061B70), and the
+      outline lays the string out in that rect.
 
 ## As built
 
@@ -53,8 +69,3 @@ timing and colours are the game's.
 - Check: Spyro 2 Summer Forest pause and Spyro 3 Sunrise Spring pause and Help at `ires=0`, 3840x2160
   (`warp 0/0/0`, start, down, cross): letters and button glyphs sharp, shaded and shadowed as the bitmap; Help
   under `gamepad make xbox` and `gamepad make playstation` for the face colours.
-
-## Not covered
-
-- Text Spyro 2/3 draw outside their two layouts: the title screen's memory-card text, Spyro 3's Atlas book
-  font, the HUD counters.
