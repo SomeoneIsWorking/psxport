@@ -195,14 +195,9 @@ public:
       layout(fonts);
     }
     bool changed = false;
-    int slots = 0;
     for (std::size_t f = 0; f < fonts.size(); f++) {
       const OutlineFont &font = fonts[f];
       FontState &state = states_.at(f);
-      const int firstSlot = slots;
-      slots += static_cast<int>(std::ranges::count_if(font.glyphs, [](const OutlineGlyph &glyph) {
-        return glyph.button != 0;
-      }));
       if ((drawn & (1u << f)) == 0) {
         continue;
       }
@@ -221,7 +216,7 @@ public:
       state.bitmaps = std::move(bitmaps);
       state.codepoints = std::move(codepoints);
       state.built = true;
-      draw(font, f, firstSlot);
+      draw(font, f);
       changed = true;
     }
     if (changed) {
@@ -260,11 +255,12 @@ private:
       next.width = std::max(next.width, place.width);
       next.height += place.height;
       for (const OutlineGlyph &glyph : fonts[f].glyphs) {
-        if (glyph.button == 0) {
+        const auto named = next.buttons.begin() + static_cast<std::ptrdiff_t>(buttons);
+        if (glyph.button == 0 || std::find(next.buttons.begin(), named, glyph.button) != named) {
           continue;
         }
         if (buttons == next.buttons.size()) {
-          lucent::error("outline", "fonts name more than {} button glyphs", next.buttons.size());
+          lucent::error("outline", "fonts name more than {} buttons", next.buttons.size());
           std::abort();
         }
         next.buttons.at(buttons++) = glyph.button;
@@ -362,8 +358,8 @@ private:
     return true;
   }
 
-  // Font `f`'s place in the atlas from its glyphs as last read; its button glyphs take slots from `firstSlot` on.
-  void draw(const OutlineFont &font, std::size_t f, int firstSlot) {
+  // Font `f`'s place in the atlas from its glyphs as last read.
+  void draw(const OutlineFont &font, std::size_t f) {
     FontState &state = states_.at(f);
     const OutlineAtlasFont &place = atlas_.fonts.at(f);
     const int pageX0 = place.originX - (font.page.x << (2 - static_cast<int>(font.page.depth)));
@@ -377,11 +373,13 @@ private:
                   place.width * kFieldScale * 4,
                   0);
     }
-    int slot = firstSlot;
     for (std::size_t i = 0; i < font.glyphs.size(); i++) {
       const OutlineGlyph &glyph = font.glyphs[i];
       const BitmapGlyph &bitmap = state.bitmaps[i];
-      const int glyphSlot = glyph.button != 0 ? ++slot : 0;
+      const int glyphSlot =
+          glyph.button != 0
+              ? static_cast<int>(std::ranges::find(atlas_.buttons, glyph.button) - atlas_.buttons.begin()) + 1
+              : 0;
       if (bitmap.empty()) {
         continue;
       }
@@ -421,6 +419,7 @@ private:
           texel[0] = static_cast<std::uint8_t>(glyphRows[y]);
           texel[1] = static_cast<std::uint8_t>(shadowRows[y]);
           texel[2] = static_cast<std::uint8_t>(glyphSlot);
+          texel[3] = 255;
         }
       }
     }

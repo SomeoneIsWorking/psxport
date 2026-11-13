@@ -102,13 +102,14 @@ struct OutlineAtlasFont {
 
 // What record.frag samples for kOpOutline. `fields` is `scale` pixels a texel over the fonts' glyphs: RGB a
 // multi-channel distance field of each glyph, A a distance field of its shadow. `indices` is one pixel a texel, R and
-// G the CLUT indices of its row of the bitmap glyph and of its shadow, B a button glyph's slot in `buttons` plus one.
+// G the CLUT indices of its row of the bitmap glyph and of its shadow, B a button glyph's slot in `buttons` plus one,
+// A 255 where a named glyph's field lies; a texel without one draws from VRAM.
 struct OutlineAtlas {
   int scale = 0;
   int width = 0; // texels
   int height = 0;
   std::array<OutlineAtlasFont, kMaxOutlineFonts> fonts{};
-  std::array<std::uint16_t, 4> buttons{}; // the PSX button (kButton*) of each button glyph, in font and glyph order
+  std::array<std::uint16_t, 4> buttons{}; // each PSX button (kButton*) the fonts' glyphs show, in font and glyph order
   std::vector<std::uint8_t> fields;       // RGBA8
   std::vector<std::uint8_t> indices;      // RGBA8
   std::uint64_t generation = 0;

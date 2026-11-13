@@ -57,10 +57,11 @@ timing and colours are the game's.
   glyph's ink texels, as an MSDF in RGB and the shadow's SDF, moved by the shadow offset, in A, eight field pixels a
   texel. Fields take their sign from the outline's nonzero fill, then msdfgen's error correction (its scanline pass):
   variable faces keep overlapping contours. The atlas holds the fonts one under another, each over the box of its
-  glyph rectangles (`OutlineAtlasFont`); a font not drawn keeps its last fields.
+  glyph rectangles (`OutlineAtlasFont`); a font not drawn keeps its last fields. A texel of a font's box that no named
+  glyph with an outline covers (index A 0) draws its bitmap from VRAM, so a font names only the glyphs it has faces for.
 - Colours stay the guest's: the index texture holds per glyph row the CLUT index most of the row's glyph
   texels use (R) and its shadow's (G), so the glyph shades down its rectangle as the bitmap does; the packet's CLUT,
-  modulation and blending apply as for any texel. A button glyph's B names its slot in `OutlineAtlas::buttons` (four across all fonts);
+  modulation and blending apply as for any texel. A button glyph's B names its button's slot in `OutlineAtlas::buttons` (four buttons across all fonts);
   at draw time `buttonFaceColours` asks `GlyphSet::faceColour` per slot and the glyph takes that colour, keeping
   its CLUT texel's semi-transparency bit: Xbox prints A green, B red, X blue, Y yellow; PlayStation, Nintendo
   and the keyboard keep the game's colours.

@@ -79,19 +79,23 @@ uint readBackTexel(ivec2 p) {
 
 float median(vec3 d) { return max(min(d.r, d.g), min(max(d.r, d.g), d.b)); }
 
-// The font cell texel at (u, v) + (fu, fv) / 256 from the outline atlas: inside the glyph's field the CLUT index of
-// the bitmap glyph's row, inside its shadow's the shadow's, else transparent.
-uint outlineTexel(uint u, uint v, uint fu, uint fv, uint font) {
+// The glyph texel at (u, v) + (fu, fv) / 256 from the outline atlas: inside the glyph's field the CLUT index of the
+// bitmap glyph's row, inside its shadow's the shadow's, else transparent; where the font names no glyph, VRAM's.
+uint outlineTexel(uint u, uint v, uint fu, uint fv, uint flags) {
+    uint font = (flags >> kOpOutlineFontShift) & 3u;
     ivec4 place = params.fontPlaces[font];
     ivec2 at = ivec2(int(windowedU(u)), int(windowedV(v))) - place.xy;
     ivec2 size = params.fontSizes[font].xy;
     if (at.x < 0 || at.y < 0 || at.x >= size.x || at.y >= size.y) {
-        return 0u;
+        return texel(u, v, fu, fv, flags);
     }
     at.y += place.z;
     vec2 field = (vec2(at) + vec2(fu, fv) / 256.0) * float(params.outline.x);
     vec4 distance = texture(u_outlineFields, field / vec2(textureSize(u_outlineFields, 0)));
-    vec3 indices = texelFetch(u_outlineIndices, at, 0).rgb;
+    vec4 indices = texelFetch(u_outlineIndices, at, 0);
+    if (indices.a < 0.5) {
+        return texel(u, v, fu, fv, flags);
+    }
     uint index;
     if (median(distance.rgb) >= 0.5) {
         index = uint(indices.r * 255.0 + 0.5);
@@ -277,7 +281,7 @@ void main() {
             if ((flags & kOpReadBack) != 0u) {
                 fore = readBackTexel(p);
             } else if ((flags & kOpOutline) != 0u && params.outline.x > 0) {
-                fore = outlineTexel(u, v, fu, fv, (flags >> kOpOutlineFontShift) & 3u);
+                fore = outlineTexel(u, v, fu, fv, flags);
             } else {
                 fore = texel(u, v, fu, fv, flags);
             }
