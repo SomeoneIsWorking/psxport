@@ -104,5 +104,8 @@ void callOriginalToReturn(Core &core, std::uint32_t guestAddress, ExecutionBudge
 bool callOriginalOrPropagate(Core &core, std::uint32_t guestAddress);
 // `dispatchGuest` under the current-turn budget, propagating a non-return the same way.
 bool dispatchGuestOrPropagate(Core &core, std::uint32_t guestAddress, std::string_view origin);
+// Between two guest calls a native makes, with no guest state of its own in flight: the interrupts the guest
+// has enabled and a device owes are taken as at a guest instruction boundary, which a running native refuses.
+void takePendingInterrupts(Core &core);
 
 } // namespace psx::cpu

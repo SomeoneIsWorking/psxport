@@ -13,6 +13,7 @@
 #include <cstdlib>
 #include <lucent/log.h>
 #include <optional>
+#include <utility>
 
 namespace psx::cpu {
 
@@ -405,6 +406,17 @@ bool callOriginalOrPropagate(Core &core, std::uint32_t guestAddress) {
 
 bool dispatchGuestOrPropagate(Core &core, std::uint32_t guestAddress, std::string_view origin) {
   return completeOrPropagate(core, dispatchGuest(core, guestAddress, ExecutionBudget::currentTurn(core), origin));
+}
+
+void takePendingInterrupts(Core &core) {
+  if (core.game == nullptr || (core.pending_work & Core::PW_IRQ) == 0u) {
+    return;
+  }
+  const std::uint32_t active = std::exchange(core.active_native_address, 0u);
+  const std::uint32_t pc = core.pc;
+  core.game->hle.irqPoll(&core);
+  core.pc = pc;
+  core.active_native_address = active;
 }
 
 std::optional<NativeKey>
