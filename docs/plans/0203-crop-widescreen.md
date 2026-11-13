@@ -4,6 +4,9 @@ User, 2026-11-12: an optional widescreen mode for every title that crops the pic
 instead of extending the sides, with the UI moved to fit. It keeps the original logic and culling; the
 extended-sides widescreen stays the default. No viewport changes during play (user, 2026-11-12).
 
+User, 2026-11-13: crop is a bonus experiment, not viable as a general mode (at 21:9 and wider it
+crops too much). It stays as built on Spyro 1/2/3 and Tomba 2; no further titles get crop layers.
+
 Prior art (2026-11-12): DuckStation's crop modes trim overscan only and its "Stretch to Fill" scales the
 GTE aspect; neither crops gameplay height to 16:9 and relocates the HUD
 ([commit b180b26](https://git.morozoff.pro/aiden/duckstation/commit/b180b26728aa8d98a303ef992fc483073826d914)).
