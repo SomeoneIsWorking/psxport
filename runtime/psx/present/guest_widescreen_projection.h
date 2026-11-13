@@ -35,18 +35,6 @@ public:
   virtual ~GuestWidescreenProjection() = default;
   // The player's aspect setting; a title overrides this only to hold 4:3 in some state.
   virtual PresentationAspect presentationAspect(const Core &core) const;
-  // Crop widescreen, asked as the draw that linked it has just run: whether the ordering-table packet at `packet` is
-  // UI, shown at its 4:3 size and place over the cropped world, and whether the whole frame is (a menu authored for
-  // 4:3).
-  virtual bool cropUiPacket(Core &core, std::uint32_t packet) const {
-    (void)core;
-    (void)packet;
-    return false;
-  }
-  virtual bool cropWholeFrameUi(Core &core) const {
-    (void)core;
-    return false;
-  }
   // Native columns the frame being sealed reaches beyond the display buffer, each side: a title whose view stops at
   // a camera bound or whose picture stops at its world's edge says so here. fitWindows turns it into the record's
   // windows.

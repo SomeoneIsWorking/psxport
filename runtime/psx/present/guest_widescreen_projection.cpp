@@ -1,6 +1,7 @@
 #include "guest_widescreen_projection.h"
 
 #include "core.h"
+#include "crop_ui_layers.h"
 #include "game.h"
 #include "gpu_device.h"
 #include "mods.h"
@@ -51,7 +52,7 @@ GuestProjectionPlan latch(Core &core, PixelSize nativePresentation, GuestProject
       .nativeProjection = nativeProjection,
       .sink = core.game->renderDevice.sinkSize(),
       .vramWidth = gpu::kVramWidth,
-      .crop = core.game->mods.widescreen == WIDESCREEN_CROP,
+      .crop = core.game->mods.crops(),
   });
   core.game->guestDisplay.latch(plan);
   return plan;
@@ -97,11 +98,11 @@ RecordWindows frameWindows(Core &core) {
 }
 
 bool cropShowsUi(Core &core, std::uint32_t packet) {
-  const GuestWidescreenProjection *projection = core.runtime.guestWidescreenProjection();
-  if (projection == nullptr || !core.game->guestDisplay.plan().crop.active()) {
+  const CropUiLayers *layers = core.runtime.cropUiLayers(core);
+  if (layers == nullptr || packet == 0 || !core.game->guestDisplay.plan().crop.active()) {
     return false;
   }
-  return projection->cropWholeFrameUi(core) || (packet != 0 && projection->cropUiPacket(core, packet));
+  return layers->uiPacket(packet);
 }
 
 void classifyCropLayers(Core &core, std::span<RecordEntry> entries) {

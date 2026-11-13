@@ -489,8 +489,10 @@ displayed buffer evicts one canvas, whose margins are black until redrawn.
 `widescreen = Crop` keeps the guest at 4:3 and shows the band of its picture the aspect keeps (`present::CropBand`), the
 world at `q * m` and the title's UI at `p * m` over the whole display, centred (plan 0203). The image stays the device's
 at S; each displayed buffer has a crop canvas (`gpu::cropCanvas`) that each primitive is planned onto first, at its
-layer's scale, before the image. The title names UI packets through `GuestWidescreenProjection::cropUiPacket`, asked at
-the seal and inside each replayed in-between; anything it does not name is world. Check: guest RAM after a warp equals
+layer's scale, before the image. The title names UI packets through its `present::CropUiLayers`
+(`GameRuntime::cropUiLayers`), asked at the seal and inside each replayed in-between; anything it does not name is
+world. Crop is offered only to a title that provides one; otherwise the row is unavailable and the setting resolves to
+Extend (`Mods::crops`). Check: guest RAM after a warp equals
 the 4:3 run's, and `pshot` shows the HUD at its 4:3 size and place over the filled 16:9 world.
 
 ### The guest projection latch

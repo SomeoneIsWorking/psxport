@@ -77,6 +77,9 @@ bool ModRowModel::available(const Mods &m, std::string_view id) {
   if (id == "fps60") {
     return m.temporalInterpolationSupported();
   }
+  if (id == "widescreen") {
+    return m.cropOffered();
+  }
   return id != "depth" || m.nativeDepthOffered();
 }
 
@@ -89,6 +92,10 @@ bool ModRowModel::value_text(const Mods &m, std::string_view id, std::string &ou
   int v = *r->field(const_cast<Mods &>(m));
   if (v < 0 || v >= r->states) {
     v = r->fallback;
+  }
+  // A title that does not name its crop UI shows Extend whatever is saved.
+  if (id == "widescreen") {
+    v = m.crops() ? WIDESCREEN_CROP : WIDESCREEN_EXTEND;
   }
   out = r->labels[v];
   return true;

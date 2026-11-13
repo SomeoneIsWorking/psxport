@@ -43,10 +43,21 @@ public:
   bool nativeDepthOffered() const {
     return nativeDepthOffered_;
   }
+  // Whether the title names its crop UI (present::CropUiLayers); without it the setting resolves to Extend.
+  void offerCrop(bool named) {
+    cropOffered_ = named;
+  }
+  bool cropOffered() const {
+    return cropOffered_;
+  }
+  bool crops() const {
+    return cropOffered_ && widescreen == WIDESCREEN_CROP;
+  }
 
 private:
   std::span<const psx::game::TitleIntSetting> titleSettings_;
   bool inited_ = false;
   bool temporalInterpolationSupported_ = false;
   bool nativeDepthOffered_ = false;
+  bool cropOffered_ = false;
 };

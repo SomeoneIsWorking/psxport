@@ -25,6 +25,7 @@ namespace psx::cd {
 struct StockReadLanding;
 }
 namespace psx::present {
+class CropUiLayers;
 class GuestWidescreenProjection;
 class ReplayFrame;
 } // namespace psx::present
@@ -170,6 +171,11 @@ public:
   }
   // Optional title-owned guest projection.
   virtual const psx::present::GuestWidescreenProjection *guestWidescreenProjection() const {
+    return nullptr;
+  }
+  // The title's UI naming for crop widescreen; a title without one is not offered Crop.
+  virtual const psx::present::CropUiLayers *cropUiLayers(Core &core) const {
+    (void)core;
     return nullptr;
   }
   // The title's picture shows its own logo right now, so the picker draws none over it.

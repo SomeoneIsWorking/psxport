@@ -125,6 +125,7 @@ bool TitleSession::boot() {
   // frame owner.
   runtime.registerOverrides(game);
   game.mods.offerNativeDepth(core.depthTest.marksAny());
+  game.mods.offerCrop(runtime.cropUiLayers(core) != nullptr);
   services_.frameLoop.prepareProduct(game);
   // Several sessions each start the channel; only the first owns the host port, which is how the
   // picker and a running title share one.

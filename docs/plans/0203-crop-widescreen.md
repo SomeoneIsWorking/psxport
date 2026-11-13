@@ -10,7 +10,9 @@ GTE aspect; neither crops gameplay height to 16:9 and relocates the HUD
 
 ## Shape
 
-- **Setting.** `widescreen` (`PSXPORT_WIDESCREEN`, the Widescreen row): `Extend` (default) or `Crop`. With Crop and a
+- **Setting.** `widescreen` (`PSXPORT_WIDESCREEN`, the Widescreen row): `Extend` (default) or `Crop`, offered only to
+  a title that names its UI (below); for any other the row is unavailable and the setting resolves to Extend
+  (`Mods::crops`), the saved value kept. With Crop and a
   wide aspect, `guestProjectionPlan` keeps the widening target at 4:3, so no canvas, projection, cull or emitter
   changes: the guest runs exactly as at 4:3 and every extend-mode override sees no margin.
 - **Band** (`present::CropBand`, `crop_band.h`): the 4:3 picture's full width over `p/q` of its rows, centred.
@@ -20,9 +22,9 @@ GTE aspect; neither crops gameplay height to 16:9 and relocates the HUD
   `Kw = q * m` from the band's top row, the UI at `Ku = p * m` over the whole display, centred. At 16:9 and S = 8 that is
   12 and 9: the band's 180 rows and the display's 240 both fill 2160 target rows. No rational mapping: both layers are
   integer scales, so `gpu.c`'s coverage and interpolants stay the planner's own at that scale.
-- **Classification is the title's,** from RE'd identity, never from where a primitive lands:
-  `GuestWidescreenProjection::cropUiPacket(core, packet)` names the ordering-table packets of the frame just drawn
-  that are UI, and `cropWholeFrameUi` a frame that is all UI. The frame presenter asks at the seal
+- **Classification is the title's,** from RE'd identity, never from where a primitive lands: its
+  `present::CropUiLayers` (`GameRuntime::cropUiLayers`, its presence the title's declaration of Crop) names the
+  ordering-table packets of the frame just drawn that are UI. The frame presenter asks at the seal
   (`classifyCropLayers`), the replay asks inside each in-between's draw (`ReplayFrame::Capture::uiPackets`), since
   in-between primitives carry no slot or owner. `DrawPrimitive::packet` is the OT node that carried a primitive
   (`Gp0Origin::packet`, `decodePacket`).
@@ -46,7 +48,6 @@ GTE aspect; neither crops gameplay height to 16:9 and relocates the HUD
 
 ## Limits
 
-- A title without classification shows everything as world: its HUD and text crop with the picture (Tomba 2 today).
 - A guest read-back (Spyro 1's pause backdrop) shows the 4:3 page at 1x in the band.
 - The UI is clipped where `h * Ku` exceeds the target's rows (`h * p % q != 0`).
 - Memory: a crop canvas is `w * Kw` by `rows * Kw` (6144 x 2160 for 512 wide at 16:9, S = 8), four RG8 textures and a
@@ -58,5 +59,6 @@ GTE aspect; neither crops gameplay height to 16:9 and relocates the HUD
 
 - Done: setting, band, planner, rasteriser, present, classification hooks; Spyro 1 (`psx-spyro`
   `titles/spyro1/render/crop_layers.h`). Guest RAM equals the 4:3 run's in Spyro 1 and Tomba 2.
+- Titles without a `CropUiLayers` (Tomba 2, Spyro 2/3 and the rest today) are not offered Crop.
 - Open: Tomba 2's classification (UI through native emitters and guest leaves across buckets 1..4, 0x7FF and
   attribute-chosen ones); Spyro 2/3 and the other titles; a band anchor from RE'd camera state.
