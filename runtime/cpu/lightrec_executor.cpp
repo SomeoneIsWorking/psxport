@@ -263,7 +263,8 @@ struct LightrecExecutor::Impl {
     if (core.sideEffectJournal != nullptr && core.sideEffectJournal->withholdsGuestTime()) {
       return;
     }
-    const std::uint32_t instructions = segmentClock.commitThrough(lightrec_current_cycle_count(lightrec));
+    const std::uint32_t instructions =
+        segmentClock.commitThrough(executedInstructionCount(*lightrec_get_execution_stats(lightrec)));
     if (instructions == 0) {
       return;
     }
@@ -643,9 +644,8 @@ ExecutionResult LightrecExecutor::executeWithBoundary(std::uint32_t guestAddress
     boundary.pc = 0;
     impl.copyCoreToLightrec();
     lightrec_reset_cycle_count(impl.state, 0);
-    // Zeroed together with Lightrec's counter: the ledger measures deltas against it.
-    impl.segmentClock.beginSegment();
     const lightrec_execution_stats before = *lightrec_get_execution_stats(impl.state);
+    impl.segmentClock.beginSegment(executedInstructionCount(before));
     // A segment also ends at the host field deadline and the next device deadline, which are only
     // folded into the clock between segments.
     std::uint64_t segmentCycleBudget = budget.cycles - consumedCycles;

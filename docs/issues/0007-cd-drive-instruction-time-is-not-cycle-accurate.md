@@ -59,9 +59,11 @@ animation by one game frame. That it cannot be seen in play is reasoned, not sho
 CD reads are instant by design, so drive-rate accuracy is not a product goal.
 
 The units question is answered for now by instructions: the in-segment device clock
-(`runtime/cpu/segment_clock.h`) divides Lightrec's cycle counter by the flat
-`kLightrecCyclesPerInstruction = 2`, Lightrec's own per-op charge, so mid-segment commits stay in
-one-tick-per-instruction time. That factor stays while this is deferred.
+(`runtime/cpu/segment_clock.h`) commits Lightrec's executed-instruction counter, one tick per
+instruction. It does not read Lightrec's cycle counter, which runs about 1% ahead of
+`kLightrecCyclesPerInstruction` × instructions in real code; committing from it made a segment's
+charge depend on where overrides split the code (psx-crash issue 0039). The factor only converts
+budgets to Lightrec's cycle target while this is deferred.
 
 Reopen when a player-visible defect traces to the clock. The fix then is a cost model in the one
 `EmulatedTime` owner (opcode, memory wait-state and GTE stall costs), checked against the console

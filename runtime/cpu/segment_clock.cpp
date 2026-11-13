@@ -2,22 +2,19 @@
 
 namespace psx::cpu {
 
-void SegmentClockLedger::beginSegment() noexcept {
-  chargedThroughCycles_ = 0;
-  pendingCycles_ = 0;
+void SegmentClockLedger::beginSegment(std::uint64_t executedInstructions) noexcept {
+  segmentStart_ = executedInstructions;
   committedInstructions_ = 0;
 }
 
-std::uint32_t SegmentClockLedger::commitThrough(std::uint32_t currentCycle) noexcept {
-  if (currentCycle <= chargedThroughCycles_) {
-    chargedThroughCycles_ = currentCycle;
+std::uint32_t SegmentClockLedger::commitThrough(std::uint64_t executedInstructions) noexcept {
+  const std::uint64_t executed = executedInstructions > segmentStart_ ? executedInstructions - segmentStart_ : 0;
+  if (executed <= committedInstructions_) {
     return 0;
   }
-  const std::uint64_t cycles = static_cast<std::uint64_t>(currentCycle - chargedThroughCycles_) + pendingCycles_;
-  chargedThroughCycles_ = currentCycle;
-  const auto instructions = static_cast<std::uint32_t>(cycles / kLightrecCyclesPerInstruction);
-  pendingCycles_ = static_cast<std::uint32_t>(cycles % kLightrecCyclesPerInstruction);
-  committedInstructions_ += instructions;
+  // A segment's budget is bounded by Lightrec's 32-bit cycle target, so a delta fits.
+  const auto instructions = static_cast<std::uint32_t>(executed - committedInstructions_);
+  committedInstructions_ = executed;
   return instructions;
 }
 

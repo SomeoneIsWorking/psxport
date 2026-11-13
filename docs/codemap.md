@@ -27,7 +27,7 @@ Dependency direction: title repo → `runtime/psx/game/` (the title interface) �
 - `runtime/psx/cpu/gte*.h`, `projected_vertex.h` — GTE / COP2 per Core: register file, register and command numbers, execute, rotation, light matrix and translation load/store, raw save and restore, pre-op observer; screen vertices handed out as `ProjectedVertex` (SXY word plus sub-pixel place and view depth), `DepthUnit` scope
 - `runtime/psx/cpu/vertex_places.*` — PGXP-style place shadow over guest memory: the unrounded place, depth and storing SWC2 site of each vertex word, kept while the word stands and carried through LW/SW (fed by `cpu/lightrec_executor`)
 - `runtime/psx/cpu/beetle/` — Beetle GTE adapter, register transfer to and from Lightrec, PGXP hooks off
-- `runtime/cpu/lightrec_executor.*`, `fallback_policy.h`, `segment_clock.*` — Lightrec dynarec / JIT lifetime per Core, state sync, bounded execution, store observation, fallback, segment cycle commit
+- `runtime/cpu/lightrec_executor.*`, `fallback_policy.h`, `segment_clock.*` — Lightrec dynarec / JIT lifetime per Core, state sync, bounded execution, store observation, fallback, segment instruction commit
 - `runtime/cpu/execution_exit.*`, `execution_control.*`, `execution_services.*`, `execution_ledger.*` — typed executor exits, budgets, break and syscall results, exit requests, executor counters ledger
 - `runtime/cpu/image_identity.*` — code image catalog: authenticated resident and module identity, generation, covered ranges
 - `runtime/cpu/native_dispatch.*`, `native_function.h`, `guest_call*.*` — native overrides / HLE by guest address, original calls, native-to-guest call, jal call sites, call attribution
