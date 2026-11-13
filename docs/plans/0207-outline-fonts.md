@@ -52,11 +52,18 @@ glyph-rectangle model: RE the drawer and its glyph table into the title's decomp
 (`OutlineFont` with `OutlineGlyph`s, `OutlineGrid` where cells are equal) and the drawer naming each glyph packet's
 font through the title's `OutlineGlyphs`.
 
-- 2c, Spyro 3's Atlas font: a second Spyro 3 font beside `spyro::textFont`; its glyphs are packed rectangles, not
-  a grid, so list each rect. Its 0x2E quads are semi-transparent and drawn twice (shadow modulated 0x202020, then the
-  text 0x78898C): name both passes' packets with the same font.
-- 2d, the HUD counters: the digit pages and tables first (Spyro 3 0x800291B8/0x800289C8, Spyro 2 0x8005251C/
-  0x800520CC).
+- 2c, Spyro 3's Atlas font: RE'd (spyro-3 `spyro3.atlas-font`): the Atlas string drawer 0x80076228 draws each
+  glyph through the icon emitter 0x800289C8 from the SpriteData table *0x80070108 (indices 0x42-0xA2, 12x9 rects,
+  CLUT 0x09F2), so the font table is that index list and the seam is the drawer's call of 0x800289C8. Blocked on the
+  framework: the glyphs lie on five 4bpp pages (DR_TPAGE 0x09-0x0D, VRAM x 576-831), so one font's box is ~1130 x 100
+  texels and its fields at eight pixels a texel ~9050 pixels wide, past a weak GPU's texture limit. The atlas has to
+  pack glyph tiles rather than map a font's page box: keep the 1x index texture over the box, and give each texel its
+  glyph's tile offset into a packed fields texture (an id per glyph in the index texture and a tile table in the
+  uniforms, or a second offset texture). The 0x202020 colour earlier read as a shadow pass is the Contents caller's
+  colour choice (0x80076958); check for a real second pass when naming packets.
+- 2d, the HUD counters: Spyro 3's value emitter 0x800291B8 draws each digit through the same icon emitter 0x800289C8
+  and SpriteData table as the Atlas, so the packing above serves both.
+  Spyro 2's 0x8005251C/0x800520CC are still to RE.
 - 2e, Spyro 2's pre-rendered string images: whole strings, not glyphs; this needs a layout of the string into its
   rect rather than an `OutlineGlyph` per cell, so it is new framework work.
 - Tomba 2 leftovers (tomba2-decomp `docs/notes/text-fonts.md`): the token strings are the four buttons, already
@@ -67,9 +74,12 @@ font through the title's `OutlineGlyphs`.
 - Multicoloured glyphs: the A channel of an unshadowed glyph could hold the field of its silhouette (the outer contour
   filled), so a button's symbol, cut from PromptFont's disc, takes the symbol's own CLUT index from the bitmap under
   it. Shadowed glyphs (Tomba 2's 8x8 buttons) have no channel left for it.
+- psx-tomba carries the `padArt` marks on its button glyphs (`game/ui/text_fonts.h`), uncommitted until the psxport
+  commit that adds `padArt` is pushed.
 - Proof routes: Spyro `ally_text.sh` (Ally, `warp 0/0/0`, start, downs, cross; Spyro 3 Help is three downs);
   Tomba 2 `psx-tomba/scratch/outline-text/tools/` (`drive.py` with the REPL files: title New Game, `warp 8/0`,
-  start; the narration dump is mid-route).
+  start; the narration dump is mid-route). Tomba 2 Options: `psx-tomba/scratch/outline-text2/options.txt`. Spyro 3
+  Atlas locally: `psx-spyro/scratch/atlas-font/atlas.txt` (`warp 0/0/0`, start, down, cross).
 
 ## As built
 
