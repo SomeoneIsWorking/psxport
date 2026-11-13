@@ -138,6 +138,25 @@ std::optional<char32_t> gamepadGlyph(SDL_GamepadType type, std::uint16_t bit) {
   return binding->trigger == SDL_GAMEPAD_AXIS_LEFT_TRIGGER ? glyphs.l2 : glyphs.r2;
 }
 
+std::optional<FaceColour> xboxFaceColour(SDL_GamepadType type, std::uint16_t bit) {
+  const std::optional<GamepadBinding> binding = gamepadBinding(bit);
+  if (!binding) {
+    return std::nullopt;
+  }
+  switch (SDL_GetGamepadButtonLabelForType(type, binding->button)) {
+  case SDL_GAMEPAD_BUTTON_LABEL_A:
+    return kXboxA;
+  case SDL_GAMEPAD_BUTTON_LABEL_B:
+    return kXboxB;
+  case SDL_GAMEPAD_BUTTON_LABEL_X:
+    return kXboxX;
+  case SDL_GAMEPAD_BUTTON_LABEL_Y:
+    return kXboxY;
+  default:
+    return std::nullopt;
+  }
+}
+
 std::optional<char32_t> keyGlyph(SDL_Scancode key) {
   if (key >= SDL_SCANCODE_A && key <= SDL_SCANCODE_Z) {
     return 0xFF21 + static_cast<char32_t>(key - SDL_SCANCODE_A);
@@ -200,6 +219,17 @@ char32_t GlyphSet::glyph(std::uint16_t button) const {
   (void)button;
   return kNoGlyph;
 #endif
+}
+
+std::optional<FaceColour> GlyphSet::faceColour(std::uint16_t button) const {
+#ifdef PSXPORT_SDL
+  if (family_ == PadFamily::Xbox) {
+    return xboxFaceColour(static_cast<SDL_GamepadType>(sdlType_), button);
+  }
+#else
+  (void)button;
+#endif
+  return std::nullopt;
 }
 
 void GlyphSet::noteKeyboard() {

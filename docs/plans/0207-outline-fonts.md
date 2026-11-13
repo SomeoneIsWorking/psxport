@@ -43,16 +43,18 @@ timing and colours are the game's.
   correction (its scanline pass): variable faces keep overlapping contours.
 - Colours stay the guest's: the index texture holds per cell row the CLUT index most of the row's glyph
   texels use (R) and its shadow's (G), so the glyph shades down the cell as the bitmap does; the packet's CLUT,
-  modulation and blending apply as for any texel.
+  modulation and blending apply as for any texel. A button cell's B names its slot in `OutlineAtlas::buttons`;
+  at draw time `buttonFaceColours` asks `GlyphSet::faceColour` per slot and the glyph takes that colour, keeping
+  its CLUT texel's semi-transparency bit: Xbox prints A green, B red, X blue, Y yellow; PlayStation, Nintendo
+  and the keyboard keep the game's colours.
 - The record op of a flagged primitive (`kOpOutline`, set only at internal scale above 1) samples the atlas
   instead of VRAM in `record.frag`, so it keeps its ordering-table slot, crop UI place and replay. At scale 1
   the bitmap draws.
 - Check: Spyro 2 Summer Forest pause and Spyro 3 Sunrise Spring pause and Help at `ires=0`, 3840x2160
-  (`warp 0/0/0`, start, down, cross): letters and button glyphs sharp, shaded and shadowed as the bitmap.
+  (`warp 0/0/0`, start, down, cross): letters and button glyphs sharp, shaded and shadowed as the bitmap; Help
+  under `gamepad make xbox` and `gamepad make playstation` for the face colours.
 
 ## Not covered
 
 - Text Spyro 2/3 draw outside their two layouts: the title screen's memory-card text, Spyro 3's Atlas book
   font, the HUD counters.
-- Button cells take the guest's icon colours (Cross blue, Square pink, Circle red, Triangle green) whatever the
-  family's letters.

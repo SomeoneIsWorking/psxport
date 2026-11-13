@@ -10,7 +10,9 @@
 #include <algorithm>
 #include <array>
 #include <cstddef>
+#include <cstdlib>
 #include <map>
+#include <optional>
 #include <string>
 
 namespace psx::present {
@@ -288,9 +290,19 @@ private:
     next.fields.assign(offsetOf(0, next.height * kFieldScale, fieldWidth, 4), 0);
     next.indices.assign(offsetOf(0, next.height, next.width, 4), 0);
     int drawn = 0;
+    std::size_t buttons = 0;
     for (std::size_t i = 0; i < font.cells.size(); i++) {
       const OutlineCell &cell = font.cells[i];
       const BitmapCell &bitmap = bitmaps_[i];
+      int slot = 0;
+      if (cell.button != 0) {
+        if (buttons == next.buttons.size()) {
+          lucent::error("outline", "font names more than {} button cells", next.buttons.size());
+          std::abort();
+        }
+        next.buttons.at(buttons) = cell.button;
+        slot = static_cast<int>(++buttons);
+      }
       if (bitmap.empty()) {
         continue;
       }
@@ -328,6 +340,7 @@ private:
           std::uint8_t *texel = &next.indices[offsetOf(tileX + x, tileY + static_cast<int>(y), next.width, 4)];
           texel[0] = static_cast<std::uint8_t>(glyphRows[y]);
           texel[1] = static_cast<std::uint8_t>(shadowRows[y]);
+          texel[2] = static_cast<std::uint8_t>(slot);
         }
       }
     }
@@ -357,6 +370,16 @@ void OutlineText::drew(const OutlineFont &font,
 
 const OutlineAtlas *OutlineText::atlas() const {
   return builder_->atlas();
+}
+
+std::array<std::uint32_t, 4> buttonFaceColours(const OutlineAtlas &atlas, const psx::input::GlyphSet &pads) {
+  std::array<std::uint32_t, 4> colours{};
+  for (std::size_t slot = 0; slot < atlas.buttons.size(); slot++) {
+    if (const std::optional<psx::input::FaceColour> face = pads.faceColour(atlas.buttons.at(slot))) {
+      colours.at(slot) = psx::gpu::toVram555(face->red, face->green, face->blue);
+    }
+  }
+  return colours;
 }
 
 void markGlyphs(const OutlineFont *font,

@@ -47,6 +47,7 @@ struct ParamsUniform {
   std::int32_t outlineOriginX = 0;
   std::int32_t outlineOriginY = 0;
   std::int32_t unusedOutline = 0;
+  std::array<std::int32_t, 4> outlineFaces{};
 };
 
 std::uint64_t coveredPixels(std::span<const gpu::RecordQuad> quads) {
@@ -215,7 +216,8 @@ void RecordRasterizer::releasePlane(Plane &plane) {
   plane = {};
 }
 
-void RecordRasterizer::useOutline(const present::OutlineAtlas *atlas) {
+void RecordRasterizer::useOutline(const present::OutlineAtlas *atlas, const std::array<std::uint32_t, 4> &faces) {
+  outlineFaces_ = faces;
   if (atlas == nullptr || atlas->generation == outlineGeneration_) {
     return;
   }
@@ -811,6 +813,9 @@ void RecordRasterizer::execute(SDL_GPUCommandBuffer *cmd, const gpu::RecordRaste
         params.outlineScale = outlineScale_;
         params.outlineOriginX = outlineOriginX_;
         params.outlineOriginY = outlineOriginY_;
+        for (std::size_t slot = 0; slot < outlineFaces_.size(); slot++) {
+          params.outlineFaces.at(slot) = static_cast<std::int32_t>(outlineFaces_.at(slot));
+        }
       }
       if (p > 0 && canvases_[static_cast<std::size_t>(p - 1)].shape.crop()) {
         const RecordCanvas &shape = canvases_[static_cast<std::size_t>(p - 1)].shape;

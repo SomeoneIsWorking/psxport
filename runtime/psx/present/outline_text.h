@@ -11,6 +11,7 @@
 #include "frame_record.h"
 #include "vram_pixel.h"
 
+#include <array>
 #include <cstdint>
 #include <memory>
 #include <span>
@@ -62,15 +63,17 @@ public:
 
 // What record.frag samples for kOpOutline. `fields` is `scale` pixels a texel over the page's cell rows: RGB a
 // multi-channel distance field of each cell's glyph, A a distance field of its shadow. `indices` is one pixel a texel,
-// R and G the CLUT indices of its row of the bitmap glyph and of its shadow.
+// R and G the CLUT indices of its row of the bitmap glyph and of its shadow, B a button cell's slot in `buttons`
+// plus one.
 struct OutlineAtlas {
   int scale = 0;
   int width = 0; // texels
   int height = 0;
   int originX = 0; // the first texel, in texels of the page's mode across VRAM
   int originY = 0;
-  std::vector<std::uint8_t> fields;  // RGBA8
-  std::vector<std::uint8_t> indices; // RGBA8
+  std::array<std::uint16_t, 4> buttons{}; // the PSX button (kButton*) of each button cell, in cell order
+  std::vector<std::uint8_t> fields;       // RGBA8
+  std::vector<std::uint8_t> indices;      // RGBA8
   std::uint64_t generation = 0;
 };
 
@@ -90,6 +93,10 @@ private:
   class Builder;
   std::unique_ptr<Builder> builder_;
 };
+
+// The face colour of each of `atlas`'s button slots in the family of `pads`, as a VRAM halfword without its
+// semi-transparency bit; 0 where the game's own colour stands.
+std::array<std::uint32_t, 4> buttonFaceColours(const OutlineAtlas &atlas, const psx::input::GlyphSet &pads);
 
 // Marks the primitives among a sealed frame's `entries` whose packets `glyphs` names; when any, `text`'s atlas follows
 // `font`'s cells in `vram` and the pad family of `pads`. Nothing without both a font and its naming.

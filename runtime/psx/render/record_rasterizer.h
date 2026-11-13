@@ -86,8 +86,9 @@ public:
             const RecordView &view,
             const present::DepthTest *depthTest);
 
-  // The outline font atlas kOpOutline ops sample from the next show() on; uploaded when its generation is new.
-  void useOutline(const present::OutlineAtlas *atlas);
+  // The outline font atlas kOpOutline ops sample from the next show() on, uploaded when its generation is new, and
+  // its button slots' face colours (present::buttonFaceColours).
+  void useOutline(const present::OutlineAtlas *atlas, const std::array<std::uint32_t, 4> &faces);
 
   // Whether the next show() counts its covered pixels; every other GpuWork count is always kept.
   void countPixels(bool counting) {
@@ -258,6 +259,7 @@ private:
   int outlineScale_ = 0;
   int outlineOriginX_ = 0;
   int outlineOriginY_ = 0;
+  std::array<std::uint32_t, 4> outlineFaces_{};
 
   Buffer quads_;
   Buffer ops_;

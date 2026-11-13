@@ -20,8 +20,9 @@ layout(std430, set = 2, binding = 5) readonly buffer Ops { uint ops[]; };
 layout(std430, set = 2, binding = 6) readonly buffer Cluts { uint cluts[]; };
 layout(std430, set = 2, binding = 7) readonly buffer Pixels { uint pixels[]; };
 // plane: scale, origin x, origin y (native), the VRAM image's scale; ui: scale, origin x, origin y (UI pixels);
-// outline: the atlas's field pixels a texel (0 for none) and its first texel.
-layout(set = 3, binding = 0) uniform Params { ivec4 plane; ivec4 ui; ivec4 outline; } params;
+// outline: the atlas's field pixels a texel (0 for none) and its first texel; faces: each button slot's face colour, 0
+// for the CLUT's.
+layout(set = 3, binding = 0) uniform Params { ivec4 plane; ivec4 ui; ivec4 outline; ivec4 faces; } params;
 
 uint op;
 int S;  // target pixels per native pixel of this fragment's mapping
@@ -86,10 +87,14 @@ uint outlineTexel(uint u, uint v, uint fu, uint fv) {
     }
     vec2 field = (vec2(at) + vec2(fu, fv) / 256.0) * float(params.outline.x);
     vec4 distance = texture(u_outlineFields, field / vec2(textureSize(u_outlineFields, 0)));
-    vec2 indices = texelFetch(u_outlineIndices, at, 0).rg;
+    vec3 indices = texelFetch(u_outlineIndices, at, 0).rgb;
     uint index;
     if (median(distance.rgb) >= 0.5) {
         index = uint(indices.r * 255.0 + 0.5);
+        uint slot = uint(indices.b * 255.0 + 0.5);
+        if (slot > 0u && params.faces[slot - 1u] != 0) {
+            return (clutEntry(word(kOpClut) + index) & 0x8000u) | uint(params.faces[slot - 1u]);
+        }
     } else if (distance.a >= 0.5) {
         index = uint(indices.g * 255.0 + 0.5);
     } else {
