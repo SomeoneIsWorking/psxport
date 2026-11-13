@@ -62,6 +62,9 @@ public:
   void noteDrawEntry(std::uint32_t field) {
     record_.markDrawEntry(field);
   }
+  void noteSectionEntry(std::uint32_t field) {
+    record_.markSectionEntry(field);
+  }
   // Places a host read-back declaration at this point of the record.
   void declareReadBack(const present::ReadBackTexture &texture) {
     record_.append(texture);

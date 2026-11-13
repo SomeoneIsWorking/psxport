@@ -275,6 +275,10 @@ public:
       drawEntryField_ = field;
     }
   }
+  // A replayed draw section samples the moment its picture shows, whatever reached the GPU around it.
+  void markSectionEntry(std::uint32_t field) {
+    drawEntryField_ = field;
+  }
 
   // The row parity (of VRAM y) the record's last drawing entry leaves undrawn, set when the device
   // rasterizes one field per frame (480-line interlace, E1 bit 10 clear); the other parity is the field

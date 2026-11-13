@@ -3,6 +3,7 @@
 #include "core.h"
 #include "emit_memory.h"
 #include "game.h"
+#include "gpu_device.h"
 #include "guest_redraw.h"
 #include "guest_widescreen_projection.h"
 #include "packet_chains.h"
@@ -29,25 +30,31 @@ void ReplayFrame::beforeDraw(Core &core) {
   }
   const GpuPerf::PhaseScope phase(core.game->perf, GpuPerf::Phase::Replay);
   ran_ = true;
+  const auto field = static_cast<std::uint32_t>(core.game->timing.displayField());
+  core.gpuDevice().noteSectionEntry(field);
+  const std::optional<std::uint32_t> previous = std::exchange(sampledField_, field);
   motion_.sample(core);
   pendingReady_ = false;
-  if (!motion_.paired() || fields_ < 2 || fields_ - 1 > kMaxInBetweens) {
+  // The interval this sample ends, in fields from the last sample: the spacing of the two records' draw entries.
+  const std::uint32_t spacing = previous && field > *previous ? field - *previous : 0u;
+  if (!motion_.paired() || spacing < 2u || spacing - 1u > static_cast<std::uint32_t>(kMaxInBetweens)) {
     return;
   }
-  pending_.fields = fields_;
+  const auto fields = static_cast<int>(spacing);
+  pending_.fields = fields;
   pending_.cycles.sample(core, cycles_);
-  pending_.captures.resize(static_cast<std::size_t>(fields_ - 1));
-  for (int k = 1; k < fields_; ++k) {
-    const float t = static_cast<float>(k) / static_cast<float>(fields_);
+  pending_.captures.resize(static_cast<std::size_t>(fields - 1));
+  for (int k = 1; k < fields; ++k) {
+    const float t = static_cast<float>(k) / static_cast<float>(fields);
     if (!replay(core, t, pending_.captures[static_cast<std::size_t>(k - 1)])) {
       ++refused_;
       motion_.settle(false);
-      lucent::warn("replay", "the draw section's replay at {}/{} refused; the interval is shown as drawn", k, fields_);
+      lucent::warn("replay", "the draw section's replay at {}/{} refused; the interval is shown as drawn", k, fields);
       return;
     }
   }
   ++replayed_;
-  replayedInBetweens_ += static_cast<std::uint64_t>(fields_ - 1);
+  replayedInBetweens_ += static_cast<std::uint64_t>(fields - 1);
   motion_.settle(true);
   pendingReady_ = true;
 }
@@ -114,8 +121,7 @@ bool ReplayFrame::replays(std::uint64_t shown) const {
   return set != nullptr && set->ran;
 }
 
-bool ReplayFrame::covers(const Interval &interval) {
-  fields_ = interval.fields;
+bool ReplayFrame::covers(const Interval &interval) const {
   const Set *set = setFor(interval.shown);
   return set != nullptr && set->from == interval.from && set->fields == interval.fields;
 }

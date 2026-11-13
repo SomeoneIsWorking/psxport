@@ -47,6 +47,10 @@ public:
   void gp0(uint32_t word, const Gp0Origin &origin = {});
   // Draw work enters the GPU in display field `field` (an OT walk, a block DMA, a GP0 port write).
   void noteDrawEntry(std::uint32_t field);
+  // A replayed draw section samples its moment in display field `field`: the record's draw entry.
+  void noteSectionEntry(std::uint32_t field) {
+    mTap.noteSectionEntry(field);
+  }
   // The guest filled a page from display pixels it read back; only the record sees this (record_raster_setup.h).
   void declareReadBack(const present::ReadBackTexture &texture) {
     mTap.declareReadBack(texture);

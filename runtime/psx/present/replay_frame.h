@@ -59,8 +59,8 @@ public:
   };
   // Whether S = `shown`'s draw ran the section; an S that did not is shown as drawn.
   [[nodiscard]] bool replays(std::uint64_t shown) const;
-  // Whether the interval's in-betweens were replayed. The next set is replayed for its `fields`.
-  [[nodiscard]] bool covers(const Interval &interval);
+  // Whether the interval's in-betweens were replayed, for its `fields`.
+  [[nodiscard]] bool covers(const Interval &interval) const;
   // In-between `k` of S' = `from` → S = `shown`, assembled; null when S's chain run cannot take it.
   [[nodiscard]] const FrameRecord *
   at(const FrameRecord &shown, const FrameRecord &from, int k, std::span<const std::uint16_t> vram);
@@ -82,7 +82,7 @@ private:
     std::vector<gpu::CapturedPacket> packets;
     std::vector<std::uint32_t> words;
     std::vector<gte::WordPlace> places;
-    RecordWindows windows; // frameWindows inside the replay, so the in-between frames its own view
+    RecordWindows windows;                // frameWindows inside the replay, so the in-between frames its own view
     std::vector<std::uint32_t> uiPackets; // the packets the replay drew as crop UI (cropShowsUi), ascending
   };
   struct Set {
@@ -107,8 +107,8 @@ private:
   const ReplaySection &section_;
   MotionSet motion_;
   const PaletteCycles *cycles_;
-  // The interval length the next set is replayed for: the last one the presenter asked for.
-  int fields_ = 2;
+  // The display field of the last sample.
+  std::optional<std::uint32_t> sampledField_;
   std::optional<float> replaying_;
   Set pending_;
   bool pendingReady_ = false;
