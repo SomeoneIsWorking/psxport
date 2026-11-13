@@ -97,8 +97,8 @@ public:
   [[nodiscard]] virtual std::optional<std::uint8_t> glyphFont(std::uint32_t packet) const = 0;
 };
 
-// Where one font lies in the atlas: its page texels from `originX`, `originY` (in texels of the page's mode across
-// VRAM), `width` x `height`, at atlas texel (0, atlasY).
+// Where one font lies in the index map: its page texels from `originX`, `originY` (in texels of the page's mode
+// across VRAM), `width` x `height`, at index texel (0, atlasY).
 struct OutlineAtlasFont {
   int originX = 0;
   int originY = 0;
@@ -107,18 +107,21 @@ struct OutlineAtlasFont {
   int atlasY = 0;
 };
 
-// What record.frag samples for kOpOutline. `fields` is `scale` pixels a texel over the fonts' glyphs: RGB a
-// multi-channel distance field of each glyph, A a distance field of its shadow. `indices` is one pixel a texel, R and
-// G the CLUT indices of its row of the bitmap glyph and of its shadow, B a button glyph's slot in `buttons` plus one,
-// A 255 where a named glyph's field lies; a texel without one draws from VRAM.
+// What record.frag samples for kOpOutline. `indices` maps the fonts' page boxes, one under another, two pixels a
+// texel: the first R and G the CLUT indices of its row of the bitmap glyph and of its shadow, B a button glyph's slot
+// in `buttons` plus one, A 255 where a named glyph's field lies (a texel without one draws from VRAM); the second the
+// field pixel in `fields` of the texel's top-left, x then y, 16 bits each, low byte first. `fields` packs one tile a
+// glyph, `scale` pixels a texel: RGB a multi-channel distance field of the glyph, A a distance field of its shadow.
 struct OutlineAtlas {
   int scale = 0;
-  int width = 0; // texels
+  int width = 0; // texels of the index map
   int height = 0;
+  int fieldWidth = 0; // pixels of the packed fields
+  int fieldHeight = 0;
   std::array<OutlineAtlasFont, kMaxOutlineFonts> fonts{};
   std::array<std::uint16_t, 4> buttons{}; // each PSX button (kButton*) the fonts' glyphs show, in font and glyph order
-  std::vector<std::uint8_t> fields;       // RGBA8
-  std::vector<std::uint8_t> indices;      // RGBA8
+  std::vector<std::uint8_t> fields;       // RGBA8, fieldWidth x fieldHeight
+  std::vector<std::uint8_t> indices;      // RGBA8, 2 * width x height
   std::uint64_t generation = 0;
 };
 

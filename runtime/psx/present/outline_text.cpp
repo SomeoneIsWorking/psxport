@@ -23,6 +23,12 @@ namespace {
 constexpr int kFieldScale = 8;
 // The distance a field channel spans either side of the edge, field pixels.
 constexpr double kFieldRange = 4.0;
+// Field pixels round each packed tile, repeating its edge, so a filtered sample never reads a neighbour's field.
+constexpr int kFieldGutter = 1;
+// The packed fields' width, pixels; tiles fill it in shelves.
+constexpr int kFieldShelfWidth = 2048;
+// The largest field texture a weak GPU takes, pixels a side.
+constexpr int kMaxFieldSide = 8192;
 
 // The element of (x, y) in a row-major image `width` wide, `channels` elements a pixel.
 constexpr std::size_t offsetOf(int x, int y, int width, int channels = 1) {
@@ -239,24 +245,48 @@ private:
     std::vector<std::uint8_t> rgba; // the glyph's tile, width x height texels at kFieldScale
   };
 
+  // A glyph's tile in the packed fields: the field pixel of its top-left texel, inside the gutter.
+  struct Tile {
+    int x = 0;
+    int y = 0;
+  };
+
   struct FontState {
     bool built = false;
     std::vector<BitmapGlyph> bitmaps;
     std::vector<char32_t> codepoints;
     std::map<std::size_t, GlyphField> fields;
+    std::vector<Tile> tiles; // by glyph
   };
 
-  // Each font's place, one under another; every glyph field and index empty.
+  // Each font's place in the index map, one under another, and each glyph's tile in shelves across the fields; every
+  // glyph field and index empty.
   void layout(std::span<const OutlineFont> fonts) {
     OutlineAtlas next;
     next.scale = kFieldScale;
+    next.fieldWidth = kFieldShelfWidth;
     std::size_t buttons = 0;
+    int shelfX = 0;
+    int shelfHeight = 0;
     for (std::size_t f = 0; f < fonts.size(); f++) {
       OutlineAtlasFont place = placeOf(fonts[f]);
       place.atlasY = next.height;
       next.fonts.at(f) = place;
       next.width = std::max(next.width, place.width);
       next.height += place.height;
+      std::vector<Tile> &tiles = states_.at(f).tiles;
+      for (const OutlineGlyph &glyph : fonts[f].glyphs) {
+        const int tileWidth = (glyph.width * kFieldScale) + (2 * kFieldGutter);
+        const int tileHeight = (glyph.height * kFieldScale) + (2 * kFieldGutter);
+        if (shelfX + tileWidth > next.fieldWidth) {
+          next.fieldHeight += shelfHeight;
+          shelfX = 0;
+          shelfHeight = 0;
+        }
+        tiles.push_back({.x = shelfX + kFieldGutter, .y = next.fieldHeight + kFieldGutter});
+        shelfX += tileWidth;
+        shelfHeight = std::max(shelfHeight, tileHeight);
+      }
       for (const OutlineGlyph &glyph : fonts[f].glyphs) {
         const auto named = next.buttons.begin() + static_cast<std::ptrdiff_t>(buttons);
         if (glyph.button == 0 || std::find(next.buttons.begin(), named, glyph.button) != named) {
@@ -269,8 +299,19 @@ private:
         next.buttons.at(buttons++) = glyph.button;
       }
     }
-    next.fields.assign(offsetOf(0, next.height * kFieldScale, next.width * kFieldScale, 4), 0);
-    next.indices.assign(offsetOf(0, next.height, next.width, 4), 0);
+    next.fieldHeight += shelfHeight;
+    if (next.fieldHeight > kMaxFieldSide || next.width * 2 > kMaxFieldSide) {
+      lucent::error("outline",
+                    "fonts need a {}x{} field atlas and a {}x{} index map, past {} a side",
+                    next.fieldWidth,
+                    next.fieldHeight,
+                    next.width * 2,
+                    next.height,
+                    kMaxFieldSide);
+      std::abort();
+    }
+    next.fields.assign(offsetOf(0, next.fieldHeight, next.fieldWidth, 4), 0);
+    next.indices.assign(offsetOf(0, next.height, next.width * 2, 4), 0);
     next.generation = atlas_.generation;
     atlas_ = std::move(next);
   }
@@ -370,18 +411,14 @@ private:
     const OutlineAtlasFont &place = atlas_.fonts.at(f);
     const int pageX0 = place.originX - (font.page.x << (2 - static_cast<int>(font.page.depth)));
     const int pageY0 = place.originY - font.page.y;
-    const int fieldWidth = atlas_.width * kFieldScale;
     for (int y = 0; y < place.height; y++) {
-      std::fill_n(&atlas_.indices[offsetOf(0, place.atlasY + y, atlas_.width, 4)], place.width * 4, 0);
-    }
-    for (int y = 0; y < place.height * kFieldScale; y++) {
-      std::fill_n(&atlas_.fields[offsetOf(0, (place.atlasY * kFieldScale) + y, fieldWidth, 4)],
-                  place.width * kFieldScale * 4,
-                  0);
+      std::fill_n(&atlas_.indices[offsetOf(0, place.atlasY + y, atlas_.width * 2, 4)], place.width * 2 * 4, 0);
     }
     for (std::size_t i = 0; i < font.glyphs.size(); i++) {
       const OutlineGlyph &glyph = font.glyphs[i];
       const BitmapGlyph &bitmap = state.bitmaps[i];
+      const Tile tile = state.tiles[i];
+      clearTile(glyph, tile);
       const int glyphSlot =
           glyph.button != 0
               ? static_cast<int>(std::ranges::find(atlas_.buttons, glyph.button) - atlas_.buttons.begin()) + 1
@@ -406,28 +443,53 @@ private:
         }
         ++drawn_;
       }
-      const int tileX = glyph.u - pageX0;
-      const int tileY = place.atlasY + glyph.v - pageY0;
-      const int tileWidth = glyph.width * kFieldScale;
-      for (int y = 0; y < glyph.height * kFieldScale; y++) {
-        std::copy_n(&field.rgba[offsetOf(0, y, tileWidth, 4)],
-                    tileWidth * 4,
-                    &atlas_.fields[offsetOf(tileX * kFieldScale, (tileY * kFieldScale) + y, fieldWidth, 4)]);
-      }
+      copyTile(glyph, tile, field.rgba);
       const std::vector<int> glyphRows = rowIndices(bitmap, [&](int index) {
         return glyphInk(font, bitmap, index);
       });
       const std::vector<int> shadowRows = rowIndices(bitmap, [&](int index) {
         return bitmap.shadowed && shadowTexel(font, index);
       });
+      const int mapX = glyph.u - pageX0;
+      const int mapY = place.atlasY + glyph.v - pageY0;
       for (std::size_t y = 0; y < glyphRows.size(); y++) {
         for (int x = 0; x < glyph.width; x++) {
-          std::uint8_t *texel = &atlas_.indices[offsetOf(tileX + x, tileY + static_cast<int>(y), atlas_.width, 4)];
+          std::uint8_t *texel =
+              &atlas_.indices[offsetOf((mapX + x) * 2, mapY + static_cast<int>(y), atlas_.width * 2, 4)];
           texel[0] = static_cast<std::uint8_t>(glyphRows[y]);
           texel[1] = static_cast<std::uint8_t>(shadowRows[y]);
           texel[2] = static_cast<std::uint8_t>(glyphSlot);
           texel[3] = 255;
+          const int fieldX = tile.x + (x * kFieldScale);
+          const int fieldY = tile.y + (static_cast<int>(y) * kFieldScale);
+          texel[4] = static_cast<std::uint8_t>(fieldX & 0xFF);
+          texel[5] = static_cast<std::uint8_t>(fieldX >> 8);
+          texel[6] = static_cast<std::uint8_t>(fieldY & 0xFF);
+          texel[7] = static_cast<std::uint8_t>(fieldY >> 8);
         }
+      }
+    }
+  }
+
+  // A glyph's tile and its gutter, empty.
+  void clearTile(const OutlineGlyph &glyph, Tile tile) {
+    const int width = (glyph.width * kFieldScale) + (2 * kFieldGutter);
+    for (int y = -kFieldGutter; y < (glyph.height * kFieldScale) + kFieldGutter; y++) {
+      std::fill_n(&atlas_.fields[offsetOf(tile.x - kFieldGutter, tile.y + y, atlas_.fieldWidth, 4)], width * 4, 0);
+    }
+  }
+
+  // A glyph's field into its tile, its edge pixels repeated across the gutter.
+  void copyTile(const OutlineGlyph &glyph, Tile tile, std::span<const std::uint8_t> rgba) {
+    const int width = glyph.width * kFieldScale;
+    const int height = glyph.height * kFieldScale;
+    for (int y = -kFieldGutter; y < height + kFieldGutter; y++) {
+      const int row = std::clamp(y, 0, height - 1);
+      for (int x = -kFieldGutter; x < width + kFieldGutter; x++) {
+        const int column = std::clamp(x, 0, width - 1);
+        std::copy_n(&rgba[offsetOf(column, row, width, 4)],
+                    4,
+                    &atlas_.fields[offsetOf(tile.x + x, tile.y + y, atlas_.fieldWidth, 4)]);
       }
     }
   }

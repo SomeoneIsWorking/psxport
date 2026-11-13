@@ -54,13 +54,10 @@ font through the title's `OutlineGlyphs`.
 
 - 2c, Spyro 3's Atlas font: RE'd (spyro-3 `spyro3.atlas-font`): the Atlas string drawer 0x80076228 draws each
   glyph through the icon emitter 0x800289C8 from the SpriteData table *0x80070108 (indices 0x42-0xA2, 12x9 rects,
-  CLUT 0x09F2), so the font table is that index list and the seam is the drawer's call of 0x800289C8. Blocked on the
-  framework: the glyphs lie on five 4bpp pages (DR_TPAGE 0x09-0x0D, VRAM x 576-831), so one font's box is ~1130 x 100
-  texels and its fields at eight pixels a texel ~9050 pixels wide, past a weak GPU's texture limit. The atlas has to
-  pack glyph tiles rather than map a font's page box: keep the 1x index texture over the box, and give each texel its
-  glyph's tile offset into a packed fields texture (an id per glyph in the index texture and a tile table in the
-  uniforms, or a second offset texture). The 0x202020 colour earlier read as a shadow pass is the Contents caller's
-  colour choice (0x80076958); check for a real second pass when naming packets.
+  CLUT 0x09F2), so the font table is that index list and the seam is the drawer's call of 0x800289C8. The glyphs lie
+  on five 4bpp pages (DR_TPAGE 0x09-0x0D, VRAM x 576-831); the packed atlas (As built) takes them. The 0x202020 colour
+  earlier read as a shadow pass is the Contents caller's colour choice (0x80076958); check for a real second pass
+  when naming packets.
 - 2d, the HUD counters: Spyro 3's value emitter 0x800291B8 draws each digit through the same icon emitter 0x800289C8
   and SpriteData table as the Atlas, so the packing above serves both.
   Spyro 2's 0x8005251C/0x800520CC are still to RE.
@@ -96,9 +93,12 @@ font through the title's `OutlineGlyphs`.
   glyph's ink texels, as an MSDF in RGB and the shadow's SDF, moved by the shadow offset, in A, eight field pixels a
   texel; a `proportional` font keeps the outline's proportions at the ink box's height instead, centred across it and
   no wider (Tomba 2's serifed I, 1 and l in a sans face). Fields take their sign from the outline's nonzero fill, then msdfgen's error correction (its scanline pass):
-  variable faces keep overlapping contours. The atlas holds the fonts one under another, each over the box of its
-  glyph rectangles (`OutlineAtlasFont`); a font not drawn keeps its last fields. A texel of a font's box that no named
-  glyph with an outline covers (index A 0) draws its bitmap from VRAM, so a font names only the glyphs it has faces for.
+  variable faces keep overlapping contours. The fields are packed, one tile a glyph in shelves 2048 pixels wide with a
+  one-pixel gutter repeating the tile's edge, so a font whose glyphs spread over several pages costs only its glyphs.
+  The index map holds the fonts' page boxes one under another (`OutlineAtlasFont`), two pixels a texel: the CLUT
+  indices and button slot, then the field pixel of the texel's top-left in its glyph's tile. A font not drawn keeps
+  its last fields. A texel of a font's box that no named glyph with an outline covers (index A 0) draws its bitmap
+  from VRAM, so a font names only the glyphs it has faces for.
 - A button glyph marked `padArt` is the PlayStation button itself in several colours (Tomba 2's rings and symbols):
   under a PlayStation pad it has no codepoint and draws its bitmap; under any other family its PromptFont glyph.
 - Colours stay the guest's: the index texture holds per glyph row the CLUT index most of the row's glyph

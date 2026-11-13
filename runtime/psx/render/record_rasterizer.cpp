@@ -224,9 +224,8 @@ void RecordRasterizer::useOutline(const present::OutlineAtlas *atlas, const std:
   }
   device_.release(outlineFields_);
   device_.release(outlineIndices_);
-  outlineFields_ =
-      device_.makeFilledTexture({atlas->width * atlas->scale, atlas->height * atlas->scale}, atlas->fields);
-  outlineIndices_ = device_.makeFilledTexture({atlas->width, atlas->height}, atlas->indices);
+  outlineFields_ = device_.makeFilledTexture({atlas->fieldWidth, atlas->fieldHeight}, atlas->fields);
+  outlineIndices_ = device_.makeFilledTexture({atlas->width * 2, atlas->height}, atlas->indices);
   outlineGeneration_ = atlas->generation;
   outlineScale_ = atlas->scale;
   outlineFonts_ = atlas->fonts;

@@ -90,12 +90,14 @@ uint outlineTexel(uint u, uint v, uint fu, uint fv, uint flags) {
         return texel(u, v, fu, fv, flags);
     }
     at.y += place.z;
-    vec2 field = (vec2(at) + vec2(fu, fv) / 256.0) * float(params.outline.x);
-    vec4 distance = texture(u_outlineFields, field / vec2(textureSize(u_outlineFields, 0)));
-    vec4 indices = texelFetch(u_outlineIndices, at, 0);
+    vec4 indices = texelFetch(u_outlineIndices, ivec2(at.x * 2, at.y), 0);
     if (indices.a < 0.5) {
         return texel(u, v, fu, fv, flags);
     }
+    // The texel's top-left in its glyph's packed tile.
+    uvec4 tile = uvec4(texelFetch(u_outlineIndices, ivec2(at.x * 2 + 1, at.y), 0) * 255.0 + 0.5);
+    vec2 field = vec2(tile.r | (tile.g << 8), tile.b | (tile.a << 8)) + vec2(fu, fv) / 256.0 * float(params.outline.x);
+    vec4 distance = texture(u_outlineFields, field / vec2(textureSize(u_outlineFields, 0)));
     uint index;
     if (median(distance.rgb) >= 0.5) {
         index = uint(indices.r * 255.0 + 0.5);
