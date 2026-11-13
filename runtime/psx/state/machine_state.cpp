@@ -219,7 +219,6 @@ std::optional<StateOutcome> MachineState::restore(std::span<const std::uint8_t> 
   }
   outcome.sections = file->names();
   outcome.bytes = image.size();
-  outcome.fields = mGame.timing.vblank;
 
   // ---- the title check FIRST, while nothing has been mutated -----------------------------------
   NativeStatePort *port = titlePort(mGame);
@@ -249,7 +248,8 @@ std::optional<StateOutcome> MachineState::restore(std::span<const std::uint8_t> 
     }
     payloads[i] = *found;
   }
-  if (port != nullptr) {
+  // The checks above leave a title payload exactly when the title has a port.
+  if (titlePayload.has_value()) {
     BlobReader title(*titlePayload);
     const std::uint8_t envelope = title.u8();
     const std::uint32_t version = title.u32();
@@ -274,6 +274,7 @@ std::optional<StateOutcome> MachineState::restore(std::span<const std::uint8_t> 
       return std::nullopt;
     }
   }
+  outcome.fields = mGame.timing.vblank;
   outcome.invalidationRanges = 2;
   Core &core = mGame.core;
   // Every section is in place and nothing below can refuse, so the title adopts what it staged.
