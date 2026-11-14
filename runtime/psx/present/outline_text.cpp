@@ -15,6 +15,7 @@
 #include <map>
 #include <optional>
 #include <string>
+#include <utility>
 
 namespace psx::present {
 namespace {
@@ -320,7 +321,9 @@ private:
     const std::string name = which == OutlineFace::Prompt   ? "promptfont.ttf"
                              : which == OutlineFace::Symbol ? font.symbolFace
                                                             : font.textFace;
-    const auto [at, added] = faces_.try_emplace(name, nullptr);
+    // Fonts sharing a variable text face at other weights each need their own instance.
+    const double weight = which == OutlineFace::Text ? font.weight : 0;
+    const auto [at, added] = faces_.try_emplace({name, weight}, nullptr);
     if (!added) {
       return at->second;
     }
@@ -334,9 +337,9 @@ private:
       lucent::error("outline", "font {} present but FreeType rejected it", path);
       return nullptr;
     }
-    if (which == OutlineFace::Text && font.weight != 0 &&
-        !msdfgen::setFontVariationAxis(freetype_, at->second, msdfgen::FontVariationAxis::Tag("wght"), font.weight)) {
-      lucent::error("outline", "font {} has no weight axis to set to {}", path, font.weight);
+    if (weight != 0 &&
+        !msdfgen::setFontVariationAxis(freetype_, at->second, msdfgen::FontVariationAxis::Tag("wght"), weight)) {
+      lucent::error("outline", "font {} has no weight axis to set to {}", path, weight);
     }
     return at->second;
   }
@@ -497,7 +500,7 @@ private:
   }
 
   msdfgen::FreetypeHandle *freetype_ = nullptr;
-  std::map<std::string, msdfgen::FontHandle *> faces_;
+  std::map<std::pair<std::string, double>, msdfgen::FontHandle *> faces_; // by file and weight
   const OutlineFont *fonts_ = nullptr;
   std::array<FontState, kMaxOutlineFonts> states_;
   int drawn_ = 0;
