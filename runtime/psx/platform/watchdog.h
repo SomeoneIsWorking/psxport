@@ -1,6 +1,8 @@
 // watchdog.h — the process frame-progress watchdog, crash and interrupt reporters.
 #pragma once
 
+#include <cstdint>
+
 namespace psx::platform {
 
 // Signal handlers carry no context, so the watchdog's state is process-wide; one RAII owner (ProductHost's
@@ -25,6 +27,10 @@ public:
   // Permanently disarm (the divergence debugger pauses indefinitely).
   static void disable();
   static bool armed();
+  // The guest position a timeout reports: the PC of the block last entered and the guest's 32 GPRs, both owned by
+  // the executor until it forgets them.
+  static void watchGuest(const volatile std::uint32_t *pc, const std::uint32_t *registers);
+  static void forgetGuest(const volatile std::uint32_t *pc);
 };
 
 // The guest burned instruction time without yielding: report the region and exit 137.

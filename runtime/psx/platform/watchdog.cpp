@@ -14,8 +14,8 @@
 #endif
 
 // SANCTIONED SIGNAL-HANDLER EXCEPTION: signal handlers receive no context, so the watchdog's
-// state must be reachable from file scope. All of it lives in this ONE static struct; the
-// sig_atomic_t fields are the only ones a handler reads.
+// state must be reachable from file scope. Per-run state lives in s_wd, the executor's guest position in s_guest;
+// the sig_atomic_t fields and s_guest are the only ones a handler reads.
 namespace {
 
 struct {
@@ -27,10 +27,30 @@ struct {
   volatile sig_atomic_t int_seen;           // SIGINT/SIGTERM re-entry latch
 } s_wd;
 
-// During guest execution the C backtrace below names the
-// guest_<addr> chain directly (the guest call stack), so there is no separate "interp PC" to
-// report. (Core::pc holds the per-core guest fn, but a signal handler has no Core handle and the
-// backtrace supersedes it.)
+// The executor's guest position, registered for the machine's lifetime rather than per run, so a run's reset of s_wd
+// keeps it.
+struct {
+  const volatile uint32_t *volatile pc;
+  const uint32_t *volatile registers;
+} s_guest;
+
+// Guest code runs as Lightrec blocks the C backtrace cannot name, so the report adds the guest's own position.
+void writeGuestPosition() {
+  const volatile uint32_t *pc = s_guest.pc;
+  const uint32_t *registers = s_guest.registers;
+  if (pc == nullptr || registers == nullptr) {
+    return;
+  }
+  char line[] = "[watchdog] guest pc=00000000 ra=00000000 sp=00000000\n";
+  const uint32_t values[3] = {*pc, registers[31], registers[29]};
+  constexpr int kFirstDigit[3] = {20, 32, 44};
+  for (int field = 0; field < 3; field++) {
+    for (int digit = 0; digit < 8; digit++) {
+      line[kFirstDigit[field] + digit] = "0123456789ABCDEF"[(values[field] >> (28 - 4 * digit)) & 0xFu];
+    }
+  }
+  write(2, line, sizeof(line) - 1);
+}
 
 void onAlarm(int sig) {
   (void)sig;
@@ -45,6 +65,7 @@ void onAlarm(int sig) {
                             "PSXPORT_WATCHDOG_BOOT)\n";
     write(2, hint, sizeof(hint) - 1);
   }
+  writeGuestPosition();
 #ifdef HAVE_BACKTRACE
   void *bt[64];
   int n = backtrace(bt, 64);
@@ -114,6 +135,7 @@ void onInterrupt(int sig) {
   // See onAlarm: this handler can use only the emergency async-signal-safe fd 2 path.
   constexpr char msg[] = "\n[watchdog] INTERRUPT (SIGINT/SIGTERM) — where it was stuck:\n";
   write(2, msg, sizeof(msg) - 1);
+  writeGuestPosition();
 #ifdef HAVE_BACKTRACE
   void *bt[64];
   int n = backtrace(bt, 64);
@@ -219,6 +241,18 @@ void Watchdog::disable() {
 
 bool Watchdog::armed() {
   return s_wd.armed != 0;
+}
+
+void Watchdog::watchGuest(const volatile std::uint32_t *pc, const std::uint32_t *registers) {
+  s_guest.registers = registers;
+  s_guest.pc = pc;
+}
+
+void Watchdog::forgetGuest(const volatile std::uint32_t *pc) {
+  if (s_guest.pc == pc) {
+    s_guest.pc = nullptr;
+    s_guest.registers = nullptr;
+  }
 }
 
 Watchdog::~Watchdog() {

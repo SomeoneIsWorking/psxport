@@ -12,6 +12,7 @@
 #include "segment_clock.h"
 #include "side_effect_journal.h"
 #include "store_observe.h"
+#include "watchdog.h"
 
 #include <lightrec.h>
 #include <lucent/log.h>
@@ -92,6 +93,7 @@ struct LightrecExecutor::Impl {
       lucent::error("executor", "Lightrec initialization failed");
       return false;
     }
+    psx::platform::Watchdog::watchGuest(&enteredPc, lightrec_get_registers(state)->gpr);
     return true;
   }
 
@@ -100,6 +102,7 @@ struct LightrecExecutor::Impl {
       return;
     }
     std::scoped_lock lifecycleLock(lifecycleMutex_);
+    psx::platform::Watchdog::forgetGuest(&enteredPc);
     lightrec_destroy(state);
     state = nullptr;
     liveMachines.fetch_sub(1);
@@ -389,6 +392,7 @@ struct LightrecExecutor::Impl {
   static lightrec_block_boundary_action
   blockBoundary(lightrec_state *lightrec, std::uint32_t guestPc, std::uint32_t *, void *userData) {
     auto &impl = *static_cast<Impl *>(userData);
+    impl.enteredPc = guestPc;
     impl.latchWriter(lightrec, guestPc);
     if (impl.reach) {
       impl.reach->observe(guestPc);
@@ -573,6 +577,8 @@ struct LightrecExecutor::Impl {
   std::array<std::uint8_t, kBiosBytes> bios{};
   std::array<lightrec_mem_map, PSX_MAP_CODE_BUFFER + 1> maps{};
   lightrec_state *state = nullptr;
+  // The block last entered, for the watchdog's report.
+  volatile std::uint32_t enteredPc = 0;
   bool initializationAttempted = false;
   FallbackPolicyProvider fallbackPolicyProvider = nullptr;
   BoundaryContext *running = nullptr;
