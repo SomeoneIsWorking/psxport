@@ -38,15 +38,11 @@ timing and colours are the game's.
    d. The HUD counters: Spyro 3's value emitter 0x800291B8 drawing each digit through the icon emitter
       0x800289C8, Spyro 2's HUD counter and sprite sites 0x8005251C and 0x800520CC; their digit pages and
       tables are still to RE.
-   e. Last, Spyro 2's pre-rendered string images (spyro-2 `spyro2.title-strings`): the title screen's
-      memory-card and language messages are whole strings in 8bpp pages at (512,256) and (640,256), drawn as
-      160x104 sprites (0x64, DR_TPAGE 0xE1000498/0xE100049A); neither text layout runs there. Each needs a
-      table of which rect shows which string (the message tables are at 0x80063B74 and 0x80061B70), and the
-      outline lays the string out in that rect.
+   e. Spyro 2's title-screen strings: built for the one-colour lines (see Next steps).
 
 ## Next steps
 
-Phases 2a to 2d are built and shown. Continue with 2e.
+Phases 2a to 2e are built and shown. Phase 2 is done.
 
 - 2c, Spyro 3's Atlas font: built (psx-spyro `titles/spyro3/render/sprite_fonts.h`, spyro-3 `spyro3.atlas-font`). The icon
   emitter's override names each packet it drew from entries 0x42-0xA2 of *0x80070108 as the Atlas font, whose glyphs
@@ -58,8 +54,18 @@ Phases 2a to 2d are built and shown. Continue with 2e.
   0x800291B8 reads digits 0-9 and the slash from *0x8006C788 at the halfword 0x800719CC, a table whose entries move
   with the level, so `sprite_fonts::Fonts::follow` reads them each sealed frame into the font (its page the entries'
   top-left page, shadow indices 2, 7 and A) and the icon emitter's override names the packets drawn from them.
-- 2e, Spyro 2's pre-rendered string images: whole strings, not glyphs; this needs a layout of the string into its
-  rect rather than an `OutlineGlyph` per cell, so it is new framework work.
+- 2e, Spyro 2's title-screen strings: built (psx-spyro `titles/spyro2/render/title_strings.*`, spyro-2
+  `spyro2.title-strings`). They are a picture, not glyphs: WAD entry 95 + 0x40800 lands as VRAM (512, 256)..(1024, 512),
+  and the boot overlay's image drawer 0x80079878(x, y, image, colour) draws each string as one sprite from its table
+  0x80063F2C + 6 * image; no character data for them exists in the game. The fifteen one-colour lines, images 0x3C-0x4A
+  on the 4bpp pages (768, 256) and (832, 256) ('Slot 1', 'Create Block', 'Memory Card 1 (Triangle) to Return', ...),
+  draw from Fredoka 500 as an `OutlineGlyph` per ink run (159, each line's runs counted against its text), the
+  Triangle as a button glyph; no framework change was needed. The drawer's override is installed when the boot overlay's
+  read lands (`BootPrefixRuntime::codeLanded`, keyed on its SHA-256) and names the sprite of each such image. Kept as
+  bitmaps: the message lines 0x20-0x3B ('Select MEMORY CARD:', ...), anti-aliased through a cream-to-black ramp that
+  rims each letter on all sides, which one CLUT index a row over an offset shadow cannot draw; 'press start', the
+  language names and the % digits, 8bpp lettering shaded across the glyph. Check: title, Start (Slot 1 / Slot 2),
+  Cross (Create Block / Cancel, Memory Card 1 to Return), Cross (New Game / Load Game) at `ires=0` against `ires=1`.
 - Tomba 2's symbols: built (psx-tomba `game/ui/text_fonts.h`, tomba2-decomp `docs/notes/text-fonts.md`): cell 0x0A as
   ※ and the token table's one-colour symbol cells from `NotoSansJP-Symbols.ttf` (`OutlineFace::Symbol`). The 8x16
   font's filled arrows, ◇ □ △ ▽ and both fonts' box 0x98 keep their bitmaps, as do the diagonal arrows 0x68-0x6B and
