@@ -90,11 +90,15 @@ Phases 2a to 2e are built and shown. Phase 2 is done.
   `outlineGlyphs(core)` names, for each ordering-table packet its text drawers filled with glyphs, the font it drew
   from (`OutlineGlyphs::glyphFont`). At seal, `markGlyphs` tags those textured primitives with their font
   (`DrawPrimitive::outlineFont`); a replayed in-between carries the same tags through `Capture::glyphPackets`.
-- A frame that drew tagged packets brings each drawn font up to date in the atlas: each glyph's bitmap is read from
-  VRAM, and a glyph whose bitmap or codepoint changed gets a new field: the codepoint's outline (the title's face, or
-  PromptFont for a button glyph, whose codepoint the pad in hand picks through `GlyphSet`) fitted to the box of the
-  glyph's ink texels, as an MSDF in RGB and the shadow's SDF, moved by the shadow offset, in A, eight field pixels a
-  texel; a `proportional` font keeps the outline's proportions at the ink box's height instead, centred across it and
+- A frame that drew tagged packets brings each drawn font up to date in the atlas for the glyphs drawn so far: the
+  glyphs whose rectangles a tagged primitive's texels overlap (`markGlyphs`, `record_geometry` `texelBox`; every
+  glyph of the font through a texture window) join the font's drawn set, which lasts until the atlas is laid out
+  again. Each drawn glyph's bitmap is read from VRAM, and one whose bitmap or codepoint changed gets a new field: the
+  codepoint's outline (the title's face, or PromptFont for a button glyph, whose codepoint the pad in hand picks
+  through `GlyphSet`) fitted to the box of the glyph's ink texels, as an MSDF in RGB, and in A the median of that
+  field moved by the shadow offset, four field pixels a texel at any internal scale; only the ink box, its shadow and
+  the field range round them are generated, the rest of the tile is outside. A glyph never drawn has no field and
+  costs nothing; a `proportional` font keeps the outline's proportions at the ink box's height instead, centred across it and
   no wider (Tomba 2's serifed I, 1 and l in a sans face). Fields take their sign from the outline's nonzero fill, then msdfgen's error correction (its scanline pass):
   variable faces keep overlapping contours. The fields are packed, one tile a glyph in shelves 2048 pixels wide with a
   one-pixel gutter repeating the tile's edge, so a font whose glyphs spread over several pages costs only its glyphs.
@@ -113,6 +117,12 @@ Phases 2a to 2e are built and shown. Phase 2 is done.
 - The record op of a tagged primitive (`kOpOutline`, set only at internal scale above 1, its font in the two bits
   from `kOpOutlineFontShift`) samples that font's place in the atlas instead of VRAM in `record.frag`, so it keeps its ordering-table slot, crop UI place and replay. At scale 1
   the bitmap draws.
+- Cost (2026-11-14, `perf-units`): Tomba 2's narration (New Game, `PSXPORT_NO_FMV=1`) first draws text at frame 716;
+  the atlas build there was 12.9 G instructions for 135 fields at eight pixels a texel, past the 3 s watchdog. It is
+  now 0.28 G for the 19 glyphs drawn (present phase max 277 M against a 59 M p50 frame and the 510 M load-frame max),
+  33 fields across the whole route, and the run passes under the default watchdog. A glyph's first frame still pays
+  msdfgen's per-pixel cost (about 8 k instructions a field pixel); baking the fields from the committed fonts at build
+  time would remove it but needs fields independent of the VRAM ink box, fitted per glyph at sample time.
 - Check: Spyro 2 Summer Forest pause and Spyro 3 Sunrise Spring pause and Help at `ires=0`, 3840x2160
   (`warp 0/0/0`, start, down, cross): letters and button glyphs sharp, shaded and shadowed as the bitmap; Help
   under `gamepad make xbox` and `gamepad make playstation` for the face colours. Tomba 2's Options screen (New Game,

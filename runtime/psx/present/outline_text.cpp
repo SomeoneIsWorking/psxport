@@ -1,6 +1,7 @@
 #include "outline_text.h"
 
 #include "glyph_set.h"
+#include "record_geometry.h"
 #include "ui_assets.h"
 
 #include <lucent/log.h>
@@ -9,6 +10,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cmath>
 #include <cstddef>
 #include <cstdlib>
 #include <limits>
@@ -20,8 +22,8 @@
 namespace psx::present {
 namespace {
 
-// Field pixels a texel: one target pixel a texel at 8x, the 4K sink's scale.
-constexpr int kFieldScale = 8;
+// Field pixels a texel, whatever the internal scale: a field holds its edges and corners magnified well past this.
+constexpr int kFieldScale = 4;
 // The distance a field channel spans either side of the edge, field pixels.
 constexpr double kFieldRange = 4.0;
 // Field pixels round each packed tile, repeating its edge, so a filtered sample never reads a neighbour's field.
@@ -166,6 +168,36 @@ OutlineAtlasFont placeOf(const OutlineFont &font) {
           .height = y1 - y0};
 }
 
+// Flags the glyphs of `font` whose rectangles the texels `primitive` samples overlap; all of them through a texture
+// window.
+void markDrawn(const OutlineFont &font, const DrawPrimitive &primitive, std::vector<bool> &drawn) {
+  const RecordDrawState &state = primitive.state;
+  if (state.windowMaskX != 0 || state.windowMaskY != 0) {
+    std::fill(drawn.begin(), drawn.end(), true);
+    return;
+  }
+  psx::gpu::RecordRect box = psx::gpu::texelBox(primitive);
+  // A polygon's right and bottom coordinates lie on edges the rasterizer leaves undrawn.
+  if (primitive.kind != PrimitiveKind::Sprite) {
+    box.x1 = std::max(box.x1 - 1, box.x0 + 1);
+    box.y1 = std::max(box.y1 - 1, box.y0 + 1);
+  }
+  // In texels of the font's page from its left edge, as its glyphs' u runs.
+  const int depthShift = 2 - static_cast<int>(font.page.depth);
+  const int pageU = (state.texPageX << depthShift) - (font.page.x << depthShift);
+  const int pageV = state.texPageY - font.page.y;
+  const psx::gpu::RecordRect sampled{
+      .x0 = pageU + box.x0, .y0 = pageV + box.y0, .x1 = pageU + box.x1, .y1 = pageV + box.y1};
+  for (std::size_t i = 0; i < font.glyphs.size(); i++) {
+    const OutlineGlyph &glyph = font.glyphs[i];
+    const psx::gpu::RecordRect rect{
+        .x0 = glyph.u, .y0 = glyph.v, .x1 = glyph.u + glyph.width, .y1 = glyph.v + glyph.height};
+    if (psx::gpu::rectsOverlap(sampled, rect)) {
+      drawn[i] = true;
+    }
+  }
+}
+
 std::uint8_t fieldByte(float value) {
   return static_cast<std::uint8_t>(std::clamp(value * 256.0f, 0.0f, 255.0f));
 }
@@ -189,7 +221,7 @@ public:
   Builder &operator=(const Builder &) = delete;
 
   void drew(std::span<const OutlineFont> fonts,
-            unsigned drawn,
+            const DrawnGlyphs &drawn,
             std::span<const std::uint16_t> vram,
             const psx::input::GlyphSet &pads) {
     if (fonts.size() > kMaxOutlineFonts) {
@@ -208,17 +240,25 @@ public:
     for (std::size_t f = 0; f < fonts.size(); f++) {
       const OutlineFont &font = fonts[f];
       FontState &state = states_.at(f);
-      if ((drawn & (1u << f)) == 0) {
+      if (std::ranges::find(drawn.at(f), true) == drawn.at(f).end()) {
         continue;
       }
-      std::vector<BitmapGlyph> bitmaps;
-      std::vector<char32_t> codepoints;
-      for (const OutlineGlyph &glyph : font.glyphs) {
-        bitmaps.push_back(readGlyph(font, vram, glyph));
-        codepoints.push_back(glyph.button == 0 ? glyph.codepoint
-                             : glyph.padArt && pads.family() == psx::input::PadFamily::PlayStation
-                                 ? psx::input::kNoGlyph
-                                 : pads.glyph(glyph.button));
+      state.wanted.resize(font.glyphs.size());
+      for (std::size_t i = 0; i < font.glyphs.size(); i++) {
+        state.wanted[i] = state.wanted[i] || drawn.at(f)[i];
+      }
+      std::vector<BitmapGlyph> bitmaps(font.glyphs.size());
+      std::vector<char32_t> codepoints(font.glyphs.size(), psx::input::kNoGlyph);
+      for (std::size_t i = 0; i < font.glyphs.size(); i++) {
+        if (!state.wanted[i]) {
+          continue;
+        }
+        const OutlineGlyph &glyph = font.glyphs[i];
+        bitmaps[i] = readGlyph(font, vram, glyph);
+        codepoints[i] =
+            (glyph.button == 0                                                     ? glyph.codepoint
+             : glyph.padArt && pads.family() == psx::input::PadFamily::PlayStation ? psx::input::kNoGlyph
+                                                                                   : pads.glyph(glyph.button));
       }
       const auto sameIndices = [](const BitmapGlyph &a, const BitmapGlyph &b) {
         return a.indices == b.indices;
@@ -260,7 +300,8 @@ private:
     std::vector<BitmapGlyph> bitmaps;
     std::vector<char32_t> codepoints;
     std::map<std::size_t, GlyphField> fields;
-    std::vector<Tile> tiles; // by glyph
+    std::vector<Tile> tiles;  // by glyph
+    std::vector<bool> wanted; // by glyph: drawn since the atlas was laid out
   };
 
   // A font's page and glyph rectangles, as the atlas was laid out for them.
@@ -423,33 +464,42 @@ private:
     const double inset = ((right - left) - ((bounds.r - bounds.l) * scale.x)) / 2;
     const msdfgen::Vector2 translate((left + inset) / scale.x - bounds.l, bottom / scale.y - bounds.b);
     const msdfgen::DistanceMapping mapping(msdfgen::Range(kFieldRange / std::min(scale.x, scale.y)));
-    // Variable faces keep overlapping contours: the fields take their sign from the nonzero fill, then the MSDF its
-    // error correction, as msdfgen's scanline pass does.
-    const msdfgen::SDFTransformation placed(msdfgen::Projection(scale, translate), mapping);
+    // The shadow is the glyph moved by its offset, field pixels right and up.
+    const int shiftX = key.shadowed ? font.shadowX * kFieldScale : 0;
+    const int shiftY = key.shadowed ? -font.shadowY * kFieldScale : 0;
+    // Past the ink box and its shadow by more than the range, every field pixel is outside: only the box between is
+    // generated.
+    const int pad = static_cast<int>(std::ceil(kFieldRange)) + 1;
+    const int cropX0 = std::max(0, static_cast<int>(left) + std::min(0, shiftX) - pad);
+    const int cropX1 = std::min(w, static_cast<int>(right) + std::max(0, shiftX) + pad);
+    const int cropY0 = std::max(0, static_cast<int>(bottom) + std::min(0, shiftY) - pad);
+    const int cropY1 = std::min(h, static_cast<int>(top) + std::max(0, shiftY) + pad);
+    const msdfgen::Vector2 cropped(translate.x - (cropX0 / scale.x), translate.y - (cropY0 / scale.y));
+    const msdfgen::SDFTransformation placed(msdfgen::Projection(scale, cropped), mapping);
     msdfgen::MSDFGeneratorConfig generate;
     generate.errorCorrection.mode = msdfgen::ErrorCorrectionConfig::DISABLED;
     msdfgen::MSDFGeneratorConfig correct;
     correct.errorCorrection.distanceCheckMode = msdfgen::ErrorCorrectionConfig::DO_NOT_CHECK_DISTANCE;
-    msdfgen::Bitmap<float, 3> field(w, h);
+    msdfgen::Bitmap<float, 3> field(cropX1 - cropX0, cropY1 - cropY0);
     msdfgen::generateMSDF(field, shape, placed, generate);
+    // Variable faces keep overlapping contours: the fields take their sign from the nonzero fill, then the MSDF its
+    // error correction, as msdfgen's scanline pass does.
     msdfgen::distanceSignCorrection(field, shape, placed, msdfgen::FILL_NONZERO);
     msdfgen::msdfErrorCorrection(field, shape, placed, correct);
-    msdfgen::Bitmap<float, 1> shadow(w, h);
-    if (key.shadowed) {
-      const msdfgen::Vector2 shifted(translate.x + font.shadowX * kFieldScale / scale.x,
-                                     translate.y - font.shadowY * kFieldScale / scale.y);
-      const msdfgen::SDFTransformation cast(msdfgen::Projection(scale, shifted), mapping);
-      msdfgen::generateSDF(shadow, shape, cast);
-      msdfgen::distanceSignCorrection(shadow, shape, cast, msdfgen::FILL_NONZERO);
-    }
-    for (int y = 0; y < h; y++) {
-      for (int x = 0; x < w; x++) {
+    const auto inCrop = [&](int x, int y) {
+      return x >= cropX0 && x < cropX1 && y >= cropY0 && y < cropY1;
+    };
+    for (int y = cropY0; y < cropY1; y++) {
+      for (int x = cropX0; x < cropX1; x++) {
         std::uint8_t *pixel = &rgba[offsetOf(x, h - 1 - y, w, 4)];
-        const float *channels = field(x, y);
+        const float *channels = field(x - cropX0, y - cropY0);
         pixel[0] = fieldByte(channels[0]);
         pixel[1] = fieldByte(channels[1]);
         pixel[2] = fieldByte(channels[2]);
-        pixel[3] = key.shadowed ? fieldByte(*shadow(x, y)) : 0;
+        if (key.shadowed && inCrop(x - shiftX, y - shiftY)) {
+          const float *cast = field(x - shiftX - cropX0, y - shiftY - cropY0);
+          pixel[3] = fieldByte(msdfgen::median(cast[0], cast[1], cast[2]));
+        }
       }
     }
     return true;
@@ -557,7 +607,7 @@ OutlineText::OutlineText() : builder_(std::make_unique<Builder>()) {}
 OutlineText::~OutlineText() = default;
 
 void OutlineText::drew(std::span<const OutlineFont> fonts,
-                       unsigned drawn,
+                       const DrawnGlyphs &drawn,
                        std::span<const std::uint16_t> vram,
                        const psx::input::GlyphSet &pads) {
   builder_->drew(fonts, drawn, vram, pads);
@@ -586,7 +636,11 @@ void markGlyphs(std::span<const OutlineFont> fonts,
   if (fonts.empty() || glyphs == nullptr) {
     return;
   }
-  unsigned drawn = 0;
+  DrawnGlyphs drawn;
+  bool any = false;
+  for (std::size_t f = 0; f < fonts.size(); f++) {
+    drawn.at(f).assign(fonts[f].glyphs.size(), false);
+  }
   for (RecordEntry &entry : entries) {
     if (auto *primitive = std::get_if<DrawPrimitive>(&entry)) {
       primitive->outlineFont = primitive->textured ? glyphs->glyphFont(primitive->packet) : std::nullopt;
@@ -596,11 +650,12 @@ void markGlyphs(std::span<const OutlineFont> fonts,
               "outline", "packet {:08X} names font {} of {}", primitive->packet, *primitive->outlineFont, fonts.size());
           std::abort();
         }
-        drawn |= 1u << *primitive->outlineFont;
+        markDrawn(fonts[*primitive->outlineFont], *primitive, drawn.at(*primitive->outlineFont));
+        any = true;
       }
     }
   }
-  if (drawn != 0) {
+  if (any) {
     text.drew(fonts, drawn, vram, pads);
   }
 }

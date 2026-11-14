@@ -90,6 +90,9 @@ struct OutlineFont {
 // The fonts a title's text drawers sample, at most this many (record_raster_setup.h kOpOutlineFontShift).
 inline constexpr std::size_t kMaxOutlineFonts = 4;
 
+// The glyphs of each font (by OutlineFont::glyphs index) a sealed frame drew.
+using DrawnGlyphs = std::array<std::vector<bool>, kMaxOutlineFonts>;
+
 // A title's naming of the packets that drew its fonts' glyphs.
 class OutlineGlyphs {
 public:
@@ -113,7 +116,8 @@ struct OutlineAtlasFont {
 // texel: the first R and G the CLUT indices of its row of the bitmap glyph and of its shadow, B a button glyph's slot
 // in `buttons` plus one, A 255 where a named glyph's field lies (a texel without one draws from VRAM); the second the
 // field pixel in `fields` of the texel's top-left, x then y, 16 bits each, low byte first. `fields` packs one tile a
-// glyph, `scale` pixels a texel: RGB a multi-channel distance field of the glyph, A a distance field of its shadow.
+// glyph, `scale` pixels a texel: RGB a multi-channel distance field of the glyph, A the field of its shadow (the
+// glyph's own, shifted by the shadow's offset).
 struct OutlineAtlas {
   int scale = 0;
   int width = 0; // texels of the index map
@@ -134,10 +138,10 @@ public:
   OutlineText(const OutlineText &) = delete;
   OutlineText &operator=(const OutlineText &) = delete;
 
-  // A sealed frame drew glyphs of the fonts `drawn` flags (bit i: fonts[i]): the atlas follows their glyphs in `vram`
-  // and the pad family of `pads`.
+  // A sealed frame drew the glyphs `drawn` names: the atlas follows every glyph drawn so far in `vram` and the pad
+  // family of `pads`; a glyph never drawn has no field.
   void drew(std::span<const OutlineFont> fonts,
-            unsigned drawn,
+            const DrawnGlyphs &drawn,
             std::span<const std::uint16_t> vram,
             const psx::input::GlyphSet &pads);
   // Null until a font's atlas is built.
