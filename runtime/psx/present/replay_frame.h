@@ -3,7 +3,8 @@
 // Before each real run of the section, the motion set samples what moves; when the frame follows the last one,
 // the section runs again in a GuestRedraw once per in-between k/n of the interval, with the inputs written k/n
 // of the way, and the packet chain it linked is captured. At seal the captures belong to the sealed record S.
-// An in-between is S with the section's chain run replaced by the capture, decoded under S's draw state at that run.
+// An in-between is S with the section's chain run replaced by the capture, decoded under S's draw state at that run,
+// and each chain the section relinked (a draw environment's packet) in place of S's run from the same head.
 #pragma once
 
 #include "frame_record.h"
@@ -70,6 +71,10 @@ public:
   [[nodiscard]] std::optional<float> replaying() const {
     return replaying_;
   }
+  // While the section runs: the chain at `head`, which the real frame sends on its own (PutDrawEnv's DR_ENV, its
+  // clear fill), was rebuilt by the replay from blended inputs without the device write; the in-between takes it in
+  // place of the record's run walked from `head`.
+  void relink(std::uint32_t head);
   // The tracks' samples, for a title override that places its draw by a blended input.
   [[nodiscard]] const MotionSet &motion() const {
     return motion_;
@@ -79,7 +84,14 @@ public:
   void report() const;
 
 private:
+  // A relinked chain: its head and its packets [first, end) of the capture's.
+  struct Relinked {
+    std::uint32_t head = 0;
+    std::size_t first = 0;
+    std::size_t end = 0;
+  };
   struct Capture {
+    // The section's chain, then each relinked chain.
     std::vector<gpu::CapturedPacket> packets;
     std::vector<std::uint32_t> words;
     std::vector<gte::WordPlace> places;
@@ -87,6 +99,8 @@ private:
     std::vector<std::uint32_t> uiPackets; // the packets the replay drew as crop UI (cropShowsUi), ascending
     // The packets the replay drew outline-font glyphs with and each one's font (OutlineGlyphs), by packet.
     std::vector<std::pair<std::uint32_t, std::uint8_t>> glyphPackets;
+    std::size_t sectionPackets = 0;
+    std::vector<Relinked> relinked;
   };
   struct Set {
     std::optional<std::uint64_t> shown;
@@ -113,6 +127,8 @@ private:
   // The display field of the last sample.
   std::optional<std::uint32_t> sampledField_;
   std::optional<float> replaying_;
+  // The heads the running replay relinked.
+  std::vector<std::uint32_t> relinking_;
   Set pending_;
   bool pendingReady_ = false;
   // The section ran since the last drawing seal.
@@ -127,6 +143,9 @@ private:
   std::array<bool, kMaxInBetweens> assembledHeld_{};
   RecordCluts cluts_;
   std::vector<RecordEntry> decoded_;
+  std::vector<ChainSplice> splices_;
+  // Where each of splices_' chains starts in decoded_.
+  std::vector<std::size_t> decodedFirst_;
   // Intervals.
   std::uint64_t replayed_ = 0;
   std::uint64_t refused_ = 0;

@@ -95,11 +95,13 @@ bool GuestRedraw::dispatchTo(std::uint32_t entry,
   bool reached = call(entry, arguments, Call::ToEnd, skips.empty() ? end : skips.front().at);
   for (std::size_t next = 1; reached && next <= skips.size(); ++next) {
     const Skip &skip = skips[next - 1];
+    // Read before the host, whose own calls move ra.
+    const std::uint32_t resume = skip.resume != 0 ? skip.resume : core_.r[cpu::kRa];
     if (skip.host) {
       skip.host();
     }
     const std::uint32_t stop = next < skips.size() ? skips[next].at : end;
-    reached = call(entry, {}, Call::ToEnd, stop, skip.resume != 0 ? skip.resume : core_.r[cpu::kRa]);
+    reached = call(entry, {}, Call::ToEnd, stop, resume);
   }
   core_.r[cpu::kSp] = sp;
   core_.r[cpu::kRa] = ra;

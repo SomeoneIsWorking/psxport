@@ -65,10 +65,19 @@ void ReplayFrame::forget() {
   pendingReady_ = false;
 }
 
+void ReplayFrame::relink(std::uint32_t head) {
+  if (!replaying_) {
+    lucent::error("replay", "chain 0x{:08X} relinked outside a replay", head);
+    std::abort();
+  }
+  relinking_.push_back(head);
+}
+
 bool ReplayFrame::replay(Core &core, float t, Capture &capture) {
   GuestRedraw redraw(core);
   motion_.write(redraw, t);
   replaying_ = t;
+  relinking_.clear();
   const std::optional<std::uint32_t> head = section_.draw(core, redraw);
   replaying_.reset();
   // The section's flatten assigned its packets buckets for a walk that never comes.
@@ -79,8 +88,15 @@ bool ReplayFrame::replay(Core &core, float t, Capture &capture) {
   capture.packets.clear();
   capture.words.clear();
   capture.places.clear();
-  PacketChainWalker(EmitMemory(core), PacketBound::anywhere())
-      .capture(*head, capture.packets, capture.words, capture.places);
+  capture.relinked.clear();
+  PacketChainWalker walker(EmitMemory(core), PacketBound::anywhere());
+  walker.capture(*head, capture.packets, capture.words, capture.places);
+  capture.sectionPackets = capture.packets.size();
+  for (const std::uint32_t relinked : relinking_) {
+    const std::size_t first = capture.packets.size();
+    walker.capture(relinked, capture.packets, capture.words, capture.places);
+    capture.relinked.push_back({.head = relinked, .first = first, .end = capture.packets.size()});
+  }
   capture.windows = frameWindows(core);
   capture.uiPackets.clear();
   capture.glyphPackets.clear();
@@ -171,34 +187,74 @@ const FrameRecord *ReplayFrame::assemble(const FrameRecord &shown,
         "replay", "record {} walked {} chains, not exactly one of them the section's", shown.sequence(), runs.size());
     return nullptr;
   }
-  const ChainRun &run = *replayed;
-  const std::span<const RecordEntry> drawn = shown.entries().subspan(run.firstEntry, run.endEntry - run.firstEntry);
-  if (std::any_of(drawn.begin(), drawn.end(), [](const RecordEntry &entry) {
-        return std::holds_alternative<VramUpload>(entry);
-      })) {
-    lucent::warn("replay", "record {}'s chain bakes an upload the replay cannot redraw", shown.sequence());
-    return nullptr;
-  }
+  // Every chain is decoded into decoded_ before the splices take spans of it.
+  splices_.clear();
+  decodedFirst_.clear();
   decoded_.clear();
-  if (!gpu::decodePackets(capture.words, capture.places, capture.packets, run.atStart, decoded_)) {
-    lucent::warn("replay", "record {}'s in-between {} links a packet that does not draw", shown.sequence(), k);
+  const auto decode = [&](const ChainRun &run, std::span<const gpu::CapturedPacket> packets) {
+    const std::span<const RecordEntry> drawn = shown.entries().subspan(run.firstEntry, run.endEntry - run.firstEntry);
+    if (std::any_of(drawn.begin(), drawn.end(), [](const RecordEntry &entry) {
+          return std::holds_alternative<VramUpload>(entry);
+        })) {
+      lucent::warn(
+          "replay", "record {}'s chain 0x{:08X} bakes an upload the replay cannot redraw", shown.sequence(), run.head);
+      return false;
+    }
+    splices_.push_back({.run = run});
+    decodedFirst_.push_back(decoded_.size());
+    if (!gpu::decodePackets(capture.words, capture.places, packets, run.atStart, decoded_)) {
+      lucent::warn("replay", "record {}'s in-between {} links a packet that does not draw", shown.sequence(), k);
+      return false;
+    }
+    return true;
+  };
+  if (!decode(*replayed, std::span(capture.packets).first(capture.sectionPackets))) {
     return nullptr;
   }
-  FrameRecord &assembled = assembled_[static_cast<std::size_t>(k - 1)];
-  assembled.splice(shown, run, decoded_);
-  assembled.setWindows(capture.windows);
-  cluts_.index(shown, between);
-  const std::span<RecordEntry> spliced = assembled.entries().subspan(run.firstEntry, decoded_.size());
-  for (RecordEntry &entry : spliced) {
-    auto *primitive = std::get_if<DrawPrimitive>(&entry);
-    if (primitive != nullptr && !cluts_.resolve(assembled, *primitive, vram)) {
-      lucent::warn("replay", "record {}'s in-between {} filled the CLUT pool", shown.sequence(), k);
+  for (const Relinked &relinked : capture.relinked) {
+    const auto from_head = [&relinked](const ChainRun &run) {
+      return run.head == relinked.head;
+    };
+    const auto run = std::find_if(runs.begin(), runs.end(), from_head);
+    if (run == runs.end() || std::count_if(runs.begin(), runs.end(), from_head) != 1 || drawn_by_section(*run)) {
+      lucent::warn("replay",
+                   "record {} walked no single chain from the relinked head 0x{:08X}",
+                   shown.sequence(),
+                   relinked.head);
+      return nullptr;
+    }
+    if (!decode(*run, std::span(capture.packets).subspan(relinked.first, relinked.end - relinked.first))) {
       return nullptr;
     }
   }
+  for (std::size_t chain = 0; chain < splices_.size(); ++chain) {
+    const std::size_t end = chain + 1 < splices_.size() ? decodedFirst_[chain + 1] : decoded_.size();
+    splices_[chain].walked =
+        std::span<const RecordEntry>(decoded_).subspan(decodedFirst_[chain], end - decodedFirst_[chain]);
+  }
+  std::ranges::sort(splices_, {}, [](const ChainSplice &splice) {
+    return splice.run.firstEntry;
+  });
+  FrameRecord &assembled = assembled_[static_cast<std::size_t>(k - 1)];
+  assembled.splice(shown, splices_);
+  assembled.setWindows(capture.windows);
+  cluts_.index(shown, between);
+  for (const ChainSplice &splice : splices_) {
+    for (RecordEntry &entry : assembled.entries().subspan(splice.at, splice.walked.size())) {
+      auto *primitive = std::get_if<DrawPrimitive>(&entry);
+      if (primitive != nullptr && !cluts_.resolve(assembled, *primitive, vram)) {
+        lucent::warn("replay", "record {}'s in-between {} filled the CLUT pool", shown.sequence(), k);
+        return nullptr;
+      }
+    }
+  }
   // The replay drew these as its own frame, so they take the layers it gave their packets.
-  for (RecordEntry &entry : spliced) {
-    if (auto *primitive = std::get_if<DrawPrimitive>(&entry)) {
+  for (const ChainSplice &splice : splices_) {
+    for (RecordEntry &entry : assembled.entries().subspan(splice.at, splice.walked.size())) {
+      auto *primitive = std::get_if<DrawPrimitive>(&entry);
+      if (primitive == nullptr) {
+        continue;
+      }
       primitive->ui = std::ranges::binary_search(capture.uiPackets, primitive->packet);
       const auto glyph = std::ranges::lower_bound(capture.glyphPackets, primitive->packet, {}, [](const auto &named) {
         return named.first;

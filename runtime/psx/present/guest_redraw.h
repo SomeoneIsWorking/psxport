@@ -62,7 +62,7 @@ public:
   // A stretch of a dispatchTo body the run does not execute: the run stops on reaching `at`, `host` (when set) does
   // the stretch's work, and the run resumes at `resume`. With `resume` 0, `at` is a callee's entry whose device work
   // the real frame already did (a draw's leading PutDrawEnv): the run resumes at the return address the call left,
-  // so the callee does not run and its delay slot did.
+  // so the callee does not run and its delay slot did. `host` may run guest calls of its own (dispatch, run).
   struct Skip {
     std::uint32_t at = 0;
     std::uint32_t resume = 0;

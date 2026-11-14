@@ -168,7 +168,10 @@ whole; an override that draws from a tracked word reads its two samples (`Motion
 difference (`EmitMemory::storeVertex`, or `GuestRedraw::writeVertex` from a motion source's write), so a one-unit step lands halfway rather than on one end. A motion source moves a copy packet the same way (`GuestRedraw::writeCopy`): its source, destination and size words each keep the part past their whole pixels, `decodeCopy` reads them into the copy's `CopyPlace`, and `addCopy` draws its rect at scale (`scaledCoordinate`, so two copies sharing an edge meet on one scaled row) and shifts its source read by the places' difference (`kOpShiftX/Y`); one that wraps VRAM or overlaps its source is drawn at its whole pixels. The chain head the
 section returns is captured (`PacketChainWalker::capture`). At seal the captures belong to S; in-between k is S
 with the one chain run the section names (`ReplaySection::linked`) replaced by the capture decoded under S's draw
-state at that run (`FrameRecord::splice`, `gpu::decodePackets`), CLUTs resolved by `RecordCluts`: one S sampled
+state at that run (`FrameRecord::splice`, `gpu::decodePackets`). A chain the real frame sent on its own that the
+section rebuilds from blended inputs without its device write (PutDrawEnv's DR_ENV and its clear fill) is named while
+the section runs (`ReplayFrame::relink`); it is captured after the section's chain and replaces S's run walked from
+the same head. CLUTs resolved by `RecordCluts`: one S sampled
 keeps its entries; one S never sampled is read from VRAM. A palette cycle is the title's to declare
 (`PaletteCycles::declare`, sampled with the set into `CycledRows`): each 16-entry row its owner uploads and the guest
 table of frames it uploads from. A declared row S' and S both sampled (same attribute, 4-bit) as two different frames
@@ -176,7 +179,7 @@ of its table is blended k/n of the way from S''s frame to S's (each 5-bit channe
 transparent 0x0000 never blended into, out of or landed on); any other CLUT change between ticks lands on S. A
 replayed in-between keeps S's entries. Each captured word keeps the depth a draw site noted with it (`EmitMemory::capturedPlace`), so replayed primitives test
 depth as the real present's do. A run that bakes an upload, a capture that does not decode, or no single matching
-run gives no in-between, and an interval with no replayed set is held (`not-replayed`). An S whose draw never ran
+run (the section's, or one from a relinked head) gives no in-between, and an interval with no replayed set is held (`not-replayed`). An S whose draw never ran
 the section (`ReplayFrame::replays`: a menu, a pause, a load) shows S as the guest drew it at every in-between. Spyro 2 and 3 replay their whole per-field draw body, state switch included; Tomba! 2 its field and room
 draws. Check: Spyro 1 Stone Hill walking, `presentseq` advances
 0.5 logic frames per simulated 60.00 Hz vblank, Spyro, Sparx and the gems move halfway between real presents, and

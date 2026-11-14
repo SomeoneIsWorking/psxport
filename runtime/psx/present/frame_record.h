@@ -210,6 +210,13 @@ struct ChainRun {
   bool operator==(const ChainRun &) const = default;
 };
 
+// A base record's chain run and the entries walked in its place; `at` is where they start in the spliced record.
+struct ChainSplice {
+  ChainRun run;
+  std::span<const RecordEntry> walked;
+  std::size_t at = 0;
+};
+
 class FrameRecord {
 public:
   // The record's storage; past either the record is marked incomplete and never replayed.
@@ -299,8 +306,9 @@ public:
   void exitTable(std::uint16_t table, const RecordDrawState &state);
   void beginChain(std::uint32_t head, const RecordDrawState &atStart);
   void endChain();
-  // `base` with its chain run `run` replaced by `walked`, in this record's storage, keeping base's pools.
-  void splice(const FrameRecord &base, const ChainRun &run, std::span<const RecordEntry> walked);
+  // `base` with each of `splices`' runs, in record order, replaced by its walked entries, in this record's storage,
+  // keeping base's pools; sets each splice's `at`.
+  void splice(const FrameRecord &base, std::span<ChainSplice> splices);
   // Keeps the pools, which `entries` index as this record's did; drops the slot starts and table exits.
   void replaceEntries(std::span<const RecordEntry> entries);
   // Becomes `other` without its entries, slot starts and table exits, in this record's storage.

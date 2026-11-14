@@ -156,13 +156,20 @@ void FrameRecord::endChain() {
   chainRuns_.back().endEntry = entries_.size();
 }
 
-void FrameRecord::splice(const FrameRecord &base, const ChainRun &run, std::span<const RecordEntry> walked) {
+void FrameRecord::splice(const FrameRecord &base, std::span<ChainSplice> splices) {
   assignPools(base);
   drawEntryField_ = base.drawEntryField_;
   const std::span<const RecordEntry> from = base.entries();
-  entries_.assign(from.begin(), from.begin() + static_cast<std::ptrdiff_t>(run.firstEntry));
-  entries_.insert(entries_.end(), walked.begin(), walked.end());
-  entries_.insert(entries_.end(), from.begin() + static_cast<std::ptrdiff_t>(run.endEntry), from.end());
+  std::size_t kept = 0;
+  for (ChainSplice &splice : splices) {
+    entries_.insert(entries_.end(),
+                    from.begin() + static_cast<std::ptrdiff_t>(kept),
+                    from.begin() + static_cast<std::ptrdiff_t>(splice.run.firstEntry));
+    splice.at = entries_.size();
+    entries_.insert(entries_.end(), splice.walked.begin(), splice.walked.end());
+    kept = splice.run.endEntry;
+  }
+  entries_.insert(entries_.end(), from.begin() + static_cast<std::ptrdiff_t>(kept), from.end());
 }
 
 void FrameRecord::replaceEntries(std::span<const RecordEntry> entries) {
