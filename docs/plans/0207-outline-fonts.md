@@ -98,8 +98,10 @@ Phases 2a to 2e are built and shown. Phase 2 is done.
   through `GlyphSet`) fitted to the box of the glyph's ink texels, as an MSDF in RGB, and in A the median of that
   field moved by the shadow offset, four field pixels a texel at any internal scale; only the ink box, its shadow and
   the field range round them are generated, the rest of the tile is outside. A glyph never drawn has no field and
-  costs nothing; a `proportional` font keeps the outline's proportions at the ink box's height instead, centred across it and
-  no wider (Tomba 2's serifed I, 1 and l in a sans face). Fields take their sign from the outline's nonzero fill, then msdfgen's error correction (its scanline pass):
+  costs nothing; a `proportional` font keeps the outline's proportions at the ink box's height instead, centred on the ink,
+  squeezed to the ink box's width where that is narrower but never below the face's scale at the cell's line height
+  (ascender to descender), and inside the cell left of its shadow (Tomba 2's serifed I, 1 and l in a sans face: its
+  one-texel l and i keep the face's width, its m and w are squeezed to the cell). Fields take their sign from the outline's nonzero fill, then msdfgen's error correction (its scanline pass):
   variable faces keep overlapping contours. The fields are packed, one tile a glyph in shelves 2048 pixels wide with a
   one-pixel gutter repeating the tile's edge, so a font whose glyphs spread over several pages costs only its glyphs.
   The index map holds the fonts' page boxes one under another (`OutlineAtlasFont`), two pixels a texel: the CLUT

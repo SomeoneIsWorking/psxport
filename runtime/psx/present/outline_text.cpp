@@ -284,18 +284,23 @@ public:
     const double top = h - (key.y0 * kFieldScale);
     const double fillX = (right - left) / (bounds.r - bounds.l);
     const double fillY = (top - bottom) / (bounds.t - bounds.b);
-    const msdfgen::Vector2 scale(job.proportional ? std::min(fillX, fillY) : fillX, fillY);
-    const double inset = ((right - left) - ((bounds.r - bounds.l) * scale.x)) / 2;
-    const msdfgen::Vector2 translate((left + inset) / scale.x - bounds.l, bottom / scale.y - bounds.b);
+    const int shiftX = key.shadowed ? job.shadowX * kFieldScale : 0;
+    // A proportional outline is centred on the ink, inside the cell left of the shadow (or the ink, if that reaches
+    // further).
+    const double edge = std::max(static_cast<double>(std::min(w, w - shiftX)), right);
+    const double scaleX = job.proportional ? proportionalScale(handle, job, bounds, fillX, fillY, edge) : fillX;
+    const msdfgen::Vector2 scale(scaleX, fillY);
+    const double width = (bounds.r - bounds.l) * scale.x;
+    const double outlineLeft = job.proportional ? std::clamp(((left + right) - width) / 2, 0.0, edge - width) : left;
+    const msdfgen::Vector2 translate(outlineLeft / scale.x - bounds.l, bottom / scale.y - bounds.b);
     const msdfgen::DistanceMapping mapping(msdfgen::Range(kFieldRange / std::min(scale.x, scale.y)));
     // The shadow is the glyph moved by its offset, field pixels right and up.
-    const int shiftX = key.shadowed ? job.shadowX * kFieldScale : 0;
     const int shiftY = key.shadowed ? -job.shadowY * kFieldScale : 0;
-    // Past the ink box and its shadow by more than the range, every field pixel is outside: only the box between is
-    // generated.
+    // Past the outline's box and its shadow by more than the range, every field pixel is outside: only the box between
+    // is generated.
     const int pad = static_cast<int>(std::ceil(kFieldRange)) + 1;
-    const int cropX0 = std::max(0, static_cast<int>(left) + std::min(0, shiftX) - pad);
-    const int cropX1 = std::min(w, static_cast<int>(right) + std::max(0, shiftX) + pad);
+    const int cropX0 = std::max(0, static_cast<int>(std::min(left, outlineLeft)) + std::min(0, shiftX) - pad);
+    const int cropX1 = std::min(w, static_cast<int>(std::max(right, outlineLeft + width)) + std::max(0, shiftX) + pad);
     const int cropY0 = std::max(0, static_cast<int>(bottom) + std::min(0, shiftY) - pad);
     const int cropY1 = std::min(h, static_cast<int>(top) + std::max(0, shiftY) + pad);
     const msdfgen::Vector2 cropped(translate.x - (cropX0 / scale.x), translate.y - (cropY0 / scale.y));
@@ -330,6 +335,20 @@ public:
   }
 
 private:
+  // A proportional glyph's horizontal scale (OutlineFont::proportional), no wider than `room` field pixels.
+  static double proportionalScale(msdfgen::FontHandle *handle,
+                                  const FieldJob &job,
+                                  const msdfgen::Shape::Bounds &bounds,
+                                  double fillX,
+                                  double fillY,
+                                  double room) {
+    msdfgen::FontMetrics metrics{};
+    const bool measured = msdfgen::getFontMetrics(metrics, handle, msdfgen::FONT_SCALING_EM_NORMALIZED) &&
+                          metrics.ascenderY > metrics.descenderY;
+    const double line = measured ? job.height * kFieldScale / (metrics.ascenderY - metrics.descenderY) : fillX;
+    return std::min({fillY, std::max(fillX, line), room / (bounds.r - bounds.l)});
+  }
+
   msdfgen::FontHandle *face(const std::string &name, double weight) {
     const auto [at, added] = faces_.try_emplace({name, weight}, nullptr);
     if (!added) {

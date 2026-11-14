@@ -78,8 +78,10 @@ struct OutlineFont {
   const char *textFace = "";   // asset file under assets/rml
   double weight = 0;           // the text face's wght axis, 0 for its default
   const char *symbolFace = ""; // asset file under assets/rml, for glyphs the text face lacks
-  // Whether an outline keeps its proportions at its bitmap glyph's height, centred across the glyph's box and no
-  // wider than it, rather than filling the box: for a bitmap font whose glyph shapes the face does not share (serifs).
+  // Whether an outline keeps its proportions at its bitmap glyph's height, centred on its ink, rather than filling the
+  // ink box: for a bitmap font whose glyph shapes the face does not share (serifs). It is squeezed to the ink box's
+  // width where that is narrower, but never below the face's scale at the cell's line height (ascender to descender),
+  // and stays inside the cell left of its shadow.
   bool proportional = false;
   // The CLUT indices of the drop shadow the bitmap glyphs carry, and the texels it lies right of and below its glyph.
   // A glyph holding only those indices has no shadow.
