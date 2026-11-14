@@ -196,8 +196,11 @@ public:
       lucent::error("outline", "a title names {} fonts, more than {}", fonts.size(), kMaxOutlineFonts);
       std::abort();
     }
-    if (fonts.data() != fonts_) {
-      fonts_ = fonts.data();
+    if (!laidOut(fonts)) {
+      places_.clear();
+      for (const OutlineFont &font : fonts) {
+        places_.push_back(placesOf(font));
+      }
       states_ = {};
       layout(fonts);
     }
@@ -259,6 +262,48 @@ private:
     std::map<std::size_t, GlyphField> fields;
     std::vector<Tile> tiles; // by glyph
   };
+
+  // A font's page and glyph rectangles, as the atlas was laid out for them.
+  struct FontPlaces {
+    psx::gpu::TexPage page;
+    std::vector<std::array<std::uint16_t, 4>> rects;
+
+    // Whether `font` still has this page and these rectangles.
+    [[nodiscard]] bool holds(const OutlineFont &font) const {
+      if (font.page.x != page.x || font.page.y != page.y || font.page.depth != page.depth ||
+          font.glyphs.size() != rects.size()) {
+        return false;
+      }
+      for (std::size_t i = 0; i < rects.size(); i++) {
+        const OutlineGlyph &glyph = font.glyphs[i];
+        if (rects[i] != std::array<std::uint16_t, 4>{glyph.u, glyph.v, glyph.width, glyph.height}) {
+          return false;
+        }
+      }
+      return true;
+    }
+  };
+
+  static FontPlaces placesOf(const OutlineFont &font) {
+    FontPlaces places{.page = font.page, .rects = {}};
+    for (const OutlineGlyph &glyph : font.glyphs) {
+      places.rects.push_back({glyph.u, glyph.v, glyph.width, glyph.height});
+    }
+    return places;
+  }
+
+  // Whether the atlas is laid out for `fonts` as they stand.
+  bool laidOut(std::span<const OutlineFont> fonts) const {
+    if (fonts.size() != places_.size()) {
+      return false;
+    }
+    for (std::size_t f = 0; f < fonts.size(); f++) {
+      if (!places_[f].holds(fonts[f])) {
+        return false;
+      }
+    }
+    return true;
+  }
 
   // Each font's place in the index map, one under another, and each glyph's tile in shelves across the fields; every
   // glyph field and index empty.
@@ -501,7 +546,7 @@ private:
 
   msdfgen::FreetypeHandle *freetype_ = nullptr;
   std::map<std::pair<std::string, double>, msdfgen::FontHandle *> faces_; // by file and weight
-  const OutlineFont *fonts_ = nullptr;
+  std::vector<FontPlaces> places_;                                        // the fonts the atlas is laid out for
   std::array<FontState, kMaxOutlineFonts> states_;
   int drawn_ = 0;
   OutlineAtlas atlas_;

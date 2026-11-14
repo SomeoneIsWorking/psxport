@@ -67,7 +67,7 @@ void FramePresenter::commit(Core *core, int guestFields) {
   core->gpuDevice().sealRecord(slot);
   slot.setWindows(present::frameWindows(*core));
   present::classifyCropLayers(*core, slot.entries());
-  present::markGlyphs(core->runtime.outlineFonts(),
+  present::markGlyphs(core->runtime.outlineFonts(*core),
                       core->runtime.outlineGlyphs(*core),
                       slot.entries(),
                       core->game->outlineText,

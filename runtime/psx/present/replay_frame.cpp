@@ -84,7 +84,7 @@ bool ReplayFrame::replay(Core &core, float t, Capture &capture) {
   capture.windows = frameWindows(core);
   capture.uiPackets.clear();
   capture.glyphPackets.clear();
-  const OutlineGlyphs *glyphs = !core.runtime.outlineFonts().empty() ? core.runtime.outlineGlyphs(core) : nullptr;
+  const OutlineGlyphs *glyphs = !core.runtime.outlineFonts(core).empty() ? core.runtime.outlineGlyphs(core) : nullptr;
   for (const gpu::CapturedPacket &packet : capture.packets) {
     if (cropShowsUi(core, packet.address)) {
       capture.uiPackets.push_back(packet.address);

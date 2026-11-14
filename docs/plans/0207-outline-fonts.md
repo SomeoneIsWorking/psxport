@@ -46,19 +46,18 @@ timing and colours are the game's.
 
 ## Next steps
 
-Phases 2a, 2b and 2c are built and shown; 2d is built for Spyro 2. Continue with the rest of 2d, then 2e.
+Phases 2a to 2d are built and shown. Continue with 2e.
 
 - 2c, Spyro 3's Atlas font: built (psx-spyro `titles/spyro3/render/sprite_fonts.h`, spyro-3 `spyro3.atlas-font`). The icon
   emitter's override names each packet it drew from entries 0x42-0xA2 of *0x80070108 as the Atlas font, whose glyphs
   lie across DR_TPAGE 0x09-0x0D. The marks are grave, acute, diaeresis, circumflex and tilde; there is no shadow pass;
   the button icons 0x9F-0xA2 are pad art. Face Fredoka 600.
-- 2d, the HUD counters: Spyro 2's built (spyro-2 `spyro2.hud-digits`): `hud_element::draw` names the sprites of the
+- 2d, the HUD counters: built. Spyro 2's (spyro-2 `spyro2.hud-digits`): `hud_element::draw` names the sprites of the
   digit images 0x8006351C; 24x16 cells at v 45 of the 2D font's page, gold bands over a (1, 1) shadow in indices 2, 7
-  and D, Fredoka 500 (`spyro::hudDigitFont`). Spyro 3's is not built: its value emitter 0x800291B8 reads the digits from
-  *0x8006C788, a table whose entries move with the level (Sunrise Spring's digits 2-9 on DR_TPAGE 0x0A, Midday
-  Gardens' on 0x0C and 0x1F, other CLUTs), so its font cannot be a fixed table. It needs the framework to take a font
-  whose glyph rectangles the title reads from the guest each frame (the atlas re-laid out when they change) and
-  `outlineFonts` to see the Core.
+  and D, Fredoka 500 (`spyro::hudDigitFont`). Spyro 3's (spyro-3 `spyro3.atlas-font` notes): the value emitter
+  0x800291B8 reads digits 0-9 and the slash from *0x8006C788 at the halfword 0x800719CC, a table whose entries move
+  with the level, so `sprite_fonts::Fonts::follow` reads them each sealed frame into the font (its page the entries'
+  top-left page, shadow indices 2, 7 and A) and the icon emitter's override names the packets drawn from them.
 - 2e, Spyro 2's pre-rendered string images: whole strings, not glyphs; this needs a layout of the string into its
   rect rather than an `OutlineGlyph` per cell, so it is new framework work.
 - Tomba 2's symbols: built (psx-tomba `game/ui/text_fonts.h`, tomba2-decomp `docs/notes/text-fonts.md`): cell 0x0A as
@@ -76,8 +75,9 @@ Phases 2a, 2b and 2c are built and shown; 2d is built for Spyro 2. Continue with
 
 ## As built
 
-- `runtime/psx/present/outline_text` owns it. A title's `GameRuntime::outlineFonts()` names up to four fonts
-  (`kMaxOutlineFonts`). An `OutlineFont` is a texture page and its glyphs, each an `OutlineGlyph`: the rectangle
+- `runtime/psx/present/outline_text` owns it. A title's `GameRuntime::outlineFonts(core)`, asked as each frame seals,
+  names up to four fonts (`kMaxOutlineFonts`); a font may follow the guest's own tables, and the atlas is laid out
+  again whenever a font's page or glyph rectangles change. An `OutlineFont` is a texture page and its glyphs, each an `OutlineGlyph`: the rectangle
   (u, v, width, height) its text drawer samples, u running on across the pages right of the font's page, with its
   codepoint and face (the font's text face, its symbol face or PromptFont) or its PSX button; `OutlineGrid` fills
   them for a font of equal cells. Also per font: the text face and its weight, the shadow's CLUT indices and offset.

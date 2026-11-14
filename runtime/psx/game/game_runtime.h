@@ -181,8 +181,9 @@ public:
     return nullptr;
   }
   // The title's bitmap fonts and its naming of the packets that draw them, drawn from outline fonts above native scale
-  // (plan 0207); a title without both draws its bitmaps.
-  virtual std::span<const psx::present::OutlineFont> outlineFonts() const {
+  // (plan 0207); a title without both draws its bitmaps. Asked as each frame seals: a font's page and glyph
+  // rectangles may follow the guest's own tables.
+  virtual std::span<const psx::present::OutlineFont> outlineFonts(Core & /*core*/) const {
     return {};
   }
   virtual const psx::present::OutlineGlyphs *outlineGlyphs(Core &core) const {
