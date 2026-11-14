@@ -38,23 +38,26 @@ RecordRect texelBox(const present::DrawPrimitive &primitive) {
   return box;
 }
 
-RecordRect drawBounds(const present::DrawPrimitive &primitive) {
-  RecordRect rect{};
+RecordRect primitiveBounds(const present::DrawPrimitive &primitive) {
   if (primitive.kind == present::PrimitiveKind::Sprite) {
     const present::RecordVertex &origin = primitive.vertices[0];
-    rect = {origin.x, origin.y, origin.x + primitive.width, origin.y + primitive.height};
-  } else {
-    rect = {primitive.vertices[0].x, primitive.vertices[0].y, primitive.vertices[0].x, primitive.vertices[0].y};
-    for (int v = 1; v < primitive.vertexCount; v++) {
-      const present::RecordVertex &vertex = primitive.vertices[static_cast<std::size_t>(v)];
-      rect.x0 = std::min(rect.x0, vertex.x);
-      rect.y0 = std::min(rect.y0, vertex.y);
-      rect.x1 = std::max(rect.x1, vertex.x);
-      rect.y1 = std::max(rect.y1, vertex.y);
-    }
-    rect.x1++;
-    rect.y1++;
+    return {origin.x, origin.y, origin.x + primitive.width, origin.y + primitive.height};
   }
+  RecordRect rect{primitive.vertices[0].x, primitive.vertices[0].y, primitive.vertices[0].x, primitive.vertices[0].y};
+  for (int v = 1; v < primitive.vertexCount; v++) {
+    const present::RecordVertex &vertex = primitive.vertices[static_cast<std::size_t>(v)];
+    rect.x0 = std::min(rect.x0, vertex.x);
+    rect.y0 = std::min(rect.y0, vertex.y);
+    rect.x1 = std::max(rect.x1, vertex.x);
+    rect.y1 = std::max(rect.y1, vertex.y);
+  }
+  rect.x1++;
+  rect.y1++;
+  return rect;
+}
+
+RecordRect drawBounds(const present::DrawPrimitive &primitive) {
+  RecordRect rect = primitiveBounds(primitive);
   const present::RecordDrawState &state = primitive.state;
   rect.x0 = std::max({rect.x0, state.clipX0, 0});
   rect.y0 = std::max({rect.y0, state.clipY0, 0});

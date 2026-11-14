@@ -22,7 +22,10 @@ struct RecordRect {
 RecordRect clampedVramRect(VramRect rect);
 bool rectsOverlap(const RecordRect &a, const RecordRect &b);
 
-// The VRAM rect a primitive can write: its vertices or sprite extent inside the draw area.
+// A primitive's vertices or sprite extent, as positioned, before any clip.
+RecordRect primitiveBounds(const present::DrawPrimitive &primitive);
+
+// The VRAM rect a primitive can write: its bounds inside the draw area.
 RecordRect drawBounds(const present::DrawPrimitive &primitive);
 
 // The texture coordinates a textured primitive reaches, half open, before the texture window and the 8-bit wrap: a
