@@ -1,6 +1,6 @@
-// Sony BIOS libc string/character/memory-compare leaves. Bytes travel through Core's guest-memory map:
+// Sony BIOS libc leaves whose state is guest memory. Bytes travel through Core's guest-memory map:
 // guest addresses are not host pointers, and KSEG0/KSEG1 aliases retain console copy order.
-#include "bios_libc_string.h"
+#include "bios_libc_leaf.h"
 
 #include "core.h"
 
@@ -26,7 +26,7 @@ void psx::hle::guestCopy(Core &core, uint32_t dst, uint32_t src, uint32_t n, Cop
   }
 }
 
-psx::hle::LibcStringLeaf psx::hle::libcStringLeaf(uint32_t fn) {
+psx::hle::LibcLeaf psx::hle::libcLeaf(uint32_t fn) {
   switch (fn) {
   case 0x27: // memmove(dst, src, n); 0x2C is the same leaf at another vector
   case 0x2C:
@@ -149,6 +149,17 @@ psx::hle::LibcStringLeaf psx::hle::libcStringLeaf(uint32_t fn) {
       core.r[psx::cpu::kV0] = a0 >= static_cast<uint32_t>('a') && a0 <= static_cast<uint32_t>('z')
                                   ? a0 - (static_cast<uint32_t>('a') - static_cast<uint32_t>('A'))
                                   : a0;
+    };
+  case 0x2F: // rand(): a 32-bit LCG, the upper 15 bits
+    return [](Core &core, uint32_t, uint32_t, uint32_t) {
+      const uint32_t seed = core.mem_r32(psx::hle::kLibcRandSeed) * 0x41C64E6Du + 0x3039u;
+      core.mem_w32(psx::hle::kLibcRandSeed, seed);
+      core.r[psx::cpu::kV0] = (seed >> 16) & 0x7FFFu;
+    };
+  case 0x30: // srand(seed)
+    return [](Core &core, uint32_t a0, uint32_t, uint32_t) {
+      core.mem_w32(psx::hle::kLibcRandSeed, a0);
+      core.r[psx::cpu::kV0] = 0;
     };
   default:
     return nullptr;

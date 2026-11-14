@@ -22,7 +22,7 @@
 namespace psx::state {
 namespace {
 
-constexpr std::uint8_t kBusLayoutVersion = 7;
+constexpr std::uint8_t kBusLayoutVersion = 8;
 
 // psx::cd::CdController's queue, verbatim. `psx::cd::CdcIrqEnt` is a plain-C struct so it is written field by field
 // rather than memcpy'd: a memcpy would put the struct's padding in the file, and padding is not a contract.
@@ -281,7 +281,6 @@ void writeHleSection(Game &game, psx::platform::BlobWriter &out) {
     out.u32(block.size);
     out.i32(block.used);
   }
-  out.u32(hle.rand_state);
   out.i32(hle.work_ok);
   out.boolean(hle.bios_pad_initialized);
   out.boolean(hle.bios_pad_irq_started);
@@ -325,7 +324,6 @@ bool readHleSection(Game &game, psx::platform::BlobReader &in, std::string &erro
     block.size = in.u32();
     block.used = in.i32();
   }
-  const std::uint32_t randState = in.u32();
   const std::int32_t workOk = in.i32();
   const bool padInitialized = in.boolean();
   const bool padIrqStarted = in.boolean();
@@ -364,7 +362,6 @@ bool readHleSection(Game &game, psx::platform::BlobReader &in, std::string &erro
   hle.heap_ok = heapOk;
   hle.nblk = nblk;
   std::copy(blocks.begin(), blocks.end(), std::begin(hle.blk));
-  hle.rand_state = randState;
   hle.work_ok = workOk;
   hle.bios_pad_initialized = padInitialized;
   hle.bios_pad_irq_started = padIrqStarted;

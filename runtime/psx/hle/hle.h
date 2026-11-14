@@ -63,7 +63,6 @@ public:
   uint32_t heap_size = 0;
   int heap_ok = 0;
   uint32_t heap_refused = 0; // malloc requests answered NULL
-  uint32_t rand_state = 1;   // A0:0x2F/0x30; Sony libc seeds 1
   int work_ok = 0;
   // B0:12/13/14 PadCardIrq lifecycle; libpad toggles reads through B0[5B]+884/+894.
   bool bios_pad_initialized = false;

@@ -93,7 +93,7 @@ set(PSXPORT_FRAMEWORK_SRC
   ${PSXPORT_ROOT}/runtime/psx/cpu/vertex_places.cpp  # places of projected vertices stored to guest words
   ${PSXPORT_ROOT}/runtime/psx/hle/bios_interrupt.cpp
   ${PSXPORT_ROOT}/runtime/psx/hle/bios_pad_work_area.cpp
-  ${PSXPORT_ROOT}/runtime/psx/hle/bios_libc_string.cpp
+  ${PSXPORT_ROOT}/runtime/psx/hle/bios_libc_leaf.cpp
   ${PSXPORT_ROOT}/runtime/psx/hle/hle_heap.cpp
   ${PSXPORT_ROOT}/runtime/psx/hle/bios_load_exec.cpp # A0:0x51 LoadAndExecute: load a CD executable and start it
   ${PSXPORT_ROOT}/runtime/psx/hle/hle.cpp

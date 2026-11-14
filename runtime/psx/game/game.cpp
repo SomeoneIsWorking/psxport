@@ -1,4 +1,5 @@
 #include "game.h"
+#include "bios_libc_leaf.h"
 #include "bios_load_exec.h"
 #include "config_vars.h"
 #include "ot_attr.h"
@@ -63,6 +64,7 @@ void Game::wireRuntimeMembers() {
   // BIOS A0:0x51 LoadAndExecute reads the executable the guest named through this run's disc, bound
   // here with every other per-Core owner rather than at the dispatch site.
   hle.loadExecReader = psx::hle::discFileReader(disc);
+  core.mem_w32(psx::hle::kLibcRandSeed, psx::hle::kLibcRandFirstSeed);
   cdc.disc = &disc;
   cdc.xa = &xa;
   xa.drive = &cdc;

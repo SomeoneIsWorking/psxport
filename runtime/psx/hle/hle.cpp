@@ -1,6 +1,6 @@
 // The A0/B0/C0 BIOS calls the titles reach, and EvMdINTR event delivery.
 #include "bios_interrupt.h"
-#include "bios_libc_string.h"
+#include "bios_libc_leaf.h"
 #include "bios_load_exec.h"
 #include "core.h"
 #include "execution_control.h"
@@ -156,7 +156,7 @@ constexpr uint32_t kBiosThreadHandle = 0xFF000000u;
 } // namespace
 
 bool Hle::biosCallKeepsHostState(char table, uint32_t fn) {
-  return table != 'A' || psx::hle::libcStringLeaf(fn) == nullptr;
+  return table != 'A' || psx::hle::libcLeaf(fn) == nullptr;
 }
 
 bool Hle::dispatchBios(char table, uint32_t fn) {
@@ -173,20 +173,11 @@ bool Hle::dispatchBios(char table, uint32_t fn) {
                 c->r[psx::cpu::kA3],
                 c->r[psx::cpu::kRa]);
   if (table == 'A') {
-    if (const psx::hle::LibcStringLeaf leaf = psx::hle::libcStringLeaf(fn)) {
+    if (const psx::hle::LibcLeaf leaf = psx::hle::libcLeaf(fn)) {
       leaf(*c, a0, a1, a2);
       return true;
     }
     switch (fn) {
-    // Sony libc rand/srand: 32-bit LCG, upper 15 bits.
-    case 0x2F:
-      rand_state = rand_state * 0x41C64E6Du + 0x3039u;
-      c->r[psx::cpu::kV0] = (rand_state >> 16) & 0x7FFFu;
-      return true;
-    case 0x30:
-      rand_state = a0;
-      c->r[psx::cpu::kV0] = 0;
-      return true;
     case 0x33:
       c->r[psx::cpu::kV0] = heapAlloc(a0);
       return true; // malloc
