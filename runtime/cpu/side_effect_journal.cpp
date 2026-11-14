@@ -184,6 +184,10 @@ bool SideEffectJournal::admitSyscall(std::uint32_t code, std::uint32_t instructi
   return mode_ == SideEffectMode::Record;
 }
 
+std::span<const std::uint32_t> SideEffectJournal::discardStopCallers() const {
+  return std::span(discardStopCallers_).first(discardStopCallerCount_);
+}
+
 bool SideEffectJournal::admitPendingWork() {
   if (mode_ != SideEffectMode::Record) {
     ++withheldPendingWork_;
@@ -250,6 +254,7 @@ void SideEffectJournal::stopDiscardedRun(const SideEffect &effect) {
   }
   if (!discardStop_) {
     discardStop_ = effect;
+    discardStopCallerCount_ = core_ != nullptr ? core_->writerLatch.returns(discardStopCallers_) : 0u;
   }
   if (translatedExecutions_ == 0) {
     throw DiscardedRunTouchedDevice{};

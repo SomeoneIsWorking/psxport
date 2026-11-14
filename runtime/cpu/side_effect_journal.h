@@ -21,6 +21,7 @@
 // costs one predicted-false branch on the device path.
 #pragma once
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <optional>
@@ -150,6 +151,8 @@ public:
   std::span<const SideEffect> effects() const;
   // Discard only: the effect the run stopped at, or nullopt when it reached none.
   const std::optional<SideEffect> &discardStop() const;
+  // Discard only: the return addresses of the guest calls open at that stop, innermost first.
+  std::span<const std::uint32_t> discardStopCallers() const;
   // The first reason this call cannot be compared, or nullopt.
   const std::optional<std::string> &unreplayable() const;
   // Replay only: the index of the first effect that differs from `recorded` (including a length
@@ -214,6 +217,8 @@ private:
   Core *core_ = nullptr;
   bool stopDeferred_ = false;
   std::optional<SideEffect> discardStop_;
+  std::array<std::uint32_t, 6> discardStopCallers_{};
+  std::size_t discardStopCallerCount_ = 0;
 };
 
 } // namespace psx::cpu

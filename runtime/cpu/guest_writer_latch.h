@@ -4,9 +4,11 @@
 
 #include "guest_call_site.h"
 
+#include <algorithm>
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <span>
 
 namespace psx::cpu {
 
@@ -53,6 +55,14 @@ public:
   // The innermost call target the stack holds; 0 when the stack is empty.
   std::uint32_t function() const {
     return depth_ != 0 ? frames_[top()].entry : 0u;
+  }
+  // The open calls' return addresses, innermost first, into `out`; how many it wrote.
+  std::size_t returns(std::span<std::uint32_t> out) const {
+    const std::size_t count = std::min({depth_, kDepth, out.size()});
+    for (std::size_t i = 0; i < count; ++i) {
+      out[i] = frames_[(top() + kDepth - i) % kDepth].returnPc;
+    }
+    return count;
   }
   // A guest function the host enters at `entry`, returning to `returnPc` (0 for a run to its exit) without a
   // `jal`: the stack holds it from here until the scope ends, however the call exits.
