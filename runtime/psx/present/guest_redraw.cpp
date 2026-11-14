@@ -19,9 +19,11 @@ GuestRedraw::GuestRedraw(Core &core)
   std::copy_n(core.r, gpr_.size(), gpr_.begin());
   std::copy_n(core.cop0, cop0_.size(), cop0_.begin());
   core_.writeRollback.arm();
+  hostPackets_ = core_.hostPackets.open();
 }
 
 GuestRedraw::~GuestRedraw() {
+  core_.hostPackets.close(hostPackets_);
   core_.writeRollback.rollBack();
   std::copy(gpr_.begin(), gpr_.end(), core_.r);
   std::copy(cop0_.begin(), cop0_.end(), core_.cop0);

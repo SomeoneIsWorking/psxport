@@ -9,6 +9,8 @@
 // The run cannot suspend at a turn's end, so an override's original call inside it gets the run's budget.
 #pragma once
 
+#include "host_packets.h"
+
 #include "core.h"
 #include "frame_record.h"
 #include "gte_control.h"
@@ -103,6 +105,8 @@ private:
   // The call stack the run's stores are attributed to, as the frame left it.
   cpu::GuestWriterLatch writerLatch_;
   cpu::SideEffectJournal journal_{cpu::SideEffectMode::Discard, {}};
+  // The host packets the run inserts are its own: its capture sees them, and they go with its stores.
+  gpu::HostPackets::Scope hostPackets_;
   cpu::SideEffectJournal::Scope journalScope_;
 };
 

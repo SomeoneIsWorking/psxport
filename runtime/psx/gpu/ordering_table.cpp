@@ -197,7 +197,7 @@ void submitOrderingTable(Core &core, GpuDevice &device, std::uint32_t rootGuestA
     core.game->display.showIfDue();
     const OtNode &node = walk.node();
     // Drawn in the bucket the previous node left open, as a guest link before this node would be.
-    core.hostPackets.drawBefore(device, node.guestAddress());
+    core.hostPackets.draw(device, node.guestAddress(), false);
     std::optional<present::OtSlot> slot = tables.slotOf(node.guestAddress());
     if (!slot && node.carriesPrimitive()) {
       slot = tables.assigned(node.guestAddress());
@@ -219,6 +219,7 @@ void submitOrderingTable(Core &core, GpuDevice &device, std::uint32_t rootGuestA
                     .place = core.vertexPlaces.at(address, words[i])});
       }
     }
+    core.hostPackets.draw(device, node.guestAddress(), true);
     if (const std::optional<present::OtSlot> empty = tables.emptyAfter(node.guestAddress())) {
       device.enterSlot(empty, tables.descending(empty->table));
     }

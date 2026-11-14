@@ -11,9 +11,11 @@
 
 namespace psx::present {
 
-template <class Visit>
-std::optional<std::uint32_t> PacketChainWalker::follow(std::uint32_t link, OtSlot slot, Visit &&visit) {
+template <class Visit> void PacketChainWalker::follow(std::uint32_t link, OtSlot slot, Visit &&visit) {
   gpu::LinkCycleCheck cycle;
+  // The chain as the walk from `link` draws it: with the host packets inserted around its nodes.
+  gpu::HostPackets &hostPackets = memory_.core().hostPackets;
+  hostPackets.select(link);
   for (gpu::OtNode tag(0, gpu::OtHeaderWord{link}); !tag.endsChain();) {
     const std::uint32_t packet = gpu::guestAddressOf(tag.nextRamOffset());
     if (!cycle.enter(gpu::mainRamOffsetOf(packet))) {
@@ -26,9 +28,12 @@ std::optional<std::uint32_t> PacketChainWalker::follow(std::uint32_t link, OtSlo
                          slot.table,
                          slot.index,
                          walked_));
-      return std::nullopt;
+      return;
     }
     tag = gpu::OtNode(gpu::mainRamOffsetOf(packet), gpu::OtHeaderWord{memory_.mem_r32(packet)});
+    hostPackets.forEach(packet, false, [&](gpu::PacketView view, std::uint32_t site) {
+      visit(packet, view, site);
+    });
     const std::uint32_t count = tag.gp0WordCount();
     const std::uint32_t arenaOffset = packet - kseg0Address(bound_.arena.address);
     const bool outside = bound_.arena.bytes != 0 &&
@@ -43,32 +48,30 @@ std::optional<std::uint32_t> PacketChainWalker::follow(std::uint32_t link, OtSlo
                     bound_.arena.bytes);
       std::abort();
     }
-    if (!tag.carriesPrimitive()) {
-      continue;
+    if (tag.carriesPrimitive()) {
+      const std::span<std::uint32_t> command(words_.data(), count);
+      const std::span<gte::WordPlace> commandPlaces(places_.data(), count);
+      memory_.readWords(packet + 4u, command);
+      memory_.readPlaces(packet + 4u, commandPlaces);
+      visit(packet, gpu::PacketView{command, commandPlaces}, memory_.placingSite(packet + 4u, command));
     }
-    const std::span<std::uint32_t> command(words_.data(), count);
-    const std::span<gte::WordPlace> commandPlaces(places_.data(), count);
-    memory_.readWords(packet + 4u, command);
-    memory_.readPlaces(packet + 4u, commandPlaces);
-    if (!visit(packet, gpu::PacketView{command, commandPlaces})) {
-      return packet;
-    }
+    hostPackets.forEach(packet, true, [&](gpu::PacketView view, std::uint32_t site) {
+      visit(packet, view, site);
+    });
   }
-  return std::nullopt;
 }
 
 void PacketChainWalker::capture(std::uint32_t link,
                                 std::vector<gpu::CapturedPacket> &packets,
                                 std::vector<std::uint32_t> &words,
                                 std::vector<gte::WordPlace> &places) {
-  (void)follow(link, OtSlot{}, [&](std::uint32_t packet, gpu::PacketView view) {
+  follow(link, OtSlot{}, [&](std::uint32_t packet, gpu::PacketView view, std::uint32_t site) {
     packets.push_back({.address = packet,
                        .offset = static_cast<std::uint32_t>(words.size()),
                        .count = static_cast<std::uint32_t>(view.words.size()),
-                       .site = memory_.placingSite(packet + 4u, view.words)});
+                       .site = site});
     words.insert(words.end(), view.words.begin(), view.words.end());
     places.insert(places.end(), view.places.begin(), view.places.end());
-    return true;
   });
 }
 

@@ -30,7 +30,8 @@ class PacketChainWalker {
 public:
   PacketChainWalker(const EmitMemory &memory, const PacketBound &bound) : memory_(memory), bound_(bound) {}
 
-  // Every packet of the chain from `link` that carries words, as it lies in memory now, appended to `packets`, its
+  // Every packet of the chain from `link` that carries words, as it lies in memory now, with the host packets the
+  // walk from `link` draws around its nodes, appended to `packets`, its
   // words to `words` and each word's place to `places`.
   void capture(std::uint32_t link,
                std::vector<gpu::CapturedPacket> &packets,
@@ -38,9 +39,9 @@ public:
                std::vector<gte::WordPlace> &places);
 
 private:
-  // Calls `visit(packet address, PacketView)` for each packet carrying words; the address of the first packet
-  // it refuses, or nullopt when the chain ends.
-  template <class Visit> std::optional<std::uint32_t> follow(std::uint32_t link, OtSlot slot, Visit &&visit);
+  // Calls `visit(packet address, PacketView, draw site)` for each packet carrying words, and for each host packet
+  // (HostPackets) of the walk from `link` with the address of the node it is drawn around, until the chain ends.
+  template <class Visit> void follow(std::uint32_t link, OtSlot slot, Visit &&visit);
 
   // A tag's 8-bit count bounds a packet.
   static constexpr std::size_t kMaxPacketWords = 255;

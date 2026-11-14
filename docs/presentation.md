@@ -198,7 +198,12 @@ the `motion` debug channel counts each track's paired records.
 - **Host packets.** A title that draws more than the guest's own packet storage holds (Mega Man X4's margin
   tiles past its 1,000-sprite arena) inserts them with `HostPackets::insertBefore(root, node, words)`: the walk
   from `root` draws them, in insertion order, right before it enters `node`, in the slot the previous node left
-  open, as a guest link there would be. A title that moves what the guest drew (X4's parallax layer shift and
+  open, as a guest link there would be. `insertAfter(root, node, packet, site)` draws a placed packet right after
+  `node`'s own, in its slot (Spyro's added grass after its bin's last terrain packet): its words keep their
+  vertex places and its draw site, so the record places and depth-tests it as that site's. Inserts made inside a
+  `GuestRedraw` are that redraw's own: lookups see only them, `PacketChainWalker::capture` draws them around the
+  nodes of the captured chain, and they go when the redraw ends (`HostPackets::open`/`close`), so a replayed
+  section's host packets move with its in-between. A title that moves what the guest drew (X4's parallax layer shift and
   HUD anchor) names the packet with `moveX(root, node, dx)`: the walk draws its vertices `dx` columns over
   (`moveVerticesX`; a poly-line is refused) and the record keeps no GTE place for them. A title that changes more
   than x (X4's co-op player 2 gauge: its rows, tiles, CLUT and texture page) gives the node's words with
