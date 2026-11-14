@@ -11,12 +11,18 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <condition_variable>
 #include <cstddef>
 #include <cstdlib>
+#include <deque>
+#include <exception>
 #include <limits>
 #include <map>
+#include <mutex>
 #include <optional>
+#include <stop_token>
 #include <string>
+#include <thread>
 #include <utility>
 
 namespace psx::present {
@@ -202,12 +208,37 @@ std::uint8_t fieldByte(float value) {
   return static_cast<std::uint8_t>(std::clamp(value * 256.0f, 0.0f, 255.0f));
 }
 
-} // namespace
+// What one glyph's field is drawn from, as the worker needs it: the face, the fit and the glyph's tile.
+struct FieldJob {
+  std::uint64_t layout = 0; // the atlas layout it was asked under
+  std::size_t font = 0;
+  std::size_t glyph = 0;
+  FieldKey key;
+  std::string face; // asset file under assets/rml
+  double weight = 0;
+  bool proportional = false;
+  int shadowX = 0;
+  int shadowY = 0;
+  int u = 0;
+  int v = 0;
+  int width = 0;
+  int height = 0;
+};
 
-class OutlineText::Builder {
+// A drawn field; `rgba` empty where the glyph has no outline.
+struct FieldResult {
+  std::uint64_t layout = 0;
+  std::size_t font = 0;
+  std::size_t glyph = 0;
+  FieldKey key;
+  std::vector<std::uint8_t> rgba; // the glyph's tile, width x height texels at kFieldScale
+};
+
+// The faces and msdfgen's drawing of glyph fields; used by one thread at a time.
+class FieldGenerator {
 public:
-  Builder() : freetype_(msdfgen::initializeFreetype()) {}
-  ~Builder() {
+  FieldGenerator() : freetype_(msdfgen::initializeFreetype()) {}
+  ~FieldGenerator() {
     for (auto &[name, face] : faces_) {
       if (face != nullptr) {
         msdfgen::destroyFont(face);
@@ -217,9 +248,190 @@ public:
       msdfgen::deinitializeFreetype(freetype_);
     }
   }
-  Builder(const Builder &) = delete;
-  Builder &operator=(const Builder &) = delete;
+  FieldGenerator(const FieldGenerator &) = delete;
+  FieldGenerator &operator=(const FieldGenerator &) = delete;
+  FieldGenerator(FieldGenerator &&) = delete;
+  FieldGenerator &operator=(FieldGenerator &&) = delete;
 
+  // The glyph's tile: RGB its outline's field fitted to the bitmap glyph's box, A the shadow's; empty without an
+  // outline.
+  std::vector<std::uint8_t> draw(const FieldJob &job) {
+    const FieldKey &key = job.key;
+    const int w = job.width * kFieldScale;
+    const int h = job.height * kFieldScale;
+    msdfgen::FontHandle *handle = face(job.face, job.weight);
+    msdfgen::Shape shape;
+    // Glyph 0 is the face's missing-glyph box.
+    msdfgen::GlyphIndex glyphIndex;
+    if (handle == nullptr || !msdfgen::getGlyphIndex(glyphIndex, handle, msdfgen::unicode_t{key.codepoint}) ||
+        glyphIndex.getIndex() == 0 ||
+        !msdfgen::loadGlyph(shape, handle, glyphIndex, msdfgen::FONT_SCALING_EM_NORMALIZED) || shape.contours.empty()) {
+      lucent::error("outline",
+                    "no outline for the glyph at ({}, {}) (U+{:04X}); it draws its bitmap",
+                    job.u,
+                    job.v,
+                    static_cast<std::uint32_t>(key.codepoint));
+      return {};
+    }
+    std::vector<std::uint8_t> rgba(offsetOf(0, h, w, 4), 0);
+    shape.normalize();
+    msdfgen::edgeColoringSimple(shape, 3.0);
+    const msdfgen::Shape::Bounds bounds = shape.getBounds();
+    // Field pixels measured up from the tile's bottom, as msdfgen's bitmaps run.
+    const double left = key.x0 * kFieldScale;
+    const double right = key.x1 * kFieldScale;
+    const double bottom = h - (key.y1 * kFieldScale);
+    const double top = h - (key.y0 * kFieldScale);
+    const double fillX = (right - left) / (bounds.r - bounds.l);
+    const double fillY = (top - bottom) / (bounds.t - bounds.b);
+    const msdfgen::Vector2 scale(job.proportional ? std::min(fillX, fillY) : fillX, fillY);
+    const double inset = ((right - left) - ((bounds.r - bounds.l) * scale.x)) / 2;
+    const msdfgen::Vector2 translate((left + inset) / scale.x - bounds.l, bottom / scale.y - bounds.b);
+    const msdfgen::DistanceMapping mapping(msdfgen::Range(kFieldRange / std::min(scale.x, scale.y)));
+    // The shadow is the glyph moved by its offset, field pixels right and up.
+    const int shiftX = key.shadowed ? job.shadowX * kFieldScale : 0;
+    const int shiftY = key.shadowed ? -job.shadowY * kFieldScale : 0;
+    // Past the ink box and its shadow by more than the range, every field pixel is outside: only the box between is
+    // generated.
+    const int pad = static_cast<int>(std::ceil(kFieldRange)) + 1;
+    const int cropX0 = std::max(0, static_cast<int>(left) + std::min(0, shiftX) - pad);
+    const int cropX1 = std::min(w, static_cast<int>(right) + std::max(0, shiftX) + pad);
+    const int cropY0 = std::max(0, static_cast<int>(bottom) + std::min(0, shiftY) - pad);
+    const int cropY1 = std::min(h, static_cast<int>(top) + std::max(0, shiftY) + pad);
+    const msdfgen::Vector2 cropped(translate.x - (cropX0 / scale.x), translate.y - (cropY0 / scale.y));
+    const msdfgen::SDFTransformation placed(msdfgen::Projection(scale, cropped), mapping);
+    msdfgen::MSDFGeneratorConfig generate;
+    generate.errorCorrection.mode = msdfgen::ErrorCorrectionConfig::DISABLED;
+    msdfgen::MSDFGeneratorConfig correct;
+    correct.errorCorrection.distanceCheckMode = msdfgen::ErrorCorrectionConfig::DO_NOT_CHECK_DISTANCE;
+    msdfgen::Bitmap<float, 3> field(cropX1 - cropX0, cropY1 - cropY0);
+    msdfgen::generateMSDF(field, shape, placed, generate);
+    // Variable faces keep overlapping contours: the fields take their sign from the nonzero fill, then the MSDF its
+    // error correction, as msdfgen's scanline pass does.
+    msdfgen::distanceSignCorrection(field, shape, placed, msdfgen::FILL_NONZERO);
+    msdfgen::msdfErrorCorrection(field, shape, placed, correct);
+    const auto inCrop = [&](int x, int y) {
+      return x >= cropX0 && x < cropX1 && y >= cropY0 && y < cropY1;
+    };
+    for (int y = cropY0; y < cropY1; y++) {
+      for (int x = cropX0; x < cropX1; x++) {
+        std::uint8_t *pixel = &rgba[offsetOf(x, h - 1 - y, w, 4)];
+        const float *channels = field(x - cropX0, y - cropY0);
+        pixel[0] = fieldByte(channels[0]);
+        pixel[1] = fieldByte(channels[1]);
+        pixel[2] = fieldByte(channels[2]);
+        if (key.shadowed && inCrop(x - shiftX, y - shiftY)) {
+          const float *cast = field(x - shiftX - cropX0, y - shiftY - cropY0);
+          pixel[3] = fieldByte(msdfgen::median(cast[0], cast[1], cast[2]));
+        }
+      }
+    }
+    return rgba;
+  }
+
+private:
+  msdfgen::FontHandle *face(const std::string &name, double weight) {
+    const auto [at, added] = faces_.try_emplace({name, weight}, nullptr);
+    if (!added) {
+      return at->second;
+    }
+    psx::ui::AssetSet assets;
+    std::string path;
+    if (freetype_ == nullptr || !assets.open() || !assets.require(name.c_str(), path)) {
+      return nullptr;
+    }
+    at->second = msdfgen::loadFont(freetype_, path.c_str());
+    if (at->second == nullptr) {
+      lucent::error("outline", "font {} present but FreeType rejected it", path);
+      return nullptr;
+    }
+    if (weight != 0 &&
+        !msdfgen::setFontVariationAxis(freetype_, at->second, msdfgen::FontVariationAxis::Tag("wght"), weight)) {
+      lucent::error("outline", "font {} has no weight axis to set to {}", path, weight);
+    }
+    return at->second;
+  }
+
+  msdfgen::FreetypeHandle *freetype_ = nullptr;
+  std::map<std::pair<std::string, double>, msdfgen::FontHandle *> faces_; // by file and weight
+};
+
+// Draws asked fields on its own thread, oldest first; the asker takes them when it is ready to.
+class FieldWorker {
+public:
+  FieldWorker() = default;
+  ~FieldWorker() = default;
+  FieldWorker(const FieldWorker &) = delete;
+  FieldWorker &operator=(const FieldWorker &) = delete;
+  FieldWorker(FieldWorker &&) = delete;
+  FieldWorker &operator=(FieldWorker &&) = delete;
+
+  void ask(FieldJob job) {
+    {
+      const std::lock_guard lock(mutex_);
+      jobs_.push_back(std::move(job));
+    }
+    asked_.notify_one();
+  }
+
+  // Forgets the asked fields not yet begun that were asked under a layout before `layout`.
+  void forgetBefore(std::uint64_t layout) {
+    const std::lock_guard lock(mutex_);
+    std::erase_if(jobs_, [layout](const FieldJob &job) {
+      return job.layout < layout;
+    });
+  }
+
+  // The fields drawn since the last take; rethrows what ended the worker.
+  std::vector<FieldResult> take() {
+    const std::lock_guard lock(mutex_);
+    if (failure_) {
+      std::rethrow_exception(failure_);
+    }
+    return std::exchange(done_, {});
+  }
+
+private:
+  void run(const std::stop_token &stop) {
+    try {
+      while (true) {
+        FieldJob job;
+        {
+          std::unique_lock lock(mutex_);
+          if (!asked_.wait(lock, stop, [this] {
+                return !jobs_.empty();
+              })) {
+            return;
+          }
+          job = std::move(jobs_.front());
+          jobs_.pop_front();
+        }
+        FieldResult result{
+            .layout = job.layout, .font = job.font, .glyph = job.glyph, .key = job.key, .rgba = generator_.draw(job)};
+        const std::lock_guard lock(mutex_);
+        done_.push_back(std::move(result));
+      }
+    } catch (...) {
+      const std::lock_guard lock(mutex_);
+      failure_ = std::current_exception();
+    }
+  }
+
+  FieldGenerator generator_; // the worker's alone once it runs
+  std::mutex mutex_;
+  std::condition_variable_any asked_;
+  std::deque<FieldJob> jobs_;
+  std::vector<FieldResult> done_;
+  std::exception_ptr failure_;
+  std::jthread thread_{[this](const std::stop_token &stop) {
+    run(stop);
+  }}; // last: stopped and joined before the state it uses goes
+};
+
+} // namespace
+
+class OutlineText::Builder {
+public:
   void drew(std::span<const OutlineFont> fonts,
             const DrawnGlyphs &drawn,
             std::span<const std::uint16_t> vram,
@@ -234,9 +446,11 @@ public:
         places_.push_back(placesOf(font));
       }
       states_ = {};
+      ++layout_;
+      worker_.forgetBefore(layout_);
       layout(fonts);
     }
-    bool changed = false;
+    bool changed = land(fonts);
     for (std::size_t f = 0; f < fonts.size(); f++) {
       const OutlineFont &font = fonts[f];
       FontState &state = states_.at(f);
@@ -274,8 +488,14 @@ public:
     }
     if (changed) {
       atlas_.generation++;
-      lucent::info("outline", "atlas {}: {} fonts, {} fields drawn", atlas_.generation, fonts.size(), drawn_);
-      drawn_ = 0;
+      lucent::info("outline",
+                   "atlas {}: {} fonts, {} fields landed, {} asked",
+                   atlas_.generation,
+                   fonts.size(),
+                   landed_,
+                   asked_);
+      landed_ = 0;
+      asked_ = 0;
     }
   }
 
@@ -286,7 +506,7 @@ public:
 private:
   struct GlyphField {
     FieldKey key;
-    std::vector<std::uint8_t> rgba; // the glyph's tile, width x height texels at kFieldScale
+    std::vector<std::uint8_t> rgba; // the glyph's tile, width x height texels at kFieldScale; empty without an outline
   };
 
   // A glyph's tile in the packed fields: the field pixel of its top-left texel, inside the gutter.
@@ -299,9 +519,10 @@ private:
     bool built = false;
     std::vector<BitmapGlyph> bitmaps;
     std::vector<char32_t> codepoints;
-    std::map<std::size_t, GlyphField> fields;
-    std::vector<Tile> tiles;  // by glyph
-    std::vector<bool> wanted; // by glyph: drawn since the atlas was laid out
+    std::map<std::size_t, GlyphField> fields; // by glyph: drawn by the worker
+    std::map<std::size_t, FieldKey> asked;    // by glyph: asked of the worker and not yet landed
+    std::vector<Tile> tiles;                  // by glyph
+    std::vector<bool> wanted;                 // by glyph: drawn since the atlas was laid out
   };
 
   // A font's page and glyph rectangles, as the atlas was laid out for them.
@@ -403,170 +624,142 @@ private:
     atlas_ = std::move(next);
   }
 
-  msdfgen::FontHandle *face(const OutlineFont &font, OutlineFace which) {
-    const std::string name = which == OutlineFace::Prompt   ? "promptfont.ttf"
-                             : which == OutlineFace::Symbol ? font.symbolFace
-                                                            : font.textFace;
+  // What glyph `i` of font `f`'s field is drawn from as its bitmap was last read; none for a glyph that draws its
+  // bitmap.
+  std::optional<FieldKey> keyOf(const OutlineFont &font, std::size_t f, std::size_t i) const {
+    const FontState &state = states_.at(f);
+    const BitmapGlyph &bitmap = state.bitmaps[i];
+    if (bitmap.empty() || state.codepoints[i] == psx::input::kNoGlyph) {
+      return std::nullopt;
+    }
+    const OutlineGlyph &glyph = font.glyphs[i];
+    return FieldKey{state.codepoints[i],
+                    glyph.button != 0 ? OutlineFace::Prompt : glyph.face,
+                    bitmap.x0,
+                    bitmap.y0,
+                    bitmap.x1,
+                    bitmap.y1,
+                    bitmap.shadowed};
+  }
+
+  // Asks the worker for glyph `i` of font `f`'s field from `key` unless it is already asked.
+  void ask(const OutlineFont &font, std::size_t f, std::size_t i, const FieldKey &key) {
+    const auto [at, added] = states_.at(f).asked.try_emplace(i, key);
+    if (!added && at->second == key) {
+      return;
+    }
+    at->second = key;
+    const OutlineGlyph &glyph = font.glyphs[i];
     // Fonts sharing a variable text face at other weights each need their own instance.
-    const double weight = which == OutlineFace::Text ? font.weight : 0;
-    const auto [at, added] = faces_.try_emplace({name, weight}, nullptr);
-    if (!added) {
-      return at->second;
-    }
-    psx::ui::AssetSet assets;
-    std::string path;
-    if (freetype_ == nullptr || !assets.open() || !assets.require(name.c_str(), path)) {
-      return nullptr;
-    }
-    at->second = msdfgen::loadFont(freetype_, path.c_str());
-    if (at->second == nullptr) {
-      lucent::error("outline", "font {} present but FreeType rejected it", path);
-      return nullptr;
-    }
-    if (weight != 0 &&
-        !msdfgen::setFontVariationAxis(freetype_, at->second, msdfgen::FontVariationAxis::Tag("wght"), weight)) {
-      lucent::error("outline", "font {} has no weight axis to set to {}", path, weight);
-    }
-    return at->second;
+    worker_.ask({.layout = layout_,
+                 .font = f,
+                 .glyph = i,
+                 .key = key,
+                 .face = key.face == OutlineFace::Prompt   ? "promptfont.ttf"
+                         : key.face == OutlineFace::Symbol ? font.symbolFace
+                                                           : font.textFace,
+                 .weight = key.face == OutlineFace::Text ? font.weight : 0,
+                 .proportional = font.proportional,
+                 .shadowX = font.shadowX,
+                 .shadowY = font.shadowY,
+                 .u = glyph.u,
+                 .v = glyph.v,
+                 .width = glyph.width,
+                 .height = glyph.height});
+    ++asked_;
   }
 
-  // The glyph's tile: RGB its outline's field fitted to the bitmap glyph's box, A the shadow's.
-  bool
-  drawField(const OutlineFont &font, const OutlineGlyph &glyph, const FieldKey &key, std::vector<std::uint8_t> &rgba) {
-    const int w = glyph.width * kFieldScale;
-    const int h = glyph.height * kFieldScale;
-    rgba.assign(offsetOf(0, h, w, 4), 0);
-    msdfgen::FontHandle *handle = face(font, key.face);
-    msdfgen::Shape shape;
-    // Glyph 0 is the face's missing-glyph box.
-    msdfgen::GlyphIndex glyphIndex;
-    if (handle == nullptr || !msdfgen::getGlyphIndex(glyphIndex, handle, msdfgen::unicode_t{key.codepoint}) ||
-        glyphIndex.getIndex() == 0 ||
-        !msdfgen::loadGlyph(shape, handle, glyphIndex, msdfgen::FONT_SCALING_EM_NORMALIZED) || shape.contours.empty()) {
-      lucent::error("outline",
-                    "no outline for the glyph at ({}, {}) (U+{:04X}); it draws nothing",
-                    glyph.u,
-                    glyph.v,
-                    static_cast<std::uint32_t>(key.codepoint));
-      return false;
-    }
-    shape.normalize();
-    msdfgen::edgeColoringSimple(shape, 3.0);
-    const msdfgen::Shape::Bounds bounds = shape.getBounds();
-    // Field pixels measured up from the tile's bottom, as msdfgen's bitmaps run.
-    const double left = key.x0 * kFieldScale;
-    const double right = key.x1 * kFieldScale;
-    const double bottom = h - (key.y1 * kFieldScale);
-    const double top = h - (key.y0 * kFieldScale);
-    const double fillX = (right - left) / (bounds.r - bounds.l);
-    const double fillY = (top - bottom) / (bounds.t - bounds.b);
-    const msdfgen::Vector2 scale(font.proportional ? std::min(fillX, fillY) : fillX, fillY);
-    const double inset = ((right - left) - ((bounds.r - bounds.l) * scale.x)) / 2;
-    const msdfgen::Vector2 translate((left + inset) / scale.x - bounds.l, bottom / scale.y - bounds.b);
-    const msdfgen::DistanceMapping mapping(msdfgen::Range(kFieldRange / std::min(scale.x, scale.y)));
-    // The shadow is the glyph moved by its offset, field pixels right and up.
-    const int shiftX = key.shadowed ? font.shadowX * kFieldScale : 0;
-    const int shiftY = key.shadowed ? -font.shadowY * kFieldScale : 0;
-    // Past the ink box and its shadow by more than the range, every field pixel is outside: only the box between is
-    // generated.
-    const int pad = static_cast<int>(std::ceil(kFieldRange)) + 1;
-    const int cropX0 = std::max(0, static_cast<int>(left) + std::min(0, shiftX) - pad);
-    const int cropX1 = std::min(w, static_cast<int>(right) + std::max(0, shiftX) + pad);
-    const int cropY0 = std::max(0, static_cast<int>(bottom) + std::min(0, shiftY) - pad);
-    const int cropY1 = std::min(h, static_cast<int>(top) + std::max(0, shiftY) + pad);
-    const msdfgen::Vector2 cropped(translate.x - (cropX0 / scale.x), translate.y - (cropY0 / scale.y));
-    const msdfgen::SDFTransformation placed(msdfgen::Projection(scale, cropped), mapping);
-    msdfgen::MSDFGeneratorConfig generate;
-    generate.errorCorrection.mode = msdfgen::ErrorCorrectionConfig::DISABLED;
-    msdfgen::MSDFGeneratorConfig correct;
-    correct.errorCorrection.distanceCheckMode = msdfgen::ErrorCorrectionConfig::DO_NOT_CHECK_DISTANCE;
-    msdfgen::Bitmap<float, 3> field(cropX1 - cropX0, cropY1 - cropY0);
-    msdfgen::generateMSDF(field, shape, placed, generate);
-    // Variable faces keep overlapping contours: the fields take their sign from the nonzero fill, then the MSDF its
-    // error correction, as msdfgen's scanline pass does.
-    msdfgen::distanceSignCorrection(field, shape, placed, msdfgen::FILL_NONZERO);
-    msdfgen::msdfErrorCorrection(field, shape, placed, correct);
-    const auto inCrop = [&](int x, int y) {
-      return x >= cropX0 && x < cropX1 && y >= cropY0 && y < cropY1;
-    };
-    for (int y = cropY0; y < cropY1; y++) {
-      for (int x = cropX0; x < cropX1; x++) {
-        std::uint8_t *pixel = &rgba[offsetOf(x, h - 1 - y, w, 4)];
-        const float *channels = field(x - cropX0, y - cropY0);
-        pixel[0] = fieldByte(channels[0]);
-        pixel[1] = fieldByte(channels[1]);
-        pixel[2] = fieldByte(channels[2]);
-        if (key.shadowed && inCrop(x - shiftX, y - shiftY)) {
-          const float *cast = field(x - shiftX - cropX0, y - shiftY - cropY0);
-          pixel[3] = fieldByte(msdfgen::median(cast[0], cast[1], cast[2]));
-        }
-      }
-    }
-    return true;
-  }
-
-  // Font `f`'s place in the atlas from its glyphs as last read.
-  void draw(const OutlineFont &font, std::size_t f) {
-    FontState &state = states_.at(f);
-    const OutlineAtlasFont &place = atlas_.fonts.at(f);
-    const int pageX0 = place.originX - (font.page.x << (2 - static_cast<int>(font.page.depth)));
-    const int pageY0 = place.originY - font.page.y;
-    for (int y = 0; y < place.height; y++) {
-      std::fill_n(&atlas_.indices[offsetOf(0, place.atlasY + y, atlas_.width * 2, 4)], place.width * 2 * 4, 0);
-    }
-    for (std::size_t i = 0; i < font.glyphs.size(); i++) {
-      const OutlineGlyph &glyph = font.glyphs[i];
-      const BitmapGlyph &bitmap = state.bitmaps[i];
-      const Tile tile = state.tiles[i];
-      clearTile(glyph, tile);
-      const int glyphSlot =
-          glyph.button != 0
-              ? static_cast<int>(std::ranges::find(atlas_.buttons, glyph.button) - atlas_.buttons.begin()) + 1
-              : 0;
-      // A glyph without a codepoint draws its bitmap.
-      if (bitmap.empty() || state.codepoints[i] == psx::input::kNoGlyph) {
+  // The fields the worker drew for the glyphs as they stand into their tiles; whether any landed.
+  bool land(std::span<const OutlineFont> fonts) {
+    bool any = false;
+    for (FieldResult &done : worker_.take()) {
+      if (done.layout != layout_) {
         continue;
       }
-      const FieldKey key{state.codepoints[i],
-                         glyph.button != 0 ? OutlineFace::Prompt : glyph.face,
-                         bitmap.x0,
-                         bitmap.y0,
-                         bitmap.x1,
-                         bitmap.y1,
-                         bitmap.shadowed};
-      GlyphField &field = state.fields[i];
-      if (field.rgba.empty() || !(field.key == key)) {
-        field.key = key;
-        if (!drawField(font, glyph, key, field.rgba)) {
-          field.rgba.clear();
-          continue;
-        }
-        ++drawn_;
+      FontState &state = states_.at(done.font);
+      if (const auto asked = state.asked.find(done.glyph); asked != state.asked.end() && asked->second == done.key) {
+        state.asked.erase(asked);
       }
-      copyTile(glyph, tile, field.rgba);
-      const std::vector<int> glyphRows = rowIndices(bitmap, [&](int index) {
-        return glyphInk(font, bitmap, index);
-      });
-      const std::vector<int> shadowRows = rowIndices(bitmap, [&](int index) {
-        return bitmap.shadowed && shadowTexel(font, index);
-      });
-      const int mapX = glyph.u - pageX0;
-      const int mapY = place.atlasY + glyph.v - pageY0;
-      for (std::size_t y = 0; y < glyphRows.size(); y++) {
-        for (int x = 0; x < glyph.width; x++) {
-          std::uint8_t *texel =
-              &atlas_.indices[offsetOf((mapX + x) * 2, mapY + static_cast<int>(y), atlas_.width * 2, 4)];
-          texel[0] = static_cast<std::uint8_t>(glyphRows[y]);
-          texel[1] = static_cast<std::uint8_t>(shadowRows[y]);
-          texel[2] = static_cast<std::uint8_t>(glyphSlot);
-          texel[3] = 255;
-          const int fieldX = tile.x + (x * kFieldScale);
-          const int fieldY = tile.y + (static_cast<int>(y) * kFieldScale);
-          texel[4] = static_cast<std::uint8_t>(fieldX & 0xFF);
-          texel[5] = static_cast<std::uint8_t>(fieldX >> 8);
-          texel[6] = static_cast<std::uint8_t>(fieldY & 0xFF);
-          texel[7] = static_cast<std::uint8_t>(fieldY >> 8);
-        }
+      const OutlineFont &font = fonts[done.font];
+      const std::optional<FieldKey> key = keyOf(font, done.font, done.glyph);
+      if (!key || !(*key == done.key)) {
+        continue;
+      }
+      if (!done.rgba.empty()) {
+        ++landed_;
+      }
+      GlyphField &field = state.fields[done.glyph];
+      field.key = done.key;
+      field.rgba = std::move(done.rgba);
+      place(font, done.font, done.glyph, field);
+      any = true;
+    }
+    return any;
+  }
+
+  // Font `f`'s place in the atlas from its glyphs as last read: each glyph with its field drawn takes it, the rest
+  // draw their bitmaps until the worker lands theirs.
+  void draw(const OutlineFont &font, std::size_t f) {
+    FontState &state = states_.at(f);
+    const OutlineAtlasFont &where = atlas_.fonts.at(f);
+    for (int y = 0; y < where.height; y++) {
+      std::fill_n(&atlas_.indices[offsetOf(0, where.atlasY + y, atlas_.width * 2, 4)], where.width * 2 * 4, 0);
+    }
+    for (std::size_t i = 0; i < font.glyphs.size(); i++) {
+      clearTile(font.glyphs[i], state.tiles[i]);
+      const std::optional<FieldKey> key = keyOf(font, f, i);
+      if (!key) {
+        continue;
+      }
+      const auto field = state.fields.find(i);
+      if (field == state.fields.end() || !(field->second.key == *key)) {
+        ask(font, f, i, *key);
+        continue;
+      }
+      place(font, f, i, field->second);
+    }
+  }
+
+  // Glyph `i` of font `f` into the atlas from `field`: its tile and its index texels; a glyph without an outline keeps
+  // its bitmap.
+  void place(const OutlineFont &font, std::size_t f, std::size_t i, const GlyphField &field) {
+    if (field.rgba.empty()) {
+      return;
+    }
+    const FontState &state = states_.at(f);
+    const OutlineGlyph &glyph = font.glyphs[i];
+    const BitmapGlyph &bitmap = state.bitmaps[i];
+    const Tile tile = state.tiles[i];
+    const OutlineAtlasFont &where = atlas_.fonts.at(f);
+    const int pageX0 = where.originX - (font.page.x << (2 - static_cast<int>(font.page.depth)));
+    const int pageY0 = where.originY - font.page.y;
+    const int glyphSlot =
+        glyph.button != 0
+            ? static_cast<int>(std::ranges::find(atlas_.buttons, glyph.button) - atlas_.buttons.begin()) + 1
+            : 0;
+    copyTile(glyph, tile, field.rgba);
+    const std::vector<int> glyphRows = rowIndices(bitmap, [&](int index) {
+      return glyphInk(font, bitmap, index);
+    });
+    const std::vector<int> shadowRows = rowIndices(bitmap, [&](int index) {
+      return bitmap.shadowed && shadowTexel(font, index);
+    });
+    const int mapX = glyph.u - pageX0;
+    const int mapY = where.atlasY + glyph.v - pageY0;
+    for (std::size_t y = 0; y < glyphRows.size(); y++) {
+      for (int x = 0; x < glyph.width; x++) {
+        std::uint8_t *texel =
+            &atlas_.indices[offsetOf((mapX + x) * 2, mapY + static_cast<int>(y), atlas_.width * 2, 4)];
+        texel[0] = static_cast<std::uint8_t>(glyphRows[y]);
+        texel[1] = static_cast<std::uint8_t>(shadowRows[y]);
+        texel[2] = static_cast<std::uint8_t>(glyphSlot);
+        texel[3] = 255;
+        const int fieldX = tile.x + (x * kFieldScale);
+        const int fieldY = tile.y + (static_cast<int>(y) * kFieldScale);
+        texel[4] = static_cast<std::uint8_t>(fieldX & 0xFF);
+        texel[5] = static_cast<std::uint8_t>(fieldX >> 8);
+        texel[6] = static_cast<std::uint8_t>(fieldY & 0xFF);
+        texel[7] = static_cast<std::uint8_t>(fieldY >> 8);
       }
     }
   }
@@ -594,12 +787,13 @@ private:
     }
   }
 
-  msdfgen::FreetypeHandle *freetype_ = nullptr;
-  std::map<std::pair<std::string, double>, msdfgen::FontHandle *> faces_; // by file and weight
-  std::vector<FontPlaces> places_;                                        // the fonts the atlas is laid out for
+  std::vector<FontPlaces> places_; // the fonts the atlas is laid out for
+  std::uint64_t layout_ = 0;       // bumped each time the atlas is laid out again
   std::array<FontState, kMaxOutlineFonts> states_;
-  int drawn_ = 0;
+  int landed_ = 0;
+  int asked_ = 0;
   OutlineAtlas atlas_;
+  FieldWorker worker_;
 };
 
 OutlineText::OutlineText() : builder_(std::make_unique<Builder>()) {}

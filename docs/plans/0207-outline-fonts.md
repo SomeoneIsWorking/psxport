@@ -120,9 +120,16 @@ Phases 2a to 2e are built and shown. Phase 2 is done.
 - Cost (2026-11-14, `perf-units`): Tomba 2's narration (New Game, `PSXPORT_NO_FMV=1`) first draws text at frame 716;
   the atlas build there was 12.9 G instructions for 135 fields at eight pixels a texel, past the 3 s watchdog. It is
   now 0.28 G for the 19 glyphs drawn (present phase max 277 M against a 59 M p50 frame and the 510 M load-frame max),
-  33 fields across the whole route, and the run passes under the default watchdog. A glyph's first frame still pays
-  msdfgen's per-pixel cost (about 8 k instructions a field pixel); baking the fields from the committed fonts at build
-  time would remove it but needs fields independent of the VRAM ink box, fitted per glyph at sample time.
+  33 fields across the whole route, and the run passes under the default watchdog. msdfgen's per-pixel cost (about
+  8 k instructions a field pixel) is unchanged but off the present path: fields are drawn on `FieldWorker`'s thread,
+  asked once per glyph and key, and each sealed frame that draws text lands the finished ones into the atlas before
+  asking for new ones, so a glyph draws its bitmap (index A 0) for the few presents until its field lands and its
+  outline from the next upload on. A field asked under a layout the atlas has since left is dropped. Paced, 3840x2160
+  (2026-11-14): Spyro 3's Atlas open (`warp 0/1/0`, select) was 14 ms late at fence 1264 in every run, now at most
+  2.9 ms over three; Tomba 2's narration has no late present at its first text (fence 1059). Fields land one sealed
+  frame after they are asked; on both routes that is before the text is visible. Baking the fields
+  from the committed fonts at build time would remove the cost but needs fields independent of the VRAM ink box,
+  fitted per glyph at sample time.
 - Check: Spyro 2 Summer Forest pause and Spyro 3 Sunrise Spring pause and Help at `ires=0`, 3840x2160
   (`warp 0/0/0`, start, down, cross): letters and button glyphs sharp, shaded and shadowed as the bitmap; Help
   under `gamepad make xbox` and `gamepad make playstation` for the face colours. Tomba 2's Options screen (New Game,

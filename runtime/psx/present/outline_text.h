@@ -4,7 +4,8 @@
 // filled with glyphs, the font it drew from (OutlineGlyphs). Each sealed frame that drew such packets brings the
 // atlas up to date with those fonts' glyphs in VRAM and the pad family in the player's hand: every glyph gets its
 // codepoint's outline, fitted to the box of its own bitmap glyph, as a multi-channel distance field (msdfgen), and
-// keeps the bitmap's CLUT indices for its colours. The record rasterizer samples the atlas for those packets'
+// keeps the bitmap's CLUT indices for its colours. Fields are drawn on a worker thread; a glyph draws its bitmap until
+// its field lands in the atlas at a later sealed frame. The record rasterizer samples the atlas for those packets'
 // primitives (kOpOutline) instead of VRAM, so a glyph keeps its ordering-table slot, its widescreen place and its
 // replay.
 #pragma once
@@ -138,8 +139,9 @@ public:
   OutlineText(const OutlineText &) = delete;
   OutlineText &operator=(const OutlineText &) = delete;
 
-  // A sealed frame drew the glyphs `drawn` names: the atlas follows every glyph drawn so far in `vram` and the pad
-  // family of `pads`; a glyph never drawn has no field.
+  // A sealed frame drew the glyphs `drawn` names: the atlas takes the fields the worker has drawn since the last call
+  // and asks it for every glyph drawn so far in `vram` and the pad family of `pads` whose field it lacks; a glyph
+  // without its field draws its bitmap. Never waits on the worker.
   void drew(std::span<const OutlineFont> fonts,
             const DrawnGlyphs &drawn,
             std::span<const std::uint16_t> vram,
