@@ -72,34 +72,16 @@ void TextureFeedback::written(RecordRect rect) {
 
 bool TextureFeedback::overlapsSampled(const present::DrawPrimitive &primitive) const {
   const present::RecordDrawState &state = primitive.state;
-  const present::RecordVertex &origin = primitive.vertices[0];
+  const RecordRect box = texelBox(primitive);
   TexelSpan u;
   TexelSpan v;
   if (primitive.kind == present::PrimitiveKind::Sprite) {
-    // A sprite steps u/v once per pixel from its origin, backwards when flipped.
-    const int spanU = std::max(primitive.width - 1, 0);
-    const int spanV = std::max(primitive.height - 1, 0);
-    u = sampledSpan(primitive.flipX ? origin.u - spanU : origin.u,
-                    primitive.flipX ? origin.u : origin.u + spanU,
-                    state.windowMaskX);
-    v = sampledSpan(primitive.flipY ? origin.v - spanV : origin.v,
-                    primitive.flipY ? origin.v : origin.v + spanV,
-                    state.windowMaskY);
+    u = sampledSpan(box.x0, box.x1 - 1, state.windowMaskX);
+    v = sampledSpan(box.y0, box.y1 - 1, state.windowMaskY);
   } else {
-    int u0 = origin.u;
-    int u1 = origin.u;
-    int v0 = origin.v;
-    int v1 = origin.v;
-    for (int index = 1; index < primitive.vertexCount; index++) {
-      const present::RecordVertex &vertex = primitive.vertices[static_cast<std::size_t>(index)];
-      u0 = std::min<int>(u0, vertex.u);
-      u1 = std::max<int>(u1, vertex.u);
-      v0 = std::min<int>(v0, vertex.v);
-      v1 = std::max<int>(v1, vertex.v);
-    }
     // Interpolated coordinates stay inside the vertices' box, give or take a rounding step.
-    u = sampledSpan(std::max(u0 - 1, 0), std::min(u1 + 1, kTexelMax), state.windowMaskX);
-    v = sampledSpan(std::max(v0 - 1, 0), std::min(v1 + 1, kTexelMax), state.windowMaskY);
+    u = sampledSpan(std::max(box.x0 - 1, 0), std::min(box.x1, kTexelMax), state.windowMaskX);
+    v = sampledSpan(std::max(box.y0 - 1, 0), std::min(box.y1, kTexelMax), state.windowMaskY);
   }
   const int shift = texelShift(state.texMode);
   const int x0 = state.texPageX + (u.first >> shift);

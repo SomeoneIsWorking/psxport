@@ -16,6 +16,28 @@ bool rectsOverlap(const RecordRect &a, const RecordRect &b) {
   return a.x0 < b.x1 && b.x0 < a.x1 && a.y0 < b.y1 && b.y0 < a.y1;
 }
 
+RecordRect texelBox(const present::DrawPrimitive &primitive) {
+  const present::RecordVertex &origin = primitive.vertices[0];
+  if (primitive.kind == present::PrimitiveKind::Sprite) {
+    const int width = std::max(primitive.width, 1);
+    const int height = std::max(primitive.height, 1);
+    const int u0 = primitive.flipX ? origin.u - width + 1 : origin.u;
+    const int v0 = primitive.flipY ? origin.v - height + 1 : origin.v;
+    return {.x0 = u0, .y0 = v0, .x1 = u0 + width, .y1 = v0 + height};
+  }
+  RecordRect box{.x0 = origin.u, .y0 = origin.v, .x1 = origin.u, .y1 = origin.v};
+  for (int index = 1; index < primitive.vertexCount; index++) {
+    const present::RecordVertex &vertex = primitive.vertices[static_cast<std::size_t>(index)];
+    box.x0 = std::min<int>(box.x0, vertex.u);
+    box.x1 = std::max<int>(box.x1, vertex.u);
+    box.y0 = std::min<int>(box.y0, vertex.v);
+    box.y1 = std::max<int>(box.y1, vertex.v);
+  }
+  box.x1++;
+  box.y1++;
+  return box;
+}
+
 RecordRect drawBounds(const present::DrawPrimitive &primitive) {
   RecordRect rect{};
   if (primitive.kind == present::PrimitiveKind::Sprite) {

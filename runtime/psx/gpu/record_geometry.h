@@ -25,6 +25,10 @@ bool rectsOverlap(const RecordRect &a, const RecordRect &b);
 // The VRAM rect a primitive can write: its vertices or sprite extent inside the draw area.
 RecordRect drawBounds(const present::DrawPrimitive &primitive);
 
+// The texture coordinates a textured primitive reaches, half open, before the texture window and the 8-bit wrap: a
+// sprite's from its origin, backwards when flipped; a polygon's or line's vertices' box.
+RecordRect texelBox(const present::DrawPrimitive &primitive);
+
 // An axis-aligned rectangle: its whole-pixel edges and how far past each a placed quad's edge lies.
 struct AxisRectangle {
   RecordRect rect;
