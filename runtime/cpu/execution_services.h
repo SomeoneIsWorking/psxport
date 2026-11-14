@@ -14,6 +14,9 @@ enum class SyscallResult : std::uint8_t {
   MissingContext,
 };
 
+// Kernel selectors 0..2: no function, EnterCriticalSection, ExitCriticalSection.
+inline constexpr std::uint32_t kExitCriticalSection = 2u;
+
 SyscallResult handleSyscall(Core &core, std::uint32_t instructionPc);
 void handleBreak(Core &core, std::uint32_t code);
 

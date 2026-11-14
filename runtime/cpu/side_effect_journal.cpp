@@ -1,6 +1,7 @@
 #include "side_effect_journal.h"
 
 #include "core.h"
+#include "execution_services.h"
 #include "lightrec_executor.h"
 
 #include <lucent/log.h>
@@ -172,6 +173,10 @@ void SideEffectJournal::withhold(std::span<const std::uint32_t> entries) {
 }
 
 bool SideEffectJournal::admitSyscall(std::uint32_t code, std::uint32_t instructionPc) {
+  // The critical-section selectors touch COP0 and the kernel's flag, which the discarded run puts back.
+  if (mode_ == SideEffectMode::Discard && code <= kExitCriticalSection) {
+    return true;
+  }
   const SideEffect effect{SideEffectKind::Syscall, instructionPc, 0, code};
   append(effect);
   stopDiscardedRun(effect);

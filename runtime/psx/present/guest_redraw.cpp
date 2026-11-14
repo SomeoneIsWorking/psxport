@@ -18,6 +18,7 @@ GuestRedraw::GuestRedraw(Core &core)
       journalScope_(core, journal_) {
   std::copy_n(core.r, gpr_.size(), gpr_.begin());
   std::copy_n(core.cop0, cop0_.size(), cop0_.begin());
+  interruptsEnabled_ = core.game->hle.irq_enabled;
   core_.writeRollback.arm();
   hostPackets_ = core_.hostPackets.open();
 }
@@ -27,6 +28,7 @@ GuestRedraw::~GuestRedraw() {
   core_.writeRollback.rollBack();
   std::copy(gpr_.begin(), gpr_.end(), core_.r);
   std::copy(cop0_.begin(), cop0_.end(), core_.cop0);
+  core_.game->hle.irq_enabled = interruptsEnabled_;
   core_.hi = hi_;
   core_.lo = lo_;
   core_.pc = pc_;

@@ -52,8 +52,9 @@ enum class SideEffectMode : std::uint8_t {
   Record, // the live path: accesses reach the devices and are logged
   Replay, // the shadow path: accesses are logged and served from, or checked against, `recorded`
   // A run whose memory the caller puts back (present/guest_redraw.h): services whose state is guest memory execute,
-  // devices are never reached, guest time and pending work are held. Its first device access, syscall or service
-  // with host-side state raises
+  // devices are never reached, guest time and pending work are held, and the critical-section syscalls run (the caller
+  // also puts back COP0 and the kernel flag). Its first device access, other syscall or service with host-side state
+  // raises
   // `DiscardedRunTouchedDevice`: out of host code at once, from translated code (served 0) when the executor
   // is next back in host code, so a run polling a device stops instead of spinning out its budget.
   Discard,

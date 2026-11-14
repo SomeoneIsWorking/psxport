@@ -21,7 +21,7 @@ SyscallResult handleSyscall(Core &core, std::uint32_t instructionPc) {
   if (core.sideEffectJournal != nullptr && !core.sideEffectJournal->admitSyscall(selector, instructionPc)) {
     return SyscallResult::Handled;
   }
-  if (selector > 2u) {
+  if (selector > kExitCriticalSection) {
     return SyscallResult::UnsupportedSelector;
   }
 

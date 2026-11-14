@@ -102,6 +102,7 @@ private:
   std::uint32_t lo_ = 0;
   std::uint32_t pc_ = 0;
   std::array<std::uint32_t, 16> cop0_{};
+  int interruptsEnabled_ = 0;
   // The call stack the run's stores are attributed to, as the frame left it.
   cpu::GuestWriterLatch writerLatch_;
   cpu::SideEffectJournal journal_{cpu::SideEffectMode::Discard, {}};
