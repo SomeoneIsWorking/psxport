@@ -141,6 +141,7 @@ void Hle::countDecline(const Core &core) {
 // The BIOS order: owed DMA callbacks, then the chain (verifier, then the claiming handler), then libcd's CD
 // handler for a CD bit left unacknowledged, then the custom exit. GTE state is not saved, as on hardware.
 void Hle::irqPoll(Core *c) {
+  const psx::cd::OwedCompletionHold cdHold(*c);
   const psx::hle::StockDmaCallbacks *guestTable = c->game->dmaCallbacks.guestTable();
   for (unsigned index = 0; index < psx::dma::kChannelCount; index++) {
     const auto ch = static_cast<psx::dma::DmaChannel>(index);

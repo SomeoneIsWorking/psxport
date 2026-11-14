@@ -25,4 +25,21 @@ CdcResponse acknowledgeCurrentCdResponse(Core &core, std::span<std::uint8_t> res
 
 // Runs the callback in `slot` with `a0 = status` for one owed completion; NothingOwed leaves it owed.
 [[nodiscard]] CdReadyDelivery deliverReadyCompletion(Core &core, std::uint32_t slot, std::uint32_t status);
+
+// Held across one interrupt dispatch: an owed read completion does not become current while the guest's own
+// handlers run, where its CD handler would acknowledge it unseen. The outermost hold services the drive on release,
+// so a completion that fell due inside raises its edge for the next dispatch.
+class OwedCompletionHold {
+public:
+  explicit OwedCompletionHold(Core &core);
+  ~OwedCompletionHold();
+  OwedCompletionHold(const OwedCompletionHold &) = delete;
+  OwedCompletionHold &operator=(const OwedCompletionHold &) = delete;
+  OwedCompletionHold(OwedCompletionHold &&) = delete;
+  OwedCompletionHold &operator=(OwedCompletionHold &&) = delete;
+
+private:
+  Core &core_;
+  bool outermost_;
+};
 } // namespace psx::cd

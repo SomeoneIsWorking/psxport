@@ -268,23 +268,23 @@ bool CdController::postDataReadyAfterRead(uint32_t first_lba, uint32_t sectors, 
   return 1;
 }
 
-// Announce every owed read completion whose drive time has elapsed, oldest first. A full response queue
-// leaves the rest owed for the next service rather than dropping one.
+// Announce the oldest owed read completion whose drive time has elapsed, current at once with nothing queued ahead
+// (Beetle delivers an async INT1 only with IRQBuffer clear) and outside the guest's interrupt service, so the
+// framework's ready delivery takes it before the guest's own CD handler, which has no libcd read state for it.
 bool CdController::serviceReadCompletions() {
-  if (read_completion_n == 0 || !tick_now) {
+  if (read_completion_n == 0 || !tick_now || owed_completions_held || !queueEmpty()) {
     return 0;
   }
   const uint64_t now_ticks = tick_now(tick_context);
-  int announced = 0;
-  while (read_completion_n > 0 && now_ticks >= read_completion_deadline_ticks[0] && postDataReady()) {
-    lucent::debug("cdcpace", "announced owed read completion now={} queue_empty={}", now_ticks, queueEmpty());
-    read_completion_n--;
-    for (int i = 0; i < read_completion_n; i++) {
-      read_completion_deadline_ticks[i] = read_completion_deadline_ticks[i + 1];
-    }
-    announced = 1;
+  if (now_ticks < read_completion_deadline_ticks[0] || !postDataReady()) {
+    return 0;
   }
-  return announced;
+  lucent::debug("cdcpace", "announced owed read completion now={}, {} more owed", now_ticks, read_completion_n - 1);
+  read_completion_n--;
+  for (int i = 0; i < read_completion_n; i++) {
+    read_completion_deadline_ticks[i] = read_completion_deadline_ticks[i + 1];
+  }
+  return 1;
 }
 
 void CdController::cancelDriveEvent() {

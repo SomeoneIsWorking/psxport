@@ -70,7 +70,8 @@ public:
   bool postDataReady();
   // The same completion, announced once the drive would have read `sectors` from `first_lba` at `mode`'s speed
   // (seek, spin-up, one period per sector) under ReadTiming::Drive, or at the next service under AtOnce; reads queue
-  // serially. False when `sectors` is 0 or four are owed. With no tick source bound it posts at once.
+  // serially, and each waits for an empty response queue and no held guest service. False when `sectors` is 0 or four
+  // are owed. With no tick source bound it posts at once.
   bool postDataReadyAfterRead(uint32_t first_lba, uint32_t sectors, uint8_t mode, ReadTiming timing);
   uint32_t read(CdcRegister reg);
   void write(CdcRegister reg, uint8_t v);
@@ -125,6 +126,8 @@ public:
   uint64_t command_deadline_ticks = 0;
   uint8_t read_completion_n = 0;                   // owed read completions not yet announced (<= 4)
   uint64_t read_completion_deadline_ticks[4] = {}; // oldest first
+  // Set while the guest's interrupt service runs: an owed completion waits for its end (cd_ready_delivery.h).
+  uint8_t owed_completions_held = 0;
   void *tick_context = nullptr;
   CdcTickNowFn tick_now = nullptr;
   CdcIrqEnt q[8] = {}; // pending-interrupt queue

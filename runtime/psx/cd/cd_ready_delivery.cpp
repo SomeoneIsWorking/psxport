@@ -84,6 +84,19 @@ CdReadyDelivery deliverReadyCompletion(Core &core, std::uint32_t slot, std::uint
   return psx::cpu::completeOrPropagate(core, result) ? CdReadyDelivery::Delivered : CdReadyDelivery::GuestExited;
 }
 
+OwedCompletionHold::OwedCompletionHold(Core &core)
+    : core_(core), outermost_(core.game->cdc.owed_completions_held == 0u) {
+  core_.game->cdc.owed_completions_held = 1u;
+}
+
+OwedCompletionHold::~OwedCompletionHold() {
+  if (!outermost_) {
+    return;
+  }
+  core_.game->cdc.owed_completions_held = 0u;
+  core_.game->timing.serviceCdc();
+}
+
 CdcResponse acknowledgeCurrentCdResponse(Core &core, std::span<std::uint8_t> response) {
   psx::cd::CdController &controller = core.game->cdc;
   std::ranges::fill(response, std::uint8_t{0});
