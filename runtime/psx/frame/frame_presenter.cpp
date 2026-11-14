@@ -111,7 +111,7 @@ void FramePresenter::commitSealed(Core &core, const present::FrameRecord &sealed
     pendingBreak_ = false;
   }
   if (present::ReplayFrame *replay = core.runtime.replayFrame(core)) {
-    replay->sealed(current_->sequence(), drawsAnything(*current_));
+    replay->sealed(core, current_->sequence(), drawsAnything(*current_));
   }
   holdUndrawnWrites(*current_);
   ++fence_;

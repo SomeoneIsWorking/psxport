@@ -33,6 +33,11 @@ public:
   // Whether a chain the frame walked from `head` is the one the section links; its first packet moves with the
   // scene, so this names the frame's other chains out.
   [[nodiscard]] virtual bool linked(std::uint32_t head) const = 0;
+  // Whether the frame's field wait comes between the section and the submission of its chain, so the record sealed
+  // at that wait holds the previous run's chain and this run belongs to the next drawing record.
+  [[nodiscard]] virtual bool submitsAfterWait() const {
+    return false;
+  }
 };
 
 class ReplayFrame {
@@ -50,8 +55,8 @@ public:
   void beforeDraw(Core &core);
   // The frame did not run the section, or broke from the last (cut, load): the next sample pairs with nothing.
   void forget();
-  // FramePresenter sealed `sequence`; a drawing record takes the captures made since the last.
-  void sealed(std::uint64_t sequence, bool draws);
+  // FramePresenter sealed `sequence`; a drawing record takes the section run whose chain it walked.
+  void sealed(Core &core, std::uint64_t sequence, bool draws);
 
   // An interval the presenter shows: S' = `from` to S = `shown` over `fields` fields.
   struct Interval {
@@ -129,10 +134,15 @@ private:
   std::optional<float> replaying_;
   // The heads the running replay relinked.
   std::vector<std::uint32_t> relinking_;
-  Set pending_;
-  bool pendingReady_ = false;
-  // The section ran since the last drawing seal.
-  bool ran_ = false;
+  // One run of the section not yet taken by a record.
+  struct Run {
+    Set set;
+    bool ready = false; // its in-betweens were replayed
+    std::optional<std::uint32_t> entryField;
+  };
+  // The latest run; with submitsAfterWait, `waiting_` is the run whose chain the next drawing record walks.
+  Run pending_;
+  Run waiting_;
   std::optional<std::uint64_t> lastDrawing_;
   std::array<Set, 3> sets_;
   std::size_t nextSet_ = 0;

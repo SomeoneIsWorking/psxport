@@ -67,6 +67,10 @@ interpolation in its Tomba 2, Ape Escape and Vigilante 8 ports with `docs/RENDER
    budget; a root counter's value reads its held count and is no device access (`SideEffectMode::Discard`).
    The critical-section syscalls run, since the redraw puts back COP0 and the kernel flag; libc `rand`
    keeps its seed in guest RAM, so a draw's random numbers roll back with the rest.
+   A run's in-betweens and its section-entry field belong to the record that walks its chain. A section whose
+   frame waits for its fields before submitting (`ReplaySection::submitsAfterWait`, Vagrant Story's
+   `func_8007629C`) hands them to the next drawing record, since the record sealed at that wait holds the
+   previous run's chain.
    Per-pass cost (thread CPU time) is measured and passes shed above budget. At run end
    `ReplayFrame::report` logs intervals replayed (with their in-betweens) and refused
    by the section (a refusal at any k drops the whole interval, so none of its in-betweens count), then

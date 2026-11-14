@@ -30,24 +30,28 @@ void ReplayFrame::beforeDraw(Core &core) {
     return;
   }
   const GpuPerf::PhaseScope phase(core.game->perf, GpuPerf::Phase::Replay);
-  ran_ = true;
+  pending_.set.ran = true;
   const auto field = static_cast<std::uint32_t>(core.game->timing.displayField());
-  core.gpuDevice().noteSectionEntry(field);
+  if (section_.submitsAfterWait()) {
+    pending_.entryField = field;
+  } else {
+    core.gpuDevice().noteSectionEntry(field);
+  }
   const std::optional<std::uint32_t> previous = std::exchange(sampledField_, field);
   motion_.sample(core);
-  pendingReady_ = false;
+  pending_.ready = false;
   // The interval this sample ends, in fields from the last sample: the spacing of the two records' draw entries.
   const std::uint32_t spacing = previous && field > *previous ? field - *previous : 0u;
   if (!motion_.paired() || spacing < 2u || spacing - 1u > static_cast<std::uint32_t>(kMaxInBetweens)) {
     return;
   }
   const auto fields = static_cast<int>(spacing);
-  pending_.fields = fields;
-  pending_.cycles.sample(core, cycles_);
-  pending_.captures.resize(static_cast<std::size_t>(fields - 1));
+  pending_.set.fields = fields;
+  pending_.set.cycles.sample(core, cycles_);
+  pending_.set.captures.resize(static_cast<std::size_t>(fields - 1));
   for (int k = 1; k < fields; ++k) {
     const float t = static_cast<float>(k) / static_cast<float>(fields);
-    if (!replay(core, t, pending_.captures[static_cast<std::size_t>(k - 1)])) {
+    if (!replay(core, t, pending_.set.captures[static_cast<std::size_t>(k - 1)])) {
       ++refused_;
       motion_.settle(false);
       lucent::warn("replay", "the draw section's replay at {}/{} refused; the interval is shown as drawn", k, fields);
@@ -57,12 +61,12 @@ void ReplayFrame::beforeDraw(Core &core) {
   ++replayed_;
   replayedInBetweens_ += static_cast<std::uint64_t>(fields - 1);
   motion_.settle(true);
-  pendingReady_ = true;
+  pending_.ready = true;
 }
 
 void ReplayFrame::forget() {
   motion_.forget();
-  pendingReady_ = false;
+  pending_.ready = false;
 }
 
 void ReplayFrame::relink(std::uint32_t head) {
@@ -114,20 +118,30 @@ bool ReplayFrame::replay(Core &core, float t, Capture &capture) {
   return true;
 }
 
-void ReplayFrame::sealed(std::uint64_t sequence, bool draws) {
+void ReplayFrame::sealed(Core &core, std::uint64_t sequence, bool draws) {
   if (!draws) {
     return;
   }
+  const bool waits = section_.submitsAfterWait();
+  Run &taken = waits ? waiting_ : pending_;
   Set &set = sets_[nextSet_];
   nextSet_ = (nextSet_ + 1) % sets_.size();
   set.shown = sequence;
-  set.from = pendingReady_ ? lastDrawing_ : std::nullopt;
-  set.fields = pendingReady_ ? pending_.fields : 0;
-  set.ran = ran_;
-  std::swap(set.captures, pending_.captures);
-  std::swap(set.cycles, pending_.cycles);
-  pendingReady_ = false;
-  ran_ = false;
+  set.from = taken.ready ? lastDrawing_ : std::nullopt;
+  set.fields = taken.ready ? taken.set.fields : 0;
+  set.ran = taken.set.ran;
+  std::swap(set.captures, taken.set.captures);
+  std::swap(set.cycles, taken.set.cycles);
+  taken.ready = false;
+  taken.set.ran = false;
+  taken.entryField.reset();
+  if (waits) {
+    // The latest run's chain is submitted into the record this seal opened.
+    std::swap(waiting_, pending_);
+    if (waiting_.entryField) {
+      core.gpuDevice().noteSectionEntry(*waiting_.entryField);
+    }
+  }
   lastDrawing_ = sequence;
   assembledFor_ = {};
 }
