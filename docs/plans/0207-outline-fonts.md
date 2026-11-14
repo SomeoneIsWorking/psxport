@@ -46,43 +46,40 @@ timing and colours are the game's.
 
 ## Next steps
 
-Phases 2a and 2b are built and shown (Spyro 2/3 pixel-identical before and after; Tomba 2 pause menu and opening
-narration at `ires=0`, moving halfway on in-betweens). Continue with 2c, 2d and 2e in that order, each on the
-glyph-rectangle model: RE the drawer and its glyph table into the title's decomp first, then a title font table
-(`OutlineFont` with `OutlineGlyph`s, `OutlineGrid` where cells are equal) and the drawer naming each glyph packet's
-font through the title's `OutlineGlyphs`.
+Phases 2a, 2b and 2c are built and shown; 2d is built for Spyro 2. Continue with the rest of 2d, then 2e.
 
-- 2c, Spyro 3's Atlas font: RE'd (spyro-3 `spyro3.atlas-font`): the Atlas string drawer 0x80076228 draws each
-  glyph through the icon emitter 0x800289C8 from the SpriteData table *0x80070108 (indices 0x42-0xA2, 12x9 rects,
-  CLUT 0x09F2), so the font table is that index list and the seam is the drawer's call of 0x800289C8. The glyphs lie
-  on five 4bpp pages (DR_TPAGE 0x09-0x0D, VRAM x 576-831); the packed atlas (As built) takes them. The 0x202020 colour
-  earlier read as a shadow pass is the Contents caller's colour choice (0x80076958); check for a real second pass
-  when naming packets.
-- 2d, the HUD counters: Spyro 3's value emitter 0x800291B8 draws each digit through the same icon emitter 0x800289C8
-  and SpriteData table as the Atlas, so the packing above serves both.
-  Spyro 2's 0x8005251C/0x800520CC are still to RE.
+- 2c, Spyro 3's Atlas font: built (psx-spyro `titles/spyro3/render/sprite_fonts.h`, spyro-3 `spyro3.atlas-font`). The icon
+  emitter's override names each packet it drew from entries 0x42-0xA2 of *0x80070108 as the Atlas font, whose glyphs
+  lie across DR_TPAGE 0x09-0x0D. The marks are grave, acute, diaeresis, circumflex and tilde; there is no shadow pass;
+  the button icons 0x9F-0xA2 are pad art. Face Fredoka 600.
+- 2d, the HUD counters: Spyro 2's built (spyro-2 `spyro2.hud-digits`): `hud_element::draw` names the sprites of the
+  digit images 0x8006351C; 24x16 cells at v 45 of the 2D font's page, gold bands over a (1, 1) shadow in indices 2, 7
+  and D, Fredoka 500 (`spyro::hudDigitFont`). Spyro 3's is not built: its value emitter 0x800291B8 reads the digits from
+  *0x8006C788, a table whose entries move with the level (Sunrise Spring's digits 2-9 on DR_TPAGE 0x0A, Midday
+  Gardens' on 0x0C and 0x1F, other CLUTs), so its font cannot be a fixed table. It needs the framework to take a font
+  whose glyph rectangles the title reads from the guest each frame (the atlas re-laid out when they change) and
+  `outlineFonts` to see the Core.
 - 2e, Spyro 2's pre-rendered string images: whole strings, not glyphs; this needs a layout of the string into its
   rect rather than an `OutlineGlyph` per cell, so it is new framework work.
-- Tomba 2 leftovers (tomba2-decomp `docs/notes/text-fonts.md`): the token strings are the four buttons, already
-  named; the v 152 font has no drawer. The reference mark (cell 0x0A) and the symbol cells 0x64-0x98 the token table
-  names need a face none of Fira Sans, Fredoka and PromptFont has (※ ○ ◇ □ △ ♪ 『』 and the rest): a JIS-complete
-  OFL face such as Noto Sans JP or M PLUS 1 covers every token, pending review. Most symbols are two-coloured (a fill
-  in indices 3/4), which one index a row cannot carry.
+- Tomba 2's symbols: built (psx-tomba `game/ui/text_fonts.h`, tomba2-decomp `docs/notes/text-fonts.md`): cell 0x0A as
+  ※ and the token table's one-colour symbol cells from `NotoSansJP-Symbols.ttf` (`OutlineFace::Symbol`). The 8x16
+  font's filled arrows, ◇ □ △ ▽ and both fonts' box 0x98 keep their bitmaps, as do the diagonal arrows 0x68-0x6B and
+  the nested squares 0x7D/0x7E, which the face has no shape for. Only ■ (the Sound screen's volume bars) is drawn by a
+  US string found so far.
 - Multicoloured glyphs: the A channel of an unshadowed glyph could hold the field of its silhouette (the outer contour
   filled), so a button's symbol, cut from PromptFont's disc, takes the symbol's own CLUT index from the bitmap under
   it. Shadowed glyphs (Tomba 2's 8x8 buttons) have no channel left for it.
-- psx-tomba carries the `padArt` marks on its button glyphs (`game/ui/text_fonts.h`), uncommitted until the psxport
-  commit that adds `padArt` is pushed.
-- Proof routes: Spyro `ally_text.sh` (Ally, `warp 0/0/0`, start, downs, cross; Spyro 3 Help is three downs);
-  Tomba 2 `psx-tomba/scratch/outline-text/tools/` (`drive.py` with the REPL files: title New Game, `warp 8/0`,
-  start; the narration dump is mid-route). Tomba 2 Options: `psx-tomba/scratch/outline-text2/options.txt`. Spyro 3
-  Atlas locally: `psx-spyro/scratch/atlas-font/atlas.txt` (`warp 0/0/0`, start, down, cross).
+- Proof routes: Spyro `ally_text.sh` (Ally, `warp 0/0/0`, start, downs, cross; Spyro 3 Help is three downs); Spyro 2
+  HUD: `warp 0/0/0`, select (the HUD slides in; `debug fps60dump` for its presents); Spyro 3 Atlas: `warp 0/0/0`,
+  start, down, cross. Tomba 2 `psx-tomba/scratch/outline-text/tools/` (narration) and Options/Sound (New Game,
+  `warp 8/0`, start, cross; down, cross for Sound).
 
 ## As built
 
 - `runtime/psx/present/outline_text` owns it. A title's `GameRuntime::outlineFonts()` names up to four fonts
   (`kMaxOutlineFonts`). An `OutlineFont` is a texture page and its glyphs, each an `OutlineGlyph`: the rectangle
-  (u, v, width, height) its text drawer samples, with its codepoint and face or its PSX button; `OutlineGrid` fills
+  (u, v, width, height) its text drawer samples, u running on across the pages right of the font's page, with its
+  codepoint and face (the font's text face, its symbol face or PromptFont) or its PSX button; `OutlineGrid` fills
   them for a font of equal cells. Also per font: the text face and its weight, the shadow's CLUT indices and offset.
   `outlineGlyphs(core)` names, for each ordering-table packet its text drawers filled with glyphs, the font it drew
   from (`OutlineGlyphs::glyphFont`). At seal, `markGlyphs` tags those textured primitives with their font

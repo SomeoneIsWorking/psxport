@@ -317,7 +317,9 @@ private:
   }
 
   msdfgen::FontHandle *face(const OutlineFont &font, OutlineFace which) {
-    const std::string name = which == OutlineFace::Prompt ? "promptfont.ttf" : font.textFace;
+    const std::string name = which == OutlineFace::Prompt   ? "promptfont.ttf"
+                             : which == OutlineFace::Symbol ? font.symbolFace
+                                                            : font.textFace;
     const auto [at, added] = faces_.try_emplace(name, nullptr);
     if (!added) {
       return at->second;

@@ -74,6 +74,13 @@ Third-party assets and code:
 | `assets/rml/FiraSans-*.ttf`, `FiraSansCondensed-Bold.ttf` | Fira Sans, Mozilla Foundation and Telefonica S.A. | SIL OFL 1.1, `assets/rml/FiraSans-OFL.txt` |
 | `assets/rml/promptfont.ttf` | PromptFont v1.10, Yukari Hafner and Severin Meyer (github.com/Shinmera/promptfont) | SIL OFL 1.1, `assets/rml/PromptFont-OFL.txt` |
 | `assets/rml/Fredoka.ttf` | Fredoka (variable), The Fredoka Project Authors, from google/fonts `ofl/fredoka` at a60a77e1 | SIL OFL 1.1, `assets/rml/Fredoka-OFL.txt` |
+| `assets/rml/NotoSansJP-Symbols.ttf` | Noto Sans JP, Google LLC and Adobe, from google/fonts `ofl/notosansjp` at 66a36c8c: the wght 700 instance, subset to the symbols Tomba! 2's fonts draw (command below) | SIL OFL 1.1, `assets/rml/NotoSansJP-OFL.txt` |
 | `vendor/msdfgen` | msdfgen v1.13.1, Viktor Chlumsky (github.com/Chlumsky/msdfgen) | MIT, `vendor/msdfgen/LICENSE.txt` |
+
+`NotoSansJP-Symbols.ttf` is made from `NotoSansJP[wght].ttf` with the locked environment's fontTools:
+
+    uv run --frozen fonttools varLib.instancer "NotoSansJP[wght].ttf" wght=700 -o NotoSansJP-700.ttf
+    uv run --frozen pyftsubset NotoSansJP-700.ttf --text='※⇨⇦⇧⇩、。，ー‐＼〜…‥‘’“”「」☆★○●◎◇◆□■△▲▽▼♪♂♀℃『』♦♣♥♠⁉‼©' \
+        --layout-features= --no-hinting --name-IDs='*' --output-file=assets/rml/NotoSansJP-Symbols.ttf
 
 Built with AI assistance (Claude and other LLMs).

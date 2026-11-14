@@ -27,6 +27,7 @@ namespace psx::present {
 
 enum class OutlineFace : std::uint8_t {
   Text,   // the title's text face (OutlineFont::textFace)
+  Symbol, // the title's symbol face (OutlineFont::symbolFace)
   Prompt, // PromptFont, the face of the pad glyphs
 };
 
@@ -73,8 +74,9 @@ struct OutlineGrid {
 struct OutlineFont {
   psx::gpu::TexPage page; // indexed
   std::span<const OutlineGlyph> glyphs;
-  const char *textFace = ""; // asset file under assets/rml
-  double weight = 0;         // the text face's wght axis, 0 for its default
+  const char *textFace = "";   // asset file under assets/rml
+  double weight = 0;           // the text face's wght axis, 0 for its default
+  const char *symbolFace = ""; // asset file under assets/rml, for glyphs the text face lacks
   // Whether an outline keeps its proportions at its bitmap glyph's height, centred across the glyph's box and no
   // wider than it, rather than filling the box: for a bitmap font whose glyph shapes the face does not share (serifs).
   bool proportional = false;

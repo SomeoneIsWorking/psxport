@@ -11,3 +11,8 @@ dependencies = [
 
 [tool.uv]
 package = false
+
+[dependency-groups]
+dev = [
+    "fonttools>=4.50,<5",
+]
