@@ -524,8 +524,12 @@ private:
   void textureReads(const RecordDrawState &state, const TexelRange &u, const TexelRange &v);
   // A quad in VRAM-space scaled pixels placed on the current target plane, its pixels marked written separately.
   void place(RecordQuad quad);
+  // `rect`, VRAM-space native pixels, in the current target plane's written-map pixels.
+  PlaneRect planeRect(const RecordRect &rect) const;
   // VRAM-space native pixels the op writes on the current target plane.
   void markWritten(const RecordRect &rect);
+  // VRAM-space native pixels a sliver's quads reach on the current target plane, which it does not write at 1x.
+  void markReached(const RecordRect &rect);
   // A VRAM-space native rect drawn and written on the current target plane.
   void emit(const RecordRect &rect, std::uint32_t param = 0);
   // A VRAM-space scaled quad drawn on the current target plane, `written` its native footprint.
@@ -537,7 +541,8 @@ private:
   // Keeps the op when its native footprint reached a plane, whatever its quads at this scale.
   // `plane`, when given, is pushed right after `op`: its DepthPlane.
   void commit(const RecordOp &op, bool readsDestination, const RecordOp *plane = nullptr);
-  // The depth group parity of a tested polygon writing opWrites_: a new group when it covers a pixel the open one does.
+  // The depth group parity of a tested polygon writing opWrites_ and reaching opReaches_: a new group when it covers a
+  // pixel the open one does.
   std::uint32_t depthGroup();
   void closeDepthGroup();
   // The stencil id of `model` in this record.
@@ -581,6 +586,7 @@ private:
   std::array<std::uint32_t, kRecordPlanes> batchStart_{};
   std::vector<PlaneQuad> opQuads_;
   std::vector<PlaneRect> opWrites_;
+  std::vector<PlaneRect> opReaches_; // a sliver's: its depth group counts them, its batch does not
   std::vector<RecordRect> opReads_;
   bool reaches_ = false;
   int lines_ = 0;                          // line primitives planned
@@ -782,19 +788,25 @@ void RecordPlanner::Builder::place(RecordQuad quad) {
   opQuads_.push_back(PlaneQuad{plane_, quad});
 }
 
-void RecordPlanner::Builder::markWritten(const RecordRect &rect) {
+RecordPlanner::Builder::PlaneRect RecordPlanner::Builder::planeRect(const RecordRect &rect) const {
   if (mapping_ == kMappingCropUi) {
     // A crop canvas counts its pixels in world pixels; a UI rect covers every one it touches.
     const int cell = canvases_[static_cast<std::size_t>(plane_ - 1)].worldScale;
-    opWrites_.push_back(PlaneRect{plane_,
-                                  {floorDivide(rect.x0 * scale_ - scaledOriginX_, cell),
-                                   floorDivide(rect.y0 * scale_ - scaledOriginY_, cell),
-                                   floorDivide(rect.x1 * scale_ - scaledOriginX_ + cell - 1, cell),
-                                   floorDivide(rect.y1 * scale_ - scaledOriginY_ + cell - 1, cell)}});
-    return;
+    return PlaneRect{plane_,
+                     {floorDivide(rect.x0 * scale_ - scaledOriginX_, cell),
+                      floorDivide(rect.y0 * scale_ - scaledOriginY_, cell),
+                      floorDivide(rect.x1 * scale_ - scaledOriginX_ + cell - 1, cell),
+                      floorDivide(rect.y1 * scale_ - scaledOriginY_ + cell - 1, cell)}};
   }
-  opWrites_.push_back(
-      PlaneRect{plane_, {rect.x0 - originX_, rect.y0 - originY_, rect.x1 - originX_, rect.y1 - originY_}});
+  return PlaneRect{plane_, {rect.x0 - originX_, rect.y0 - originY_, rect.x1 - originX_, rect.y1 - originY_}};
+}
+
+void RecordPlanner::Builder::markWritten(const RecordRect &rect) {
+  opWrites_.push_back(planeRect(rect));
+}
+
+void RecordPlanner::Builder::markReached(const RecordRect &rect) {
+  opReaches_.push_back(planeRect(rect));
 }
 
 void RecordPlanner::Builder::emit(const RecordRect &rect, std::uint32_t param) {
@@ -887,6 +899,7 @@ void RecordPlanner::Builder::commit(const RecordOp &op, bool readsDestination, c
   if (!reaches_) {
     opQuads_.clear();
     opWrites_.clear();
+    opReaches_.clear();
     opReads_.clear();
     return;
   }
@@ -923,19 +936,26 @@ void RecordPlanner::Builder::commit(const RecordOp &op, bool readsDestination, c
   }
   for (const PlaneRect &write : opWrites_) {
     written_[static_cast<std::size_t>(write.plane)].mark(write.rect);
-    if (readBack_ && write.plane == 0 && rectsOverlap(write.rect, readBack_->pageVram)) {
-      readBack_.reset();
+  }
+  for (const std::vector<PlaneRect> *rects : {&opWrites_, &opReaches_}) {
+    for (const PlaneRect &write : *rects) {
+      if (readBack_ && write.plane == 0 && rectsOverlap(write.rect, readBack_->pageVram)) {
+        readBack_.reset();
+      }
     }
   }
   opQuads_.clear();
   opWrites_.clear();
+  opReaches_.clear();
   opReads_.clear();
 }
 
 std::uint32_t RecordPlanner::Builder::depthGroup() {
   bool covered = false;
-  for (const PlaneRect &write : opWrites_) {
-    covered = covered || grouped_[static_cast<std::size_t>(write.plane)].any(write.rect);
+  for (const std::vector<PlaneRect> *rects : {&opWrites_, &opReaches_}) {
+    for (const PlaneRect &write : *rects) {
+      covered = covered || grouped_[static_cast<std::size_t>(write.plane)].any(write.rect);
+    }
   }
   if (covered) {
     closeDepthGroup();
@@ -944,8 +964,10 @@ std::uint32_t RecordPlanner::Builder::depthGroup() {
     groupOpen_ = true;
     depthGroups_++;
   }
-  for (const PlaneRect &write : opWrites_) {
-    grouped_[static_cast<std::size_t>(write.plane)].mark(write.rect);
+  for (const std::vector<PlaneRect> *rects : {&opWrites_, &opReaches_}) {
+    for (const PlaneRect &write : *rects) {
+      grouped_[static_cast<std::size_t>(write.plane)].mark(write.rect);
+    }
   }
   return groupParity_;
 }
@@ -1059,8 +1081,8 @@ void RecordPlanner::Builder::addTriangle(const TriVertex scaled[3],
     return;
   }
   // The native walk decides what the op writes, so ops and batches are the same at every scale. A triangle whose
-  // places give it area where its words give none (a sliver a clip cut) writes the native pixels its quads
-  // reach.
+  // places give it area where its words give none (a sliver a clip cut) writes no native pixel, as at 1x, but its
+  // quads reach native pixels its neighbours cover, which only its depth group counts.
   const std::optional<TriangleWalk> nativeWalk = s == 1 ? walk : walkTriangle(native, 1);
   const TriVertex *vertices = walk->vertices;
   TriangleSetup setup;
@@ -1108,7 +1130,7 @@ void RecordPlanner::Builder::addTriangle(const TriVertex scaled[3],
                  .param = static_cast<std::uint32_t>(i)});
           if (!nativeWalk) {
             reaches_ = true;
-            markWritten(nativeReach(covered, s));
+            markReached(nativeReach(covered, s));
           }
         }
       }

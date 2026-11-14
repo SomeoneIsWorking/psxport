@@ -99,10 +99,11 @@ name is refused with a warning and the Core stays on `record`.
   split come from the 1x walk at every S: the `record_plan` line's ops and batches for one frame are
   equal at every S, and only its quads (and the GPU's pixels) grow. The one exception is a triangle whose
   stored places give it area where its words give none, such as a sliver a clip cut between two crossings
-  that round to one word: above 1x it draws and writes the native pixels its quads reach (`addTriangle`); without
-  it the pieces either side of the sliver leave a seam. A tested sliver covers its neighbours' native pixels, so it
-  also starts a depth group. Spyro 1 Stone Hill at 8x has about 48 slivers and 29 extra groups per record, +3% ops
-  and +37% draws over 1x (psxport issue 0199). A batch's snapshot refresh
+  that round to one word: above 1x it draws the native pixels its quads reach (`addTriangle`); without
+  it the pieces either side of the sliver leave a seam. It writes no native pixel, as at 1x, so it never splits a
+  batch; a later read in its batch sees the snapshot without it. A tested sliver covers its neighbours' native
+  pixels, so it starts a depth group. Spyro 1 Stone Hill at 8x has about 48 slivers and 29 extra groups per record
+  (psxport issues 0199, 0206). A batch's snapshot refresh
   covers every scaled pixel its quads can reach. The 1x walk is CPU work every frame at any S; a line plans as one quad
   per pixel.
 - **Scale.** S is the internal-resolution setting (`setires`, `mods.ires`). Vertices and the draw
