@@ -35,6 +35,13 @@ container: Xvfb, `LANG=C.UTF-8`, `xvfb xdotool x11-utils mesa-vulkan-drivers` in
 with no arguments and `xdotool search --onlyvisible --name .` polled for 30 s. Tomba (2026-11-15): the window
 appears after 2 s with `WM_NAME(STRING) = "Tomba! setup"` and shows the first-run disc screen.
 
+## On the second machine
+`remote_install.py --host ally --rom-map /mnt/Boy/ROM=ROM --appimage <release AppImage>` from a title root puts
+the AppImage in `~/Games/<product>/` with a `play.sh` that exports the title's `.env` disc keys under
+`~/ROM/`, the desktop entry, and a Steam shortcut to `play.sh` added through the running Steam client
+(re-harness `steam_shortcut.py`), which game mode lists. The package's SDL3 fork reads the Ally's pad through
+InputPlumber with Steam closed.
+
 ## Problems met and their fixes
 | problem | cause | fix | xmen2 |
 |---|---|---|---|

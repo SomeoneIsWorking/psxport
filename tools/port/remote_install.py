@@ -1,6 +1,7 @@
-"""Install this title's player build on another machine over ssh, with its menu and Desktop shortcut.
+"""Install this title on another machine over ssh, with its menu, Desktop and Steam shortcuts.
 
-    uv run --frozen python external/psxport/tools/port/remote_install.py --host HOST --rom-map LOCAL=REMOTE
+    uv run --frozen python external/psxport/tools/port/remote_install.py --host HOST --rom-map LOCAL=REMOTE \
+        [--appimage PATH]
 
 Run from the title root. The title's own launcher, run with the shortcut's no-rebuild switch, writes
 its product exec as a plan instead of running it; this engine stages that executable, the shared
@@ -9,6 +10,10 @@ libraries outside the system directories, the framework UI assets, the title's `
 title's desktop entry there pointing at ``play.sh``. Disc paths under LOCAL are rewritten to the same
 place under REMOTE (relative to the remote home). Files the product provisions at run time beside
 itself (``scratch/``) survive a reinstall. The player's settings are copied only when HOST has none.
+
+With ``--appimage`` the install is that release AppImage instead of the player build: ``play.sh`` exports
+the title's ``.env`` disc keys, mapped the same way, and runs it. While HOST's Steam runs, a non-Steam
+shortcut to ``play.sh`` is added or updated through it (re-harness ``steam_shortcut.py``) for game mode.
 """
 
 from __future__ import annotations
@@ -36,6 +41,7 @@ SYSTEM_LIBRARIES = ("/lib/", "/lib64/", "/usr/lib/", "/usr/lib64/")
 HOST_KEYS = frozenset({"PSXPORT_ASSET_DIR", "PSXPORT_LOG_FILE", launcher.RUN_BUILT})
 # The product's runtime-provisioned files beside play.sh, kept across reinstalls.
 KEPT = "/scratch/"
+STEAM_SHORTCUT = launcher.FRAMEWORK.parent.parent / "shared" / "re-harness" / "tools" / "steam_shortcut.py"
 
 
 @dataclass(frozen=True)
@@ -138,6 +144,36 @@ def play_script(plan: Plan, environment: Mapping[str, str], arguments: Sequence[
     return "\n".join(lines) + "\n"
 
 
+def appimage_script(product: str, appimage: str, environment: Mapping[str, str]) -> str:
+    """The remote launcher of a release AppImage, its disc keys overridable from the caller's environment."""
+    lines = ["#!/bin/sh", "set -eu", 'here=$(dirname "$(readlink -f "$0")")',
+             f'log="${{XDG_STATE_HOME:-$HOME/.local/state}}/psxport/{product}/last-run.log"',
+             'mkdir -p "$(dirname "$log")"', 'export PSXPORT_LOG_FILE="${PSXPORT_LOG_FILE:-$log}"']
+    lines += [f"export {key}=${{{key}:-{shlex.quote(value)}}}" for key, value in sorted(environment.items())]
+    lines.append(f'exec "$here/{appimage}" "$@"')
+    return "\n".join(lines) + "\n"
+
+
+def stage_appimage(root: Path, product: str, appimage: Path, roms: RomMap, home: PurePosixPath) -> Path:
+    """The install tree of a release AppImage under the title's scratch, rebuilt from nothing."""
+    tree = root / STAGE / product
+    if tree.exists():
+        shutil.rmtree(tree)
+    tree.mkdir(parents=True)
+    shutil.copy2(appimage, tree / appimage.name)
+    (tree / appimage.name).chmod(0o755)
+    discs = {}
+    for key, value in dotenv(root).items():
+        remote = roms.remote_path(value, home)
+        if remote is None:
+            raise ToolError(f".env {key}={value} is not under {roms.local}, so {product} has no disc there")
+        discs[key] = remote
+    script = tree / "play.sh"
+    script.write_text(appimage_script(product, appimage.name, discs), encoding="utf-8")
+    script.chmod(0o755)
+    return tree
+
+
 def stage(root: Path, plan: Plan, roms: RomMap, home: PurePosixPath) -> Path:
     """The install tree for ``plan`` under the title's scratch, rebuilt from nothing."""
     tree = root / STAGE / plan.product
@@ -175,13 +211,16 @@ def stage(root: Path, plan: Plan, roms: RomMap, home: PurePosixPath) -> Path:
     return tree
 
 
+def send_tree(tree: Path, host: str, remote: str) -> None:
+    ssh(host, f"mkdir -p {shlex.quote(remote)}")
+    subprocess.run(["rsync", "-a", "--delete", f"--filter=P {KEPT}", f"{tree}/", f"{host}:{remote}/"], check=True)
+
+
 def copy_tree(tree: Path, plan: Plan, host: str, remote: str) -> None:
     """Send the tree, adding each system library of this machine that HOST lacks."""
-    ssh(host, f"mkdir -p {shlex.quote(remote)}")
     local = loaded_libraries(plan.program)
     while True:
-        subprocess.run(["rsync", "-a", "--delete", f"--filter=P {KEPT}", f"{tree}/", f"{host}:{remote}/"],
-                       check=True)
+        send_tree(tree, host, remote)
         listing = ssh(host, f"cd {shlex.quote(remote)} && LD_LIBRARY_PATH=lib ldd bin/{plan.product} || true")
         missing = [line.split()[0] for line in listing.splitlines() if "=> not found" in line]
         if not missing:
@@ -208,6 +247,11 @@ def install_shortcut(root: Path, host: str, remote: str, data: str, desktop: str
         subprocess.run(["rsync", "--chmod=755", str(entry), f"{host}:{directory}/"], check=True)
     for command in desktop_shortcut.cache_commands(data):
         ssh(host, f"! command -v {command[0]} >/dev/null || {shlex.join(command)}")
+    name = desktop_shortcut.field(text, "Name")
+    steam = subprocess.run([sys.executable, "-I", str(STEAM_SHORTCUT), "--host", host, "add", "--name", name,
+                            "--exe", play], text=True, capture_output=True, check=False)
+    if steam.returncode != 0:
+        print(f"[remote-install] {host}: no Steam shortcut for {name}: {steam.stderr.strip()}")
     return f"{applications}/{entry.name}"
 
 
@@ -233,6 +277,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--host", required=True, help="the ssh host to install on")
     parser.add_argument("--rom-map", type=rom_map, required=True, metavar="LOCAL=REMOTE",
                         help="the local ROM root and the same tree on the host, relative to its home")
+    parser.add_argument("--appimage", type=Path, help="install this release AppImage instead of the player build")
     args = parser.parse_args(argv)
     root = Path.cwd().resolve()
     try:
@@ -241,8 +286,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         desktop = ssh(args.host, "xdg-user-dir DESKTOP 2>/dev/null || true").strip()
         plan = launch_plan(root)
         remote = str(home / "Games" / plan.product)
-        tree = stage(root, plan, args.rom_map, home)
-        copy_tree(tree, plan, args.host, remote)
+        if args.appimage:
+            send_tree(stage_appimage(root, plan.product, args.appimage.resolve(), args.rom_map, home), args.host, remote)
+        else:
+            copy_tree(stage(root, plan, args.rom_map, home), plan, args.host, remote)
         seed_settings(args.host, plan.product, home)
         entry = install_shortcut(root, args.host, remote, data, desktop)
     except (ToolError, OSError, subprocess.CalledProcessError) as error:
