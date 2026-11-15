@@ -20,7 +20,6 @@
 #include <map>
 #include <mutex>
 #include <optional>
-#include <stop_token>
 #include <string>
 #include <thread>
 #include <utility>
@@ -379,7 +378,14 @@ private:
 class FieldWorker {
 public:
   FieldWorker() = default;
-  ~FieldWorker() = default;
+  ~FieldWorker() {
+    {
+      const std::lock_guard lock(mutex_);
+      stopping_ = true;
+    }
+    asked_.notify_one();
+    thread_.join();
+  }
   FieldWorker(const FieldWorker &) = delete;
   FieldWorker &operator=(const FieldWorker &) = delete;
   FieldWorker(FieldWorker &&) = delete;
@@ -411,15 +417,16 @@ public:
   }
 
 private:
-  void run(const std::stop_token &stop) {
+  void run() {
     try {
       while (true) {
         FieldJob job;
         {
           std::unique_lock lock(mutex_);
-          if (!asked_.wait(lock, stop, [this] {
-                return !jobs_.empty();
-              })) {
+          asked_.wait(lock, [this] {
+            return stopping_ || !jobs_.empty();
+          });
+          if (stopping_) {
             return;
           }
           job = std::move(jobs_.front());
@@ -438,13 +445,14 @@ private:
 
   FieldGenerator generator_; // the worker's alone once it runs
   std::mutex mutex_;
-  std::condition_variable_any asked_;
+  std::condition_variable asked_;
   std::deque<FieldJob> jobs_;
   std::vector<FieldResult> done_;
   std::exception_ptr failure_;
-  std::jthread thread_{[this](const std::stop_token &stop) {
-    run(stop);
-  }}; // last: stopped and joined before the state it uses goes
+  bool stopping_ = false;
+  std::thread thread_{[this] {
+    run();
+  }}; // last: started after the state it uses
 };
 
 } // namespace
