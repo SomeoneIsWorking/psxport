@@ -12,6 +12,7 @@ import hashlib
 import shutil
 import tarfile
 import urllib.request
+import zipfile
 from collections.abc import Mapping
 from pathlib import Path
 
@@ -59,13 +60,17 @@ def _download(url: str, sha256: str, root: Path, name: str) -> Path:
     return archive
 
 
-def _extracted(url: str, sha256: str, root: Path, directory: str, marker: Path) -> Path:
-    """Extract a pinned archive into ``root`` once; ``marker`` (relative to ``root / directory``) proves it."""
+def extracted(url: str, sha256: str, root: Path, directory: str, marker: Path) -> Path:
+    """Extract a pinned tar or zip archive into ``root`` once; ``marker`` (relative to ``root / directory``) proves it."""
     if (root / directory / marker).exists():
         return root / directory
     archive = _download(url, sha256, root, url.rsplit("/", 1)[1])
-    with tarfile.open(archive) as source:
-        source.extractall(root, filter="data")
+    if archive.suffix == ".zip":
+        with zipfile.ZipFile(archive) as source:
+            source.extractall(root)
+    else:
+        with tarfile.open(archive) as source:
+            source.extractall(root, filter="data")
     archive.unlink()
     if not (root / directory / marker).exists():
         raise ToolError(f"{url} did not hold {directory}/{marker}")
@@ -73,14 +78,14 @@ def _extracted(url: str, sha256: str, root: Path, directory: str, marker: Path) 
 
 
 def llvm_mingw(root: Path) -> Path:
-    return _extracted(LLVM_MINGW_URL, LLVM_MINGW_SHA256, root, LLVM_MINGW_NAME,
+    return extracted(LLVM_MINGW_URL, LLVM_MINGW_SHA256, root, LLVM_MINGW_NAME,
                       Path("bin") / f"{WINDOWS_TRIPLE}-clang")
 
 
 def moltenvk(root: Path) -> Path:
     """The pinned MoltenVK dylib a macOS package carries."""
     library = Path("MoltenVK") / "dynamic" / "dylib" / "macOS" / "libMoltenVK.dylib"
-    return _extracted(MOLTENVK_URL, MOLTENVK_SHA256, root / f"moltenvk-{MOLTENVK_RELEASE}", "MoltenVK",
+    return extracted(MOLTENVK_URL, MOLTENVK_SHA256, root / f"moltenvk-{MOLTENVK_RELEASE}", "MoltenVK",
                       library) / library
 
 

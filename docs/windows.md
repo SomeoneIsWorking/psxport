@@ -9,7 +9,7 @@ shares its title identity, version and content audit (`tools/port/release_packag
 | `cmake/toolchains/llvm-mingw-x86_64.cmake` | llvm-mingw (UCRT) toolchain; `-static`, so the C++ runtime and winpthreads are linked in |
 | `tools/port/target_platform.py` | llvm-mingw 20260922 (checksummed), the target libraries and Lightning, each built once per pin under the dependency root (shared with `docs/macos.md`) |
 | `tools/port/target_libraries.py`, `target-libraries.json` | zlib, SDL3 (fork), SDL3_image and FreeType from pinned, checksummed sources; the AppImage image builds the same pins |
-| `tools/port/consumer_build.py --platform windows` | the title's build in `build/windows` |
+| `tools/port/consumer_build.py --platform windows` | the title's build in `build/windows`, with the title's icon compiled in as a resource (`app_icon.py`, `psxport_add_product`) |
 | `tools/port/windows_package.py` | `<Name>-<version>-windows-x86_64.zip`: `<Name>/<Name>.exe` (stripped), `assets/`, the licence |
 | `.github/workflows/title-release.yml` `windows` | the same build and package on the Ubuntu runner, uploaded to the title's release |
 
@@ -46,6 +46,5 @@ at frame 764 and present 1000 shows Tomba outside his house, 0 Lightrec fallback
 | Hidden-window runs never present under Wine | Wine creates no surface for a hidden window, with either display driver | the container check above |
 
 ## Open
-- The executable carries no icon resource.
 - Unsigned: SmartScreen warns on first run.
 - Not yet run on a Windows kernel; Wine 11 is the evidence.

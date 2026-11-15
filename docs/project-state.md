@@ -168,7 +168,7 @@ Partial, Windows release: llvm-mingw cross-builds a title (`consumer_build.py --
 `windows_package.py` writes `<Name>-<version>-windows-x86_64.zip`, refusing game content and any DLL Windows
 does not ship; the release workflow builds and uploads it beside the AppImage (`docs/windows.md`). Evidence:
 the Tomba archive under Wine 11 reaches Tomba 2 free roam with 0 fallbacks and 0 faults
-(`psx-tomba/scratch/windows/wine_gameplay_1000.png`). Gaps: no Windows-kernel run, no icon, unsigned.
+(`psx-tomba/scratch/windows/wine_gameplay_1000.png`). Gaps: no Windows-kernel run, unsigned.
 
 Partial, macOS release: `consumer_build.py --platform macos` builds natively on an Intel Mac and
 `macos_package.py` writes `<Name>.app` with MoltenVK under SDL_GPU's Vulkan backend, refusing game content and

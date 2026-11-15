@@ -4,7 +4,7 @@
 
 Run on a Mac from the title root after `consumer_build.py --platform macos`. The archive holds `<Name>.app`:
 the port as `Contents/MacOS/<Name>`, the framework's assets and the title's licence in `Contents/Resources`
-with an icon drawn from the title's SVG, and the pinned MoltenVK in `Contents/Frameworks`, which SDL's
+with an icon drawn from the title's SVG (`app_icon.py`), and the pinned MoltenVK in `Contents/Frameworks`, which SDL's
 Vulkan backend runs on (`RenderDevice::useBundledMoltenVK`). The port treats that layout as its package
 (`psx::config::Config`). The app is signed ad hoc; it runs natively on Intel and under Rosetta on Apple
 silicon.
@@ -26,28 +26,13 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from port import target_platform
+from port import app_icon, target_platform
 from port.release_package import Mismatch, Refused, Title, audit_content, release_version, resolve_title, run_checked, sha256
 
 FRAMEWORK = Path(__file__).resolve().parents[2]
 ASSETS = FRAMEWORK / "assets"
-ICON_SIZES = (16, 32, 128, 256, 512)
 # Libraries macOS itself provides; everything else must be inside the bundle.
 SYSTEM_PREFIXES = ("/System/Library/", "/usr/lib/")
-
-
-def icon(svg: Path, work: Path, destination: Path) -> None:
-    """An .icns from the title's SVG: rsvg-convert renders each size, iconutil packs them."""
-    iconset = work / "icon.iconset"
-    if iconset.exists():
-        shutil.rmtree(iconset)
-    iconset.mkdir(parents=True)
-    for size in ICON_SIZES:
-        for scale in (1, 2):
-            suffix = "" if scale == 1 else "@2x"
-            run_checked(["rsvg-convert", "-w", str(size * scale), "-h", str(size * scale), "-o",
-                         str(iconset / f"icon_{size}x{size}{suffix}.png"), str(svg)])
-    run_checked(["iconutil", "-c", "icns", "-o", str(destination), str(iconset)])
 
 
 def info_plist(title: Title, version: str) -> bytes:
@@ -84,7 +69,7 @@ def stage(title: Title, binary: Path, work: Path, version: str) -> Path:
         raise Refused(f"framework assets are missing at {ASSETS}")
     shutil.copytree(ASSETS, contents / "Resources" / "assets")
     shutil.copy2(title.licence, contents / "Resources" / title.licence.name)
-    icon(title.entry.icon, work, contents / "Resources" / "icon.icns")
+    app_icon.icns(title.entry.icon, contents / "Resources" / "icon.icns", work / "icon")
     moltenvk = target_platform.moltenvk(target_platform.dependency_root(os.environ))
     shutil.copy2(moltenvk, contents / "Frameworks" / moltenvk.name)
     # MoltenVK is Apache-2.0; its licence travels with it.
@@ -119,7 +104,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     work = root / "build" / "package" / "macos"
     try:
         if sys.platform != "darwin":
-            raise Refused("the macOS app is built on macOS (iconutil, otool, codesign)")
+            raise Refused("the macOS app is built on macOS (otool, codesign, ditto)")
         title = resolve_title(root)
         binary = args.binary.resolve()
         if not binary.is_file():

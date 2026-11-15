@@ -21,7 +21,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from automation.process import ToolError
-from port import target_platform
+from port import app_icon, desktop_shortcut, target_platform
 from port.launcher import (
     AGENT_BUILD,
     PLATFORM_BUILDS,
@@ -47,6 +47,9 @@ def main(argv: Sequence[str] | None = None) -> int:
             environment.pop("PSXPORT_LIGHTNING_PREFIX", None)
             definitions = [*target_platform.provision(args.platform, environment), *definitions]
         build = maintainer_build(root, args.build or PLATFORM_BUILDS.get(args.platform, AGENT_BUILD))
+        if args.platform == "windows":
+            icon = app_icon.ico(desktop_shortcut.resolve(root).icon, build / "icon" / "app.ico", build / "icon")
+            definitions.append(f"-DPSXPORT_PRODUCT_ICON={icon}")
         configure_consumer(root, build, "RelWithDebInfo", definitions, environment)
         build_targets(build, args.target, environment)
     except ToolError as error:

@@ -433,4 +433,11 @@ function(psxport_add_product target)
   set_target_properties(${target} PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
     ENABLE_EXPORTS ON)
+  # The executable's icon in Explorer and the taskbar (tools/port/consumer_build.py --platform windows).
+  if(WIN32 AND PSXPORT_PRODUCT_ICON)
+    set(icon_rc "${CMAKE_CURRENT_BINARY_DIR}/${target}_icon.rc")
+    file(TO_CMAKE_PATH "${PSXPORT_PRODUCT_ICON}" icon_path)
+    file(CONFIGURE OUTPUT "${icon_rc}" CONTENT "1 ICON \"${icon_path}\"\n")
+    target_sources(${target} PRIVATE "${icon_rc}")
+  endif()
 endfunction()
