@@ -591,8 +591,9 @@ clock (psx-crash-bash issue 0045); the VBlanks follow the fields Timing delivers
 turn ends at the stock VSync (`StockVSync` notes the wait, `Timing::noteVSyncWait`) commits
 `Timing::takeStepFields()`: the wait's fields less those earlier no-wait steps already delivered since its last return,
 or, for a turn that ran out without a wait, the field edges it crossed (C-12, Vagrant Story). Toy Story 2's resident
-loop commits its fixed count (psx-toy-story-2 issue 0059); the titles whose loop is not owned answer each guest VSync
-with one field (each title's frame-loop issue). Spyro 1, 2 and 3 need no count: the field owner's host
+loop commits its fixed count (psx-toy-story-2 issue 0059); Crash 1, 2 and 3 still run the guest's waits but deliver
+each one's `vsyncFields(0)` fields and VBlanks at the wait (psx-crash issue 0031); the other titles whose loop is not
+owned answer each guest VSync with one field (each title's frame-loop issue). Spyro 1, 2 and 3 need no count: the field owner's host
 turn delivers each field as the guest clock crosses it and each `VSync(0)` takes the next, and the draws keep
 their inline `while (VSync(-1) - last < 2)` loop, which gives max(2, k + flag) fields where `vsyncFields(2)`
 would give max(2, k + 1) (psx-spyro issue 0217). Deadlines step at the guest's field rate (`field_rate.h`: NTSC 59.817 Hz, the console's 263 lines of 3413
