@@ -15,12 +15,13 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 import shutil
 import subprocess
 import sys
 import tarfile
 import urllib.request
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 
 PINS = Path(__file__).resolve().with_name("target-libraries.json")
@@ -31,10 +32,10 @@ class Refused(Exception):
     pass
 
 
-def run(command: Sequence[object], cwd: Path | None = None) -> None:
+def run(command: Sequence[object], cwd: Path | None = None, environment: Mapping[str, str] | None = None) -> None:
     arguments = [str(part) for part in command]
     print(f"[target-libraries] {' '.join(arguments)}", flush=True)
-    if subprocess.run(arguments, cwd=cwd, check=False).returncode != 0:
+    if subprocess.run(arguments, cwd=cwd, env=environment, check=False).returncode != 0:
         raise Refused(f"{arguments[0]} failed")
 
 
@@ -94,15 +95,20 @@ def build_libraries(platform: str, prefix: Path, work: Path, cmake_arguments: Se
         shutil.rmtree(build)
 
 
-def build_lightning(revision: str, root: Path, compiler: str, host: str | None) -> None:
+def build_lightning(revision: str, root: Path, compiler: str, host: str | None,
+                    macos_deployment_target: str | None = None) -> None:
     checkout = root / "lightning"
     if not (checkout / ".git").is_dir():
         run(["git", "clone", LIGHTNING_REPOSITORY, checkout])
     run(["git", "-C", checkout, "fetch", "--quiet", "origin"])
     run(["git", "-C", checkout, "checkout", "--quiet", "--detach", revision])
     run(["git", "-C", checkout, "submodule", "update", "--init", "--recursive"])
+    environment = dict(os.environ)
+    if macos_deployment_target:
+        # autoconf passes no -mmacosx-version-min; clang reads this instead of defaulting to the SDK's.
+        environment["MACOSX_DEPLOYMENT_TARGET"] = macos_deployment_target
     run(["uv", "run", "--directory", checkout, "--frozen", "python", "tools/build_lightning.py", "--clean",
-         "--cc", compiler, "--skip-upstream-tests", *(["--host", host] if host else [])])
+         "--cc", compiler, "--skip-upstream-tests", *(["--host", host] if host else [])], environment=environment)
 
 
 def main(argv: Sequence[str] | None = None) -> int:

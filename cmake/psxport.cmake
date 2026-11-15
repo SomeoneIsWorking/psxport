@@ -364,6 +364,7 @@ else()
 endif()
 option(PSXPORT_WRAP_MEMCPY "Route first-party memcpy/memmove through the call-site census" ${_psxport_wrap_default})
 if(PSXPORT_WRAP_MEMCPY)
+  target_compile_definitions(psxport PRIVATE PSXPORT_WRAP_MEMCPY=1)
   # --undefined pulls memcensus.o from the archive even when only a later library (zstd) calls memcpy.
   target_link_options(psxport INTERFACE -Wl,--wrap=memcpy -Wl,--wrap=memmove
     -Wl,--undefined=__wrap_memcpy -Wl,--undefined=__wrap_memmove)

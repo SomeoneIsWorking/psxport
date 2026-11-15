@@ -4,6 +4,8 @@
 #include "diagnostic_config.h"
 #include "number_text.h"
 
+#include <lucent/log.h>
+
 #include <algorithm>
 #include <atomic>
 #include <optional>
@@ -12,6 +14,7 @@
 #include <string.h>
 #include <string_view>
 
+#if PSXPORT_WRAP_MEMCPY
 namespace psx::debug {
 // The linker's --wrap symbols, named through asm labels.
 void *realMemcpy(void *dst, const void *src, size_t n) __asm__("__real_memcpy");
@@ -166,11 +169,16 @@ void *psx::debug::wrapMemmove(void *dst, const void *src, size_t n) {
   }
   return realMemmove(dst, src, n);
 }
+#endif
 
 void psx::debug::armMemoryCensus() {
   if (!psx::config::memory_census()) {
     return;
   }
+#if PSXPORT_WRAP_MEMCPY
   g_on.store(true, std::memory_order_relaxed);
   atexit(dump); // a signal-terminated run writes nothing
+#else
+  lucent::warn("memcensus", "PSXPORT_MEMCENSUS asks for a census, but this build links without --wrap=memcpy");
+#endif
 }

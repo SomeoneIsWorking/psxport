@@ -115,7 +115,8 @@ def provision(platform: str, environment: Mapping[str, str]) -> list[str]:
         compiler, host = "clang", None
     libraries = _keyed(root, platform, "libraries", *shaping, target_libraries.PINS.read_bytes(),
                        Path(target_libraries.__file__).read_bytes())
-    lightning = _keyed(root, platform, "lightning", *shaping, lightning_revision.encode())
+    lightning = _keyed(root, platform, "lightning", *shaping, lightning_revision.encode(),
+                       Path(target_libraries.__file__).read_bytes())
     prefix = libraries / "prefix"
     profile = "windows-x86_64" if platform == "windows" else "macos-x86_64"
     lightning_install = lightning / "lightning" / "build" / "install" / profile
@@ -126,7 +127,8 @@ def provision(platform: str, environment: Mapping[str, str]) -> list[str]:
             shutil.rmtree(libraries / "work", ignore_errors=True)
             (libraries / "complete").touch()
         if not (lightning / "complete").is_file():
-            target_libraries.build_lightning(lightning_revision, lightning, compiler, host)
+            target_libraries.build_lightning(lightning_revision, lightning, compiler, host,
+                                             MACOS_DEPLOYMENT_TARGET if platform == "macos" else None)
             (lightning / "complete").touch()
     except target_libraries.Refused as error:
         raise ToolError(f"{platform} target dependencies: {error}") from error

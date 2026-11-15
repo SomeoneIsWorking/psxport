@@ -27,7 +27,9 @@ Lightning pins in `cmake/lightrec_dependency.cmake`. Out:
 - SDL_GPU's Vulkan backend runs on the bundled `Contents/Frameworks/libMoltenVK.dylib`
   (`RenderDevice::useBundledMoltenVK`); psxport's shaders are SPIR-V only, so Metal is not a backend.
   MoltenVK's Apache-2.0 licence ships as `Resources/MoltenVK-LICENSE`.
-- `--wrap=memcpy` is off: ld64 has no `--wrap` (`PSXPORT_WRAP_MEMCPY`).
+- `--wrap=memcpy` is off: ld64 has no `--wrap` (`PSXPORT_WRAP_MEMCPY`), so `memcensus.cpp` compiles no
+  `__wrap_*` and `PSXPORT_MEMCENSUS` only warns.
+- Lightning is built for `MACOS_DEPLOYMENT_TARGET` like every other library (`MACOSX_DEPLOYMENT_TARGET`).
 - Lightrec on macOS x86-64 is qualified by Lightrec's own CI job on the Intel runner; Apple silicon runs the
   x86-64 app under Rosetta.
 
