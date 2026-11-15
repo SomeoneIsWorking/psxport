@@ -19,6 +19,7 @@
 #include <lucent/log.h>
 #include <lucent/platform.h>
 
+#include <algorithm>
 #include <optional>
 #include <span>
 #include <string>
@@ -96,11 +97,17 @@ void ProductHost::printUsage(const char *program) const {
 
 int ProductHost::runSelector() {
   Process &state = process();
+  if (config_.packageRoot.has_value() && !enterUserData(*config_.packageRoot)) {
+    return 2;
+  }
   PickerRuntime pickerRuntime;
   for (const TitleIdentity &title : catalog_.titles()) {
     provisionExecutable(title, title.defaultExecutable(catalog_.provisioningRoot()));
   }
   const TitleAvailabilityProbe probe(catalog_.provisioningRoot(), catalog_.titles());
+  if (std::ranges::none_of(probe.probe(), &TitleAvailability::available) && !firstRun()) {
+    return 0;
+  }
   for (;;) {
     // Re-probed on every return: a title provisioned while another ran becomes available.
     const std::vector<TitleAvailability> titles = probe.probe();
@@ -138,7 +145,7 @@ int ProductHost::runSelector() {
 
 int ProductHost::runOnlyTitle() {
   const TitleIdentity &only = catalog_.titles().front();
-  if (config_.packageRoot.has_value() && !enterUserData(only, *config_.packageRoot)) {
+  if (config_.packageRoot.has_value() && !enterUserData(*config_.packageRoot)) {
     return 2;
   }
   const std::filesystem::path executable = only.defaultExecutable(catalog_.provisioningRoot());
@@ -156,11 +163,26 @@ int ProductHost::runOnlyTitle() {
   return runExecutable(executable);
 }
 
-bool ProductHost::enterUserData(const TitleIdentity &title, const std::filesystem::path &packageRoot) const {
-  const std::optional<std::filesystem::path> directory = lucent::platform::user_data_directory(title.slug);
+bool ProductHost::firstRun() const {
+  bool provided = false;
+  for (const TitleIdentity &title : catalog_.titles()) {
+    if (FirstRunSetup(title).run(psx::config::show_window()) != FirstRunSetup::Outcome::Accepted) {
+      continue;
+    }
+    provided =
+        provisionExecutable(title, title.defaultExecutable(catalog_.provisioningRoot())) != Provisioning::Unavailable ||
+        provided;
+  }
+  return provided;
+}
+
+bool ProductHost::enterUserData(const std::filesystem::path &packageRoot) const {
+  const std::optional<std::filesystem::path> executable = lucent::platform::executable_path();
+  const std::optional<std::filesystem::path> directory =
+      executable ? lucent::platform::user_data_directory(executable->stem().string()) : std::nullopt;
   std::string error = "no user-data directory";
   if (!directory || !lucent::platform::ensure_user_data_directory(*directory, error)) {
-    lucent::error("host", "{} cannot keep its data: {}", title.displayName, error);
+    lucent::error("host", "{} cannot keep its data: {}", catalog_.productName(), error);
     return false;
   }
   std::error_code entered;

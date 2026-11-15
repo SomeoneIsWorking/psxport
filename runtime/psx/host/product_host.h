@@ -54,8 +54,11 @@ private:
   int runSelector();
   // The zero-argument run of a one-title product: its executable (from a disc asked for at first run), then the title.
   int runOnlyTitle();
-  // A packaged run keeps every relative path (executable, settings, card) in the title's user data.
-  bool enterUserData(const TitleIdentity &title, const std::filesystem::path &packageRoot) const;
+  // A packaged run keeps its working files (provisioned executables, cards) in the product's user data, beside its
+  // settings.
+  bool enterUserData(const std::filesystem::path &packageRoot) const;
+  // With no title provisioned: each title's first-run screen; false when the player gave no disc.
+  bool firstRun() const;
   int runExecutable(const std::filesystem::path &executable);
 
   // The one loop every entered title runs in, whether it came from the picker or from an
