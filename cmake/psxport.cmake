@@ -154,6 +154,8 @@ set(PSXPORT_FRAMEWORK_SRC
   ${PSXPORT_ROOT}/runtime/psx/audio/spu_beetle.cpp
   # Beetle's state chunk codec; beetle_device_state.cpp defines the StateAction it calls.
   ${PSXPORT_ROOT}/vendor/beetle-psx/mednafen/state.c
+  # libretro's strlcpy for state.c; glibc has one only from 2.38 and Windows none.
+  ${PSXPORT_ROOT}/vendor/beetle-psx/libretro-common/compat/compat_strl.c
   ${PSXPORT_ROOT}/runtime/psx/state/state_file.cpp
   ${PSXPORT_ROOT}/runtime/psx/state/beetle_device_state.cpp
   ${PSXPORT_ROOT}/runtime/psx/state/machine_state.cpp
@@ -390,13 +392,9 @@ set_source_files_properties(
 # COMPARED on the way back in — MDFNSS_LoadSM checks the 16-byte magic and nothing else, because the
 # per-field size checks inside each chunk are what actually version a state. So this supplies the
 # symbol at the value the fork's own reader ignores, rather than forking a header to change it.
-#
-# HAVE_STRL tells the libretro compat header to use the C library's strlcpy/strlcat instead of the
-# `strlcpy_retro__` shims, which live in libretro-common/strings.c — a unit psxport does not compile.
-# state.c uses strlcpy exactly once, to copy a field LABEL into a 256-byte state buffer.
 set_source_files_properties(
   ${PSXPORT_ROOT}/vendor/beetle-psx/mednafen/state.c
-  PROPERTIES COMPILE_DEFINITIONS "MEDNAFEN_VERSION_NUMERIC=0;HAVE_STRL;_DEFAULT_SOURCE")
+  PROPERTIES COMPILE_DEFINITIONS "MEDNAFEN_VERSION_NUMERIC=0;_DEFAULT_SOURCE")
 
 # ---- the product executable --------------------------------------------------------------------
 # psxport_add_product(<target> CATALOG <factory> HEADER <header> [SOURCES <file>...] [LIBRARIES <lib>...])
