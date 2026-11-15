@@ -45,6 +45,7 @@ appears after 2 s with `WM_NAME(STRING) = "Tomba! setup"` and shows the first-ru
 | `strlcpy` undeclared in Beetle's `state.c` | `HAVE_STRL` asked the C library, which has it only from glibc 2.38 | compile libretro's `compat_strl.c`, drop `HAVE_STRL` | not applicable |
 | `cmake_minimum_required` fails | Ubuntu 22.04's CMake is 3.22; titles need 3.24 | Kitware CMake 3.31.6 release tarball, checksummed | not hit |
 | The packager finds no binary | titles set the output directory themselves, and two never did | `psxport_add_product` puts every product in `<build>/bin` | not applicable |
+| msdfgen configure fails in CI only | CI's fresh framework clone initialised a hand-kept submodule list that lacked `vendor/msdfgen` | `psxport_fetch.py` initialises every `.gitmodules` path under `vendor/`; a failed dependency step prints its output | not applicable |
 | Missing `<cstddef>` in title code | libstdc++ includes it transitively, libc++ does not | include what is used | not applicable |
 | `libfreetype.so.6` missing on a bare system | linuxdeploy's exclude list never bundles FreeType | FreeType 2.14.1 built static, optional codecs off | same: static FreeType from source |
 | The catalog sees no window | SDL's X11 `WM_NAME` is `UTF8_STRING` under a UTF-8 locale, which `xdotool` cannot match | SDL from the fork branch `psxport/release-3.4.20` (release-3.4.20 plus the ICCCM `WM_NAME` commit) | the same commit on `xmen2/release-3.4.16` (xmen2 issue 198) |
@@ -55,3 +56,5 @@ appears after 2 s with `WM_NAME(STRING) = "Tomba! setup"` and shows the first-ru
 - Name consistency: the catalog compares the repository, AppImage, README title and desktop `Name=`; the
   repositories are `psx-<title>` while the packages are named after the game.
 - Windows, macOS and Android packages do not exist (`project-state.md` S021).
+- clang-20 and libc++ 20 come from apt.llvm.org, which is neither pinned nor checksummed; the pinned
+  alternative is LLVM's 2 GB `LLVM-<version>-Linux-X64.tar.xz` release.

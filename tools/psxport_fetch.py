@@ -25,10 +25,10 @@ import re
 LINK_REL = os.path.join("external", "psxport")
 DEFAULT_URL = "https://github.com/SomeoneIsWorking/psxport.git"
 DEFAULT_BRANCH = "main"
-# psxport's own vendor submodules, init'd non-recursively (beetle has a URL-less nested gitlink that
-# makes `--recursive` fail outright), then that nested gitlink, as (parent, child) pairs.
-SUBMODULES = ((".", "vendor/beetle-psx"), (".", "vendor/lucent"), (".", "vendor/rmlui"),
-              (".", "vendor/bug-report"), (".", "vendor/setup-ui"), ("vendor/beetle-psx", "deps/libchdr"))
+# The build's submodules are every `.gitmodules` path under vendor/, init'd non-recursively (beetle has a
+# URL-less nested gitlink that makes `--recursive` fail outright), then that nested gitlink.
+VENDOR_PREFIX = "vendor/"
+NESTED_SUBMODULES = (("vendor/beetle-psx", "deps/libchdr"),)
 REVISION_DECLARATION = r'set\s*\(\s*PSXPORT_{}_REVISION\s+"([0-9a-f]{{40}})"'
 
 
@@ -137,10 +137,17 @@ def do_clone(link):
             shutil.rmtree(staging, ignore_errors=True)
 
 
+def submodules(root):
+    """(parent, child) pairs to init in `root`: its declared vendor submodules, then the nested ones."""
+    paths, code = git(["config", "-f", ".gitmodules", "--get-regexp", r"^submodule\..*\.path$"], root)
+    declared = [line.split(None, 1)[1] for line in paths.splitlines()] if code == 0 else []
+    return [(".", path) for path in declared if path.startswith(VENDOR_PREFIX)] + list(NESTED_SUBMODULES)
+
+
 def init_submodules(root):
-    """Check out every declared submodule at the commit its parent records, one level at a time with cwd
+    """Check out every build submodule at the commit its parent records, one level at a time with cwd
     in the real checkout `root` (never through a link); Beetle's URL-less nested gitlink rules out --recursive."""
-    for parent, sub in SUBMODULES:
+    for parent, sub in submodules(root):
         path = os.path.join(root, parent)
         if not os.path.isdir(path):
             print(f"[psxport] NOTE: this revision has no {parent}, so {sub} was NOT initialised.")

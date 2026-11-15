@@ -13,7 +13,7 @@ REMOTE_BACKED = ("psx-spyro", "psx-spider-man", "psx-tomba", "psx-vagrant-story"
 LOCAL_ONLY: tuple[str, ...] = ()
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "tools"))
-from psxport_fetch import SUBMODULES, init_submodules  # noqa: E402
+from psxport_fetch import init_submodules, submodules  # noqa: E402
 from submodule_state import Git, declared_entries  # noqa: E402
 
 
@@ -31,7 +31,7 @@ def run(arguments: Sequence[str | Path], *, cwd: Path, required: bool = True) ->
 
 def initialize_framework_vendors(framework: Path) -> None:
     init_submodules(str(framework))
-    for parent, relative in SUBMODULES:
+    for parent, relative in submodules(str(framework)):
         if parent == ".":
             run(["git", "reset", "--hard", "-q", "HEAD"], cwd=framework / relative)
 
