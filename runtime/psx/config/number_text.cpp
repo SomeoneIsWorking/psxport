@@ -3,6 +3,9 @@
 #include <charconv>
 #include <cmath>
 #include <limits>
+#include <locale>
+#include <sstream>
+#include <string>
 #include <system_error>
 
 namespace psx::config {
@@ -69,9 +72,12 @@ std::optional<int> parseInt(std::string_view text) {
 }
 
 std::optional<float> parseFloat(std::string_view text) {
+  // Apple's libc++ has no floating-point from_chars; the classic locale keeps '.' the separator.
+  std::istringstream stream{std::string(text)};
+  stream.imbue(std::locale::classic());
   float value = 0.0f;
-  const auto [end, error] = std::from_chars(text.data(), text.data() + text.size(), value);
-  if (error != std::errc() || end != text.data() + text.size() || !std::isfinite(value)) {
+  stream >> std::noskipws >> value;
+  if (stream.fail() || stream.peek() != std::istringstream::traits_type::eof() || !std::isfinite(value)) {
     return std::nullopt;
   }
   return value;
