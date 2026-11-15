@@ -18,6 +18,7 @@ add_subdirectory(tools)
 # The framework static library `psxport`.
 include(cmake/psxport.cmake)
 
-if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
+option(PSXPORT_TESTPROG "Build the mipsel test program and psxtest_port (psxport's own build)" ON)
+if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR AND PSXPORT_TESTPROG)
   include(cmake/testprog.cmake)
 endif()

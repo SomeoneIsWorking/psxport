@@ -35,7 +35,8 @@ def main() -> int:
         else:
             # The host's Lightning prefix is not the target's.
             environment.pop("PSXPORT_LIGHTNING_PREFIX", None)
-            platform = target_platform.provision(args.platform, environment)
+            # The mipsel test program and psxtest_port are host checks; a platform build is the framework only.
+            platform = [*target_platform.provision(args.platform, environment), "-DPSXPORT_TESTPROG=OFF"]
         build = maintainer_build(ROOT, args.build or PLATFORM_BUILDS.get(args.platform, DEFAULT_BUILD))
         configure(ROOT, build, "RelWithDebInfo",
                   ["-DCMAKE_EXPORT_COMPILE_COMMANDS=ON", *lightrec_cmake_definitions(environment), *platform],
