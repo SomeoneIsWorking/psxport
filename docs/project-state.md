@@ -28,7 +28,7 @@ translated control flow without restoring an offline dispatch substrate.
 | S018 | Independent test oracle | partial | S013 | G003 |
 | S019 | Narrow multi-title framework seam | partial | S012, S017 | G002 |
 | S020 | Record rendering and title-owned enhancements | partial | S017 | G003 |
-| S021 | Portable desktop and Android delivery | missing | S012, S019, S020 | G003, G004 |
+| S021 | Portable desktop and Android delivery | partial | S012, S019, S020 | G003, G004 |
 | S022 | Mechanical structure/config/logging/tooling policy | partial | — | G002, G004 |
 | S023 | Whole-machine save states (title-neutral; a title adds native state via `GameRuntime::nativeState(Core &)`, and adopts RAM-derived state in `NativeStatePort::restored` after every section is restored; a frame driver whose `ResumableGuestCall` spans steps saves it with `ResumableGuestCall::save`) | verified | S012, S017 | G003 |
 | S024 | In-app bug report (B key: freeze, present shot + GPU device render of the same frame, pad recording + start card, replay command, RmlUi form) | partial | S017, S020 | G003 |
@@ -162,7 +162,14 @@ Partial, Linux release: `tools/port/appimage_container.py` builds a title in the
 (`tools/port/appimage-build.Containerfile`: clang-20, SDL3/SDL3_image and pinned Lightning/Lightrec built
 in) and `tools/port/appimage.py` packages it, refusing game content and any ELF needing more than
 glibc 2.35, with GitHub update information and its `.zsync` (`docs/appimage.md`). Titles call
-`.github/workflows/title-release.yml` from a `v*` tag or by hand. Windows, macOS and Android have none.
+`.github/workflows/title-release.yml` from a `v*` tag or by hand.
+
+Partial, Windows release: llvm-mingw cross-builds a title (`consumer_build.py --platform windows`) and
+`windows_package.py` writes `<Name>-<version>-windows-x86_64.zip`, refusing game content and any DLL Windows
+does not ship; the release workflow builds and uploads it beside the AppImage (`docs/windows.md`). Evidence:
+the Tomba archive under Wine 11 reaches Tomba 2 free roam with 0 fallbacks and 0 faults
+(`psx-tomba/scratch/windows/wine_gameplay_1000.png`). Gaps: no Windows-kernel run, no icon, unsigned.
+macOS and Android have none.
 
 ### S022 — Mechanical structure/config/logging/tooling policy
 

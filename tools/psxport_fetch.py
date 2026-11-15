@@ -11,20 +11,22 @@ No git command runs with its cwd at `external/psxport` or through a link this to
 (issue 0142); a staged tree or link is published by one atomic rename.
 
 `--lightrec` materialises the Lightrec revision pinned in this checkout's
-`cmake/lightrec_dependency.cmake` as a detached worktree.
+`cmake/lightrec_dependency.cmake` as a detached worktree, first cloning the Lightrec fork into the
+workspace's `shared/lightrec` on a machine that has none.
 """
 
 import argparse
 import os
+import re
 import shutil
 import subprocess
 import sys
 import tempfile
-import re
 
 LINK_REL = os.path.join("external", "psxport")
 DEFAULT_URL = "https://github.com/SomeoneIsWorking/psxport.git"
 DEFAULT_BRANCH = "main"
+LIGHTREC_URL = "https://github.com/SomeoneIsWorking/lightrec.git"
 # The build's submodules are every `.gitmodules` path under vendor/, init'd non-recursively (beetle has a
 # URL-less nested gitlink that makes `--recursive` fail outright), then that nested gitlink.
 VENDOR_PREFIX = "vendor/"
@@ -34,7 +36,7 @@ REVISION_DECLARATION = r'set\s*\(\s*PSXPORT_{}_REVISION\s+"([0-9a-f]{{40}})"'
 
 def git(args, cwd):
     """Run git in a real directory, never through `external/psxport` (issue 0142)."""
-    done = subprocess.run(["git"] + args, cwd=cwd, capture_output=True, text=True)
+    done = subprocess.run(["git", *args], cwd=cwd, capture_output=True, text=True, check=False)
     return done.stdout.strip(), done.returncode
 
 
@@ -201,6 +203,13 @@ def do_lightrec(repo):
         roots.append(os.path.join(os.environ["SHARED_DIR"], "lightrec"))
     roots += [os.path.join(parent, "shared", "lightrec"),
               os.path.join(os.path.dirname(parent), "shared", "lightrec")]
+    if not any(os.path.isfile(os.path.join(candidate, "CMakeLists.txt")) for candidate in roots):
+        # A fresh machine: the workspace's shared/ beside the framework's parent, which CMake also probes.
+        fresh = roots[-1]
+        if git(["clone", "--quiet", LIGHTREC_URL, fresh], repo)[1] != 0:
+            print(f"[psxport] REFUSED: could not clone {LIGHTREC_URL} into {fresh}.")
+            return 2
+        print(f"[psxport] Lightrec cloned into {fresh}")
     for candidate in roots:
         if not os.path.isfile(os.path.join(candidate, "CMakeLists.txt")):
             continue

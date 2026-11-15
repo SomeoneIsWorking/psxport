@@ -1,9 +1,9 @@
-# Presentation dependencies are desktop pkg-config packages or Android imported CMake targets.  Keep
-# that platform split here: renderer owners link one interface target and never probe host packages
-# while CMake is cross-compiling.
+# Presentation dependencies are desktop pkg-config packages or, in a cross build (Android, Windows),
+# imported CMake targets from a separately built target prefix. Keep that platform split here:
+# renderer owners link one interface target and never probe host packages while cross-compiling.
 include_guard(GLOBAL)
 
-function(_psxport_android_target result name)
+function(_psxport_prefix_target result name)
   foreach(candidate IN LISTS ARGN)
     if(TARGET "${candidate}")
       set("${result}" "${candidate}" PARENT_SCOPE)
@@ -11,7 +11,7 @@ function(_psxport_android_target result name)
     endif()
   endforeach()
   message(FATAL_ERROR
-    "psxport Android dependency '${name}' did not export an expected CMake target. "
+    "psxport target dependency '${name}' did not export an expected CMake target. "
     "Expected one of: ${ARGN}")
 endfunction()
 
@@ -22,35 +22,29 @@ function(psxport_configure_presentation_dependencies)
 
   add_library(psxport_presentation_dependencies INTERFACE)
 
-  if(ANDROID)
-    set(PSXPORT_ANDROID_DEPENDENCY_PREFIX "" CACHE PATH
-      "Prefix containing Android SDL3, SDL3_image, and FreeType CMake packages")
-    if(NOT IS_DIRECTORY "${PSXPORT_ANDROID_DEPENDENCY_PREFIX}")
+  if(CMAKE_CROSSCOMPILING)
+    set(PSXPORT_TARGET_DEPENDENCY_PREFIX "" CACHE PATH
+      "Prefix containing the target's SDL3, SDL3_image and FreeType CMake packages")
+    if(NOT IS_DIRECTORY "${PSXPORT_TARGET_DEPENDENCY_PREFIX}")
       message(FATAL_ERROR
-        "psxport Android requires PSXPORT_ANDROID_DEPENDENCY_PREFIX. Build the title's Android "
-        "dependency prefix through shared/android-port, then configure with "
-        "-DPSXPORT_ANDROID_DEPENDENCY_PREFIX=<prefix>.")
+        "psxport: a cross build needs -DPSXPORT_TARGET_DEPENDENCY_PREFIX=<prefix>, the target's "
+        "SDL3, SDL3_image and FreeType (Windows: tools/port/windows_deps.py; Android: shared/android-port).")
     endif()
-    # Android's toolchain searches package prefixes beneath its sysroot. This prefix is a separately
-    # cross-compiled target dependency tree, so resolve its exported configs directly instead.
-    find_package(SDL3 CONFIG REQUIRED
-      PATHS "${PSXPORT_ANDROID_DEPENDENCY_PREFIX}"
-      NO_DEFAULT_PATH NO_CMAKE_FIND_ROOT_PATH)
-    find_package(SDL3_image CONFIG REQUIRED
-      PATHS "${PSXPORT_ANDROID_DEPENDENCY_PREFIX}"
-      NO_DEFAULT_PATH NO_CMAKE_FIND_ROOT_PATH)
-    find_package(Freetype CONFIG REQUIRED
-      PATHS "${PSXPORT_ANDROID_DEPENDENCY_PREFIX}"
-      NO_DEFAULT_PATH NO_CMAKE_FIND_ROOT_PATH)
-    find_package(fmt CONFIG REQUIRED
-      PATHS "${PSXPORT_ANDROID_DEPENDENCY_PREFIX}"
-      NO_DEFAULT_PATH NO_CMAKE_FIND_ROOT_PATH)
-    set(fmt_DIR "${PSXPORT_ANDROID_DEPENDENCY_PREFIX}/lib/cmake/fmt" CACHE PATH
-      "Android fmt package supplied by PSXPORT_ANDROID_DEPENDENCY_PREFIX" FORCE)
-    _psxport_android_target(_psxport_sdl3 "SDL3" SDL3::SDL3 SDL3::SDL3-shared SDL3::SDL3-static)
-    _psxport_android_target(_psxport_sdl3_image "SDL3_image"
+    # The toolchain searches beneath its sysroot; this prefix is a separate target tree.
+    foreach(_package IN ITEMS SDL3 SDL3_image Freetype)
+      find_package(${_package} CONFIG REQUIRED
+        PATHS "${PSXPORT_TARGET_DEPENDENCY_PREFIX}" NO_DEFAULT_PATH NO_CMAKE_FIND_ROOT_PATH)
+    endforeach()
+    if(ANDROID)
+      find_package(fmt CONFIG REQUIRED
+        PATHS "${PSXPORT_TARGET_DEPENDENCY_PREFIX}" NO_DEFAULT_PATH NO_CMAKE_FIND_ROOT_PATH)
+      set(fmt_DIR "${PSXPORT_TARGET_DEPENDENCY_PREFIX}/lib/cmake/fmt" CACHE PATH
+        "Android fmt package supplied by PSXPORT_TARGET_DEPENDENCY_PREFIX" FORCE)
+    endif()
+    _psxport_prefix_target(_psxport_sdl3 "SDL3" SDL3::SDL3 SDL3::SDL3-shared SDL3::SDL3-static)
+    _psxport_prefix_target(_psxport_sdl3_image "SDL3_image"
       SDL3_image::SDL3_image SDL3_image::SDL3_image-shared SDL3_image::SDL3_image-static)
-    _psxport_android_target(_psxport_freetype "FreeType" Freetype::Freetype)
+    _psxport_prefix_target(_psxport_freetype "FreeType" Freetype::Freetype freetype)
     target_link_libraries(psxport_presentation_dependencies INTERFACE
       "${_psxport_sdl3}" "${_psxport_sdl3_image}" "${_psxport_freetype}")
     return()

@@ -24,11 +24,14 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from port.launcher import APPIMAGE_BUILD  # noqa: E402
-from psxport_fetch import pinned_revision  # noqa: E402
+from port.launcher import APPIMAGE_BUILD
+from psxport_fetch import pinned_revision
 
 FRAMEWORK = Path(__file__).resolve().parents[2]
 CONTAINERFILE = Path(__file__).resolve().with_name("appimage-build.Containerfile")
+# Files the image COPYs in; their bytes are part of the image tag.
+IMAGE_INPUTS = (CONTAINERFILE, CONTAINERFILE.with_name("target_libraries.py"),
+                CONTAINERFILE.with_name("target-libraries.json"))
 IMAGE = "localhost/psxport-appimage-build"
 GLIBC_FLOOR = "2.35"
 GITHUB_REMOTE = re.compile(r"github\.com[:/]([^/]+/[^/]+?)(?:\.git)?/?$")
@@ -53,7 +56,9 @@ def revisions() -> dict[str, str]:
 
 
 def image_tag(pins: dict[str, str]) -> str:
-    digest = hashlib.sha256(CONTAINERFILE.read_bytes())
+    digest = hashlib.sha256()
+    for path in IMAGE_INPUTS:
+        digest.update(path.read_bytes())
     for name in sorted(pins):
         digest.update(f"{name}={pins[name]}".encode())
     return f"{IMAGE}:{digest.hexdigest()[:12]}"

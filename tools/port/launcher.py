@@ -36,8 +36,10 @@ AGENT_BUILD = Path("build/agent")
 CI_BUILD = Path("build/ci")
 # Built inside the release container (appimage_container.py), never by the host toolchain.
 APPIMAGE_BUILD = Path("build/appimage")
+# The Windows x86-64 cross build (llvm-mingw, tools/port/windows_target.py).
+WINDOWS_BUILD = Path("build/windows")
 # The trees a maintainer build may name; one tree per purpose, never one per task.
-MAINTAINER_BUILDS = (AGENT_BUILD, CI_BUILD, APPIMAGE_BUILD)
+MAINTAINER_BUILDS = (AGENT_BUILD, CI_BUILD, APPIMAGE_BUILD, WINDOWS_BUILD)
 FRAMEWORK_TOOLS_BUILD = Path("build/player-tools")
 # Set by the desktop shortcut: launch the newest product already built instead of building.
 RUN_BUILT = "PSXPORT_RUN_BUILT"
@@ -88,13 +90,10 @@ FREETYPE = Dependency("FreeType development files",
 ZLIB = Dependency("zlib development files",
                   install_commands("zlib-devel", "zlib1g-dev", "brew install zlib", "vcpkg install zlib"),
                   pkg_config="zlib")
-ZSTD = Dependency("zstd development files",
-                  install_commands("libzstd-devel", "libzstd-dev", "brew install zstd", "vcpkg install zstd"),
-                  pkg_config="libzstd")
 COMPILER = install_commands("clang", "clang", "xcode-select --install", "winget install LLVM.LLVM")
 
 # What psxport itself needs to configure and build.
-FRAMEWORK_DEPENDENCIES = (CMAKE, NINJA, GIT, PKG_CONFIG, GLSLC, SDL3, SDL3_IMAGE, FREETYPE, ZLIB, ZSTD)
+FRAMEWORK_DEPENDENCIES = (CMAKE, NINJA, GIT, PKG_CONFIG, GLSLC, SDL3, SDL3_IMAGE, FREETYPE, ZLIB)
 
 
 def host_family() -> str:
@@ -220,7 +219,9 @@ def configure(source: Path, build: Path, build_type: str, definitions: Sequence[
     build = build.absolute()
     if not build.is_relative_to(owner / "build") or build.resolve() != build:
         raise ToolError(f"build directory must be a real path under {owner / 'build'}: {build}")
-    options = [*compiler_definitions(environment), f"-DCMAKE_BUILD_TYPE={build_type}",
+    # A toolchain file names its own compilers.
+    cross = any(definition.startswith("-DCMAKE_TOOLCHAIN_FILE=") for definition in definitions)
+    options = [*([] if cross else compiler_definitions(environment)), f"-DCMAKE_BUILD_TYPE={build_type}",
                f"-DPython3_EXECUTABLE={sys.executable}", *definitions]
     cached_source = _cache_value(build, "CMAKE_HOME_DIRECTORY")
     generator = _cache_value(build, "CMAKE_GENERATOR")

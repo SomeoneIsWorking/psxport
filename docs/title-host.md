@@ -78,8 +78,9 @@ window not shown (`psx::config::show_window()` false) it renders one offscreen f
 exits 2, so a test run never waits on a player. A selector with no available title shows each title's
 first-run screen in turn and opens when one was provided; with none it exits 0.
 
-A packaged run (`Config::packageRoot`, the AppImage's absolute `APPDIR`) applies
-`psx::config::applyPackagedDefaults` (a window, assets under `<APPDIR>/usr/share/psxport`) and enters
+A packaged run (`Config::package`: the AppImage's absolute `APPDIR` with assets under `usr/share/psxport`, or
+a Windows executable with `assets/` beside it) applies `psx::config::applyPackagedDefaults` (a window and
+those assets) and enters
 `<user data>/<executable name>`, the settings directory, so the provisioning root and memory card are
 user data for a one-title product and the selector alike.
 

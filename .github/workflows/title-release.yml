@@ -1,7 +1,8 @@
 name: Title release
 
 # Called by a title's release workflow: builds its AppImage in the Ubuntu 22.04 container
-# (tools/port/appimage_container.py) and publishes it with its .zsync on the title's GitHub release.
+# (tools/port/appimage_container.py) and its Windows archive with llvm-mingw (tools/port/windows_package.py),
+# and publishes both on the title's GitHub release.
 on:
   workflow_call:
     inputs:
@@ -18,8 +19,23 @@ permissions:
   contents: write
 
 jobs:
+  release:
+    name: Create the release
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    env:
+      RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Create the release when it does not exist
+        run: |
+          gh release view "${RELEASE_TAG}" --repo "${GITHUB_REPOSITORY}" >/dev/null 2>&1 \
+            || gh release create "${RELEASE_TAG}" --repo "${GITHUB_REPOSITORY}" --target "${GITHUB_SHA}" \
+                 --title "${RELEASE_TAG}" --notes "Bring your own disc: the first-run screen asks for it."
+
   linux-appimage:
     name: Linux AppImage (x86-64)
+    needs: release
     runs-on: ubuntu-24.04
     timeout-minutes: 120
     env:
@@ -43,9 +59,42 @@ jobs:
       - name: Publish the AppImage and its update file
         env:
           GH_TOKEN: ${{ github.token }}
-        run: |
-          gh release view "${RELEASE_TAG}" --repo "${GITHUB_REPOSITORY}" >/dev/null 2>&1 \
-            || gh release create "${RELEASE_TAG}" --repo "${GITHUB_REPOSITORY}" --target "${GITHUB_SHA}" \
-                 --title "${RELEASE_TAG}" --notes "Bring your own disc: the first-run screen asks for it."
-          gh release upload "${RELEASE_TAG}" --repo "${GITHUB_REPOSITORY}" --clobber \
-            build/release/*.AppImage build/release/*.AppImage.zsync
+        run: >-
+          gh release upload "${RELEASE_TAG}" --repo "${GITHUB_REPOSITORY}" --clobber
+          build/release/*.AppImage build/release/*.AppImage.zsync
+
+  windows:
+    name: Windows (x86-64)
+    needs: release
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    env:
+      RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
+    steps:
+      - name: Check out the title with full history
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Select uv
+        uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d
+        with:
+          version: "0.10.12"
+      - name: Resolve the framework
+        run: uv run --no-project https://raw.githubusercontent.com/SomeoneIsWorking/psxport/main/tools/psxport_fetch.py --auto
+      - name: Install the build host's tools
+        run: >-
+          sudo apt-get update && sudo apt-get install -y --no-install-recommends
+          autoconf automake libtool make texinfo ninja-build glslc
+      - name: Check out the pinned Lightrec
+        run: uv run --no-project python external/psxport/tools/psxport_fetch.py --lightrec
+      - name: Cross-compile with llvm-mingw
+        run: uv run --frozen python external/psxport/tools/port/consumer_build.py --platform windows --target "${{ inputs.product }}"
+      - name: Package the archive
+        run: >-
+          uv run --frozen python external/psxport/tools/port/windows_package.py
+          --binary "build/windows/bin/${{ inputs.product }}.exe" --version "${RELEASE_TAG}" --output build/release
+      - name: Publish the archive
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload "${RELEASE_TAG}" --repo "${GITHUB_REPOSITORY}" --clobber build/release/*-windows-x86_64.zip

@@ -42,6 +42,7 @@ Dependency direction: title repo → `runtime/psx/game/` (the title interface) �
 - `cmake/lightrec_dependency.cmake` — pinned Lightrec revision and worktree
 - `cmake/dependency_prefix.cmake`, `cmake/deps/` — RmlUi, libchdr, Lucent and Lightrec built once per source content and toolchain into `~/.cache/psxport/deps/<dep>/<compiler>-<config>-<key>` (`PSXPORT_DEPENDENCY_ROOT`), found with find_package; libpsxport, bug-report and setup-ui stay per build tree
 - `cmake/build_policy.cmake` — per-build-type flags (line tables + zstd debug sections for RelWithDebInfo, no debug info in Release, full `-g` only in Debug) and lld for Clang
+- `cmake/toolchains/llvm-mingw-x86_64.cmake` — the Windows x86-64 cross toolchain (`docs/windows.md`)
 - `runtime/psx/hle/hle.*`, `hle_heap.cpp`, `hle_interrupt.cpp`, `kernel_syscall.cpp`, `syscall_exception.*` — BIOS / kernel HLE: A0/B0/C0 tables, events, heap, interrupt chain, syscall exception entry and return
 - `runtime/psx/hle/bios_*` — BIOS libc leaves (string, memory, rand with its seed in guest RAM), setjmp / HookEntryInt, LoadExec / LoadAndExecute, pad work area
 - `runtime/psx/hle/platform_hle.*`, `stock_*` — PSY-Q stock library bodies a title binds: libgpu DrawSync waits, libgte projection setters, libetc VSync frame boundary, DMACallback table
@@ -52,7 +53,7 @@ Dependency direction: title repo → `runtime/psx/game/` (the title interface) �
 - `runtime/psx/platform/io_peripherals.*`, `irq_edge.h` — I_STAT / I_MASK interrupt lines, root counter and SIO decode
 - `runtime/psx/platform/memcard.*`, `card_syscall_log.*` — memory card device and file, card syscall counts
 - `runtime/psx/platform/coro.*` — coroutine / fiber for a guest task scheduler, each handoff a turn on the product's `lucent::perf::WorkClock`
-- `runtime/psx/platform/watchdog.*`, `spin_detector.*` — frame watchdog, crash and signal reporters, guest spin / hang detection
+- `runtime/psx/platform/watchdog.*`, `watchdog_host.h` (`watchdog_posix.cpp`, `watchdog_win32.cpp`), `spin_detector.*` — frame watchdog, crash and interrupt reporters over the host timer and fault hooks, guest spin / hang detection
 - `runtime/psx/platform/host_clock.h`, `fs_util.*`, `blob_codec.h`, `active_low_edges.h` — host monotonic clock, host file I/O, little-endian byte codec, active-low button press and release edges
 - `runtime/psx/platform/beetle_device_instance.h` — one per-Game Beetle device state behind Beetle's process-global bind point (SPU, MDEC)
 - `runtime/psx/frame/field_turn.*`, `logic_frame.*`, `frame_loop_shell.*`, `session_control.*` — product loop: per-field services (pause, watchdog, RAM dump, command), logic frame start, frame step, return to selector
@@ -105,13 +106,13 @@ Dependency direction: title repo → `runtime/psx/game/` (the title interface) �
 - `runtime/psx/debug/debug_commands.*`, `command_args.*`, `control_surface_limits.h` — debug verbs table shared by transports, command words, reply caps
 - `runtime/psx/debug/dbg_server.*`, `repl.*` — control channel (loopback HTTP `POST /command`), stdin REPL
 - `runtime/psx/debug/ot_attr.*` — OT / GTE submission attribution
-- `runtime/psx/debug/gpu_debug.*`, `gpu_perf.*`, `memcensus.*`, `field_digest.*`, `image_writer.*`, `snapshot.*`, `store_watch.*`, `pad_frame_probes.*`, `frame_schedule.*`, `host_backtrace.*` — diagnostics: scene dump, cost and cadence meter (CPU work per phase, GPU work per present, planned 60 Hz cadence, play-check presents; `presentation.md` Cost and cadence; counters and percentiles from `lucent::perf`), memmove census, per-field digest, PNG / APNG / PPM capture, RAM snapshot, store watch, pad-frame probes, host backtrace
+- `runtime/psx/debug/gpu_debug.*`, `gpu_perf.*`, `memcensus.*`, `field_digest.*`, `image_writer.*`, `snapshot.*`, `store_watch.*`, `pad_frame_probes.*`, `frame_schedule.*`, `host_backtrace.*`, `text_capture.*` — diagnostics: scene dump (captured as text), cost and cadence meter (CPU work per phase, GPU work per present, planned 60 Hz cadence, play-check presents; `presentation.md` Cost and cadence; counters and percentiles from `lucent::perf`), memmove census, per-field digest, PNG / APNG / PPM capture, RAM snapshot, store watch, pad-frame probes, host backtrace
 - `runtime/psx/debug/bug_report_session.*` — in-app bug report: reference frame at the next sealed frame, motion clip, reproduction command
 - `runtime/ui/` — RmlUi overlay menu: library (one Rml::Initialise per device), document, tabs, rows, readouts, `<glyph>` button prompts (`menu_prompts`), pad navigation, toggles, wrapped stepping, Debug and About tabs generated from the title debug menu (`title_debug_rows`), SDL_GPU render interface, assets
 - `assets/rml/` — overlay menu markup, styles, fonts
 - `bios/`, `scripts/build_openbios.py`, `patches/openbios/` — fast-boot OpenBIOS image
 - `testprog/`, `tools/testprog/`, `cmake/testprog.cmake` — framework test program: freestanding mipsel guest EXE built with clang, its host title `psxtest_port`, planted owner-journal rows
-- `tools/port/` — tooling every title runs: consumer build, launcher, launch environment, desktop shortcut, AppImage release (`appimage.py`, `appimage_container.py`, `appimage-build.Containerfile`, pinned tools in `appimage-tools.json`; `docs/appimage.md`), remote install, capture checks
+- `tools/port/` — tooling every title runs: consumer build, launcher, launch environment, desktop shortcut, AppImage release (`appimage.py`, `appimage_container.py`, `appimage-build.Containerfile`, pinned tools in `appimage-tools.json`; `docs/appimage.md`), Windows release (`windows_target.py`, `windows_package.py`; `docs/windows.md`), the identity and content audit both share (`release_package.py`), target libraries both build (`target_libraries.py`, `target-libraries.json`), remote install, capture checks
 - `tools/oracle/` — CPU oracle / reference emulator: Mednafen snapshot and trace, full-console libretro host, state, SPU voice/register (audio) and picture comparison
 - `tools/decomp_pipeline.py`, `tools/decomp/` — Ghidra headless decompilation, callers, refs
 - `tools/formats/`, `tools/mips/`, `tools/disasm.*`, `tools/discdump.cpp`, `tools/crt0_extract.cpp`, `tools/fmv_export/` — PS-X EXE reader, MIPS decode, disassembly, disc listing and extract, crt0 dump, STR export through the shipping decode

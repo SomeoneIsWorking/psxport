@@ -55,6 +55,6 @@ appears after 2 s with `WM_NAME(STRING) = "Tomba! setup"` and shows the first-ru
 ## Open
 - Name consistency: the catalog compares the repository, AppImage, README title and desktop `Name=`; the
   repositories are `psx-<title>` while the packages are named after the game.
-- Windows, macOS and Android packages do not exist (`project-state.md` S021).
+- macOS and Android packages do not exist (`project-state.md` S021); Windows is `docs/windows.md`.
 - clang-20 and libc++ 20 come from apt.llvm.org, which is neither pinned nor checksummed; the pinned
   alternative is LLVM's 2 GB `LLVM-<version>-Linux-X64.tar.xz` release.
