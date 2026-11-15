@@ -3,6 +3,7 @@ name: Title release
 # Called by a title's release workflow: builds its AppImage in the Ubuntu 22.04 container
 # (tools/port/appimage_container.py), its Windows archive with llvm-mingw (tools/port/windows_package.py) and
 # its macOS app on an Intel Mac (tools/port/macos_package.py), and publishes them on the title's GitHub release.
+# tools/port/publish_release.py builds the first two locally and asks this only for macos.
 on:
   workflow_call:
     inputs:
@@ -14,6 +15,11 @@ on:
         description: Release tag; defaults to the pushed tag
         required: false
         type: string
+      platforms:
+        description: The packages to build, space-separated from linux, windows and macos
+        required: false
+        type: string
+        default: linux windows macos
 
 permissions:
   contents: write
@@ -36,6 +42,7 @@ jobs:
   linux-appimage:
     name: Linux AppImage (x86-64)
     needs: release
+    if: contains(inputs.platforms, 'linux')
     runs-on: ubuntu-24.04
     timeout-minutes: 120
     env:
@@ -66,6 +73,7 @@ jobs:
   windows:
     name: Windows (x86-64)
     needs: release
+    if: contains(inputs.platforms, 'windows')
     runs-on: ubuntu-24.04
     timeout-minutes: 120
     env:
@@ -102,6 +110,7 @@ jobs:
   macos:
     name: macOS (x86-64)
     needs: release
+    if: contains(inputs.platforms, 'macos')
     runs-on: macos-15-intel
     timeout-minutes: 120
     env:

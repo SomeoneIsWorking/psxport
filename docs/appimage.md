@@ -10,7 +10,8 @@ doc is how psxport meets them.
 | `tools/port/appimage_container.py` | runs the title's build (`build/appimage`) and the packager in that image; podman locally, docker in CI |
 | `tools/port/appimage.py` | AppDir, audits, AppImage, update information and `.zsync` |
 | `tools/port/appimage-tools.json` | pinned linuxdeploy, appimagetool, type-2 runtime and patchelf |
-| `.github/workflows/title-release.yml` | called by each title's `release.yml` on a `v*` tag or by hand; uploads to the title's release |
+| `tools/port/publish_release.py` | the release from this machine: tags HEAD, builds the AppImage and Windows archive here, creates the release, dispatches macOS |
+| `.github/workflows/title-release.yml` | called by each title's `release.yml` by hand, for the `platforms` asked (`linux windows macos`); uploads to the title's release |
 
 ## Inputs and outputs
 In: a clean title commit, its `packaging/linux/<app-id>.desktop` and SVG, its `LICENSE` or `COPYING`,
