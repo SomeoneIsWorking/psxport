@@ -20,8 +20,10 @@ Lightning pins in `cmake/lightrec_dependency.cmake`. Out:
 ## Invariants
 - No game content: the shared content audit refuses disc images, PS-X EXEs and manifest-named files.
 - The executable links only `/System/Library/` and `/usr/lib/`; the libraries are static.
-- `Contents/Resources/assets` beside `Contents/MacOS` makes the app a package: it defaults to a window and
+- `Contents/Resources/assets` beside `Contents/MacOS` makes the app a package: it opens fullscreen and
   reads those assets (`psx::config::Config`).
+- psxport's own build compiles the mipsel test program with Homebrew's LLVM (`brew install llvm`);
+  AppleClang, which builds everything else, has no MIPS backend (`cmake/testprog.cmake`).
 - SDL_GPU's Vulkan backend runs on the bundled `Contents/Frameworks/libMoltenVK.dylib`
   (`RenderDevice::useBundledMoltenVK`); psxport's shaders are SPIR-V only, so Metal is not a backend.
   MoltenVK's Apache-2.0 licence ships as `Resources/MoltenVK-LICENSE`.

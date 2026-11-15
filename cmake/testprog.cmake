@@ -5,7 +5,8 @@ set(PSXPORT_TESTPROG_HEADER "${PSXPORT_TESTPROG_ROOT}/include/testprog_identity.
 if(CMAKE_C_COMPILER_ID STREQUAL "Clang")
   set(PSXPORT_TESTPROG_CLANG "${CMAKE_C_COMPILER}")
 else()
-  find_program(PSXPORT_TESTPROG_CLANG clang REQUIRED)
+  # Apple's clang has no MIPS backend; Homebrew's LLVM does.
+  find_program(PSXPORT_TESTPROG_CLANG clang HINTS /opt/homebrew/opt/llvm/bin /usr/local/opt/llvm/bin REQUIRED)
 endif()
 add_custom_command(
   OUTPUT "${PSXPORT_TESTPROG_HEADER}" "${PSXPORT_TESTPROG_ROOT}/psxtest/PSXT_000.01"
