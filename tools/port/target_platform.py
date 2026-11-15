@@ -27,8 +27,8 @@ LLVM_MINGW_NAME = f"llvm-mingw-{LLVM_MINGW_RELEASE}-ucrt-ubuntu-22.04-x86_64"
 LLVM_MINGW_URL = (f"https://github.com/mstorsjo/llvm-mingw/releases/download/{LLVM_MINGW_RELEASE}/"
                   f"{LLVM_MINGW_NAME}.tar.xz")
 LLVM_MINGW_SHA256 = "bb7bb7654b33d5aa8712acb837c963b2e0c56352560c76105270a3268c665c21"
-# The oldest macOS the package runs on; the libraries and the port are built for it.
-MACOS_DEPLOYMENT_TARGET = "11.0"
+# The oldest macOS the package runs on: std::format of floating point needs 13.3.
+MACOS_DEPLOYMENT_TARGET = "13.3"
 MOLTENVK_RELEASE = "v1.4.2"
 MOLTENVK_URL = f"https://github.com/KhronosGroup/MoltenVK/releases/download/{MOLTENVK_RELEASE}/MoltenVK-macos.tar"
 MOLTENVK_SHA256 = "f95765a6229cb7b915990a2890ce12ebe36a730b021545d3d52ae69ce4c4024e"

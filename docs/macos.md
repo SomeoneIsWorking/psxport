@@ -6,7 +6,7 @@ owner, and `docs/appimage.md` the title identity, version and content audit (`to
 
 | piece | role |
 |---|---|
-| `tools/port/target_platform.py` | macOS deployment target 11.0, the target libraries and Lightning built once per pin, MoltenVK v1.4.2 (checksummed) |
+| `tools/port/target_platform.py` | macOS deployment target 13.3 (std::format of floating point), the target libraries and Lightning built once per pin, MoltenVK v1.4.2 (checksummed) |
 | `tools/port/target_libraries.py`, `target-libraries.json` | SDL3 (fork), SDL3_image (stb backend) and FreeType, static |
 | `tools/port/consumer_build.py --platform macos` | the title's build in `build/macos`, natively on an Intel Mac |
 | `tools/port/macos_package.py` | `<Name>-<version>-macos-x86_64.zip` holding `<Name>.app`, signed ad hoc |
