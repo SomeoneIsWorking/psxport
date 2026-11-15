@@ -78,9 +78,9 @@ window not shown (`psx::config::show_window()` false) it renders one offscreen f
 exits 2, so a test run never waits on a player. A selector with no available title shows each title's
 first-run screen in turn and opens when one was provided; with none it exits 0.
 
-A packaged run (`Config::package`: the AppImage's absolute `APPDIR` with assets under `usr/share/psxport`, or
-a Windows executable with `assets/` beside it) applies `psx::config::applyPackagedDefaults` (a window and
-those assets) and enters
+A packaged run (`Config::package`: the AppImage's absolute `APPDIR` with assets under `usr/share/psxport`, a
+macOS `.app`, or a Windows executable with `assets/` beside it) applies `psx::config::applyPackagedDefaults` (a
+fullscreen window and those assets) and enters
 `<user data>/<executable name>`, the settings directory, so the provisioning root and memory card are
 user data for a one-title product and the selector alike.
 
@@ -246,6 +246,12 @@ the event drain, so it reaches the run-end report like a client `quit`.
 ## Invariants
 
 - The window and its device are the product's and outlive every session.
+- Fullscreen is the player's saved choice (`fullscreen` in the settings file; `PSXPORT_FULLSCREEN` overrides one
+  run): the Display menu's Fullscreen row, F11 or Alt+Enter flip it, and `RenderWindow::followFullscreen` applies a
+  change after each present's event drain.
+- A handheld's built-in controller reaches SDL without Steam: InputPlumber (Bazzite, SteamOS-likes) hides the
+  device and offers a Steam Deck protocol HID target under a per-device Valve product id (0x12F0, 0x12FA-0x12FF),
+  which the SDL fork treats as a Steam Deck controller; stock SDL sees no pad there until Steam runs.
 - A Core snapshots the installed `GameRuntime` when it is constructed, so `TitleSession::boot`
   installs `catalog.runtime(index)` immediately before building its `Game`.
 - Only the focused panel's guest ever advances, one paced step per selector iteration.
