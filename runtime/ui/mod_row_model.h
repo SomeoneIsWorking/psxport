@@ -1,4 +1,5 @@
-// psx::ui::ModRowModel — what a `toggle=` menu row means: the Mods field it cycles and its labels.
+// psx::ui::ModRowModel — what a `toggle=` menu row means: the Mods field (or the window's fullscreen) it cycles
+// and its labels.
 #ifndef PSXPORT_UI_MOD_ROW_MODEL_H
 #define PSXPORT_UI_MOD_ROW_MODEL_H
 

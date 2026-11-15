@@ -16,7 +16,8 @@ void RenderWindow::create(bool shown, const char *title, present::PixelSize size
   SDL_WindowFlags flags = exactPixels ? 0 : SDL_WINDOW_HIGH_PIXEL_DENSITY;
   const SDL_PropertiesID props = SDL_CreateProperties();
   if (shown) {
-    flags |= psx::config::fullscreen_requested() ? SDL_WINDOW_FULLSCREEN : SDL_WINDOW_RESIZABLE;
+    fullscreen_ = psx::config::fullscreen();
+    flags |= SDL_WINDOW_RESIZABLE | (fullscreen_ ? SDL_WINDOW_FULLSCREEN : 0);
   } else {
     // SDL drops controller input while no window has keyboard focus, and an unmapped window never takes it.
     SDL_SetHint(SDL_HINT_JOYSTICK_ALLOW_BACKGROUND_EVENTS, "1");
@@ -63,6 +64,20 @@ void RenderWindow::claim(SDL_GPUDevice *device) {
                presentModeName(got),
                presentModeBlocksCaller(got) ? " (blocking: every present stalls the guest thread until vblank)" : "");
   swapchainFormat_ = SDL_GetGPUSwapchainTextureFormat(device, window_);
+}
+
+void RenderWindow::followFullscreen() {
+  const bool want = psx::config::fullscreen();
+  if (!shown_ || want == fullscreen_) {
+    return;
+  }
+  // Recorded either way: a refused change is reported once, not retried every present.
+  fullscreen_ = want;
+  if (!SDL_SetWindowFullscreen(window_, want)) {
+    lucent::warn("render", "fullscreen {} refused: {}", want ? "on" : "off", SDL_GetError());
+    return;
+  }
+  lucent::info("render", "fullscreen {}", want ? "on" : "off");
 }
 
 void RenderWindow::showError(const char *title, const std::string &message) const {

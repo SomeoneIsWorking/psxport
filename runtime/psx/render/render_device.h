@@ -93,6 +93,9 @@ public:
   const RenderWindow &window() const {
     return window_;
   }
+  RenderWindow &window() {
+    return window_;
+  }
   // The swapchain's format, which the sink pass records into.
   SDL_GPUTextureFormat sinkFormat() const;
   SDL_GPUSampler *nearestSampler() const {

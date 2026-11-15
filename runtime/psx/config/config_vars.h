@@ -58,7 +58,10 @@ std::string owners_dir(); // PSXPORT_OWNERS_DIR: owner journal JSONL directory, 
 // PSXPORT_RENDER_PATH: record | device; an unknown value warns and gives `fallback`.
 present::RenderPath render_path(present::RenderPath fallback = present::RenderPath::Record);
 
-bool fullscreen_requested(); // PSXPORT_FULLSCREEN, or PSXPORT_WINDOWED=0
+// The player's saved choice (a package defaults to on); PSXPORT_FULLSCREEN overrides it for one run.
+bool fullscreen();
+// The player's choice from the menu or a hotkey, saved; the shown window follows it.
+void setFullscreen(bool on);
 std::string picker_titles(); // PSXPORT_PICKER_TITLES: panel slugs, empty for every provisioned title
 
 } // namespace psx::config

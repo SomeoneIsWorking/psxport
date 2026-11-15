@@ -237,13 +237,19 @@ void RenderState::showPresentImage(SDL_GPUCommandBuffer *cmd) {
   SDL_GPUTexture *swapchain = acquireSink(sink_, cmd, device_.window().window(), &width, &height);
   if (swapchain == nullptr) {
     device_.submit(cmd, "show");
-    game_.hostInput.drainEvents();
+    takeHostEvents();
     return;
   }
   recordScreen(cmd, swapchain, {static_cast<int>(width), static_cast<int>(height)});
   device_.submit(cmd, "show");
   game_.perf.presented(std::chrono::steady_clock::now(), device_.window().refreshPeriodMs());
+  takeHostEvents();
+}
+
+// The player's input since the last present, and any window change it asked for.
+void RenderState::takeHostEvents() {
   game_.hostInput.drainEvents();
+  device_.window().followFullscreen();
 }
 
 void RenderState::recordScreen(SDL_GPUCommandBuffer *cmd, SDL_GPUTexture *target, PixelSize size) {

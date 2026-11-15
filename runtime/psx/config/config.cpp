@@ -65,8 +65,7 @@ Var<std::string> cv_reach_report("PSXPORT_REACH_REPORT", "", kRunOnly);
 Var<std::string> cv_owners_dir("PSXPORT_OWNERS_DIR", "scratch/owners", kRunOnly);
 Var<std::string> cv_card("PSXPORT_CARD", "", kRunOnly);
 Var<bool> cv_bug_report_clip("PSXPORT_BUG_REPORT_CLIP", true, kSaved);
-Var<bool> cv_fullscreen("PSXPORT_FULLSCREEN", false, kRunOnly);
-Var<bool> cv_windowed("PSXPORT_WINDOWED", true, kRunOnly);
+Var<bool> cv_fullscreen("fullscreen", false, {lucent::cvar::Persistence::Saved, "PSXPORT_FULLSCREEN"});
 Var<std::string> cv_picker_titles("PSXPORT_PICKER_TITLES", "", kRunOnly);
 Var<bool> cv_nopace("PSXPORT_NOPACE", false, kRunOnly);
 Var<bool> cv_repl("PSXPORT_REPL", false, kRunOnly);
@@ -104,7 +103,6 @@ const Registration kRegistration{
     cv_card,
     cv_bug_report_clip,
     cv_fullscreen,
-    cv_windowed,
     cv_picker_titles,
     cv_nopace,
     cv_repl,
@@ -194,6 +192,7 @@ bool show_window() {
 
 void applyPackagedDefaults(const std::filesystem::path &assetParent) {
   cv_show_window.set(true, Layer::Default);
+  cv_fullscreen.set(true, Layer::Default);
   cv_asset_dir.set(assetParent.string(), Layer::Default);
 }
 
@@ -291,8 +290,15 @@ std::string asset_dir() {
   return cv_asset_dir.get();
 }
 
-bool fullscreen_requested() {
-  return cv_fullscreen.get() || !cv_windowed.get();
+bool fullscreen() {
+  return cv_fullscreen.get();
+}
+
+void setFullscreen(bool on) {
+  // The player's choice outranks this run's PSXPORT_FULLSCREEN from here on.
+  cv_fullscreen.clear(Layer::Override);
+  cv_fullscreen.set(on, Layer::Value);
+  save_settings();
 }
 
 std::string picker_titles() {

@@ -1,5 +1,6 @@
 #include "mod_row_model.h"
 
+#include "config_vars.h"
 #include "mods.h"
 
 namespace psx::ui {
@@ -58,6 +59,9 @@ const ToggleRow kToggleRows[] = {
      1},
 };
 
+// The window's, not a Mods field: one choice for every title the process runs.
+constexpr std::string_view kFullscreen = "fullscreen";
+
 const ToggleRow *find_toggle(std::string_view id) {
   for (const ToggleRow &r : kToggleRows) {
     if (id == r.id) {
@@ -70,7 +74,7 @@ const ToggleRow *find_toggle(std::string_view id) {
 } // namespace
 
 bool ModRowModel::knows(std::string_view id) {
-  return find_toggle(id) != nullptr;
+  return id == kFullscreen || find_toggle(id) != nullptr;
 }
 
 bool ModRowModel::available(const Mods &m, std::string_view id) {
@@ -84,6 +88,10 @@ bool ModRowModel::available(const Mods &m, std::string_view id) {
 }
 
 bool ModRowModel::value_text(const Mods &m, std::string_view id, std::string &out) {
+  if (id == kFullscreen) {
+    out = kOnOff[psx::config::fullscreen() ? 1 : 0];
+    return true;
+  }
   const ToggleRow *r = find_toggle(id);
   if (!r) {
     return false;
@@ -102,6 +110,10 @@ bool ModRowModel::value_text(const Mods &m, std::string_view id, std::string &ou
 }
 
 void ModRowModel::toggle(Mods &m, std::string_view id) {
+  if (id == kFullscreen) {
+    psx::config::setFullscreen(!psx::config::fullscreen());
+    return;
+  }
   if (!available(m, id)) {
     return;
   }
@@ -115,7 +127,7 @@ void ModRowModel::toggle(Mods &m, std::string_view id) {
 }
 
 int ModRowModel::toggle_count() {
-  return static_cast<int>(sizeof(kToggleRows) / sizeof(kToggleRows[0]));
+  return static_cast<int>(sizeof(kToggleRows) / sizeof(kToggleRows[0])) + 1;
 }
 
 } // namespace psx::ui

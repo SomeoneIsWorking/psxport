@@ -120,6 +120,7 @@ private:
   void finishBuild(bool built);
   void buildHostImage(SDL_GPUCommandBuffer *cmd, float fade);
   void showPresentImage(SDL_GPUCommandBuffer *cmd);
+  void takeHostEvents();
   // The window's contents drawn into `target`: the present image letterboxed, the overlay on top.
   void recordScreen(SDL_GPUCommandBuffer *cmd, SDL_GPUTexture *target, PixelSize size);
   // The built present image into the motion clip when it goes to the window.

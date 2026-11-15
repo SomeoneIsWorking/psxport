@@ -30,6 +30,8 @@ public:
   void destroy();
   // Tells the player `message` in a modal error box over a shown window; a tool's unmapped window only logs it.
   void showError(const char *title, const std::string &message) const;
+  // A shown window takes the player's fullscreen choice when it changes; call on the event thread.
+  void followFullscreen();
 
   SDL_Window *window() const {
     return window_;
@@ -51,6 +53,7 @@ private:
 
   SDL_Window *window_ = nullptr;
   bool shown_ = false;
+  bool fullscreen_ = false;
   double refreshPeriodMs_ = 0.0;
   SDL_GPUTextureFormat swapchainFormat_ = SDL_GPU_TEXTUREFORMAT_INVALID;
 };

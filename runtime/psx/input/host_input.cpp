@@ -1,6 +1,7 @@
 // host_input.cpp — psx::input::HostInput: the SDL event drain, the delivered host key state, the
 // gamepads, and the PSX active-low button mask they add up to.
 #include "host_input.h"
+#include "config_vars.h"
 #include "diagnostic_config.h" // PSXPORT_PAD_NOPAD
 #ifdef PSXPORT_SDL
 #include "input_binding.h"
@@ -99,6 +100,15 @@ RmlOverlay *psx::input::HostInput::liveOverlay() const {
 namespace {
 // A stick or trigger pushed this far is the player using that pad, not drift.
 constexpr int kDeliberateAxis = 22000;
+
+// F11, or Alt+Enter: the desktop's usual fullscreen keys.
+bool fullscreenChord(const SDL_KeyboardEvent &key) {
+  if (key.repeat) {
+    return false;
+  }
+  const bool enter = key.scancode == SDL_SCANCODE_RETURN || key.scancode == SDL_SCANCODE_KP_ENTER;
+  return key.scancode == SDL_SCANCODE_F11 || (enter && (key.mod & SDL_KMOD_ALT) != 0);
+}
 } // namespace
 #endif
 
@@ -107,6 +117,11 @@ void psx::input::HostInput::drainEvents() {
   SDL_PumpEvents();
   SDL_Event event;
   while (SDL_PollEvent(&event)) {
+    // The chord is the player's, not the game's: Enter would also press Start.
+    if (event.type == SDL_EVENT_KEY_DOWN && fullscreenChord(event.key)) {
+      psx::config::setFullscreen(!psx::config::fullscreen());
+      continue;
+    }
     if (event.type == SDL_EVENT_KEY_DOWN || event.type == SDL_EVENT_KEY_UP) {
       noteHostKey(static_cast<int>(event.key.scancode), event.type == SDL_EVENT_KEY_DOWN);
     }
