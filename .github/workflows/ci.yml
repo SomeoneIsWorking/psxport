@@ -54,8 +54,10 @@ jobs:
           enable-cache: false
       - name: Install the build host's tools
         run: |
-          brew install autoconf automake libtool texinfo ninja shaderc
+          brew install autoconf automake libtool texinfo ninja shaderc llvm
           echo "$(brew --prefix libtool)/libexec/gnubin" >> "$GITHUB_PATH"
+          # The test program is mipsel guest code; Apple's clang has no MIPS backend. cc stays AppleClang.
+          echo "$(brew --prefix llvm)/bin" >> "$GITHUB_PATH"
       - name: Check out the pinned Lightrec
         run: uv run --frozen python tools/psxport_fetch.py --lightrec
       - name: Build against the macOS target libraries
