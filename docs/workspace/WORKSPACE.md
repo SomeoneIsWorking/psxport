@@ -49,7 +49,7 @@ Toy Story 2, C-12: Final Resistance. Every title: widescreen and loading removal
 whose logic runs at 30 fps (two fields per logic frame, read from its frame loop or `[playcheck] cadence:`); a 60 fps
 title gets none. Tekken 3, Tomba! 1 and Mega Man X4 are 60 fps; measure any other title before planning it. Vagrant Story's horizontal
 projection word is gameplay state (battle code branches on it), so widen its canvas, never `H`.
-C-12 also gets increased draw distance. Spyro 1/2/3 also get more vegetation (psx-spyro G006) and a right-stick camera (psx-spyro G007). Tomba! 2 also gets better water and fire (psx-tomba G006, G007). Mega Man X4 also gets drop-in/drop-out co-op
+C-12 also gets increased draw distance and a right-stick camera (psx-c12 G004). Spyro 1/2/3 also get more vegetation (psx-spyro G006) and a right-stick camera (psx-spyro G007). Tomba! 2 also gets better water and fire (psx-tomba G006, G007). Mega Man X4 also gets drop-in/drop-out co-op
 and skippable dialogue and sequences.
 
 Start skips what the player does not control (logos, movies, flybys, transition and load fades) in every title.
