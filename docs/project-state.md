@@ -156,8 +156,13 @@ Partial, in the product host: a one-title product with no usable disc shows the 
 first-run screen and remembers the accepted image; a packaged (AppImage `APPDIR`) run defaults to a
 window and its shipped assets and keeps its data in user data (`docs/title-host.md`). Evidence: a Crash Bash zero-argument packaged run refused with no disc
 (hidden) and, from a saved choice, extracted its executable and booted. Gaps: the windowed screen has
-not been driven by a player click, it has no handset-size capture, and the selector has no first-run
-screen.
+not been driven by a player click and it has no handset-size capture.
+
+Partial, Linux release: `tools/port/appimage_container.py` builds a title in the Ubuntu 22.04 image
+(`tools/port/appimage-build.Containerfile`: clang-20, SDL3/SDL3_image and pinned Lightning/Lightrec built
+in) and `tools/port/appimage.py` packages it, refusing game content and any ELF needing more than
+glibc 2.35, with GitHub update information and its `.zsync` (`docs/appimage.md`). Titles call
+`.github/workflows/title-release.yml` from a `v*` tag or by hand. Windows, macOS and Android have none.
 
 ### S022 — Mechanical structure/config/logging/tooling policy
 
@@ -205,7 +210,7 @@ shown window and is unrun by an agent.
 
 The direct maintained Lightrec fork is now the Linux x86-64 product dependency. Hosted verification
 builds the maintained GNU Lightning fork at exact revision
-`8138ebae9f5ab23abec1340f0eba00c906c85c78` and passes its validated installed prefix explicitly to
+`PSXPORT_LIGHTNING_REVISION` (`cmake/lightrec_dependency.cmake`) and passes its validated installed prefix explicitly to
 Lightrec instead of relying on a distribution package or ambient sibling checkout. Gameplay is still
 blocked on multi-`Core` lifecycle support, complete executable-write invalidation coverage, and
 representative title/device integration. Its AArch64 dependency also

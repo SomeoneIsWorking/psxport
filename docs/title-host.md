@@ -75,12 +75,13 @@ With no argument a one-title product provisions its executable. If it is neither
 copied): the chosen image must open as a CHD and its `discExecutablePath` must authenticate as the
 title; an accepted path is saved and provisioning runs again. Closing the screen exits 0. With the
 window not shown (`psx::config::show_window()` false) it renders one offscreen frame, logs the key to set and
-exits 2, so a test run never waits on a player. The selector has no first-run screen yet.
+exits 2, so a test run never waits on a player. A selector with no available title shows each title's
+first-run screen in turn and opens when one was provided; with none it exits 0.
 
 A packaged run (`Config::packageRoot`, the AppImage's absolute `APPDIR`) applies
-`psx::config::applyPackagedDefaults` (a window, assets under `<APPDIR>/usr/share/psxport`) and, for a
-one-title product, enters `<user data>/<slug>` so the provisioning root, settings and memory card are
-user data. A packaged multi-title product keeps the working directory it was started in.
+`psx::config::applyPackagedDefaults` (a window, assets under `<APPDIR>/usr/share/psxport`) and enters
+`<user data>/<executable name>`, the settings directory, so the provisioning root and memory card are
+user data for a one-title product and the selector alike.
 
 `GameRuntime::startProgram` enters the guest, called by `TitleSession::boot` after the overrides,
 the control channel and the display clear. Its default does nothing: the title's frame driver enters

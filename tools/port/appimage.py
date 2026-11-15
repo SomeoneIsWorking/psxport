@@ -20,6 +20,7 @@ import hashlib
 import json
 import os
 import platform
+import re
 import shutil
 import stat
 import subprocess
@@ -30,6 +31,7 @@ import urllib.request
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
+from xml.sax.saxutils import escape
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
@@ -40,6 +42,8 @@ TOOLS_MANIFEST = Path(__file__).resolve().with_name("appimage-tools.json")
 ASSETS = FRAMEWORK / "assets"
 DISC_SUFFIXES = frozenset({".chd", ".cue", ".bin", ".iso", ".img", ".pbp", ".ccd", ".sub", ".mds", ".mdf"})
 PSX_EXE_MAGIC = b"PS-X EXE"
+GLIBC_REFERENCE = re.compile(r"\bGLIBC_(\d+)\.(\d+)(?:\.(\d+))?\b")
+ELF_MAGIC = b"\x7fELF"
 ARTIFACT_NAME_CHARACTERS = frozenset("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._+-")
 
 
@@ -252,8 +256,9 @@ def release_version(root: Path, requested: str | None, allow_dirty: bool) -> tup
     return version, int(git_value(root, ["show", "-s", "--format=%ct", "HEAD"]))
 
 
-def run_checked(command: Sequence[str], *, environment: Mapping[str, str] | None = None) -> None:
-    completed = subprocess.run(list(command), text=True, capture_output=True, check=False, env=environment)
+def run_checked(command: Sequence[str], *, environment: Mapping[str, str] | None = None,
+                cwd: Path | None = None) -> None:
+    completed = subprocess.run(list(command), text=True, capture_output=True, check=False, env=environment, cwd=cwd)
     if completed.returncode != 0:
         detail = "\n".join(output.strip() for output in (completed.stdout, completed.stderr) if output.strip())
         raise Refused(f"{' '.join(command)} failed:\n{detail or 'no diagnostic'}")
@@ -282,10 +287,13 @@ def prepare_appdir(title: Title, binary: Path, space: Workspace, tools: Mapping[
     licences = space.appdir / "usr" / "share" / "licenses" / title.entry.app_id
     licences.mkdir(parents=True, exist_ok=True)
     shutil.copy2(title.licence, licences / title.licence.name)
+    metainfo = space.appdir / "usr" / "share" / "metainfo"
+    metainfo.mkdir(parents=True, exist_ok=True)
     if title.metainfo is not None:
-        metainfo = space.appdir / "usr" / "share" / "metainfo"
-        metainfo.mkdir(parents=True, exist_ok=True)
         shutil.copy2(title.metainfo, metainfo / title.metainfo.name)
+    else:
+        (metainfo / f"{title.entry.app_id}.metainfo.xml").write_text(generated_metainfo(title, binary.name),
+                                                                    encoding="utf-8")
 
     app_run = space.appdir / "AppRun"
     app_run.unlink(missing_ok=True)
@@ -294,6 +302,34 @@ def prepare_appdir(title: Title, binary: Path, space: Workspace, tools: Mapping[
     directory_icon.unlink(missing_ok=True)
     directory_icon.symlink_to(title.entry.icon.name)
     audit_appdir(title, space.appdir)
+
+
+def generated_metainfo(title: Title, binary: str) -> str:
+    """AppStream metadata from the desktop entry, for an MIT title with no committed metainfo."""
+    if not title.licence.read_text(encoding="utf-8").startswith("MIT License"):
+        raise Mismatch(f"{title.licence.name} is not MIT; commit "
+                       f"packaging/linux/{title.entry.app_id}.metainfo.xml naming its licence")
+    text = title.entry.source.read_text(encoding="utf-8")
+    name, comment = (escape(desktop_shortcut.field(text, key)) for key in ("Name", "Comment"))
+    if not comment:
+        raise Mismatch(f"{title.entry.source} has no Comment= for the AppStream summary")
+    categories = "".join(f"    <category>{escape(category)}</category>\n"
+                         for category in desktop_shortcut.field(text, "Categories").split(";") if category)
+    return (f'<?xml version="1.0" encoding="UTF-8"?>\n'
+            f'<component type="desktop-application">\n'
+            f"  <id>{title.entry.app_id}</id>\n"
+            f"  <name>{name}</name>\n"
+            f"  <summary>{comment}</summary>\n"
+            f"  <metadata_license>CC0-1.0</metadata_license>\n"
+            f"  <project_license>MIT</project_license>\n"
+            f"  <description>\n"
+            f"    <p>{comment}. The original game is not included: the first launch asks for the player's "
+            f"own disc image.</p>\n"
+            f"  </description>\n"
+            f'  <launchable type="desktop-id">{title.entry.source.name}</launchable>\n'
+            f"  <provides>\n    <binary>{escape(binary)}</binary>\n  </provides>\n"
+            f"  <categories>\n{categories}  </categories>\n"
+            f"</component>\n")
 
 
 def audit_appdir(title: Title, appdir: Path) -> None:
@@ -319,8 +355,50 @@ def audit_appdir(title: Title, appdir: Path) -> None:
     print(f"[appimage] content audit: {files} packaged files, 0 game files")
 
 
+def parse_glibc(text: str) -> tuple[int, ...]:
+    try:
+        return tuple(int(part) for part in text.split("."))
+    except ValueError as error:
+        raise Refused(f"--max-glibc {text!r} is not a version") from error
+
+
+def audit_glibc(appdir: Path, ceiling: tuple[int, ...]) -> None:
+    """Refuses an AppDir whose ELF files need a newer glibc than the oldest supported distribution."""
+    newest: tuple[tuple[int, ...], Path] | None = None
+    scanned = 0
+    for path in appdir.rglob("*"):
+        if not path.is_file() or path.is_symlink():
+            continue
+        with path.open("rb") as input_file:
+            if input_file.read(len(ELF_MAGIC)) != ELF_MAGIC:
+                continue
+        scanned += 1
+        completed = subprocess.run(["readelf", "--version-info", "--wide", str(path)], text=True,
+                                   capture_output=True, check=False)
+        if completed.returncode != 0:
+            raise Refused(f"readelf cannot read {path}: {completed.stderr.strip()}")
+        for match in GLIBC_REFERENCE.finditer(completed.stdout):
+            version = tuple(int(part) for part in match.groups() if part is not None)
+            if newest is None or version > newest[0]:
+                newest = (version, path.relative_to(appdir))
+    if scanned == 0:
+        raise Refused("the glibc audit found no ELF files")
+    if newest is not None and newest[0] > ceiling:
+        raise Mismatch(f"{newest[1]} needs GLIBC_{'.'.join(map(str, newest[0]))}, newer than the "
+                       f"{'.'.join(map(str, ceiling))} floor; build in tools/port/appimage-build.Containerfile")
+    found = ".".join(map(str, newest[0])) if newest else "none"
+    print(f"[appimage] glibc audit: {scanned} ELF files, newest GLIBC_{found}")
+
+
+def update_information(title: Title, repository: str) -> str:
+    owner, separator, name = repository.partition("/")
+    if not separator or not owner or not name or "/" in name or "|" in repository:
+        raise Refused(f"--update-repository {repository!r} is not OWNER/REPO")
+    return f"gh-releases-zsync|{owner}|{name}|latest|{title.name}-*-x86_64.AppImage.zsync"
+
+
 def build_appimage(title: Title, space: Workspace, output: Path, version: str, epoch: int,
-                   tools: Mapping[str, Tool]) -> Path:
+                   tools: Mapping[str, Tool], update: str | None) -> Path:
     appimagetool = space.extract(tools["appimagetool"])
     runtime = space.download(tools["runtime"])
     output.mkdir(parents=True, exist_ok=True)
@@ -328,8 +406,13 @@ def build_appimage(title: Title, space: Workspace, output: Path, version: str, e
     destination.unlink(missing_ok=True)
     environment = os.environ.copy()
     environment.update({"ARCH": "x86_64", "VERSION": version, "SOURCE_DATE_EPOCH": str(epoch)})
-    run_checked([str(appimagetool), "--runtime-file", str(runtime), str(space.appdir), str(destination)],
-                environment=environment)
+    command = [str(appimagetool), "--runtime-file", str(runtime)]
+    if update is not None:
+        command += ["--updateinformation", update]
+    # appimagetool writes the .zsync into its working directory.
+    run_checked([*command, str(space.appdir), str(destination)], environment=environment, cwd=output)
+    if update is not None and not destination.with_name(destination.name + ".zsync").is_file():
+        raise Refused(f"appimagetool embedded update information but wrote no {destination.name}.zsync")
     destination.chmod(destination.stat().st_mode | stat.S_IXUSR)
     verify_artifact(space, destination)
     print(f"[appimage] artifact: {destination} ({destination.stat().st_size} bytes, sha256 {sha256(destination)})")
@@ -355,6 +438,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--binary", type=Path, required=True, help="the built port")
     parser.add_argument("--version", help="release version; defaults to git describe")
     parser.add_argument("--output", type=Path, help="output directory; defaults to build/package/appimage/out")
+    parser.add_argument("--max-glibc", help="refuse a package that needs a newer glibc, e.g. 2.35")
+    parser.add_argument("--update-repository", metavar="OWNER/REPO",
+                        help="embed GitHub-release update information and write the .zsync beside it")
     parser.add_argument("--allow-dirty", action="store_true",
                         help="developer staging only; a release is built from a clean commit")
     args = parser.parse_args(argv)
@@ -367,8 +453,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         version, epoch = release_version(root, args.version, args.allow_dirty)
         tools = load_tools()
         space = Workspace(title.work)
+        update = update_information(title, args.update_repository) if args.update_repository else None
         prepare_appdir(title, binary, space, tools)
-        build_appimage(title, space, args.output or title.work / "out", version, epoch, tools)
+        if args.max_glibc:
+            audit_glibc(space.appdir, parse_glibc(args.max_glibc))
+        build_appimage(title, space, args.output or title.work / "out", version, epoch, tools, update)
         return 0
     except Mismatch as error:
         print(f"MISMATCH: {error}", file=sys.stderr)
