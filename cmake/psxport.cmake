@@ -340,6 +340,10 @@ target_include_directories(psxport PRIVATE ${PSXPORT_INTERNAL_INCLUDES})
 
 target_compile_definitions(psxport PUBLIC
   PSXPORT_SDL _XOPEN_SOURCE=700 RMLUI_STATIC_LIB RMLUI_SDL_VERSION_MAJOR=3)
+if(APPLE)
+  # _XOPEN_SOURCE hides Darwin's BSD extensions (strlcpy), which libretro-common expects there.
+  target_compile_definitions(psxport PUBLIC _DARWIN_C_SOURCE)
+endif()
 
 target_compile_options(psxport PRIVATE -w)
 
