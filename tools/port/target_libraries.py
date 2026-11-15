@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Build the libraries a packaged psxport product links, from pinned and checksummed sources.
 
-    target_libraries.py libraries --platform linux|windows --prefix DIR --work DIR [-- CMAKE_ARG...]
+    target_libraries.py libraries --platform linux|windows|macos --prefix DIR --work DIR [-- CMAKE_ARG...]
     target_libraries.py lightning --revision REV --root DIR --cc CC [--host TRIPLE]
 
 `libraries` builds every entry of target-libraries.json for the platform into one prefix, passing
@@ -109,7 +109,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     commands = parser.add_subparsers(dest="command", required=True)
     libs = commands.add_parser("libraries")
-    libs.add_argument("--platform", choices=("linux", "windows"), required=True)
+    libs.add_argument("--platform", choices=("linux", "windows", "macos"), required=True)
     libs.add_argument("--prefix", type=Path, required=True)
     libs.add_argument("--work", type=Path, required=True)
     libs.add_argument("cmake_arguments", nargs="*")

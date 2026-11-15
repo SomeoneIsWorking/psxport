@@ -169,7 +169,11 @@ Partial, Windows release: llvm-mingw cross-builds a title (`consumer_build.py --
 does not ship; the release workflow builds and uploads it beside the AppImage (`docs/windows.md`). Evidence:
 the Tomba archive under Wine 11 reaches Tomba 2 free roam with 0 fallbacks and 0 faults
 (`psx-tomba/scratch/windows/wine_gameplay_1000.png`). Gaps: no Windows-kernel run, no icon, unsigned.
-macOS and Android have none.
+
+Partial, macOS release: `consumer_build.py --platform macos` builds natively on an Intel Mac and
+`macos_package.py` writes `<Name>.app` with MoltenVK under SDL_GPU's Vulkan backend, refusing game content and
+any non-system library (`docs/macos.md`); the release workflow builds it on `macos-15-intel`. Gaps: no run on
+a Mac, ad-hoc signature, no arm64. Android has none.
 
 ### S022 — Mechanical structure/config/logging/tooling policy
 

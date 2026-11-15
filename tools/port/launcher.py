@@ -36,10 +36,10 @@ AGENT_BUILD = Path("build/agent")
 CI_BUILD = Path("build/ci")
 # Built inside the release container (appimage_container.py), never by the host toolchain.
 APPIMAGE_BUILD = Path("build/appimage")
-# The Windows x86-64 cross build (llvm-mingw, tools/port/windows_target.py).
-WINDOWS_BUILD = Path("build/windows")
+# The release platforms' build trees (tools/port/target_platform.py).
+PLATFORM_BUILDS = {"windows": Path("build/windows"), "macos": Path("build/macos")}
 # The trees a maintainer build may name; one tree per purpose, never one per task.
-MAINTAINER_BUILDS = (AGENT_BUILD, CI_BUILD, APPIMAGE_BUILD, WINDOWS_BUILD)
+MAINTAINER_BUILDS = (AGENT_BUILD, CI_BUILD, APPIMAGE_BUILD, *PLATFORM_BUILDS.values())
 FRAMEWORK_TOOLS_BUILD = Path("build/player-tools")
 # Set by the desktop shortcut: launch the newest product already built instead of building.
 RUN_BUILT = "PSXPORT_RUN_BUILT"

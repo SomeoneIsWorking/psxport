@@ -1,8 +1,8 @@
 name: Title release
 
 # Called by a title's release workflow: builds its AppImage in the Ubuntu 22.04 container
-# (tools/port/appimage_container.py) and its Windows archive with llvm-mingw (tools/port/windows_package.py),
-# and publishes both on the title's GitHub release.
+# (tools/port/appimage_container.py), its Windows archive with llvm-mingw (tools/port/windows_package.py) and
+# its macOS app on an Intel Mac (tools/port/macos_package.py), and publishes them on the title's GitHub release.
 on:
   workflow_call:
     inputs:
@@ -98,3 +98,39 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: gh release upload "${RELEASE_TAG}" --repo "${GITHUB_REPOSITORY}" --clobber build/release/*-windows-x86_64.zip
+
+  macos:
+    name: macOS (x86-64)
+    needs: release
+    runs-on: macos-15-intel
+    timeout-minutes: 120
+    env:
+      RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
+    steps:
+      - name: Check out the title with full history
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Select uv
+        uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d
+        with:
+          version: "0.10.12"
+      - name: Resolve the framework
+        run: uv run --no-project https://raw.githubusercontent.com/SomeoneIsWorking/psxport/main/tools/psxport_fetch.py --auto
+      - name: Install the build host's tools
+        run: |
+          brew install autoconf automake libtool texinfo ninja shaderc librsvg
+          echo "$(brew --prefix libtool)/libexec/gnubin" >> "$GITHUB_PATH"
+      - name: Check out the pinned Lightrec
+        run: uv run --no-project python external/psxport/tools/psxport_fetch.py --lightrec
+      - name: Build against the macOS target libraries
+        run: uv run --frozen python external/psxport/tools/port/consumer_build.py --platform macos --target "${{ inputs.product }}"
+      - name: Package the app
+        run: >-
+          uv run --frozen python external/psxport/tools/port/macos_package.py
+          --binary "build/macos/bin/${{ inputs.product }}" --version "${RELEASE_TAG}" --output build/release
+      - name: Publish the app
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload "${RELEASE_TAG}" --repo "${GITHUB_REPOSITORY}" --clobber build/release/*-macos-x86_64.zip

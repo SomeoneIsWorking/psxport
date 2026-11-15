@@ -352,7 +352,13 @@ target_compile_options(psxport PRIVATE -w)
 # ON by default because an instrument nobody can switch on without recompiling is an instrument
 # nobody uses; set PSXPORT_WRAP_MEMCPY=OFF to link without it and prove the wrapper itself costs
 # nothing (an A/B this option exists to make possible).
-option(PSXPORT_WRAP_MEMCPY "Route first-party memcpy/memmove through the call-site census" ON)
+# Apple's linker has no --wrap.
+if(APPLE)
+  set(_psxport_wrap_default OFF)
+else()
+  set(_psxport_wrap_default ON)
+endif()
+option(PSXPORT_WRAP_MEMCPY "Route first-party memcpy/memmove through the call-site census" ${_psxport_wrap_default})
 if(PSXPORT_WRAP_MEMCPY)
   # --undefined pulls memcensus.o from the archive even when only a later library (zstd) calls memcpy.
   target_link_options(psxport INTERFACE -Wl,--wrap=memcpy -Wl,--wrap=memmove

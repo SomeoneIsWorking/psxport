@@ -179,6 +179,8 @@ private:
   // A submit failed or hung: latch, and record it for the next process.
   void failDevice(const char *where, const char *detail);
   SDL_GPUSampler *makeSampler(SDL_GPUFilter filter);
+  // macOS: point SDL at the MoltenVK a package carries.
+  static void useBundledMoltenVK();
 
   bool enabled_ = true;
   bool faulted_ = false;

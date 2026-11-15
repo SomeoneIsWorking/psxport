@@ -323,6 +323,16 @@ Config Config::fromEnvironment() {
   if (executable && std::filesystem::is_directory(executable->parent_path() / "assets", missing)) {
     config.package = Package{executable->parent_path(), executable->parent_path()};
   }
+#elif defined(__APPLE__)
+  // A macOS package is <Name>.app with the executable in Contents/MacOS and assets/ in Contents/Resources.
+  const std::optional<std::filesystem::path> executable = lucent::platform::executable_path();
+  if (executable) {
+    const std::filesystem::path contents = executable->parent_path().parent_path();
+    std::error_code missing;
+    if (std::filesystem::is_directory(contents / "Resources" / "assets", missing)) {
+      config.package = Package{contents.parent_path(), contents / "Resources"};
+    }
+  }
 #else
   std::filesystem::path root(lucent::config::text("APPDIR"));
   if (root.is_absolute()) {

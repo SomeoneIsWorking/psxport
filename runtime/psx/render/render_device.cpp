@@ -12,6 +12,7 @@
 
 #include <cstdlib>
 #include <cstring>
+#include <filesystem>
 #include <optional>
 #include <string>
 
@@ -107,6 +108,22 @@ SDL_GPUSampler *RenderDevice::makeSampler(SDL_GPUFilter filter) {
   return sampler;
 }
 
+void RenderDevice::useBundledMoltenVK() {
+#if defined(__APPLE__)
+  // A macOS package carries MoltenVK in Contents/Frameworks, where SDL's Vulkan loader does not look.
+  const char *base = SDL_GetBasePath();
+  if (base == nullptr) {
+    return;
+  }
+  // In a bundle SDL's base path is Contents/Resources/.
+  const std::filesystem::path moltenvk = std::filesystem::path(base) / ".." / "Frameworks" / "libMoltenVK.dylib";
+  std::error_code missing;
+  if (std::filesystem::is_regular_file(moltenvk, missing)) {
+    SDL_SetHint(SDL_HINT_VULKAN_LIBRARY, moltenvk.string().c_str());
+  }
+#endif
+}
+
 void RenderDevice::bringUp() {
   if (device_ != nullptr) {
     return;
@@ -117,6 +134,7 @@ void RenderDevice::bringUp() {
   }
   window_.create(shown(), windowTitle_ != nullptr ? windowTitle_ : "psxport (untitled game)", sinkSize(), namedSink_);
   reportRecordedFault();
+  useBundledMoltenVK();
   device_ = SDL_CreateGPUDevice(SDL_GPU_SHADERFORMAT_SPIRV, psx::config::gpu_validation(), nullptr);
   GPUCHK(device_, "SDL_CreateGPUDevice");
   const char *driver = SDL_GetGPUDeviceDriver(device_);

@@ -9,7 +9,7 @@ namespace psx::config {
 
 // The installed package a process runs from.
 struct Package {
-  std::filesystem::path root;        // an AppImage's APPDIR, or the directory of a Windows executable
+  std::filesystem::path root;        // an AppImage's APPDIR, a macOS .app, or a Windows executable's directory
   std::filesystem::path assetParent; // the directory holding assets/
 };
 

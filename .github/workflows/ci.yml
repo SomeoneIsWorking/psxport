@@ -35,3 +35,28 @@ jobs:
         uses: ./.github/actions/setup-linux
       - name: Build the shipping binaries
         run: uv run --frozen python tools/build.py
+
+  macos-x86_64:
+    name: macOS x86-64 build
+    runs-on: macos-15-intel
+    timeout-minutes: 90
+    steps:
+      - name: Check out psxport with full history
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+          submodules: recursive
+      - name: Select locked uv
+        uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d
+        with:
+          version: "0.10.12"
+          enable-cache: false
+      - name: Install the build host's tools
+        run: |
+          brew install autoconf automake libtool texinfo ninja shaderc
+          echo "$(brew --prefix libtool)/libexec/gnubin" >> "$GITHUB_PATH"
+      - name: Check out the pinned Lightrec
+        run: uv run --frozen python tools/psxport_fetch.py --lightrec
+      - name: Build against the macOS target libraries
+        run: uv run --frozen python tools/build.py --platform macos

@@ -7,7 +7,7 @@ shares its title identity, version and content audit (`tools/port/release_packag
 | piece | role |
 |---|---|
 | `cmake/toolchains/llvm-mingw-x86_64.cmake` | llvm-mingw (UCRT) toolchain; `-static`, so the C++ runtime and winpthreads are linked in |
-| `tools/port/windows_target.py` | llvm-mingw 20260922 (checksummed), the target libraries and Lightning, each built once per pin under the dependency root |
+| `tools/port/target_platform.py` | llvm-mingw 20260922 (checksummed), the target libraries and Lightning, each built once per pin under the dependency root (shared with `docs/macos.md`) |
 | `tools/port/target_libraries.py`, `target-libraries.json` | zlib, SDL3 (fork), SDL3_image and FreeType from pinned, checksummed sources; the AppImage image builds the same pins |
 | `tools/port/consumer_build.py --platform windows` | the title's build in `build/windows` |
 | `tools/port/windows_package.py` | `<Name>-<version>-windows-x86_64.zip`: `<Name>/<Name>.exe` (stripped), `assets/`, the licence |

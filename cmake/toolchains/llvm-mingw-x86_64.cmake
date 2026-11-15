@@ -1,11 +1,11 @@
-# Windows x86-64 with llvm-mingw (Clang, libc++, UCRT). tools/port/windows_target.py provisions the
+# Windows x86-64 with llvm-mingw (Clang, libc++, UCRT). tools/port/target_platform.py provisions the
 # toolchain and passes its root as LLVM_MINGW_ROOT.
 set(CMAKE_SYSTEM_NAME Windows)
 set(CMAKE_SYSTEM_PROCESSOR x86_64)
 
 if(NOT LLVM_MINGW_ROOT)
   message(FATAL_ERROR "llvm-mingw-x86_64.cmake: pass -DLLVM_MINGW_ROOT=<llvm-mingw directory>; "
-                      "tools/port/windows_target.py provisions one.")
+                      "tools/port/target_platform.py provisions one.")
 endif()
 # Windows hosts pass backslashes, which generated CMake files read as escapes.
 file(TO_CMAKE_PATH "${LLVM_MINGW_ROOT}" LLVM_MINGW_ROOT)

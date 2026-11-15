@@ -12,29 +12,32 @@
       "name": "SDL3",
       "url": "https://github.com/SomeoneIsWorking/SDL/archive/b76a1c0dbba2f3b936fb95ad55ec4cae58318db6.tar.gz",
       "sha256": "693d77d5c450b4c2a3ec2ca3fdbf6e8835aaad658146c38eefe60ef7c7451cff",
-      "platforms": ["linux", "windows"],
+      "platforms": ["linux", "windows", "macos"],
       "options": {
         "all": ["-DSDL_TESTS=OFF", "-DSDL_EXAMPLES=OFF"],
-        "windows": ["-DSDL_SHARED=OFF", "-DSDL_STATIC=ON", "-DSDL_TEST_LIBRARY=OFF"]
+        "windows": ["-DSDL_SHARED=OFF", "-DSDL_STATIC=ON", "-DSDL_TEST_LIBRARY=OFF"],
+        "macos": ["-DSDL_SHARED=OFF", "-DSDL_STATIC=ON", "-DSDL_TEST_LIBRARY=OFF"]
       }
     },
     {
       "name": "SDL3_image",
       "url": "https://github.com/libsdl-org/SDL_image/releases/download/release-3.4.8/SDL3_image-3.4.8.tar.gz",
       "sha256": "e8223b424bc7541cf84ffff5cf7e4f24ec3711c60462cb1bd6dc1d7bd7f25477",
-      "platforms": ["linux", "windows"],
+      "platforms": ["linux", "windows", "macos"],
       "options": {
         "all": ["-DSDLIMAGE_VENDORED=OFF", "-DSDLIMAGE_SAMPLES=OFF", "-DSDLIMAGE_TESTS=OFF", "-DSDLIMAGE_AVIF=OFF",
                 "-DSDLIMAGE_JXL=OFF", "-DSDLIMAGE_TIF=OFF", "-DSDLIMAGE_WEBP=OFF"],
         "windows": ["-DBUILD_SHARED_LIBS=OFF", "-DSDLIMAGE_DEPS_SHARED=OFF", "-DSDLIMAGE_BACKEND_STB=ON",
-                    "-DSDLIMAGE_BACKEND_WIC=OFF", "-DSDLIMAGE_PNG_LIBPNG=OFF"]
+                    "-DSDLIMAGE_BACKEND_WIC=OFF", "-DSDLIMAGE_PNG_LIBPNG=OFF"],
+        "macos": ["-DBUILD_SHARED_LIBS=OFF", "-DSDLIMAGE_DEPS_SHARED=OFF", "-DSDLIMAGE_BACKEND_STB=ON",
+                  "-DSDLIMAGE_BACKEND_IMAGEIO=OFF", "-DSDLIMAGE_PNG_LIBPNG=OFF"]
       }
     },
     {
       "name": "freetype",
       "url": "https://github.com/freetype/freetype/archive/refs/tags/VER-2-14-1.tar.gz",
       "sha256": "44bd69d1f0750603410cfd4f26f1c5523c5a3a087a2dfa8639b757dc7c6677be",
-      "platforms": ["linux", "windows"],
+      "platforms": ["linux", "windows", "macos"],
       "options": {
         "all": ["-DCMAKE_POSITION_INDEPENDENT_CODE=ON", "-DBUILD_SHARED_LIBS=OFF", "-DFT_DISABLE_BZIP2=ON",
                 "-DFT_DISABLE_BROTLI=ON", "-DFT_DISABLE_HARFBUZZ=ON", "-DFT_DISABLE_PNG=ON", "-DFT_DISABLE_ZLIB=ON"]
