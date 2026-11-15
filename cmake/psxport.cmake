@@ -415,4 +415,9 @@ function(psxport_add_product target)
     "PSXPORT_PRODUCT_CATALOG=${PRODUCT_CATALOG}"
     "PSXPORT_PRODUCT_CATALOG_HEADER=\"${PRODUCT_HEADER}\"")
   target_link_libraries(${target} PRIVATE psxport ${PRODUCT_LIBRARIES})
+  # <build>/bin/<target> is where the launcher, desktop shortcut and AppImage packager find the product;
+  # exported symbols name the watchdog's backtrace frames.
+  set_target_properties(${target} PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
+    ENABLE_EXPORTS ON)
 endfunction()

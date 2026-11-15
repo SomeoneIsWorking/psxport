@@ -3,7 +3,7 @@
 FROM docker.io/library/ubuntu:22.04
 ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update && apt-get install -y --no-install-recommends \
-        autoconf automake binutils ca-certificates cmake curl desktop-file-utils file git gnupg \
+        autoconf automake binutils ca-certificates curl desktop-file-utils file git gnupg \
         libtool make ninja-build pkg-config texinfo xz-utils zlib1g-dev libzstd-dev zsync \
         libc6-dev libstdc++-11-dev \
         libx11-dev libxext-dev libxrandr-dev libxcursor-dev libxi-dev libxfixes-dev libxss-dev \
@@ -23,6 +23,14 @@ RUN curl -fsSL -o /tmp/uv.tar.gz \
     && echo "${UV_SHA256}  /tmp/uv.tar.gz" | sha256sum -c - \
     && tar -xzf /tmp/uv.tar.gz -C /usr/local/bin --strip-components=1 \
     && rm /tmp/uv.tar.gz
+# Ubuntu 22.04's CMake is 3.22; titles need 3.24.
+ARG CMAKE_VERSION=3.31.6
+ARG CMAKE_SHA256=5a1133ff103c71eb5120e2cc3de922733e7d8a26a98ae716397e8676adb367bf
+RUN curl -fsSL -o /tmp/cmake.tar.gz \
+        "https://github.com/Kitware/CMake/releases/download/v${CMAKE_VERSION}/cmake-${CMAKE_VERSION}-linux-x86_64.tar.gz" \
+    && echo "${CMAKE_SHA256}  /tmp/cmake.tar.gz" | sha256sum -c - \
+    && tar -xzf /tmp/cmake.tar.gz -C /usr/local --strip-components=1 \
+    && rm /tmp/cmake.tar.gz && cmake --version
 ENV CC=clang-20 CXX=clang++-20 UV_FROZEN=1 PYTHONDONTWRITEBYTECODE=1
 # libstdc++ 11 has no <format>; libc++ 20 is linked statically, so the package needs no newer GLIBCXX.
 ENV CXXFLAGS=-stdlib=libc++ LDFLAGS="-stdlib=libc++ -static-libstdc++"
