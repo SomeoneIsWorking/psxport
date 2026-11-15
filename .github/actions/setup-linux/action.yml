@@ -16,7 +16,7 @@ runs:
         PSXPORT_CI_FRAMEWORK: ${{ inputs.framework-directory }}
         PSXPORT_CI_DEPENDENCIES: ${{ inputs.dependency-directory }}
       run: uv run --frozen python "${{ github.action_path }}/setup.py" --validate-only
-    - name: Resolve the framework-pinned Lightrec revision
+    - name: Resolve the framework-pinned Lightrec and Lightning revisions
       id: revisions
       shell: bash
       env:
@@ -35,7 +35,7 @@ runs:
       uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
       with:
         repository: SomeoneIsWorking/lightning
-        ref: 8138ebae9f5ab23abec1340f0eba00c906c85c78
+        ref: ${{ steps.revisions.outputs.lightning }}
         path: ${{ inputs.dependency-directory }}/lightning
         fetch-depth: 0
         persist-credentials: false

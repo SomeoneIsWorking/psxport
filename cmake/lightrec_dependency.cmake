@@ -19,6 +19,8 @@ include_guard(GLOBAL)
 # break 6), so a guarded divide by zero or INT_MIN/-1 yields the MIPS LO/HI where an R3000A takes the
 # break exception (docs/testprog.md, psx-crash issues 0033 and 0034).
 set(PSXPORT_LIGHTREC_REVISION "5aa9bdfcf330ce4140898cc89c8516c78dcdff8e")
+# The GNU Lightning fork (https://github.com/SomeoneIsWorking/lightning.git) CI and release builds link.
+set(PSXPORT_LIGHTNING_REVISION "8138ebae9f5ab23abec1340f0eba00c906c85c78")
 set(PSXPORT_LIGHTREC_PIN_ROOT "scratch/pins" CACHE STRING
     "Path, relative to a Lightrec checkout, holding one detached worktree per pinned revision")
 set(PSXPORT_LIGHTREC_DIR "" CACHE PATH "Path to the maintained shared/lightrec checkout")

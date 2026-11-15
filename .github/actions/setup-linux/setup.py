@@ -5,8 +5,8 @@ from __future__ import annotations
 import argparse
 import logging
 import os
-import re
 import subprocess
+import sys
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -16,22 +16,20 @@ PACKAGES = (
     "libfreetype-dev", "libtool", "make", "libsdl3-dev", "libsdl3-image-dev",
     "libvulkan1", "mesa-vulkan-drivers", "ninja-build", "pkg-config", "xvfb", "zlib1g-dev",
 )
-LIGHTREC_REVISION_DECLARATION = re.compile(r'set\(PSXPORT_LIGHTREC_REVISION "([0-9a-f]{40})"\)')
 Runner = Callable[[Sequence[str], Path], None]
 
 
 def framework_revisions(framework: Path) -> dict[str, str]:
-    # cmake/lightrec_dependency.cmake is the single authority for the maintained Lightrec revision;
-    # the CI checkout must never carry a second copy of that literal.
-    declaration = framework / "cmake" / "lightrec_dependency.cmake"
-    if not declaration.is_file():
-        raise RuntimeError(f"framework Lightrec dependency owner is missing: {declaration}")
-    revisions = set(LIGHTREC_REVISION_DECLARATION.findall(declaration.read_text(encoding="utf-8")))
-    if len(revisions) != 1:
-        raise RuntimeError(
-            f"expected exactly one PSXPORT_LIGHTREC_REVISION in {declaration}, found {len(revisions)}"
-        )
-    return {"lightrec": revisions.pop()}
+    # cmake/lightrec_dependency.cmake is the pins' one home; psxport_fetch reads it.
+    sys.path.insert(0, str(framework / "tools"))
+    from psxport_fetch import pinned_revision
+
+    revisions = {name.lower(): pinned_revision(str(framework), name) for name in ("LIGHTREC", "LIGHTNING")}
+    missing = [name for name, revision in revisions.items() if revision is None]
+    if missing:
+        raise RuntimeError(f"expected exactly one pinned revision of {', '.join(missing)} in "
+                           f"{framework / 'cmake' / 'lightrec_dependency.cmake'}")
+    return revisions
 
 
 @dataclass(frozen=True)

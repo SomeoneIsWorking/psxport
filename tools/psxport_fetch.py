@@ -29,7 +29,7 @@ DEFAULT_BRANCH = "main"
 # makes `--recursive` fail outright), then that nested gitlink, as (parent, child) pairs.
 SUBMODULES = ((".", "vendor/beetle-psx"), (".", "vendor/lucent"), (".", "vendor/rmlui"),
               (".", "vendor/bug-report"), (".", "vendor/setup-ui"), ("vendor/beetle-psx", "deps/libchdr"))
-LIGHTREC_REVISION = re.compile(r'set\s*\(\s*PSXPORT_LIGHTREC_REVISION\s+"([0-9a-f]{40})"')
+REVISION_DECLARATION = r'set\s*\(\s*PSXPORT_{}_REVISION\s+"([0-9a-f]{{40}})"'
 
 
 def git(args, cwd):
@@ -167,15 +167,15 @@ def do_ensure(repo, link):
     return do_clone(link)
 
 
-def pinned_lightrec_revision(repo):
-    """The Lightrec revision psxport pins, read from the module that consumes it — ONE source for the
-    pin, so this tool and cmake/lightrec_dependency.cmake cannot disagree about it."""
+def pinned_revision(repo, name):
+    """The LIGHTREC or LIGHTNING revision psxport pins, read from cmake/lightrec_dependency.cmake, the
+    pins' one home."""
     source = os.path.join(repo, "cmake", "lightrec_dependency.cmake")
     if not os.path.isfile(source):
         return None
     with open(source, encoding="utf-8") as handle:
-        found = LIGHTREC_REVISION.search(handle.read())
-    return found.group(1) if found else None
+        found = re.findall(REVISION_DECLARATION.format(name), handle.read())
+    return found[0] if len(found) == 1 else None
 
 
 def do_lightrec(repo):
@@ -183,7 +183,7 @@ def do_lightrec(repo):
     checkout, and print its path. `cmake/lightrec_dependency.cmake` probes `scratch/pins/<revision>/`
     before the plain checkout and refuses a checkout that is not at the pinned revision, so a Lightrec
     commit landing under a running consumer cannot change what that consumer builds."""
-    sha = pinned_lightrec_revision(repo)
+    sha = pinned_revision(repo, "LIGHTREC")
     if not sha:
         print("[psxport] REFUSED: no PSXPORT_LIGHTREC_REVISION in cmake/lightrec_dependency.cmake, so "
               "there is no Lightrec commit to pin to.")
