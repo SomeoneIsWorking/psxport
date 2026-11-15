@@ -55,8 +55,8 @@ ProductHost::Process &ProductHost::process() {
 
 int ProductHost::run(int argc, char **argv) {
   const char *program = argc > 0 ? argv[0] : "product";
-  if (config_.packageRoot) {
-    psx::config::applyPackagedDefaults(*config_.packageRoot);
+  if (config_.package) {
+    psx::config::applyPackagedDefaults(config_.package->assetParent);
   }
   if (argc <= 1) {
     return catalog_.titles().size() == 1 ? runOnlyTitle() : runSelector();
@@ -97,7 +97,7 @@ void ProductHost::printUsage(const char *program) const {
 
 int ProductHost::runSelector() {
   Process &state = process();
-  if (config_.packageRoot.has_value() && !enterUserData(*config_.packageRoot)) {
+  if (config_.package.has_value() && !enterUserData(config_.package->root)) {
     return 2;
   }
   PickerRuntime pickerRuntime;
@@ -145,7 +145,7 @@ int ProductHost::runSelector() {
 
 int ProductHost::runOnlyTitle() {
   const TitleIdentity &only = catalog_.titles().front();
-  if (config_.packageRoot.has_value() && !enterUserData(*config_.packageRoot)) {
+  if (config_.package.has_value() && !enterUserData(config_.package->root)) {
     return 2;
   }
   const std::filesystem::path executable = only.defaultExecutable(catalog_.provisioningRoot());

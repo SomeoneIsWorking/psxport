@@ -44,8 +44,8 @@ std::string asset_dir(); // PSXPORT_ASSET_DIR: the directory containing assets/,
 
 // PSXPORT_SHOW_WINDOW: map the window for a player; off, the same window stays unmapped for tools.
 bool show_window();
-// A packaged product's defaults: a window, and the assets under `<packageRoot>/usr/share/psxport`.
-void applyPackagedDefaults(const std::filesystem::path &packageRoot);
+// A packaged product's defaults: a window, and the assets under `assetParent`.
+void applyPackagedDefaults(const std::filesystem::path &assetParent);
 
 // PSXPORT_LIGHTREC_FALLBACK_BLOCK_LIMIT: interpreter-fallback blocks one bounded execution may admit.
 psx::cpu::FallbackPolicy lightrec_fallback_policy();

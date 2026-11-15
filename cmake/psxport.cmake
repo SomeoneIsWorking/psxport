@@ -106,6 +106,8 @@ set(PSXPORT_FRAMEWORK_SRC
   ${PSXPORT_ROOT}/runtime/psx/gpu/draw_list_cycle.cpp # a draw list that never ends, refused before the GPU
   ${PSXPORT_ROOT}/runtime/psx/debug/image_writer.cpp      # one checked RGB24 capture-file boundary, stills and clips
   ${PSXPORT_ROOT}/runtime/psx/debug/gpu_debug.cpp
+  ${PSXPORT_ROOT}/runtime/psx/debug/text_capture.cpp    # a FILE*-writing view captured as text
+  ${PSXPORT_ROOT}/runtime/psx/debug/host_backtrace.cpp  # host call stacks for fault and watch reports
   ${PSXPORT_ROOT}/runtime/psx/audio/spu_audio.cpp
   ${PSXPORT_ROOT}/runtime/psx/audio/host_audio_output.cpp
   ${PSXPORT_ROOT}/runtime/psx/audio/wav_writer.cpp
@@ -249,6 +251,7 @@ set(PSXPORT_FRAMEWORK_SRC
   ${PSXPORT_ROOT}/runtime/psx/debug/bug_report_session.cpp
   ${PSXPORT_ROOT}/runtime/psx/platform/spin_detector.cpp
   ${PSXPORT_ROOT}/runtime/psx/platform/watchdog.cpp
+  ${PSXPORT_ROOT}/runtime/psx/platform/$<IF:$<PLATFORM_ID:Windows>,watchdog_win32.cpp,watchdog_posix.cpp>
   ${PSXPORT_ROOT}/runtime/psx/game/psx_exe_image.cpp
   ${PSXPORT_ROOT}/runtime/psx/game/disc_executable.cpp # a boot stub's hand-off to an executable on its disc
   ${PSXPORT_ROOT}/runtime/ui/rmlui_library.cpp  # RmlUi process state on the render device

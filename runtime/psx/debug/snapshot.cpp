@@ -8,16 +8,21 @@
 
 #include <csignal>
 #include <string>
+
+#if defined(SIGUSR1)
 #include <unistd.h>
+#endif
 
 namespace {
 
 // Only a sig_atomic_t is safe to touch from the handler.
 volatile sig_atomic_t g_sigRequested = 0;
 
+#if defined(SIGUSR1)
 void onUsr1(int) {
   g_sigRequested = 1;
 }
+#endif
 
 } // namespace
 
@@ -41,8 +46,12 @@ void Snapshotter::configure() {
   at_ = FrameSchedule(schedule.at);
   every_ = schedule.every;
   max_ = schedule.max;
+#if defined(SIGUSR1)
   signal(SIGUSR1, onUsr1);
   lucent::debug("snap", "scheduled {} frame(s), every={}, max={} (kill -USR1 {})", at_.size(), every_, max_, getpid());
+#else
+  lucent::debug("snap", "scheduled {} frame(s), every={}, max={}", at_.size(), every_, max_);
+#endif
 }
 
 void Snapshotter::capture(const Core &core, std::uint32_t frame, const char *why) {

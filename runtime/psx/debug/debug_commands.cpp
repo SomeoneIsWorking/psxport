@@ -23,6 +23,7 @@
 #include "render_state.h"
 #include "snapshot.h"
 #include "spu_field_cadence.h"
+#include "text_capture.h"
 #include "title_debug_menu.h"
 #include "wav_writer.h"
 #include "xa_state.h"
@@ -517,31 +518,28 @@ void xaDump(const Call &call) {
   call.reply(lucent::format("xadump -> {} ({} frames @ {} Hz)", path, out.size() / 2u, SpuFieldCadence::kSampleRateHz));
 }
 
-void captureText(const Call &call, void (*view)(Core &, std::FILE *)) {
-  char *buffer = nullptr;
-  std::size_t length = 0;
-  std::FILE *stream = open_memstream(&buffer, &length);
-  if (stream == nullptr) {
+void replyView(const Call &call, void (*view)(Core &, std::FILE *)) {
+  const std::optional<std::string> captured = psx::debug::captureText([&call, view](std::FILE *stream) {
+    view(call.core, stream);
+  });
+  if (!captured) {
     call.reply("no reply stream");
     return;
   }
-  view(call.core, stream);
-  std::fclose(stream);
-  std::string_view text(buffer != nullptr ? buffer : "", length);
+  std::string_view text(*captured);
   while (!text.empty()) {
     const std::size_t end = text.find('\n');
     call.reply(text.substr(0, end));
     text = end == std::string_view::npos ? std::string_view{} : text.substr(end + 1);
   }
-  std::free(buffer);
 }
 
 void scene(const Call &call) {
-  captureText(call, &psx::debug::dumpScene);
+  replyView(call, &psx::debug::dumpScene);
 }
 
 void display(const Call &call) {
-  captureText(call, &psx::debug::dumpDisplay);
+  replyView(call, &psx::debug::dumpDisplay);
 }
 
 void otAttribution(const Call &call) {

@@ -2,6 +2,7 @@
 #pragma once
 #include "hunk_reader.h"
 
+#include <filesystem>
 #include <libchdr/chd.h>
 #include <memory>
 #include <optional>
@@ -42,7 +43,7 @@ public:
   // Resolve the configured image (title key, PSXPORT_DISC, first-run choice, drop-in) and open it.
   bool open();
   // Opens exactly `path`, consulting no key; the first-run screen judges a chosen image with it.
-  bool openImage(const char *path);
+  bool openImage(const std::filesystem::path &image);
   // Closes the image and drops the cache and TOC; the next read opens it again.
   void close();
   bool isOpen() const {

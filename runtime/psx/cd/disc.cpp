@@ -144,10 +144,13 @@ bool Disc::open() {
                  env_key ? env_key : "<no TitleIdentity::discEnvVar>");
     return false;
   }
-  return openImage(path.c_str());
+  return openImage(path);
 }
 
-bool Disc::openImage(const char *path) {
+bool Disc::openImage(const std::filesystem::path &image) {
+  // libchdr opens with the C runtime narrow fopen.
+  const std::string native = image.string();
+  const char *path = native.c_str();
   const uint64_t started = psx::platform::hostNowNs();
   if (chd_open(path, CHD_OPEN_READ, 0, &chd) != CHDERR_NONE) {
     lucent::error("disc", "failed to open CHD: {}", path);

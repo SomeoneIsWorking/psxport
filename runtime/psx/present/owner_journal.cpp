@@ -86,7 +86,11 @@ OwnerJournal::OwnerJournal() {
   screens_.reserve(kMaxScreens);
   const std::time_t now = std::chrono::system_clock::to_time_t(std::chrono::system_clock::now());
   std::tm local{};
+#ifdef _WIN32
+  localtime_s(&local, &now);
+#else
   localtime_r(&now, &local);
+#endif
   char buffer[32];
   std::strftime(buffer, sizeof(buffer), "%Y%m%d-%H%M%S", &local);
   stamp_ = buffer;

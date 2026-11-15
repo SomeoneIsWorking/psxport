@@ -9,8 +9,6 @@
 #include "title_debug_menu.h"
 #include "watchdog.h"
 
-#include <unistd.h>
-
 #include <lucent/http.h>
 #include <lucent/log.h>
 
@@ -22,6 +20,7 @@
 #include <mutex>
 #include <string>
 #include <string_view>
+#include <thread>
 
 namespace {
 
@@ -270,5 +269,5 @@ void DbgServer::idleFrame(Core *c) {
   c->game->pad.pollHostInput(); // must not tick the pad-frame clock
   c->game->display.repaint();
   service(c);
-  usleep(15000);
+  std::this_thread::sleep_for(std::chrono::milliseconds(15));
 }

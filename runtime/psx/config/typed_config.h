@@ -7,15 +7,21 @@
 
 namespace psx::config {
 
+// The installed package a process runs from.
+struct Package {
+  std::filesystem::path root;        // an AppImage's APPDIR, or the directory of a Windows executable
+  std::filesystem::path assetParent; // the directory holding assets/
+};
+
 class Config {
 public:
   static Config fromEnvironment();
 
   std::string describe() const;
 
-  bool unpaced = false;                             // PSXPORT_NOPACE: never sleep to hold the present rate
-  bool repl = false;                                // PSXPORT_REPL: the stdin REPL drives the product loop
-  std::optional<std::filesystem::path> packageRoot; // APPDIR: the mounted AppImage this process runs from
+  bool unpaced = false; // PSXPORT_NOPACE: never sleep to hold the present rate
+  bool repl = false;    // PSXPORT_REPL: the stdin REPL drives the product loop
+  std::optional<Package> package;
 };
 
 } // namespace psx::config

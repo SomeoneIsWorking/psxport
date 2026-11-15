@@ -9,7 +9,7 @@ TitleDisc::TitleDisc(const TitleIdentity &title) {
 }
 
 TitleDisc::TitleDisc(const std::filesystem::path &image) {
-  disc_.openImage(image.c_str());
+  disc_.openImage(image);
 }
 
 bool TitleDisc::opened() {

@@ -163,7 +163,7 @@ void write(uint32_t addr, uint32_t val) {
   // MMIO is invisible to guest write watches; the host stack names the native chain that wrote.
   if (spu.writeBacktraceOffset == off) {
     void *frames[32];
-    const int n = backtrace(frames, 32);
+    const int n = psxport::host::captureBacktrace(frames, 32);
     lucent::info("spubt", "off={:03X} val={:04X}", off, val & 0xFFFF);
     psxport::host::emitBacktrace(
         lucent::Level::Info, "spubt", std::span<void *const>(frames, static_cast<std::size_t>(n)).subspan(1));

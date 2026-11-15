@@ -6,27 +6,25 @@
 #include "gp0_command.h"
 #include "gpu_device.h"
 #include "ordering_table.h"
+#include "text_capture.h"
 
 #include <lucent/log.h>
 
-#include <cstdlib>
+#include <functional>
+#include <optional>
 #include <span>
+#include <string>
 #include <string_view>
 
 namespace {
 
-template <typename Producer> void logDiagnosticLines(std::string_view channel, Producer &&producer) {
-  char *buffer = nullptr;
-  size_t size = 0;
-  FILE *stream = open_memstream(&buffer, &size);
-  if (!stream) {
+void logDiagnosticLines(std::string_view channel, const std::function<void(std::FILE *)> &producer) {
+  const std::optional<std::string> captured = psx::debug::captureText(producer);
+  if (!captured) {
     lucent::error("gpu-diag", "could not allocate the {} diagnostic stream", channel);
     return;
   }
-  producer(stream);
-  fclose(stream);
-
-  const std::string_view output(buffer ? buffer : "", size);
+  const std::string_view output(*captured);
   size_t begin = 0;
   while (begin < output.size()) {
     const size_t end = output.find('\n', begin);
@@ -37,7 +35,6 @@ template <typename Producer> void logDiagnosticLines(std::string_view channel, P
     }
     begin = end + 1;
   }
-  free(buffer);
 }
 
 void writeScene(Core &core, FILE *out, uint32_t madr) {

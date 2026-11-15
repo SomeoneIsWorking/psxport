@@ -59,9 +59,8 @@ Var<long> cv_override_diff_every("PSXPORT_OVERRIDE_DIFF_EVERY",
 Var<long> cv_override_diff_dead_stack("PSXPORT_OVERRIDE_DIFF_DEAD_STACK",
                                       static_cast<long>(psx::cpu::kDefaultDifferentialDeadStackBytes),
                                       kRunOnly);
-Var<std::string> cv_override_diff_report("PSXPORT_OVERRIDE_DIFF_REPORT",
-                                         psx::cpu::kDefaultDifferentialReportPath,
-                                         kRunOnly);
+Var<std::string>
+    cv_override_diff_report("PSXPORT_OVERRIDE_DIFF_REPORT", psx::cpu::kDefaultDifferentialReportPath, kRunOnly);
 Var<std::string> cv_reach_report("PSXPORT_REACH_REPORT", "", kRunOnly);
 Var<std::string> cv_owners_dir("PSXPORT_OWNERS_DIR", "scratch/owners", kRunOnly);
 Var<std::string> cv_card("PSXPORT_CARD", "", kRunOnly);
@@ -193,9 +192,9 @@ bool show_window() {
   return cv_show_window.get();
 }
 
-void applyPackagedDefaults(const std::filesystem::path &packageRoot) {
+void applyPackagedDefaults(const std::filesystem::path &assetParent) {
   cv_show_window.set(true, Layer::Default);
-  cv_asset_dir.set((packageRoot / "usr" / "share" / "psxport").string(), Layer::Default);
+  cv_asset_dir.set(assetParent.string(), Layer::Default);
 }
 
 psx::cpu::FallbackPolicy lightrec_fallback_policy() {
@@ -317,10 +316,19 @@ Config Config::fromEnvironment() {
   Config config;
   config.unpaced = cv_nopace.get();
   config.repl = cv_repl.get();
+#if defined(_WIN32)
+  // A Windows package is the executable beside its assets/.
+  const std::optional<std::filesystem::path> executable = lucent::platform::executable_path();
+  std::error_code missing;
+  if (executable && std::filesystem::is_directory(executable->parent_path() / "assets", missing)) {
+    config.package = Package{executable->parent_path(), executable->parent_path()};
+  }
+#else
   std::filesystem::path root(lucent::config::text("APPDIR"));
   if (root.is_absolute()) {
-    config.packageRoot = root;
+    config.package = Package{root, root / "usr" / "share" / "psxport"};
   }
+#endif
   return config;
 }
 
@@ -328,7 +336,7 @@ std::string Config::describe() const {
   return lucent::format("nopace={} repl={} package={}",
                         unpaced ? "on" : "off",
                         repl ? "on" : "off",
-                        packageRoot.has_value() ? packageRoot->string() : std::string("none"));
+                        package.has_value() ? package->root.string() : std::string("none"));
 }
 
 std::string launch_setting(std::initializer_list<const char *> keys) {

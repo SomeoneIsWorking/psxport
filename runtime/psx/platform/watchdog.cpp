@@ -1,22 +1,21 @@
-// Frame-progress watchdog: SIGALRM fires when no frame presents within N seconds, dumps the backtrace and aborts.
+// Frame-progress watchdog: the host timer fires when no frame presents within N seconds, dumps the backtrace and
+// aborts.
 #include "watchdog.h"
 #include "config_vars.h" // watchdog_seconds / watchdog_boot_seconds
 #include "host_backtrace.h"
+#include "watchdog_host.h"
+#include <csignal>
+#include <cstdint>
+#include <cstdlib>
 #include <lucent/log.h>
-#include <signal.h>
-#include <stdint.h>
-#include <stdio.h>
-#include <stdlib.h>
-#include <unistd.h>
-#if !defined(__ANDROID__) && (defined(__GLIBC__) || defined(__linux__))
-#include <execinfo.h>
-#define HAVE_BACKTRACE 1
-#endif
+#include <span>
 
 // SANCTIONED SIGNAL-HANDLER EXCEPTION: signal handlers receive no context, so the watchdog's
 // state must be reachable from file scope. Per-run state lives in s_wd, the executor's guest position in s_guest;
 // the sig_atomic_t fields and s_guest are the only ones a handler reads.
 namespace {
+
+namespace watchdog_host = psx::platform::watchdog_host;
 
 struct {
   int secs;      // 0 => disabled
@@ -49,47 +48,33 @@ void writeGuestPosition() {
       line[kFirstDigit[field] + digit] = "0123456789ABCDEF"[(values[field] >> (28 - 4 * digit)) & 0xFu];
     }
   }
-  write(2, line, sizeof(line) - 1);
+  watchdog_host::writeError(line, sizeof(line) - 1);
 }
 
-void onAlarm(int sig) {
-  (void)sig;
+void onExpired() {
   // SANCTIONED SIGNAL-HANDLER OUTPUT: Lucent, formatting, allocation, and stdio are not
-  // async-signal-safe. Keep this emergency report restricted to fixed buffers, raw fd 2 writes,
-  // the allocation-free fd backtrace formatter, and _exit.
+  // async-signal-safe. Keep this emergency report restricted to fixed buffers, the host stderr path,
+  // its allocation-free backtrace, and std::_Exit.
   constexpr char msg[] = "\n[watchdog] STUCK: no frame presented within the timeout — backtrace:\n";
-  write(2, msg, sizeof(msg) - 1);
+  watchdog_host::writeError(msg, sizeof(msg) - 1);
   if (!s_wd.main_present_ready) {
     constexpr char hint[] = "[watchdog] (tripped before the main presenter became ready — likely "
                             "cold GPU initialization, not a hang; re-run, or raise "
                             "PSXPORT_WATCHDOG_BOOT)\n";
-    write(2, hint, sizeof(hint) - 1);
+    watchdog_host::writeError(hint, sizeof(hint) - 1);
   }
   writeGuestPosition();
-#ifdef HAVE_BACKTRACE
-  void *bt[64];
-  int n = backtrace(bt, 64);
-  backtrace_symbols_fd(bt, n, 2); // async-signal-safe (unlike backtrace_symbols)
-#endif
-  _exit(134);
+  watchdog_host::writeBacktrace();
+  std::_Exit(134);
 }
 
-void onFault(int sig) {
-  // See onAlarm: this handler can use only the emergency async-signal-safe fd 2 path.
-  constexpr char msg[] = "\n[watchdog] FAULT (signal): backtrace:\n";
-  write(2, msg, sizeof(msg) - 1);
-  {
-    char b[] = "[watchdog] signal = 00\n";
-    b[20] = static_cast<char>('0' + (sig / 10) % 10);
-    b[21] = static_cast<char>('0' + sig % 10);
-    write(2, b, sizeof(b) - 1);
-  }
-#ifdef HAVE_BACKTRACE
-  void *bt[64];
-  int n = backtrace(bt, 64);
-  backtrace_symbols_fd(bt, n, 2);
-#endif
-  _exit(139);
+void onFault(const char *line, std::size_t length) {
+  // See onExpired: this handler can use only the emergency stderr path.
+  constexpr char msg[] = "\n[watchdog] FAULT: backtrace:\n";
+  watchdog_host::writeError(msg, sizeof(msg) - 1);
+  watchdog_host::writeError(line, length);
+  watchdog_host::writeBacktrace();
+  std::_Exit(139);
 }
 
 } // namespace
@@ -108,13 +93,11 @@ void spinFault(unsigned anchor_pc, unsigned last_pc, unsigned long long instruct
                 anchor_pc,
                 last_pc,
                 instructions);
-#ifdef HAVE_BACKTRACE
-  void *bt2[64];
-  int nbt = backtrace(bt2, 64);
+  void *frames[64];
+  const int count = psxport::host::captureBacktrace(frames, 64);
   psxport::host::emitBacktrace(
-      lucent::Level::Error, "spin", std::span<void *const>(bt2, static_cast<std::size_t>(nbt)).subspan(1));
-#endif
-  _exit(137);
+      lucent::Level::Error, "spin", std::span<void *const>(frames, static_cast<std::size_t>(count)));
+  std::_Exit(137);
 }
 
 } // namespace psx::platform
@@ -126,22 +109,17 @@ namespace {
 // UI. Install our OWN handler so Ctrl+C always force-exits IMMEDIATELY — and report where it was
 // stuck (interp PC + C backtrace) on the way out, so a hang is diagnosable, not just killable.
 // A second signal hard-kills in case anything in the handler wedges.
-void onInterrupt(int sig) {
-  (void)sig;
+void onInterrupt() {
   if (s_wd.int_seen) {
-    _exit(130); // second Ctrl+C: bail without touching anything
+    std::_Exit(130); // second Ctrl+C: bail without touching anything
   }
   s_wd.int_seen = 1;
-  // See onAlarm: this handler can use only the emergency async-signal-safe fd 2 path.
+  // See onExpired: this handler can use only the emergency stderr path.
   constexpr char msg[] = "\n[watchdog] INTERRUPT (SIGINT/SIGTERM) — where it was stuck:\n";
-  write(2, msg, sizeof(msg) - 1);
+  watchdog_host::writeError(msg, sizeof(msg) - 1);
   writeGuestPosition();
-#ifdef HAVE_BACKTRACE
-  void *bt[64];
-  int n = backtrace(bt, 64);
-  backtrace_symbols_fd(bt, n, 2);
-#endif
-  _exit(130);
+  watchdog_host::writeBacktrace();
+  std::_Exit(130);
 }
 
 } // namespace
@@ -157,17 +135,8 @@ Watchdog::Watchdog() {
   s_wd = {};
   // A crash (SIGSEGV/SIGABRT) during boot should report WHERE (C backtrace names the guest_<addr>
   // guest call chain), not silently dump core — install the fault handler regardless of the setting.
-  struct sigaction fa = {};
-  fa.sa_handler = onFault;
-  sigaction(SIGSEGV, &fa, 0);
-  sigaction(SIGABRT, &fa, 0);
-  sigaction(SIGBUS, &fa, 0);
-
-  // A hung guest loop never pumps events, so SIGINT/SIGTERM force-exit with the stuck PC.
-  struct sigaction ia = {};
-  ia.sa_handler = onInterrupt;
-  sigaction(SIGINT, &ia, 0);
-  sigaction(SIGTERM, &ia, 0);
+  // A hung guest loop never pumps events, so an interrupt force-exits with the stuck PC.
+  watchdog_host::install({onExpired, onFault, onInterrupt});
 
   // PSXPORT_WATCHDOG=0 disables it.
   s_wd.secs = (int)psx::config::watchdog_seconds();
@@ -177,11 +146,8 @@ Watchdog::Watchdog() {
   // A cold pipeline cache can stall the first present for seconds; unset (-1) grants max(secs, 45).
   const long boot = psx::config::watchdog_boot_seconds();
   s_wd.boot_secs = boot >= 0 ? (int)boot : (s_wd.secs > 45 ? s_wd.secs : 45);
-  struct sigaction sa = {};
-  sa.sa_handler = onAlarm;
-  sigaction(SIGALRM, &sa, 0);
   s_wd.armed = 1;
-  alarm((unsigned)s_wd.boot_secs);
+  watchdog_host::arm((unsigned)s_wd.boot_secs);
   lucent::info("watchdog",
                "armed: {}s frame-progress timeout ({}s grace until the main presenter is ready)",
                s_wd.secs,
@@ -194,7 +160,7 @@ Watchdog::Watchdog() {
 // regain boot grace.
 void Watchdog::progress() {
   if (s_wd.armed && !s_wd.suspended) {
-    alarm((unsigned)(s_wd.main_present_ready ? s_wd.secs : s_wd.boot_secs));
+    watchdog_host::arm((unsigned)(s_wd.main_present_ready ? s_wd.secs : s_wd.boot_secs));
   }
 }
 
@@ -207,7 +173,7 @@ void Watchdog::mainPresentComplete() {
     return;
   }
   s_wd.main_present_ready = 1;
-  alarm((unsigned)s_wd.secs);
+  watchdog_host::arm((unsigned)s_wd.secs);
 }
 
 // Resume after suspend without claiming that a frame completed. Before the first completed
@@ -216,7 +182,7 @@ void Watchdog::mainPresentComplete() {
 void Watchdog::resume() {
   s_wd.suspended = 0;
   if (s_wd.armed) {
-    alarm((unsigned)(s_wd.main_present_ready ? s_wd.secs : s_wd.boot_secs));
+    watchdog_host::arm((unsigned)(s_wd.main_present_ready ? s_wd.secs : s_wd.boot_secs));
   }
 }
 
@@ -227,7 +193,7 @@ void Watchdog::resume() {
 void Watchdog::suspend() {
   s_wd.suspended = 1;
   if (s_wd.armed) {
-    alarm(0);
+    watchdog_host::arm(0);
   }
 }
 
@@ -236,7 +202,7 @@ void Watchdog::suspend() {
 // there, not a hang, and suspend (a one-shot alarm cancel) can't keep up with an open pause.
 void Watchdog::disable() {
   s_wd.armed = 0;
-  alarm(0);
+  watchdog_host::arm(0);
 }
 
 bool Watchdog::armed() {
