@@ -5,7 +5,7 @@
 #include "execution_ledger.h"
 #include "game.h"
 #include "game_runtime.h"
-#include "lightrec_executor.h"
+#include "guest_executor.h"
 #include "replay_frame.h"
 #include "snapshot.h"
 
@@ -19,7 +19,7 @@ void RunEndReport::emit(std::uint64_t productSteps) const {
   Core &core = game_.core;
   lucent::info(
       "runtime", "run complete: product_steps={} presentation_fences={}", productSteps, game_.presentation.fence());
-  psx::cpu::logLedger(core.lightrecExecutor().counters(), "run-end", lucent::Level::Info);
+  psx::cpu::logLedger(core.executor().counters(), "run-end", lucent::Level::Info);
   core.guestCallCensus().log("product loop ended");
   game_.perf.report();
   game_.presentation.reportStability();

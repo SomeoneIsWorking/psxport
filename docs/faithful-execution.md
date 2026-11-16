@@ -1,25 +1,25 @@
 # Faithful execution boundaries
 
-Faithful execution is the observable PSX contract the native/Lightrec product preserves before
+Faithful execution is the observable PSX contract the native/interpreter product preserves before
 intentional enhancements.
 
 ## One architectural state
 
-`Core` owns the framework-visible PSX state. The state bridge transfers that complete boundary into
-Lightrec on entry and back on every host-visible exit. GPRs, HI/LO, PC/delay state, CP0, GTE,
-interrupts, and cycles are never read from two competing authoritative copies.
+`Core` owns the framework-visible PSX state, and the executor runs directly on it: there is no second
+register file to copy in or out. GPRs, HI/LO, PC/delay state, CP0, GTE, interrupts, and cycles have
+one authoritative copy. A stop lands every load still in flight before host code reads `Core`.
 
 Native functions receive typed access to `Core` state through the normal ABI owner. They do not
 open-code register shuffles at call sites or preserve host-stack assumptions from an offline
 translation. When native code invokes guest behavior, it calls the executor by guest identity/address:
 normal dispatch honors overrides; original dispatch suppresses only its current override and executes
-the guest body through Lightrec.
+the guest body on the interpreter.
 
 ## Explicit suspension and return
 
-Guest execution is always bounded. Lightrec returns a typed reason for budget, native/HLE/device,
+Guest execution is always bounded. The executor returns a typed reason for budget, native/HLE/device,
 interrupt/exception, frame/VSync, thread yield/exit, or fault. Host code commits and handles that
-state, then resumes deliberately. It never unwinds a C++ exception through JIT frames or uses a host
+state, then resumes deliberately. It never unwinds a C++ exception through a guest segment or uses a host
 coroutine stack as the owner of guest continuation state.
 
 A skip or synchronous native service establishes the complete guest-visible lifecycle invariant. It
@@ -33,9 +33,8 @@ construction. A frame driver's own turn takes `ExecutionBudget::untilFieldEdge`,
 edge (`Timing::ticksToNextField`), so work the field already ran (a VBlank handler, a CD callback) shortens it; guest
 work nested at executor boundaries is not charged to the turn, and the clock keeps that overshoot into the next field
 (`EmulatedTime::advanceDisplayFields`). A budget counts the guest clock's unit,
-one cycle per executed instruction (the unit `Timing` and every device deadline use); the Lightrec executor converts it to Lightrec's own
-`kLightrecCyclesPerInstruction` cycles at the `lightrec_execute` call, so no title multiplies by it. A
-call that needs more than one field is routine rather than exceptional. While an
+one cycle per executed instruction (the unit `Timing` and every device deadline use), so no title multiplies by it.
+A call that needs more than one field is routine rather than exceptional. While an
 `ExecutionControl::Unsuspendable` lives (a `GuestRedraw`), every call gets the whole budget in place of a turn —
 per call, not what its caller has left, so a runaway nested N calls deep runs up to N budgets. The two entry points for continuing
 are `psx::cpu::resumeOriginal` and `psx::cpu::resumeGuestToReturn`
@@ -54,11 +53,8 @@ blocked at all. The budget constant is deliberately not a tuning knob, so resumi
 
 The same investigation found three repositories had each written their own suspend/resume for this one
 contract, and a fourth could not compile because the wrappers did not exist. There is now one
-implementation. Its hermetic coverage is a real gap and is recorded as one: the only bound the executor
-consults between segments is Lightrec's HOST cycle counter, so a cycle-sized budget is
-machine-dependent, a loop Lightrec closes over completes in one segment regardless, and a guest loop
-calling a host override never reaches a segment boundary. The composition — truncate a call mid-loop,
-then resume it — is therefore closed at the product level rather than by a synthetic loop that only
+implementation. Its hermetic coverage is a real gap and is recorded as one. The composition — truncate a call
+mid-loop, then resume it — is therefore closed at the product level rather than by a synthetic loop that only
 looks like coverage. `executeFunction`'s arbitrary-entry / supplied-return-address behaviour is covered
 by `test_explicit_function_continuation_is_independent_of_incoming_ra`.
 
@@ -72,7 +68,7 @@ unusable even if the bytes or range appear identical.
 ## Verification
 
 Use an independent emulator/hardware trace, binary evidence, or the separately built test interpreter
-to diagnose the first divergence. Tests drive the production state bridge, executor exits, dispatch,
+to diagnose the first divergence. Tests drive the production `Core` state, executor exits, dispatch,
 and invalidation; they do not reimplement those rules beside the product. Each instrument demonstrates
 both a match and a deliberately seeded mismatch and reports how many blocks, exits, ranges, or state
 fields it examined.

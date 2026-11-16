@@ -117,7 +117,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         run_checked(["codesign", "--verify", "--deep", "--strict", str(app)])
         output = args.output or work / "out"
         output.mkdir(parents=True, exist_ok=True)
-        destination = output / f"{title.name}-{version}-macos-x86_64.zip"
+        destination = output / f"{title.name}-{version}-macos-{target_platform.architecture('macos')}.zip"
         destination.unlink(missing_ok=True)
         run_checked(["ditto", "-c", "-k", "--keepParent", str(app), str(destination)])
         print(f"[macos] artifact: {destination} ({destination.stat().st_size} bytes, sha256 {sha256(destination)})")

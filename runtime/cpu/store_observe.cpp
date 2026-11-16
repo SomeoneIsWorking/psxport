@@ -26,7 +26,7 @@ void observeStore(const StoreObservation &observation, void * /*context*/) noexc
 }
 
 void disarm(Core &core) {
-  core.lightrecExecutor().configureStoreObserver({}, nullptr, nullptr);
+  core.executor().configureStoreObserver({}, nullptr, nullptr);
 }
 
 } // namespace
@@ -47,7 +47,7 @@ void configureStoreObserver(Core &core) {
     disarm(core);
     return;
   }
-  const StoreObserverStatus status = core.lightrecExecutor().configureStoreObserver(*pcs, observeStore, nullptr);
+  const StoreObserverStatus status = core.executor().configureStoreObserver(*pcs, observeStore, nullptr);
   if (status != StoreObserverStatus::Configured) {
     lucent::error("store-observe", "could not arm the store observer (status {})", static_cast<int>(status));
     disarm(core);
@@ -64,20 +64,19 @@ void reportStoreObserver(const StoreObserverReport &report) {
     return;
   }
   lucent::info("store-observe",
-               "report: armed={} store_pcs={} jit_instructions={} fallback_instructions={} observations={}",
+               "report: armed={} store_pcs={} instructions={} observations={}",
                report.armed ? "yes" : "no",
                report.targetCount,
-               report.executedJitInstructions,
-               report.fallbackInstructions,
+               report.executedInstructions,
                report.observations);
   for (std::size_t i = 0; i < report.targetCount && i < report.targets.size(); ++i) {
     const StoreObserverTargetCounts &target = report.targets[i];
     if (target.before + target.after == 0) {
       lucent::info("store-observe",
-                   "  [{}] store PC 0x{:08X} never executed in {} JIT instruction(s)",
+                   "  [{}] store PC 0x{:08X} never executed in {} instruction(s)",
                    i,
                    target.guestPc,
-                   report.executedJitInstructions);
+                   report.executedInstructions);
       continue;
     }
     lucent::info("store-observe", "  [{}] store PC 0x{:08X} executed {} time(s)", i, target.guestPc, target.before);

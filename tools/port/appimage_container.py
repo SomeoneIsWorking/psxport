@@ -3,7 +3,7 @@
     uv run --frozen python external/psxport/tools/port/appimage_container.py --product <product>
 
 Run from the title root. The image is ``appimage-build.Containerfile`` beside this file, tagged by its
-hash and the Lightrec and Lightning revisions it bakes in. The title and the framework checkout are
+hash and the pinned library sources it bakes in. The title and the framework checkout are
 mounted at their host paths; the build, its uv environment and the dependency prefixes stay under the
 title's ``build/``, apart from the host's own trees. The package is audited against glibc 2.35 and carries
 GitHub-release update information for the title's ``origin``. Locally this runs under podman; CI passes
@@ -25,7 +25,6 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from port.launcher import APPIMAGE_BUILD
-from psxport_fetch import pinned_revision
 
 FRAMEWORK = Path(__file__).resolve().parents[2]
 CONTAINERFILE = Path(__file__).resolve().with_name("appimage-build.Containerfile")
@@ -47,28 +46,17 @@ def run(command: Sequence[str]) -> None:
         raise Refused(f"{command[0]} failed")
 
 
-def revisions() -> dict[str, str]:
-    found = {name: pinned_revision(str(FRAMEWORK), name) for name in ("LIGHTREC", "LIGHTNING")}
-    missing = [name for name, revision in found.items() if revision is None]
-    if missing:
-        raise Refused(f"cmake/lightrec_dependency.cmake pins no {', '.join(missing)} revision")
-    return {name: revision for name, revision in found.items() if revision is not None}
-
-
-def image_tag(pins: dict[str, str]) -> str:
+def image_tag() -> str:
     digest = hashlib.sha256()
     for path in IMAGE_INPUTS:
         digest.update(path.read_bytes())
-    for name in sorted(pins):
-        digest.update(f"{name}={pins[name]}".encode())
     return f"{IMAGE}:{digest.hexdigest()[:12]}"
 
 
-def build_image(engine: str, tag: str, pins: dict[str, str]) -> None:
+def build_image(engine: str, tag: str) -> None:
     if subprocess.run([engine, "image", "inspect", tag], capture_output=True, check=False).returncode == 0:
         return
-    arguments = [f"--build-arg={name}_REVISION={revision}" for name, revision in pins.items()]
-    run([engine, "build", "-t", tag, *arguments, "-f", str(CONTAINERFILE), str(CONTAINERFILE.parent)])
+    run([engine, "build", "-t", tag, "-f", str(CONTAINERFILE), str(CONTAINERFILE.parent)])
 
 
 def engine_options(engine: str) -> list[str]:
@@ -115,9 +103,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             raise Refused(f"{args.engine} is required to build the release AppImage")
         if not re.fullmatch(r"[A-Za-z0-9_]+", args.product):
             raise Refused(f"--product {args.product!r} is not a target name")
-        pins = revisions()
-        tag = image_tag(pins)
-        build_image(args.engine, tag, pins)
+        tag = image_tag()
+        build_image(args.engine, tag)
         build = root / APPIMAGE_BUILD
         consumer = FRAMEWORK / "tools" / "port" / "consumer_build.py"
         packager = FRAMEWORK / "tools" / "port" / "appimage.py"

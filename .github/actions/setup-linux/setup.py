@@ -6,30 +6,16 @@ import argparse
 import logging
 import os
 import subprocess
-import sys
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
 PACKAGES = (
-    "autoconf", "automake", "clang", "clang-format", "clang-tidy", "cmake", "glslc", "libclang-dev",
-    "libfreetype-dev", "libtool", "make", "libsdl3-dev", "libsdl3-image-dev",
+    "clang", "clang-format", "clang-tidy", "cmake", "glslc", "libclang-dev",
+    "libfreetype-dev", "libsdl3-dev", "libsdl3-image-dev",
     "libvulkan1", "mesa-vulkan-drivers", "ninja-build", "pkg-config", "xvfb", "zlib1g-dev",
 )
 Runner = Callable[[Sequence[str], Path], None]
-
-
-def framework_revisions(framework: Path) -> dict[str, str]:
-    # cmake/lightrec_dependency.cmake is the pins' one home; psxport_fetch reads it.
-    sys.path.insert(0, str(framework / "tools"))
-    from psxport_fetch import pinned_revision
-
-    revisions = {name.lower(): pinned_revision(str(framework), name) for name in ("LIGHTREC", "LIGHTNING")}
-    missing = [name for name, revision in revisions.items() if revision is None]
-    if missing:
-        raise RuntimeError(f"expected exactly one pinned revision of {', '.join(missing)} in "
-                           f"{framework / 'cmake' / 'lightrec_dependency.cmake'}")
-    return revisions
 
 
 @dataclass(frozen=True)
@@ -59,32 +45,14 @@ def run(command: Sequence[str], cwd: Path) -> None:
 
 
 def provision(paths: SetupPaths, runner: Runner = run) -> dict[str, str]:
-    lightrec = paths.dependencies / "lightrec"
-    lightning = paths.dependencies / "lightning"
-    for required in (
-        paths.framework / "cmake/psxport.cmake",
-        lightrec / "lightrec.h",
-        lightning / "tools/build_lightning.py",
-    ):
-        if not required.is_file():
-            raise RuntimeError(f"required pinned checkout input is missing: {required}")
+    required = paths.framework / "cmake/psxport.cmake"
+    if not required.is_file():
+        raise RuntimeError(f"required framework checkout input is missing: {required}")
     # .gitmodules is the one list; non-recursive because beetle carries a URL-less nested gitlink.
     runner(["git", "submodule", "update", "--init"], paths.framework)
     runner(["sudo", "apt-get", "update"], paths.workspace)
     runner(["sudo", "apt-get", "install", "--yes", *PACKAGES], paths.workspace)
-    runner(
-        ["uv", "run", "--frozen", "python", "tools/build_lightning.py", "--clean", "--cc", "clang",
-         "--skip-upstream-tests"],
-        lightning,
-    )
-    prefix = lightning / "build/install/linux-x86_64"
-    for required in (prefix / "include/lightning.h", prefix / "lib/liblightning.a"):
-        if not required.is_file():
-            raise RuntimeError(f"GNU Lightning build did not produce its required input: {required}")
-    return {
-        "PSXPORT_LIGHTREC_DIR": str(lightrec),
-        "PSXPORT_LIGHTNING_PREFIX": str(prefix),
-    }
+    return {}
 
 
 def export_environment(path: Path, values: Mapping[str, str]) -> None:
@@ -98,14 +66,9 @@ def main() -> int:
     logging.basicConfig(level=logging.INFO, format="[setup-linux] %(message)s")
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--validate-only", action="store_true")
-    parser.add_argument("--print-revisions", action="store_true")
     args = parser.parse_args()
     try:
         paths = SetupPaths.from_environment(os.environ)
-        if args.print_revisions:
-            for name, revision in framework_revisions(paths.framework).items():
-                print(f"{name}={revision}")
-            return 0
         if not args.validate_only:
             export_environment(paths.environment_file, provision(paths))
     except (KeyError, OSError, RuntimeError, subprocess.CalledProcessError) as error:

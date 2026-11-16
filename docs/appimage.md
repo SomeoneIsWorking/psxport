@@ -6,7 +6,7 @@ doc is how psxport meets them.
 
 | piece | role |
 |---|---|
-| `tools/port/appimage-build.Containerfile` | Ubuntu 22.04 build image: clang-20 with libc++ 20, glslc, SDL3, SDL3_image, FreeType, Lightning and Lightrec |
+| `tools/port/appimage-build.Containerfile` | Ubuntu 22.04 build image: clang-20 with libc++ 20, glslc, SDL3, SDL3_image and FreeType |
 | `tools/port/appimage_container.py` | runs the title's build (`build/appimage`) and the packager in that image; podman locally, docker in CI |
 | `tools/port/appimage.py` | AppDir, audits, AppImage, update information and `.zsync` |
 | `tools/port/appimage-tools.json` | pinned linuxdeploy, appimagetool, type-2 runtime and patchelf |
@@ -15,8 +15,8 @@ doc is how psxport meets them.
 
 ## Inputs and outputs
 In: a clean title commit, its `packaging/linux/<app-id>.desktop` and SVG, its `LICENSE` or `COPYING`,
-optionally `<app-id>.metainfo.xml` (required when the licence is not MIT), and the pins in
-`cmake/lightrec_dependency.cmake`. Out: `build/release/<Name>-<version>-x86_64.AppImage` and its `.zsync`.
+optionally `<app-id>.metainfo.xml` (required when the licence is not MIT). Out:
+`build/release/<Name>-<version>-x86_64.AppImage` and its `.zsync`.
 
 ## Invariants
 - No game content: the packager refuses disc-image suffixes, PS-X EXE headers and any file whose hash a

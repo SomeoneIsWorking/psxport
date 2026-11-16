@@ -35,10 +35,10 @@ same frame. Player builds stay one static executable.
   guest state there.
 - **The swap:**
   1. replace the image-scoped override table;
-  2. advance the dispatch epoch (`runtime/cpu/dispatch_epoch.h`);
-  3. invalidate every Lightrec path that captured an old dispatch decision, through
-     `runtime/cpu/invalidation.*`;
-  4. rebind the frame driver and debug menu.
+  2. advance the dispatch epoch (`runtime/cpu/dispatch_epoch.h`), which retires every cached dispatch
+     verdict. The executor asks the dispatcher at every block entry, so nothing else holds an old
+     decision;
+  3. rebind the frame driver and debug menu.
 - **State.**
   - Guest RAM, CPU, GTE and devices are runtime-owned and survive a reload.
   - Title host-side state, such as presentation producers, interpolation tracks, menu state and

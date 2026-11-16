@@ -1,4 +1,4 @@
-# psxport — a native/Lightrec PSX→PC runtime. The product library contains native platform owners
+# psxport — a native/interpreted PSX→PC runtime. The product library contains native platform owners
 # and the runtime guest-execution boundary; offline derived guest source and selectable fallback
 # engines are not product inputs.
 cmake_minimum_required(VERSION 3.21)

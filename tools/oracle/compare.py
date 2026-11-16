@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""State-aligned comparison of a Lightrec product against the Beetle full-console reference
+"""State-aligned comparison of a psxport product against the Beetle full-console reference
 (docs/oracle.md "State-aligned comparison").
 
 The framework owns the mechanism: both cores boot the same disc; each is driven toward the next

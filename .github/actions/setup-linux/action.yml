@@ -16,30 +16,6 @@ runs:
         PSXPORT_CI_FRAMEWORK: ${{ inputs.framework-directory }}
         PSXPORT_CI_DEPENDENCIES: ${{ inputs.dependency-directory }}
       run: uv run --frozen python "${{ github.action_path }}/setup.py" --validate-only
-    - name: Resolve the framework-pinned Lightrec and Lightning revisions
-      id: revisions
-      shell: bash
-      env:
-        PSXPORT_CI_FRAMEWORK: ${{ inputs.framework-directory }}
-        PSXPORT_CI_DEPENDENCIES: ${{ inputs.dependency-directory }}
-      run: uv run --frozen python "${{ github.action_path }}/setup.py" --print-revisions >> "$GITHUB_OUTPUT"
-    - name: Check out the exact maintained Lightrec revision
-      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
-      with:
-        repository: SomeoneIsWorking/lightrec
-        ref: ${{ steps.revisions.outputs.lightrec }}
-        path: ${{ inputs.dependency-directory }}/lightrec
-        fetch-depth: 0
-        persist-credentials: false
-    - name: Check out the exact maintained GNU Lightning revision
-      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
-      with:
-        repository: SomeoneIsWorking/lightning
-        ref: ${{ steps.revisions.outputs.lightning }}
-        path: ${{ inputs.dependency-directory }}/lightning
-        fetch-depth: 0
-        persist-credentials: false
-        submodules: recursive
     - name: Provision the Linux build environment
       shell: bash
       env:

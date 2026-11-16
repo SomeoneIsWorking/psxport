@@ -17,8 +17,6 @@ set(RT runtime/psx)
 set(MED ${PSXPORT_ROOT}/vendor/beetle-psx/mednafen)
 
 include("${PSXPORT_ROOT}/cmake/dependency_prefix.cmake")
-include("${PSXPORT_ROOT}/cmake/lightrec_dependency.cmake")
-psxport_configure_lightrec_dependency()
 
 # ---- RmlUi 6.3 (the overlay UI), static, Core + Debugger only --------------------------------
 # vendor/rmlui is a submodule of upstream RmlUi pinned at the 6.3 release, the workspace's standard
@@ -67,7 +65,7 @@ set(PSXPORT_FRAMEWORK_SRC
   ${PSXPORT_ROOT}/runtime/cpu/guest_call_census.cpp # per-Core tally of calls that crossed a host turn
   ${PSXPORT_ROOT}/runtime/cpu/resumable_guest_call.cpp # one guest call across display fields: latch, cap, classify
   ${PSXPORT_ROOT}/runtime/cpu/invalidation.cpp
-  ${PSXPORT_ROOT}/runtime/cpu/lightrec_executor.cpp
+  ${PSXPORT_ROOT}/runtime/cpu/guest_executor.cpp
   ${PSXPORT_ROOT}/runtime/cpu/machine_snapshot.cpp # CPU/GTE/RAM capture and invalidating restore
   ${PSXPORT_ROOT}/runtime/cpu/native_dispatch.cpp
   ${PSXPORT_ROOT}/runtime/cpu/override_differential.cpp # per-function override differential (shadow mode)
@@ -383,7 +381,7 @@ psxport_dependency_prefix(lucent SOURCE "${PSXPORT_ROOT}/vendor/lucent" PACKAGE 
 
 target_link_libraries(psxport PUBLIC
   lucent::lucent
-  lightrec::lightrec RmlUi::Debugger RmlUi::Core bug_report::bug_report chdr::chdr-static
+  RmlUi::Debugger RmlUi::Core bug_report::bug_report chdr::chdr-static
   psxport_presentation_dependencies
   Threads::Threads m)
 # The first-run screen is the host's own; titles never include it.

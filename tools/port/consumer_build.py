@@ -5,10 +5,10 @@
         [--build build/agent|build/ci] [--platform host|windows|macos] [--target NAME]... [-DNAME=VALUE]...
 
 Run from the title root. The configure is the launcher's (`launcher.configure_consumer`), so the
-compiler, Lightrec and Lightning choices are the player's, at RelWithDebInfo. `--platform windows`
-cross-compiles with llvm-mingw into `build/windows`; `--platform macos` builds the Intel app on any Mac into
+compiler choice is the player's, at RelWithDebInfo. `--platform windows`
+cross-compiles with llvm-mingw into `build/windows`; `--platform macos` builds the Mac's own architecture into
 `build/macos`, both against the pinned target libraries (`port/target_platform.py`). On a Mac, `host` is
-`macos` built into the host tree: Lightrec has no arm64 macOS backend, so every Mac builds the Intel app.
+`macos` built into the host tree, since the Mac's libraries come from those pins.
 """
 
 from __future__ import annotations
@@ -45,8 +45,6 @@ def main(argv: Sequence[str] | None = None) -> int:
         definitions = [f"-D{item}" for item in args.definitions]
         platform = "macos" if args.platform == "host" and sys.platform == "darwin" else args.platform
         if platform != "host":
-            # The host's Lightning prefix is not the target's.
-            environment.pop("PSXPORT_LIGHTNING_PREFIX", None)
             definitions = [*target_platform.provision(platform, environment), *definitions]
         build = maintainer_build(root, args.build or PLATFORM_BUILDS.get(args.platform, AGENT_BUILD))
         if platform == "windows":

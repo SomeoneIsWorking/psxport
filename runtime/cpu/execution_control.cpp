@@ -1,7 +1,7 @@
 #include "execution_control.h"
 
 #include "core.h"
-#include "lightrec_executor.h"
+#include "guest_executor.h"
 
 #include <utility>
 
@@ -46,7 +46,7 @@ void requestExecutionExit(Core &core, ExecutionExitReason reason) {
 
 void requestExecutionExit(Core &core, ExecutionResult result) {
   if (core.executionControl().request(std::move(result))) {
-    core.lightrecExecutor().requestStop();
+    core.executor().requestStop();
   }
 }
 

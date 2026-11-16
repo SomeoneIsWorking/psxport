@@ -1,11 +1,12 @@
 ---
 id: 146
 title: The cross-block load-delay hazard still runs on the interpreter; Lightrec needs a compiled hazard stub (design, not implemented)
+status: resolved
 symptom: Toy Story 2 takes 1,267 `load_delay_hazard` fallbacks per 1000-pad-frame route, each interpreting up to 3 guest instructions, and psxport exempts them from the fallback block limit (e5888e22)
 state_items: S002
 tags: lightrec,load-delay,fallback,interpreter,design,toystory2
 created: 2026-10-01
-updated: 2026-10-01
+updated: 2026-11-16
 ---
 
 ## Answer
@@ -71,3 +72,7 @@ On the hazard edge the boundary callback is NOT invoked for the target pc (the s
 resumes at `loop2` after the commit, but the check runs before the boundary). A title override at a
 function entry reached as `jal f; lw a0, ...` is skipped. Not measured in a real title; the stub's
 dispatcher change should route through the boundary for `pc`.
+
+## Superseded (2026-11-16)
+Lightrec was replaced by the interpreter (`runtime/cpu/guest_executor.*`). Its real load delay slots cover
+this hazard: a load's value reaches its register after the next instruction, with no fallback or stub.

@@ -45,9 +45,6 @@ Var<bool> cv_show_window("PSXPORT_SHOW_WINDOW", false, kRunOnly);
 // Empty is the player's own file in the user-data directory; tools name a file of their own.
 Var<std::string> cv_settings_path("PSXPORT_SETTINGS", "", kRunOnly);
 Var<std::string> cv_render_path("PSXPORT_RENDER_PATH", "record", kSaved);
-Var<long> cv_lightrec_fallback_block_limit("PSXPORT_LIGHTREC_FALLBACK_BLOCK_LIMIT",
-                                           static_cast<long>(psx::cpu::kDefaultMaxFallbackBlocksPerExecution),
-                                           kRunOnly);
 // A settings file must never arm a gate that rewrites the continued run's state.
 Var<std::string> cv_override_diff("PSXPORT_OVERRIDE_DIFF", "", kRunOnly);
 Var<long> cv_override_diff_first("PSXPORT_OVERRIDE_DIFF_FIRST",
@@ -92,7 +89,6 @@ const Registration kRegistration{
     cv_show_window,
     cv_settings_path,
     cv_render_path,
-    cv_lightrec_fallback_block_limit,
     cv_override_diff,
     cv_override_diff_first,
     cv_override_diff_every,
@@ -194,10 +190,6 @@ void applyPackagedDefaults(const std::filesystem::path &assetParent) {
   cv_show_window.set(true, Layer::Default);
   cv_fullscreen.set(true, Layer::Default);
   cv_asset_dir.set(assetParent.string(), Layer::Default);
-}
-
-psx::cpu::FallbackPolicy lightrec_fallback_policy() {
-  return psx::cpu::fallbackPolicyFromConfigured(cv_lightrec_fallback_block_limit.get());
 }
 
 psx::cpu::OverrideDifferentialConfig override_differential_config() {

@@ -1,11 +1,11 @@
 ---
 id: 50
 title: Centralize executable-image and override invalidation through Lightrec
-status: open
+status: resolved
 symptom: executable-memory writes and module-generation changes have no single path that invalidates all affected translated and native-dispatch decisions
 tags: lightrec,invalidation,dma,overlays,savestate
 created: 2026-09-04
-updated: 2026-09-04
+updated: 2026-11-16
 ---
 state_items: S015
 
@@ -53,3 +53,6 @@ extent overlaps the range (previously only a block whose FIRST word was written)
 Still open here: `LightrecExecutor` must publish Lightrec's new denominators (`invalidation_words`,
 `invalidation_guards`, `invalidation_scans`, `invalidated_blocks`) beside `ExecutorCounters::invalidations`,
 and the per-Core owner/test list above.
+
+## Superseded (2026-11-16)
+Lightrec was replaced by the interpreter (`runtime/cpu/guest_executor.*`).

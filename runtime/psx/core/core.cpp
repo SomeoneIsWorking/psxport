@@ -7,7 +7,7 @@
 #include "game_runtime.h"
 #include "gpu_device.h"
 #include "image_identity.h"
-#include "lightrec_executor.h"
+#include "guest_executor.h"
 #include "native_dispatch.h"
 #include "override_differential.h"
 
@@ -22,7 +22,7 @@ Core::Core(psx::game::GameRuntime &runtime) : runtime(runtime), gpuDevice_(std::
   std::memset(scratch, 0, sizeof(scratch));
   executionControl_ = std::make_unique<psx::cpu::ExecutionControl>();
   imageCatalog_ = std::make_unique<psx::cpu::ImageCatalog>(dispatchEpoch);
-  lightrecExecutor_ = std::make_unique<psx::cpu::LightrecExecutor>(*this, psx::config::lightrec_fallback_policy);
+  executor_ = std::make_unique<psx::cpu::GuestExecutor>(*this);
   nativeDispatcher_ = std::make_unique<psx::cpu::NativeDispatcher>(*this);
   // Armed for every runtime, so no product route can miss the gate.
   if (psx::cpu::OverrideDifferentialConfig differential = psx::config::override_differential_config();
@@ -33,7 +33,7 @@ Core::Core(psx::game::GameRuntime &runtime) : runtime(runtime), gpuDevice_(std::
         std::make_unique<psx::cpu::OverrideDifferential>(*this, std::move(differential)));
   }
   if (std::string reachReport = psx::config::function_reach_report_path(); !reachReport.empty()) {
-    lightrecExecutor_->attachFunctionReach(
+    executor_->attachFunctionReach(
         std::make_unique<psx::cpu::FunctionReach>(*imageCatalog_, std::move(reachReport)));
   }
   storeWatch.configure();
@@ -57,8 +57,8 @@ const psx::cpu::ImageCatalog &Core::imageCatalog() const {
   return *imageCatalog_;
 }
 
-psx::cpu::LightrecExecutor &Core::lightrecExecutor() {
-  return *lightrecExecutor_;
+psx::cpu::GuestExecutor &Core::executor() {
+  return *executor_;
 }
 
 // The CD and SIO edges are folded in on every I_STAT access, so neither waits for a later look.

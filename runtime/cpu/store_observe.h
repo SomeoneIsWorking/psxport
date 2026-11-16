@@ -1,7 +1,7 @@
 // store_observe — arms the executor's store observer from PSXPORT_STORE_OBSERVE and reports what it saw.
 #pragma once
 
-#include "lightrec_executor.h"
+#include "guest_executor.h"
 
 class Core;
 

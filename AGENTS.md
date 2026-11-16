@@ -1,74 +1,57 @@
-# psxport — native/dynarec PlayStation port framework
+# psxport — native/interpreter PlayStation port framework
 
 This file is the canonical project-local authority for psxport. `CLAUDE.md` is a discovery symlink;
-never edit it separately. The portfolio-wide native/dynarec methodology lives in the shared
-`dynarec-*` skills. Local migration requirements, intent, factual capability state, ownership, and
-atomic work live in `docs/migration.md`, `docs/project-goals.md`, `docs/project-state.md`,
-`docs/codemap.md`, and `docs/issues/` respectively.
+never edit it separately. The portfolio-wide native-port methodology lives in the shared
+`dynarec-*` skills (named for their history; on PSX the guest runs on an interpreter). Local
+migration requirements, intent, factual capability state, ownership, and atomic work live in
+`docs/migration.md`, `docs/project-goals.md`, `docs/project-state.md`, `docs/codemap.md`, and
+`docs/issues/` respectively.
 
 Before framework work, read `docs/workspace/PROTOCOL.md` (short), `docs/codemap.md` and `docs/features.md`.
 
 ## Product architecture is settled
 
-psxport's intended product is a game-agnostic native/dynarec hybrid:
+psxport's intended product is a game-agnostic native/interpreter hybrid:
 
 - verified native functions and subsystems execute in host code;
-- every remaining guest instruction executes on demand through a maintained, immutable Lightrec
-  revision; and
+- every remaining guest instruction executes on demand on psxport's own R3000 interpreter
+  (`runtime/cpu/guest_executor.*`); and
 - the user's authenticated PSX image remains runtime data. No build, install, provisioning, or
   release path emits guest functions as C/C++, object files, or a precompiled title substrate.
 
-PSX is not exposing an interpreter-vs-JIT product choice. Lightrec/native execution is the product
-default. After successful dynarec initialization, the maintained backend may use automatic
-interpreter fallback only when translation explicitly refuses a classified compilation failure,
-unsafe instruction fetch, or rare unsupported block. A host whose Lightrec backend is not qualified
-(Apple Silicon macOS until it is) runs the whole guest on the interpreter, chosen by the host
-platform at build time, never by a player setting; on a qualified host a missing backend is a named
-failure. Fallback is bounded per call and by total guest share, reports
-per-reason calls and instructions, and returns a typed fault on a threshold breach. An explicit
-interpreter mode remains test-only and cannot enter product configuration, UI, or command line.
-
-The repository has a partial Linux x86-64 Lightrec adapter, not a gameplay-ready hybrid. The removed
-guest-source pipeline and `PSXPORT_ENGINE` selector are not extension points. Follow
-`docs/migration.md`; do not add another derived guest-source feature, engine choice, or static
-compatibility path while completing the runtime path.
-
-## Lightrec dependency boundary
-
-- Integrate Lightrec directly at an exact immutable revision from its maintained repository or a
-  maintained fork. Record the URL, revision, upstream base, and why a fork is required in the normal
-  dependency metadata. Never carry a patch file or depend on the indirectly bundled copy under the
-  Beetle hardware backend as the product pin.
-- One live `Core` owns one Lightrec state and its callback context. No process-global active core,
-  register pointer, current image tag, override table, clock, or invalidation target may select a
-  different instance implicitly.
-- Lightrec owns its translated-block cache, chaining, executable-memory allocation, publication,
-  and teardown. Do not wrap or duplicate those mechanisms with `jit-common`; use Lightrec's supported
-  APIs and extend the maintained fork when a product requirement is missing.
-- psxport owns the PSX-specific integration: canonical CPU state, memory/device callbacks,
-  machine-state synchronization, image identity, native dispatch, scoped original calls, bounded
-  exits, and invalidation requests.
+There is one guest executor on every host and no engine choice: no recompiler, no translation cache,
+no fallback tier, no player or test setting that selects another. Lightrec was removed on 2026-11-16
+because a recompiler's cache, invalidation, executable-memory and per-host backend costs bought speed
+the native-heavy titles do not need. Do not reintroduce a recompiler or a block cache without the
+user's explicit decision; make the interpreter faster in place instead. The removed guest-source
+pipeline and `PSXPORT_ENGINE` selector are not extension points. Follow `docs/migration.md`; do not
+add another derived guest-source feature, engine choice, or static compatibility path.
 
 ## Executor contract
 
-The product loop is:
+The executor runs directly on `Core`'s architectural state (GPRs, HI/LO, PC, CP0, the GTE): there is
+no second register file to synchronize. The product loop is:
 
-`Core state -> synchronize into Lightrec -> execute within a budget -> bounded exit -> synchronize
-back -> handle host/native/device work -> resume`
+`execute within a budget -> bounded exit -> handle host/native/device work -> resume`
 
-The boundary is explicit and testable:
-
-- Entry synchronizes GPRs, HI/LO, PC and delay/next-PC state, CP0, GTE registers, pending interrupt
-  state, and the guest cycle deadline. Exactly one representation is authoritative while guest code
-  executes.
+- Guest code is read from guest memory as it runs. Every load and store goes through `Core`'s memory
+  API, so owner tracking, vertex places and executable-write notification see each one; a
+  hardware-register access first commits the guest time elapsed in the segment.
+- Branch and load delay slots are architectural: a load's value reaches its register after the next
+  instruction, and a stop lands every load still in flight before host code reads `Core`.
+- Blocks keep the classic recompiler shape so dispatch and writer attribution stay stable: a block ends
+  after an unconditional jump's delay slot, at a SYSCALL or a Status/Cause write, or at a taken
+  branch that leaves it. Each block entry is where native dispatch, the requested guest return and
+  pending work are checked.
+- One live `Core` owns one executor. No process-global active core, register pointer, current image
+  tag, override table, clock, or invalidation target may select a different instance implicitly.
 - Before a native override, HLE/device callback, interrupt/exception handoff, frame/VSync boundary,
   thread yield/exit, budget exhaustion, or fault is observed by host code, all guest-visible state and
-  elapsed cycles are committed to `Core`. After host work, any state changes are synchronized back
-  before resuming.
+  elapsed instructions are committed to `Core`.
 - Execution returns a typed result containing the reason, current guest PC, and consumed budget.
-  It never unwinds a C++ exception through JIT frames. Budget exhaustion is an ordinary bounded exit;
-  an unsupported instruction, executable-memory fault, or unavailable dynarec backend is a named
-  failure.
+  It never unwinds a C++ exception through a guest segment (`SideEffectJournal::GuestExecutionScope`).
+  Budget exhaustion is an ordinary bounded exit; an unknown instruction or an instruction fetch
+  outside main RAM and the scratchpad is a named fault.
 - Host frame, task, and BIOS/HLE owners request exits through this contract. They never fast-forward
   guest simulation or manufacture a phase/timer/scene state to escape guest code.
 
@@ -78,14 +61,14 @@ An address alone does not identify PSX code because overlays reuse ranges. The r
 active authenticated image/module identity, its load generation, and guest address.
 
 - A normal guest call resolves that complete key and invokes the native override when one is active;
-  otherwise it enters the original guest body through Lightrec.
+  otherwise it enters the original guest body on the interpreter.
 - An original call from inside an override suppresses only that exact override key for the dynamic
   extent of one call. Nested calls continue to honor all other overrides, including a different image
   at the same guest address. Suppression state is per-`Core`, bounded, and restored on every typed exit.
 - Loading, unloading, or replacing a module increments its generation and makes stale override keys
   unreachable. Equal addresses in resident code and two overlays must be independently testable.
-- Installing, removing, or replacing an override invalidates every Lightrec path that captured the
-  old dispatch decision. Do not leave patched/chained host calls pointing at stale policy.
+- Installing, removing, or replacing an override advances the dispatch epoch, so no cached dispatch
+  decision outlives it.
 - An override key names a function entry that guest code reaches by `jal`/`jalr`. A label inside a
   function body that guest code reaches by `j` or by falling through is never an override: the
   override returns to its entry `r31`, which a tail jump does not set, so execution resumes at the
@@ -94,8 +77,8 @@ active authenticated image/module identity, its load generation, and guest addre
 
 All writes that can modify executable bytes use one invalidation owner. CPU stores, DMA, CD/module
 loads, decompression into executable RAM, debugger writes, and savestate restore report normalized
-guest ranges after the write becomes visible. The owner invalidates every overlapping Lightrec block
-and any derived image-generation decision. Positive changed-byte and controlled no-change/out-of-range
+guest ranges after the write becomes visible. The owner invalidates any derived image-generation
+decision (the interpreter itself caches no code). Positive changed-byte and controlled no-change/out-of-range
 tests are required; a diagnostic that only prints on invalidation is not evidence it scanned anything.
 
 ## Structure is part of correctness
@@ -103,12 +86,11 @@ tests are required; a diagnostic that only prints on invalidation is not evidenc
 Use `docs/codemap.md` as the placement authority. The target CPU integration is split by ownership,
 not accumulated in `Core`, the boot composition, `dispatch.cpp`, or a replacement god class:
 
-- `runtime/cpu/lightrec_executor.*`: Lightrec lifetime, bounded execution, and architectural-state
-  transfer;
+- `runtime/cpu/guest_executor.*`: the R3000 interpreter and bounded execution;
 - `runtime/cpu/execution_exit.*`: typed exit reasons and budgets;
 - `runtime/cpu/image_identity.*`: authenticated resident/module identity and generation;
 - `runtime/cpu/native_dispatch.*`: image-scoped overrides and one-call original dispatch;
-- `runtime/cpu/invalidation.*`: normalized executable-write notification and Lightrec invalidation;
+- `runtime/cpu/invalidation.*`: normalized executable-write notification;
 - `tools/oracle/`: separately built reference emulator, never a product dependency.
 
 Names are target ownership, not permission to add empty forwarding files. Each class owns one cohesive
@@ -130,8 +112,8 @@ repository. Game repositories are part of the caller set even though psxport rem
 
 Configuration has one owner. It ingests CLI, environment, settings, and live diagnostic changes,
 validates them, and passes typed immutable values to subsystem constructors. Product modules do not
-call `getenv`, read config files, or infer execution mode. There is no product CPU-engine setting:
-the gameplay executor is Lightrec by construction. A test oracle is selected by building/running a
+call `getenv`, read config files, or infer execution mode. There is no CPU-engine setting: the
+gameplay executor is the interpreter by construction. A test oracle is selected by building/running a
 different test target, not by a gameplay CVar or menu choice.
 
 All product logging goes through Lucent. Use `lucent::info`/`warn`/`error` for normal-run messages and
@@ -201,7 +183,7 @@ Decompiled C is a reading and porting aid. What ships is a hand-written native o
 here may become a build input, an install-time translation, or a precompiled guest corpus.
 
 Native overrides are deliberately owned behavior or proven service boundaries, never repairs for a
-missing MIPS semantic. Fix instruction behavior in Lightrec or its integration owner. A readable port
+missing MIPS semantic. Fix instruction behavior in the interpreter. A readable port
 uses named types and state transitions; opaque guest-memory soup is not complete merely because it
 runs.
 

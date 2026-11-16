@@ -1,7 +1,7 @@
 // execution_ledger — the one text of every executor counter, for the run-end log and the live endpoint.
 #pragma once
 
-#include "lightrec_executor.h"
+#include "guest_executor.h"
 
 #include <lucent/log.h>
 

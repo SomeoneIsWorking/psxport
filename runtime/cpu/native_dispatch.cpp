@@ -4,7 +4,7 @@
 #include "execution_control.h"
 #include "game.h"
 #include "guest_memory_map.h"
-#include "lightrec_executor.h"
+#include "guest_executor.h"
 #include "override_differential.h"
 #include "platform_hle.h"
 #include "side_effect_journal.h"
@@ -64,7 +64,7 @@ bool NativeDispatcher::install(NativeRegistration registration) {
   }
   epoch_.advance();
   const std::uint32_t pc = physical(registration.key.address);
-  core_.lightrecExecutor().invalidate({pc, pc + 4u});
+  core_.executor().invalidate({pc, pc + 4u});
   return true;
 }
 
@@ -76,7 +76,7 @@ bool NativeDispatcher::remove(NativeKey key) {
   entries_.erase(entry);
   epoch_.advance();
   const std::uint32_t pc = physical(key.address);
-  core_.lightrecExecutor().invalidate({pc, pc + 4u});
+  core_.executor().invalidate({pc, pc + 4u});
   return true;
 }
 
@@ -320,14 +320,14 @@ ExecutionResult dispatchGuest(Core &core, std::uint32_t guestAddress, ExecutionB
   }
   auto attribution = core.callAttribution.scope(guestAddress);
   auto writer = core.writerLatch.hostCall(guestAddress, core.r[31]);
-  return core.lightrecExecutor().executeFunction(guestAddress, core.r[31], budget);
+  return core.executor().executeFunction(guestAddress, core.r[31], budget);
 }
 
 ExecutionResult dispatchGuestUntilExit(Core &core, std::uint32_t guestAddress, ExecutionBudget budget) {
   NativeCallerContextScope callerContext(core);
   auto attribution = core.callAttribution.scope(guestAddress);
   auto writer = core.writerLatch.hostCall(guestAddress, 0u);
-  return core.lightrecExecutor().executeUntilExit(guestAddress, budget);
+  return core.executor().executeUntilExit(guestAddress, budget);
 }
 
 std::optional<ExecutionResult> NativeDispatcher::invoke(NativeKey key) {
@@ -356,7 +356,7 @@ ExecutionResult executeOriginal(Core &core, NativeKey key, ExecutionBudget budge
   NativeCallerContextScope callerContext(core);
   SuppressionScope suppression(core.nativeDispatcher(), key);
   auto writer = core.writerLatch.hostCall(key.address, core.r[31]);
-  return core.lightrecExecutor().executeFunction(key.address, core.r[31], budget);
+  return core.executor().executeFunction(key.address, core.r[31], budget);
 }
 
 } // namespace
@@ -367,14 +367,14 @@ resumeOriginal(Core &core, NativeKey key, std::uint32_t resumePc, std::uint32_t 
   SuppressionScope suppression(core.nativeDispatcher(), key);
   auto attribution = core.callAttribution.scope(key.address);
   auto writer = core.writerLatch.hostCall(key.address, returnPc);
-  return core.lightrecExecutor().executeFunction(resumePc, returnPc, budget);
+  return core.executor().executeFunction(resumePc, returnPc, budget);
 }
 
 ExecutionResult resumeGuestToReturn(Core &core, GuestCallSite call, std::uint32_t resumePc, ExecutionBudget budget) {
   NativeCallerContextScope callerContext(core);
   auto attribution = core.callAttribution.scope(call.entry);
   auto writer = core.writerLatch.hostCall(call.entry, call.returnPc);
-  return core.lightrecExecutor().executeFunction(resumePc, call.returnPc, budget);
+  return core.executor().executeFunction(resumePc, call.returnPc, budget);
 }
 
 ExecutionResult callOriginal(Core &core, NativeKey key, ExecutionBudget budget) {

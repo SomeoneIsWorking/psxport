@@ -1,9 +1,9 @@
 # Test-only oracle architecture
 
 The oracle exists to diagnose the first divergence; it is not a gameplay engine. The production
-library is intended to execute non-native guest code through Lightrec. Any interpreter reference is
-built into separate test/diagnostic targets that the gameplay library and consumers do
-not link and cannot select through configuration, CLI, UI, or fallback.
+library executes non-native guest code on its own interpreter (`runtime/cpu/guest_executor.*`). Any
+reference emulator is built into separate test/diagnostic targets that the gameplay library and
+consumers do not link and cannot select through configuration, CLI, or UI.
 
 USER, 2026-07-01: *"We need a real oracle for INTERLEAVED DIVERGENCE COMPARE"*.
 
@@ -12,20 +12,18 @@ divergence, and state each instrument's blind spot. No product configuration sel
 
 ## Separate targets
 
-- The gameplay `psxport` library contains the Lightrec executor, canonical `Core` state, memory/device
-  owners and native dispatch. Backend fallback is product-owned and telemetry-bounded; the
-  independent oracle remains a separate target.
+- The gameplay `psxport` library contains the guest executor, canonical `Core` state, memory/device
+  owners and native dispatch; the independent oracle remains a separate target.
 - A test-only interpreter target may reuse the production state types and memory/service interfaces.
   Its CPU state and diagnostic provenance are per test core.
 - The Beetle GPU is not an oracle: it is the product's GPU device (`runtime/psx/gpu/gpu_device.*`), the
   only VRAM and register file the guest observes. `RenderPath::Device` presents its display area.
-- A test harness links the production Lightrec library and the test-only oracle libraries, drives both
+- A test harness links the production library and the test-only oracle libraries, drives both
   with authenticated user data, and compares explicitly declared state at named barriers.
 
 Building the harness is what selects the oracle. No runtime engine selector enters the product config
-or UI. Product-link inspection names the objects/symbols examined and proves the absence of an
-explicit interpreter mode while allowing the backend's bounded automatic fallback; observing zero
-fallback executions in one run is insufficient.
+or UI. Product-link inspection names the objects/symbols examined and proves the absence of a second
+engine or engine selector.
 
 ## State-aligned comparison
 
@@ -141,6 +139,6 @@ valid inputs to later tests:
   stack-only byte differences and one registered owner never reached. This is limited boot evidence,
   not whole-game equivalence.
 
-These are evidence facts, not justification for exposing an interpreter mode in the product.
+These are evidence facts, not justification for exposing a reference engine in the product.
 Implementation keeps the still-useful mechanisms in separate test targets and revalidates them
-against the production Lightrec state bridge.
+against the production executor's `Core` state.

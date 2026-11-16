@@ -5,16 +5,13 @@
 
 namespace psx::cpu {
 
-// Lightrec charges a flat cycles_per_op of 2 per guest instruction; not an R3000 pipeline model (issue 0007).
-inline constexpr std::uint32_t kLightrecCyclesPerInstruction = 2;
-
-// The guest time a translated segment has already committed at device accesses, so an MMIO read
-// mid-segment sees the clock move. Commits and the segment end count Lightrec's executed-instruction
-// counter, not its cycle counter, which runs ahead of it, so a segment charges exactly its instructions
-// however overrides split the code into segments.
+// The guest time a segment has already committed at device accesses, so an MMIO read mid-segment sees
+// the clock move. Commits and the segment end count executed instructions, one guest tick each (not an
+// R3000 pipeline model, issue 0007), so a segment charges exactly its instructions however overrides
+// split the code into segments.
 class SegmentClockLedger {
 public:
-  // Start a new segment at Lightrec's executed-instruction count `executedInstructions`.
+  // Start a new segment at the executor's executed-instruction count `executedInstructions`.
   void beginSegment(std::uint64_t executedInstructions) noexcept;
 
   // Instructions to commit at a device access that saw the executed-instruction count `executedInstructions`.

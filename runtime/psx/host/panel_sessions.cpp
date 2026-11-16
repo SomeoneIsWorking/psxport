@@ -7,7 +7,7 @@
 #include "core.h"
 #include "game.h"
 #include "game_runtime.h"
-#include "lightrec_executor.h"
+#include "guest_executor.h"
 #include "wrap.h"
 
 #include <lucent/log.h>
@@ -197,8 +197,8 @@ std::uint64_t PanelSessions::executedInstructions(int panel) const {
   if (!session.booted()) {
     return 0;
   }
-  const psx::cpu::ExecutorCounters &counters = session.core().lightrecExecutor().counters();
-  return counters.executedInstructions + counters.fallback.instructions;
+  const psx::cpu::ExecutorCounters &counters = session.core().executor().counters();
+  return counters.executedInstructions;
 }
 
 std::string PanelSessions::summary() const {

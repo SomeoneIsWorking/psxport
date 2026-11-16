@@ -25,10 +25,6 @@ if str(TOOLS) not in sys.path:
 
 import psxport_fetch
 from automation.process import ToolError, cpu_jobs
-from project import (
-    lightning_cmake_definitions,
-    lightrec_cmake_definitions,
-)
 
 FRAMEWORK = TOOLS.parent
 PLAYER_BUILD = Path("build/player")
@@ -255,16 +251,10 @@ def build_targets(build: Path, targets: Sequence[str], environment: Mapping[str,
     run(command, environment)
 
 
-def framework_definitions(environment: Mapping[str, str]) -> list[str]:
-    """``-DPSXPORT_DIR`` and the Lightrec/Lightning overrides a consumer configure passes."""
-    return [f"-DPSXPORT_DIR={FRAMEWORK}", *lightrec_cmake_definitions(environment),
-            *lightning_cmake_definitions(environment)]
-
-
 def configure_consumer(root: Path, build: Path, build_type: str, definitions: Sequence[str],
                        environment: Mapping[str, str], *, quiet: bool = False) -> None:
     """Configure a title repository against this framework checkout."""
-    configure(root, build, build_type, [*framework_definitions(environment), *definitions], environment,
+    configure(root, build, build_type, [f"-DPSXPORT_DIR={FRAMEWORK}", *definitions], environment,
               quiet=quiet)
 
 
@@ -333,9 +323,7 @@ def build_discdump(root: Path, environment: Mapping[str, str]) -> Path:
     if environment.get(RUN_BUILT) == "1" and (built := _discdump_in(build)) is not None:
         return built
     say("building discdump…")
-    configure(FRAMEWORK, build, "Release", [*lightrec_cmake_definitions(environment),
-                                            *lightning_cmake_definitions(environment)],
-              environment, owner=root, quiet=True)
+    configure(FRAMEWORK, build, "Release", [], environment, owner=root, quiet=True)
     build_targets(build, ["discdump"], environment)
     if (built := _discdump_in(build)) is not None:
         return built

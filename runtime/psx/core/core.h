@@ -45,7 +45,7 @@ namespace psx::cpu {
 class ExecutionControl;
 class ImageCatalog;
 struct ImageIdentity;
-class LightrecExecutor;
+class GuestExecutor;
 class NativeDispatcher;
 class SideEffectJournal;
 } // namespace psx::cpu
@@ -133,7 +133,7 @@ public:
   const psx::cpu::ExecutionControl &executionControl() const;
   psx::cpu::ImageCatalog &imageCatalog();
   const psx::cpu::ImageCatalog &imageCatalog() const;
-  psx::cpu::LightrecExecutor &lightrecExecutor();
+  psx::cpu::GuestExecutor &executor();
   psx::cpu::NativeDispatcher &nativeDispatcher() {
     return *nativeDispatcher_;
   }
@@ -163,8 +163,8 @@ public:
   int32_t mem_r8s(uint32_t a) {
     return (int32_t)(int8_t)mem_r8(a);
   }
-  // The optional source labels the executable-write notification each store issues: the Lightrec
-  // memory callbacks pass Cpu (a guest store), native and device paths keep the default.
+  // The optional source labels the executable-write notification each store issues: the guest
+  // executor passes Cpu (a guest store), native and device paths keep the default.
   void
   mem_w8(uint32_t a, uint8_t v, psx::cpu::ExecutableWriteSource source = psx::cpu::ExecutableWriteSource::MappedStore);
   void mem_w16(uint32_t a,
@@ -199,7 +199,7 @@ private:
   std::unique_ptr<psx::gpu::GpuDevice> gpuDevice_;
   std::unique_ptr<psx::cpu::ExecutionControl> executionControl_;
   std::unique_ptr<psx::cpu::ImageCatalog> imageCatalog_;
-  std::unique_ptr<psx::cpu::LightrecExecutor> lightrecExecutor_;
+  std::unique_ptr<psx::cpu::GuestExecutor> executor_;
   std::unique_ptr<psx::cpu::NativeDispatcher> nativeDispatcher_;
   uint8_t *host_ptr(GuestSpan span);
   uint32_t io_read(uint32_t a, uint32_t bytes);

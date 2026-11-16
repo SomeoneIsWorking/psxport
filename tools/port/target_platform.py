@@ -1,7 +1,7 @@
-"""The release platforms a title builds for beside the Linux host: their toolchain, target libraries and Lightning.
+"""The release platforms a title builds for beside the Linux host: their toolchain and target libraries.
 
-Windows x86-64 cross-compiles with llvm-mingw; macOS x86-64 builds natively on an Intel Mac. Each platform's
-libraries (target-libraries.json) and Lightning land under the shared dependency root
+Windows x86-64 cross-compiles with llvm-mingw; macOS builds natively for the Mac's own architecture. Each
+platform's libraries (target-libraries.json) land under the shared dependency root
 (``PSXPORT_DEPENDENCY_ROOT``, else the user cache), keyed by the pins that shape them, and are reused by every
 title's build tree. MoltenVK, which a macOS package carries, is pinned here too.
 """
@@ -9,6 +9,7 @@ title's build tree. MoltenVK, which a macOS package carries, is pinned here too.
 from __future__ import annotations
 
 import hashlib
+import platform as host_platform
 import shutil
 import tarfile
 import urllib.request
@@ -18,7 +19,6 @@ from pathlib import Path
 
 from automation.process import ToolError
 from port import target_libraries
-from psxport_fetch import pinned_revision
 
 FRAMEWORK = Path(__file__).resolve().parents[2]
 WINDOWS_TOOLCHAIN_FILE = FRAMEWORK / "cmake" / "toolchains" / "llvm-mingw-x86_64.cmake"
@@ -33,7 +33,6 @@ MACOS_DEPLOYMENT_TARGET = "13.3"
 MOLTENVK_RELEASE = "v1.4.2"
 MOLTENVK_URL = f"https://github.com/KhronosGroup/MoltenVK/releases/download/{MOLTENVK_RELEASE}/MoltenVK-macos.tar"
 MOLTENVK_SHA256 = "f95765a6229cb7b915990a2890ce12ebe36a730b021545d3d52ae69ce4c4024e"
-MACOS_TRIPLE = "x86_64-apple-darwin"
 PLATFORMS = ("windows", "macos")
 
 
@@ -90,53 +89,45 @@ def moltenvk(root: Path) -> Path:
                       library) / library
 
 
+def architecture(platform: str) -> str:
+    """The CPU a platform build targets: x86-64 for Windows, the building Mac's own for macOS."""
+    if platform == "macos":
+        return "arm64" if host_platform.machine() == "arm64" else "x86_64"
+    return "x86_64"
+
+
 def _keyed(root: Path, platform: str, kind: str, *parts: bytes) -> Path:
     digest = hashlib.sha256(platform.encode())
     for part in parts:
         digest.update(part)
-    return root / f"{platform}-x86_64" / kind / digest.hexdigest()[:16]
+    return root / f"{platform}-{architecture(platform)}" / kind / digest.hexdigest()[:16]
 
 
 def provision(platform: str, environment: Mapping[str, str]) -> list[str]:
-    """Build the platform's libraries and Lightning when missing and return the CMake definitions that use them."""
+    """Build the platform's libraries when missing and return the CMake definitions that use them."""
     if platform not in PLATFORMS:
         raise ToolError(f"no target platform {platform!r}; known: {', '.join(PLATFORMS)}")
     root = dependency_root(environment)
-    lightning_revision = pinned_revision(str(FRAMEWORK), "LIGHTNING")
-    if lightning_revision is None:
-        raise ToolError("cmake/lightrec_dependency.cmake pins no Lightning revision")
     if platform == "windows":
         toolchain = llvm_mingw(root)
         library_arguments = [f"-DCMAKE_TOOLCHAIN_FILE={WINDOWS_TOOLCHAIN_FILE}", f"-DLLVM_MINGW_ROOT={toolchain}"]
         shaping = (LLVM_MINGW_NAME.encode(), WINDOWS_TOOLCHAIN_FILE.read_bytes())
-        compiler, host = str(toolchain / "bin" / f"{WINDOWS_TRIPLE}-clang"), WINDOWS_TRIPLE
     else:
-        # Intel on every Mac: Lightrec has no proven Apple-silicon JIT (MAP_JIT), so Apple silicon runs it under Rosetta.
-        library_arguments = [f"-DCMAKE_OSX_DEPLOYMENT_TARGET={MACOS_DEPLOYMENT_TARGET}", "-DCMAKE_OSX_ARCHITECTURES=x86_64"]
-        shaping = (MACOS_DEPLOYMENT_TARGET.encode(), MACOS_TRIPLE.encode())
-        compiler, host = "clang", MACOS_TRIPLE
+        arch = architecture(platform)
+        library_arguments = [f"-DCMAKE_OSX_DEPLOYMENT_TARGET={MACOS_DEPLOYMENT_TARGET}", f"-DCMAKE_OSX_ARCHITECTURES={arch}"]
+        shaping = (MACOS_DEPLOYMENT_TARGET.encode(), arch.encode())
     libraries = _keyed(root, platform, "libraries", *shaping, target_libraries.PINS.read_bytes(),
                        Path(target_libraries.__file__).read_bytes())
-    lightning = _keyed(root, platform, "lightning", *shaping, lightning_revision.encode(),
-                       Path(target_libraries.__file__).read_bytes())
     prefix = libraries / "prefix"
-    profile = f"{platform}-x86_64"
-    lightning_install = lightning / "lightning" / "build" / "install" / profile
     try:
         if not (libraries / "complete").is_file():
             target_libraries.build_libraries(platform, prefix, libraries / "work",
                                              [*library_arguments, f"-DCMAKE_FIND_ROOT_PATH={prefix}"])
             shutil.rmtree(libraries / "work", ignore_errors=True)
             (libraries / "complete").touch()
-        if not (lightning / "complete").is_file():
-            target_libraries.build_lightning(lightning_revision, lightning, compiler, host,
-                                             MACOS_DEPLOYMENT_TARGET if platform == "macos" else None)
-            (lightning / "complete").touch()
     except target_libraries.Refused as error:
         raise ToolError(f"{platform} target dependencies: {error}") from error
-    definitions = [*library_arguments, f"-DCMAKE_PREFIX_PATH={prefix}",
-                   f"-DLIBLIGHTNING_INCLUDE_DIR={lightning_install / 'include'}",
-                   f"-DLIBLIGHTNING={lightning_install / 'lib' / 'liblightning.a'}"]
+    definitions = [*library_arguments, f"-DCMAKE_PREFIX_PATH={prefix}"]
     if platform == "windows":
         definitions += [f"-DPSXPORT_TARGET_DEPENDENCY_PREFIX={prefix}", f"-DCMAKE_FIND_ROOT_PATH={prefix}",
                         # zlib's static MinGW name, which FindZLIB does not search.

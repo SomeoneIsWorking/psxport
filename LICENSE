@@ -26,11 +26,10 @@ Third-party code keeps its own licence. Files under `vendor/` and external
 dependencies are not covered by the MIT licence above:
 
 - `vendor/beetle-psx` is GPL-2.0-or-later.
-- Lightrec, fetched at build time, is LGPL-2.1-or-later.
 - `vendor/imgui`, `vendor/rmlui` and `vendor/lucent` are MIT.
 - `vendor/bug-report` and `vendor/setup-ui` are MIT upstream; their vendored
   copies predate the upstream LICENSE file.
 
-Every product binary built from this repository links Beetle PSX and Lightrec,
-so it is a combined GPL-2.0-or-later work and is distributed with its source
+Every product binary built from this repository links Beetle PSX, so it is a
+combined GPL-2.0-or-later work and is distributed with its source
 and the GPL notice.

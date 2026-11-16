@@ -2,7 +2,7 @@
 
 #include "core.h"
 #include "guest_memory_map.h"
-#include "lightrec_executor.h"
+#include "guest_executor.h"
 
 #include <algorithm>
 
@@ -18,7 +18,7 @@ void invalidatePhysicalSegment(Core &core, std::uint32_t begin, std::uint32_t le
   const std::uint32_t alignedBegin = begin & ~3u;
   const std::uint64_t end = static_cast<std::uint64_t>(begin) + length;
   const auto alignedEnd = static_cast<std::uint32_t>((end + 3u) & ~std::uint64_t{3u});
-  core.lightrecExecutor().invalidate({alignedBegin, alignedEnd}, source);
+  core.executor().invalidate({alignedBegin, alignedEnd}, source);
 }
 
 } // namespace
@@ -29,7 +29,7 @@ void notifyExecutableWrite(Core &core, GuestAddressRange range, ExecutableWriteS
   }
   const std::uint64_t length = static_cast<std::uint64_t>(range.end) - range.begin;
   if (length >= kPhysicalAddressSpaceSize) {
-    core.lightrecExecutor().invalidateAll(source);
+    core.executor().invalidateAll(source);
     return;
   }
 

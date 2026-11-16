@@ -19,7 +19,7 @@ struct DivideCase {
 };
 
 // The guest's divide_cases in order, with the LO and HI each leaves. Bare cases are the R3000A's; on an
-// R3000A the guarded ones take break 7/6, and these are the results of the fork stripping that guard.
+// R3000A the guarded ones take break 7/6, which psxport logs and resumes past, so these are the results.
 inline constexpr std::array<DivideCase, 7> kDivideCases{{
     {"divu-guarded 0x2D6FFC/0", 0xFFFFFFFFu, 0x002D6FFCu},
     {"div-guarded 5/0", 0xFFFFFFFFu, 5u},

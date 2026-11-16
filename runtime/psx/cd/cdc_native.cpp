@@ -723,7 +723,7 @@ bool CdController::getlocP(uint8_t out[8]) const {
 }
 
 bool CdController::nextDeadlineTicks(uint64_t *absoluteTicks) const {
-  // A Lightrec segment ends at the earliest armed deadline.
+  // A guest segment ends at the earliest armed deadline.
   uint64_t earliest = 0;
   bool armed = false;
   const auto consider = [&](bool isArmed, uint64_t deadline) {

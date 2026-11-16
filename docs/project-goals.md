@@ -4,31 +4,29 @@ This document owns psxport's epic product intent. Factual capability state lives
 `docs/project-state.md`; ownership and placement live in `docs/codemap.md`; implementation order and
 acceptance gates live in `docs/migration.md`; atomic work lives in `docs/issues/`.
 
-## G001 — Native/dynarec guest execution
+## G001 — Native/interpreter guest execution
 
-Provide one game-agnostic PSX executor in which verified native overrides cooperate with a maintained,
-pinned Lightrec dynarec for every remaining MIPS R3000A instruction.
+Provide one game-agnostic PSX executor in which verified native overrides cooperate with psxport's own
+R3000 interpreter (`runtime/cpu/guest_executor.*`) for every remaining MIPS R3000A instruction.
 
 Why it matters: a port should consume the user's original game image at runtime and behave as a
 maintainable native application without generating and compiling a title-sized source corpus.
 
 Success conditions:
 
-- One Lightrec instance is owned by each live `Core`, with no implicit process-global CPU, image,
+- One executor is owned by each live `Core`, with no implicit process-global CPU, image,
   override, clock, or invalidation state.
-- Gameplay objects and links contain no standalone interpreter mode, offline guest bodies,
-  dispatch table, or engine-selection surface. Automatic fallback is backend-owned, bounded, counted,
-  and limited to named compilation/fetch/unsupported-block failures.
+- Gameplay objects and links contain no second engine, recompiler, translation cache, fallback tier,
+  offline guest bodies, dispatch table, or engine-selection surface.
 - Native overrides use complete image/module-generation-plus-address identity. A scoped original call
-  bypasses only its current override and executes the guest body through Lightrec without recursion.
-- Lightrec owns its block cache and executable memory. psxport owns explicit architectural-state
-  synchronization, bounded exits, callbacks, native dispatch, and invalidation.
-- CPU writes, DMA, module loads, debugger writes, and savestate restore invalidate every affected
-  translated block and stale dispatch decision.
+  bypasses only its current override and executes the guest body on the interpreter without recursion.
+- The executor runs directly on `Core`'s architectural state and reads code from guest memory as it
+  runs. psxport owns bounded exits, block entries, native dispatch, and invalidation.
+- CPU writes, DMA, module loads, debugger writes, and savestate restore invalidate every stale
+  dispatch decision.
 
-Non-goals: designing a new MIPS JIT, exposing an interpreter mode to players (a host without a
-qualified Lightrec backend runs the interpreter; G004), wrapping Lightrec's cache in
-`jit-common`, or retaining offline guest-code generation as a compatibility mode.
+Non-goals: a recompiler or block cache (make the interpreter faster in place instead), an engine
+choice for players, or retaining offline guest-code generation as a compatibility mode.
 
 Contributing state items: S012–S016.
 
@@ -54,7 +52,7 @@ Contributing state items: S017, S019, S022.
 
 ## G003 — Faithful, representative conformance
 
-Establish that the native/Lightrec product works through representative interactive gameplay, not
+Establish that the native/interpreter product works through representative interactive gameplay, not
 merely a boot logo, menu, attract loop, FMV, or clean internal trace.
 
 Why it matters: early checkpoints do not exercise the override, overlay, timing, input, rendering,
@@ -66,7 +64,7 @@ Success conditions:
   native overrides, an original call, interrupts/timing, input, rendering, and audio.
 - Independent emulator, hardware, binary, or separately built test-oracle evidence can stop at the
   first divergence and reports reachability and denominators.
-- Every released host architecture demonstrates nonzero Lightrec execution, invalidation, correct
+- Every released host architecture demonstrates nonzero guest execution, invalidation, correct
   state boundaries, and an interactive frame-time/correctness budget.
 - Enhancements such as widescreen, interpolation, and loading removal remain explicit intentional divergences layered
   on a faithful baseline.
@@ -87,17 +85,14 @@ machine paths, or undocumented runtime flags.
 
 Success conditions:
 
-- Lightrec is a direct dependency at an immutable maintained revision with recorded provenance; any
-  required changes live as commits in a maintained fork, never patch files.
-- Consumer launchers authenticate user game files and start the native/Lightrec product without an
+- Consumer launchers authenticate user game files and start the native/interpreter product without an
   offline translator, derived guest source, or engine flag.
 - One typed configuration owner and Lucent logging boundary are enforced; product modules do not read
   environment/config files or print diagnostics directly.
 - Structure, format, lint, hermetic tests, product-link audits, and representative gameplay checks
   fail with named causes and non-empty denominators.
-- Apple Silicon macOS is a required host. It may run the guest on the interpreter until Lightrec is
-  qualified there (`MAP_JIT`, per-thread write protection, icache flush, `allow-jit`); hardware
-  checks are done by the user on their Mac.
+- Apple Silicon macOS is a required host, built natively for arm64; hardware checks are done by the
+  user on their Mac.
 
 Non-goals: requiring Ghidra for players, shipping copyrighted game data, or encoding the maintainer's
 Clang choice as a user-facing compiler restriction.

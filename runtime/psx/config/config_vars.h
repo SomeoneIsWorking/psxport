@@ -1,6 +1,5 @@
 // The product and run knobs, read through these typed accessors. Diagnostic knobs are in diagnostic_config.h.
 #pragma once
-#include "fallback_policy.h"
 #include "override_differential_config.h"
 #include "render_mode.h"
 
@@ -47,8 +46,6 @@ bool show_window();
 // A packaged product's defaults: a window, and the assets under `assetParent`.
 void applyPackagedDefaults(const std::filesystem::path &assetParent);
 
-// PSXPORT_LIGHTREC_FALLBACK_BLOCK_LIMIT: interpreter-fallback blocks one bounded execution may admit.
-psx::cpu::FallbackPolicy lightrec_fallback_policy();
 // PSXPORT_OVERRIDE_DIFF (+ _FIRST, _EVERY, _DEAD_STACK, _REPORT): the override differential; empty selectors disarm.
 psx::cpu::OverrideDifferentialConfig override_differential_config();
 std::string function_reach_report_path(); // PSXPORT_REACH_REPORT: empty disarms

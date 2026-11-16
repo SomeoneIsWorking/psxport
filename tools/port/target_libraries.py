@@ -2,12 +2,9 @@
 """Build the libraries a packaged psxport product links, from pinned and checksummed sources.
 
     target_libraries.py libraries --platform linux|windows|macos --prefix DIR --work DIR [-- CMAKE_ARG...]
-    target_libraries.py lightning --revision REV --root DIR --cc CC [--host TRIPLE]
 
 `libraries` builds every entry of target-libraries.json for the platform into one prefix, passing
-the trailing CMake arguments (a toolchain file) to each. `lightning` clones the maintained GNU
-Lightning fork at REV under ROOT and builds it with the fork's own tool, for the build host or for
-TRIPLE. Stdlib only: the AppImage image runs this file before any project environment exists.
+the trailing CMake arguments (a toolchain file) to each. Stdlib only: the AppImage image runs this file before any project environment exists.
 """
 
 from __future__ import annotations
@@ -15,7 +12,6 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
-import os
 import shutil
 import subprocess
 import sys
@@ -25,7 +21,6 @@ from collections.abc import Mapping, Sequence
 from pathlib import Path
 
 PINS = Path(__file__).resolve().with_name("target-libraries.json")
-LIGHTNING_REPOSITORY = "https://github.com/SomeoneIsWorking/lightning.git"
 
 
 class Refused(Exception):
@@ -95,22 +90,6 @@ def build_libraries(platform: str, prefix: Path, work: Path, cmake_arguments: Se
         shutil.rmtree(build)
 
 
-def build_lightning(revision: str, root: Path, compiler: str, host: str | None,
-                    macos_deployment_target: str | None = None) -> None:
-    checkout = root / "lightning"
-    if not (checkout / ".git").is_dir():
-        run(["git", "clone", LIGHTNING_REPOSITORY, checkout])
-    run(["git", "-C", checkout, "fetch", "--quiet", "origin"])
-    run(["git", "-C", checkout, "checkout", "--quiet", "--detach", revision])
-    run(["git", "-C", checkout, "submodule", "update", "--init", "--recursive"])
-    environment = dict(os.environ)
-    if macos_deployment_target:
-        # autoconf passes no -mmacosx-version-min; clang reads this instead of defaulting to the SDK's.
-        environment["MACOSX_DEPLOYMENT_TARGET"] = macos_deployment_target
-    run(["uv", "run", "--directory", checkout, "--frozen", "python", "tools/build_lightning.py", "--clean",
-         "--cc", compiler, "--skip-upstream-tests", *(["--host", host] if host else [])], environment=environment)
-
-
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     commands = parser.add_subparsers(dest="command", required=True)
@@ -119,17 +98,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     libs.add_argument("--prefix", type=Path, required=True)
     libs.add_argument("--work", type=Path, required=True)
     libs.add_argument("cmake_arguments", nargs="*")
-    lightning = commands.add_parser("lightning")
-    lightning.add_argument("--revision", required=True)
-    lightning.add_argument("--root", type=Path, required=True)
-    lightning.add_argument("--cc", required=True)
-    lightning.add_argument("--host")
     args = parser.parse_args(argv)
     try:
-        if args.command == "libraries":
-            build_libraries(args.platform, args.prefix.resolve(), args.work.resolve(), args.cmake_arguments)
-        else:
-            build_lightning(args.revision, args.root.resolve(), args.cc, args.host)
+        build_libraries(args.platform, args.prefix.resolve(), args.work.resolve(), args.cmake_arguments)
     except Refused as error:
         print(f"[target-libraries] REFUSED: {error}", file=sys.stderr)
         return 2

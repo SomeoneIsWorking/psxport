@@ -219,7 +219,7 @@ waits in `Repl::beforeStep` for a `run N` that covers the step (`quit`, `end` or
 The body is `FieldTurn::beginField`, `FrameLoopShell::step` (one presentation fence; the field number a
 `FrameDriver` receives counts from 1 and goes up by one per step),
 `RunBudget::step` and `Repl::afterStep` for a product, `FieldTurn::endField`.
-A product session's destructor prints the one `RunEndReport` (`run complete`, fallback telemetry,
+A product session's destructor prints the one `RunEndReport` (`run complete`, the executor
 ledger, guest-call census, present intervals, record stability, audio queue, `reportRun`). `Quit` and
 `BudgetSpent` end the process; `ReturnedToSelector` and `TitleEnded` rebuild the selector when the
 run came from it, and end the process under `runExecutable`.
@@ -271,7 +271,7 @@ the event drain, so it reaches the run-end report like a client `quit`.
 ## Running
 
 `PSXPORT_DEBUG=picker` logs one `[picker] panels:` line per selector iteration with each panel's steps
-and executed guest instructions (Lightrec plus fallback); an unfocused panel's two numbers stay fixed.
+and executed guest instructions; an unfocused panel's two numbers stay fixed.
 Picker frame time is read from those lines in a paced run (`PSXPORT_DEBUG=picker,pacer`, no NOPACE). The headless walk (`picker`, `select left|right`, `tap left|right`, `pshot <path>` for the
 selector's frame, `key`/`mouse`/`gamepad` input, `pick <slug>`, `session return`, `pick <slug>`) runs on a built port with `PSXPORT_DEBUG_SERVER` and
 `tools/dbgclient.py`; see the consuming port's docs for its route.

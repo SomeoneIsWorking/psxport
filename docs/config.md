@@ -91,34 +91,22 @@ connection refused against a product that is otherwise running normally.
 `tools/dbgclient.py` is the client: a one-shot CLI, and `LiveClient` for a driver that sends many commands;
 each command is its own request, so there is no connection to open or close.
 Two commands exist so a running product can be QUERIED rather than read out of its log: `cvars` answers
-the effective configuration with the layer each value came from, and `guest` answers the dynarec's own
-denominators (translated and executed blocks and instructions, cache hit/miss, host dispatches,
-invalidations, faults, and interpreter fallback by every reason it counts).
+the effective configuration with the layer each value came from, and `guest` answers the executor's own
+denominators (calls, executed blocks and instructions, host dispatches, memory accesses, device clock
+commits, invalidations by source, faults, and budget exits).
 
-## Diagnostic runs and bounded fallback
+## Diagnostic runs
 
 `PSXPORT_DIAGNOSTIC_RUN` accepts `product`, `compare-candidate`, or `compare-reference`. It labels
-the role of the same dynarec/native runtime; it is not a CPU-engine selector. Consumer code reads
+the role of the same interpreter/native runtime; it is not a CPU-engine selector. Consumer code reads
 `psx::config::diagnostic_run_mode()` and harnesses use the typed, nestable
 `psx::config::ScopedDiagnosticRun`. Both comparison roles suppress requested enhancements through
 the shared `psx::config::enh()` / `enh_named()` gate so title code does not duplicate comparison
 configuration semantics. Invalid roles fail closed at that gate and are logged by name.
 
-`PSXPORT_LIGHTREC_FALLBACK_BLOCK_LIMIT` is the maximum automatic interpreter-fallback blocks one
-bounded executor call may admit. Its default is `1`, matching the verified difficult-block escape;
-a second fallback block in the same call is a typed execution fault. `0` disables automatic
-fallback admission without creating a selectable interpreter mode. Negative values are invalid and
-fault before guest execution. Lightrec asks the executor before entering any fallback block, so a
-zero limit executes zero interpreter instructions of a block fallback. The one exemption is the
-cross-block load-delay hazard (`load_delay_hazard` in the telemetry): a taken branch whose delay slot
-loads `$r` into a block whose first instruction reads `$r` must see the OLD `$r`, and Lightrec
-resolves that by interpreting at most three guest instructions (the first instruction, or a first
-branch with its delay slot). It is architected R3000 behaviour rather than a refused compilation,
-hand-scheduled loops hit it once per iteration (Toy Story 2's GTE clipper at `0x800202F0`), and a
-per-call block limit would fault correct guest code, so it is admitted without consuming the limit
-and reported by its own counters against `executed_instructions`. Lightrec shutdown and explicit turn-end reports
-name executor calls, executed blocks/instructions, admitted and refused fallback blocks, every
-admitted/refused reason count, and the policy applied to the most recent execution.
+The executor's shutdown and explicit turn-end reports print the same ledger lines `guest` answers:
+`guest:` (calls, executed blocks and instructions, host dispatches, memory accesses, device clock commits
+and the instructions they committed, invalidations, faults), `invalidations_by_source:` and `budget_exit:`.
 
 ## Logging
 
@@ -175,16 +163,16 @@ no report is written. What is and is not compared is written into the report its
 `PSXPORT_STORE_OBSERVE` is a comma- or space-separated list of hex **guest addresses of store
 instructions**, up to `kMaxObservedStoreTargets` of them, e.g. `0x80083884,0x8007DB3C`. Empty is the
 default and disarms, so an ordinary run pays one string compare and nothing per instruction. It arms the
-dynarec store observer, which names the **guest** PC of a translated store together with the full
-register file.
+executor's store observer, which names the **guest** PC of an executed store together with the full
+register file. It observes exactly the armed store PCs.
 
 **THESE ARE STORE PCs, NOT DATA ADDRESSES — and that is the whole usability question.**
-`LightrecExecutor::Impl::observeStore` matches `target.guestPc != guestPc`, the pc of the translated
-STORE. So the instrument answers "what does this store instruction write, and with what registers", NOT
+`GuestExecutor` matches each armed target against the pc of the executed STORE. So the instrument answers
+"what does this store instruction write, and with what registers", NOT
 "which instruction wrote this word". Arming a data address matches nothing and the resulting zero is not
 evidence. Measured 2026-09-27 on Spyro 1: arming the two store PCs `0x8007DB3C` and `0x8007DB54` produced
 **24,332 correctly attributed callback lines** with both positive controls firing, while arming the data
-address `0x80078AE0` produced `MATCHED NONE of the 9,366,306 executed JIT instruction(s)` on a word that
+address `0x80078AE0` matched none of 9,366,306 executed instructions on a word that
 demonstrably changes every frame. The per-target report row echoes the armed value in a column that
 reads like an address, which is exactly what makes the mistake easy. **To find which instruction wrote a
 word you must already know the instruction**: use `PSXPORT_CW` for host-reaching stores, or read the
@@ -192,7 +180,7 @@ store out of the listing. An earlier version of this section claimed the surface
 that wrote this word", and that claim was wrong in the way that matters — it invited arming a data
 address and reading the silence as a result.
 
-`PSXPORT_CW` sees every store to RAM or the scratchpad, native or guest: Lightrec routes each guest
+`PSXPORT_CW` sees every store to RAM or the scratchpad, native or guest: the executor sends each guest
 store through `Core::writeGuestMemory`, including stores to a constant address. `PSXPORT_STORE_OBSERVE` is armed by
 `TitleSession::boot` beside the live endpoint.
 
@@ -202,12 +190,12 @@ Two honest limits, both stated in `runtime/cpu/store_observe.cpp` rather than pa
   them one at a time, or read `store_observe_report`, whose per-target rows do carry each address's
   store counts and the guest PC of its last one. The callback line therefore does not invent a target.
 - An unarmed observer reports **nothing**, so its silence is not evidence. `store_observe_report` prints
-  the executor's own `executedJitInstructions` / `fallbackInstructions` beside the per-target counts, and
+  the executor's own executed instruction count (`instructions=`) beside the per-target counts, and
   the arming lines print how many addresses were accepted — so "ran and matched nothing" is
   distinguishable from "never ran". An unparsable or over-long list is REFUSED with the offending token
   named, rather than silently watching a prefix, which is the failure this area has already produced
   once.
 
 A title wanting richer handling than a log line calls
-`LightrecExecutor::configureStoreObserver` itself with its own callback; this is the
+`GuestExecutor::configureStoreObserver` itself with its own callback; this is the
 configuration-driven path, so an investigation needs no product edit.

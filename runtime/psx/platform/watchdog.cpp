@@ -33,7 +33,7 @@ struct {
   const uint32_t *volatile registers;
 } s_guest;
 
-// Guest code runs as Lightrec blocks the C backtrace cannot name, so the report adds the guest's own position.
+// Guest code runs in the interpreter, which the C backtrace cannot place in the guest, so the report adds the guest's own position.
 void writeGuestPosition() {
   const volatile uint32_t *pc = s_guest.pc;
   const uint32_t *registers = s_guest.registers;

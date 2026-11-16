@@ -1,11 +1,11 @@
 ---
 id: 48
 title: Define the Lightrec state bridge and bounded executor exits
-status: open
+status: resolved
 symptom: current host boundaries assume generated C calls or exception unwinding instead of returning from JIT execution with synchronized PSX state
 tags: lightrec,state,cycles,interrupts,executor
 created: 2026-09-04
-updated: 2026-09-12
+updated: 2026-11-16
 ---
 state_items: S013
 
@@ -44,3 +44,6 @@ before re-entry. Do not unwind C++ exceptions through Lightrec frames.
 Focused tests must exercise each exit reason through the shipping executor seam and prove both state
 directions, cycle accounting, nested resume, and budget exhaustion. The negative cases must seed a
 wrong register/cycle answer and show the comparator reports it.
+
+## Superseded (2026-11-16)
+Lightrec was replaced by the interpreter (`runtime/cpu/guest_executor.*`).

@@ -3,8 +3,8 @@
 FROM docker.io/library/ubuntu:22.04
 ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update && apt-get install -y --no-install-recommends \
-        autoconf automake binutils ca-certificates curl desktop-file-utils file git gnupg \
-        libtool make ninja-build pkg-config texinfo xz-utils zlib1g-dev zsync \
+        binutils ca-certificates curl desktop-file-utils file git gnupg \
+        make ninja-build pkg-config xz-utils zlib1g-dev zsync \
         libc6-dev libstdc++-11-dev \
         libx11-dev libxext-dev libxrandr-dev libxcursor-dev libxi-dev libxfixes-dev libxss-dev \
         libxtst-dev libxkbcommon-dev libwayland-dev wayland-protocols libdecor-0-dev libegl-dev \
@@ -52,12 +52,5 @@ RUN uv run --no-project --python 3.12 python /opt/psxport-deps/target_libraries.
         --prefix /usr/local --work /tmp/deps \
     && rm -rf /tmp/deps && ldconfig
 
-# The maintained Lightrec and GNU Lightning forks at the revisions psxport pins.
-ARG LIGHTNING_REVISION
-ARG LIGHTREC_REVISION
-RUN git config --system --add safe.directory '*' \
-    && uv run --no-project --python 3.12 python /opt/psxport-deps/target_libraries.py lightning \
-        --revision "${LIGHTNING_REVISION}" --root /opt --cc clang-20 \
-    && git clone https://github.com/SomeoneIsWorking/lightrec.git /opt/lightrec \
-    && git -C /opt/lightrec checkout --detach "${LIGHTREC_REVISION}"
-ENV PSXPORT_LIGHTNING_PREFIX=/opt/lightning/build/install/linux-x86_64 PSXPORT_LIGHTREC_DIR=/opt/lightrec
+# The mounted checkouts belong to the host user.
+RUN git config --system --add safe.directory '*'

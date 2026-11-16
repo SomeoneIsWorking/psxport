@@ -2,7 +2,7 @@
 
 #include "core.h"
 #include "execution_services.h"
-#include "lightrec_executor.h"
+#include "guest_executor.h"
 
 #include <lucent/log.h>
 
@@ -222,15 +222,15 @@ const std::optional<JournalBoundViolation> &SideEffectJournal::boundViolation() 
   return boundViolation_;
 }
 
-SideEffectJournal::TranslatedExecutionScope::TranslatedExecutionScope(Core &core) : journal_(core.sideEffectJournal) {
+SideEffectJournal::GuestExecutionScope::GuestExecutionScope(Core &core) : journal_(core.sideEffectJournal) {
   if (journal_ != nullptr) {
-    ++journal_->translatedExecutions_;
+    ++journal_->guestExecutions_;
   }
 }
 
-SideEffectJournal::TranslatedExecutionScope::~TranslatedExecutionScope() {
+SideEffectJournal::GuestExecutionScope::~GuestExecutionScope() {
   if (journal_ != nullptr) {
-    --journal_->translatedExecutions_;
+    --journal_->guestExecutions_;
   }
 }
 
@@ -256,17 +256,17 @@ void SideEffectJournal::stopDiscardedRun(const SideEffect &effect) {
     discardStop_ = effect;
     discardStopCallerCount_ = core_ != nullptr ? core_->writerLatch.returns(discardStopCallers_) : 0u;
   }
-  if (translatedExecutions_ == 0) {
+  if (guestExecutions_ == 0) {
     throw DiscardedRunTouchedDevice{};
   }
   if (!stopDeferred_ && core_ != nullptr) {
     stopDeferred_ = true;
-    core_->lightrecExecutor().requestStop();
+    core_->executor().requestStop();
   }
 }
 
 void SideEffectJournal::stopDeferredDiscardedRun() const {
-  if (stopDeferred_ && translatedExecutions_ == 0) {
+  if (stopDeferred_ && guestExecutions_ == 0) {
     throw DiscardedRunTouchedDevice{};
   }
 }
@@ -303,15 +303,15 @@ void SideEffectJournal::append(SideEffect effect) {
 //  3. THEN STOP THE CALL, but only out of HOST code. A shadow-path overrun inside a native body is
 //     stopped by throwing `JournalBoundExceeded`, which the differential catches and turns into a
 //     verdict — without it the runaway keeps allocating (the measured 7.4 GB). The throw is NOT raised
-//     when a `TranslatedExecutionScope` is open, because then a translated Lightrec frame is below this
-//     one and unwinding through it is undefined; there the call still terminates through the
+//     when a `GuestExecutionScope` is open, because then a guest segment is below this one and
+//     unwinding through it would skip its exit bookkeeping; there the call still terminates through the
 //     executor's own cycle budget, and the recorded violation is reported when it does.
 void SideEffectJournal::refuseAtBound(SideEffect effect) {
   if (!boundViolation_) {
     boundViolation_ = JournalBoundViolation{mode_, effect, effects_.size(), 0, false};
   }
   ++boundViolation_->refused;
-  if (mode_ != SideEffectMode::Replay || translatedExecutions_ != 0) {
+  if (mode_ != SideEffectMode::Replay || guestExecutions_ != 0) {
     return;
   }
   boundViolation_->stoppedCall = true;

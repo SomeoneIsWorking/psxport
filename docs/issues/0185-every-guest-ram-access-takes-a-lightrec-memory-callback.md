@@ -1,6 +1,6 @@
 # 0185 — Every guest RAM access takes a Lightrec memory callback
 
-Status: open (2026-10-28). Owner: `runtime/cpu/lightrec_executor.cpp` (`Impl::initializeMaps`, `kMemoryOps`).
+Status: closed (2026-11-16), superseded. Owner: `runtime/cpu/lightrec_executor.cpp` (`Impl::initializeMaps`, `kMemoryOps`), since removed.
 
 ## Observed
 C-12's boot load (psx-c12 issue 0006) spins in libcd's CdReady wait for drive-paced sectors. Each such field runs the
@@ -26,3 +26,6 @@ title's store path, so it needs its own pass and an all-title real-time check.
 C-12 now binds its libcd CdRead and CdReadSync as stock, so its loads land at once and its boot no longer spins in
 CdReady (psx-c12 0006: 0 of 2361 presents missed). The callback cost itself is unchanged and still applies to any
 title that spins or stores heavily; this issue stays open for the direct RAM map.
+
+## Superseded (2026-11-16)
+Lightrec was replaced by the interpreter (`runtime/cpu/guest_executor.*`).

@@ -11,7 +11,7 @@
 //
 // WHAT IS JOURNALED, AND ONLY THIS. Everything guest code or native code routes through `Core`'s own
 // device funnel (`Core::mem_r*`/`mem_w*` on an address with no RAM mapping, which is where every
-// translated Lightrec device access also lands), every host-service dispatch from guest code
+// interpreted guest device access also lands), every host-service dispatch from guest code
 // (`dispatchGuestHostService`: title overrides, platform HLE leaves, BIOS tables, the pad work area),
 // syscalls, and pending-work servicing. A native override that calls a device model DIRECTLY in C++,
 // bypassing `Core`'s memory API, is invisible here — the report says so rather than implying otherwise.
@@ -56,7 +56,7 @@ enum class SideEffectMode : std::uint8_t {
   // devices are never reached, guest time and pending work are held, and the critical-section syscalls run (the caller
   // also puts back COP0 and the kernel flag). Its first device access, other syscall or service with host-side state
   // raises
-  // `DiscardedRunTouchedDevice`: out of host code at once, from translated code (served 0) when the executor
+  // `DiscardedRunTouchedDevice`: out of host code at once, from guest code (served 0) when the executor
   // is next back in host code, so a run polling a device stops instead of spinning out its budget.
   Discard,
 };
@@ -87,8 +87,8 @@ struct JournalBoundViolation {
   SideEffect offending{};
   std::size_t effects = 0; // journaled when the bound was reached; equals the bound
   std::size_t refused = 0; // effects refused after it, counted rather than dropped silently
-  // Whether the host body was stopped by the raise. False on the live path and anywhere a translated
-  // frame is on the stack, where a `throw` is illegal — see `SideEffectJournal::TranslatedExecutionScope`.
+  // Whether the host body was stopped by the raise. False on the live path and anywhere a guest
+  // segment is on the stack, where a `throw` is refused — see `SideEffectJournal::GuestExecutionScope`.
   bool stoppedCall = false;
   // The whole fault as one sentence: which path, which effect, how many were journaled, the bound, and
   // what happened to the call. The override's own name and address are NOT here — the journal does not
@@ -162,31 +162,32 @@ public:
   // Set the first time an effect is refused at `kMaxSideEffectsPerCall`, and never cleared. A journal
   // holding one has a TRUNCATED log, so the differential must record a failure rather than compare it.
   const std::optional<JournalBoundViolation> &boundViolation() const;
-  // The executor, back in host code after a translated segment: raises the stop a Discard run deferred there.
+  // The executor, back in host code after a guest segment: raises the stop a Discard run deferred there.
   void stopDeferredDiscardedRun() const;
 
   // THE UNWIND GUARD, and the reason it exists.
   //
-  // A `throw` from a device access is only legal while every frame between here and the shadow
-  // boundary is HOST code, and the journal cannot see that from inside itself: a translated Lightrec
-  // frame sits directly below the device callback (`Core::mem_w*` is reached from generated code), so
-  // "am I in host code" is a fact about the CALLER, not about this frame. The executor is the only
-  // thing that knows, so it marks the one place translated code runs — the `lightrec_execute` call in
-  // `executeWithBoundary`, which `execute`/`executeUntilExit`/`executeFunction` all funnel through; host
-  // services it dispatches between segments run unmarked — and the journal then refuses to
-  // raise while the mark is set. It records the violation either way, so the fault is reported whether
-  // or not the call could be stopped.
+  // A `throw` from a device access is only allowed while every frame between here and the shadow
+  // boundary is NATIVE host code, and the journal cannot see that from inside itself: the interpreter's
+  // segment loop sits directly below the device access (`Core::mem_w*` is reached from a guest store),
+  // and unwinding through it would skip the segment's exit, which lands loads still in flight, accounts
+  // the instructions run and restores the enclosing block context. So "may I raise" is a fact about the
+  // CALLER, not about this frame. The executor is the only thing that knows, so it marks the one place
+  // guest code runs — the `runSegment` call in `executeWithBoundary`, which `executeUntilExit` and
+  // `executeFunction` funnel through; host services it dispatches between segments run unmarked — and
+  // the journal then refuses to raise while the mark is set. It records the violation either way, so
+  // the fault is reported whether or not the call could be stopped.
   //
   // This is also why the LIVE path never unwinds at all: the original's device traffic comes from
-  // translated guest code, so a `throw` there would cross JIT frames on every overrun rather than only
-  // on the rare one. The live path's growth is already bounded by the executor's cycle budget, so it
+  // guest code, so a `throw` there would cross a guest segment on every overrun rather than only on the
+  // rare one. The live path's growth is already bounded by the executor's cycle budget, so it
   // terminates through the ordinary bounded-exit path and the violation is reported when it does.
-  class TranslatedExecutionScope {
+  class GuestExecutionScope {
   public:
-    explicit TranslatedExecutionScope(Core &core);
-    ~TranslatedExecutionScope();
-    TranslatedExecutionScope(const TranslatedExecutionScope &) = delete;
-    TranslatedExecutionScope &operator=(const TranslatedExecutionScope &) = delete;
+    explicit GuestExecutionScope(Core &core);
+    ~GuestExecutionScope();
+    GuestExecutionScope(const GuestExecutionScope &) = delete;
+    GuestExecutionScope &operator=(const GuestExecutionScope &) = delete;
 
   private:
     SideEffectJournal *journal_ = nullptr;
@@ -194,7 +195,7 @@ public:
 
 private:
   void markUnreplayable(std::string reason);
-  // A Discard run that reached a device stops here, or at the end of the translated segment it is in.
+  // A Discard run that reached a device stops here, or at the end of the guest segment it is in.
   void stopDiscardedRun(const SideEffect &effect);
   // Refuses the effect and records the fault when the call is already at `kMaxSideEffectsPerCall`. The
   // entry is NOT stored, so a refused effect can never shift the positions the replay compares by.
@@ -210,9 +211,9 @@ private:
   std::uint64_t withheldPendingWork_ = 0;
   std::vector<std::uint32_t> withheldServices_;
   std::optional<JournalBoundViolation> boundViolation_;
-  // How many `TranslatedExecutionScope`s are open. Only a NATIVE body is raiseable, because only it is
+  // How many `GuestExecutionScope`s are open. Only a NATIVE body is raiseable, because only it is
   // host code all the way down.
-  std::uint32_t translatedExecutions_ = 0;
+  std::uint32_t guestExecutions_ = 0;
   // The Core the journal was last scoped on, whose executor a deferred stop ends the segment of.
   Core *core_ = nullptr;
   bool stopDeferred_ = false;

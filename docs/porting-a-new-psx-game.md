@@ -1,12 +1,12 @@
 # Porting a new PlayStation game with psxport
 
-This guide describes the native/Lightrec architecture. psxport's current code is still migrating to
+This guide describes the native/interpreter architecture. psxport's current code is still migrating to
 it; follow `docs/project-state.md` and do not begin a new title until the active PSX title's declared
 completion bar is met.
 
 ## What the framework provides
 
-- A per-`Core` Lightrec executor for non-native MIPS R3000A code.
+- A per-`Core` R3000 interpreter (`runtime/cpu/guest_executor.*`) for non-native MIPS R3000A code.
 - PSX GPU, SPU, GTE, MDEC, CD/DMA/timer/pad, BIOS/SDK HLE, rendering, audio, input, configuration,
   diagnostics, and platform seams.
 - Image-scoped native overrides, scoped original calls, bounded execution exits, and executable-code
@@ -50,33 +50,29 @@ zero or a guessed address is not a placeholder.
 ## Bring-up sequence
 
 1. Load and authenticate the user-supplied executable/module bytes into canonical guest memory.
-2. Construct one Lightrec executor for the title's `Core` and execute a bounded resident instruction
-   window with nonzero translated blocks.
-3. Prove state synchronization and one service exit against independent evidence.
+2. Execute a bounded resident instruction window on the title's `Core` executor (`Core::executor()`)
+   with nonzero executed blocks.
+3. Prove guest state and one service exit against independent evidence.
 4. Register one resident native override and exercise normal plus scoped original calls.
 5. Load two modules that reuse an address and prove identity/generation selects the right native or
    guest body.
 6. Exercise executable invalidation with a changed overlapping write and a controlled non-overlap.
 7. Reach boot, menu, and gameplay checkpoints while adding only evidence-backed service/native owners.
 8. Drive representative interactive gameplay with rendering, audio, input, timing, interrupts,
-   module loads, overrides, original calls, and nonzero Lightrec translation active.
+   module loads, overrides, original calls, and nonzero guest execution active.
 
-Do not repair a missing MIPS semantic with a title-address override. Fix Lightrec or its psxport
+Do not repair a missing MIPS semantic with a title-address override. Fix the interpreter or the PSX
 integration. Native overrides are for deliberately owned game behavior and proven service boundaries.
 
 ## Product and oracle separation
 
-The gameplay build has no CPU engine selector. Lightrec/native execution is always the default. A
-missing or unsupported dynarec backend fails by name. After successful initialization, automatic
-interpreter fallback may occur only when translation explicitly refuses a classified compilation
-failure, unsafe instruction fetch, rare unsupported block, or cache exhaustion. Each fallback call
-and instruction is counted, bounded per call and by total guest share, and exceeding either threshold
-returns a typed fault.
-An explicit interpreter mode or software-GPU oracle is test-only and cannot be selected by product
-config, command line, or UI.
+The gameplay build has no CPU engine selector: native functions plus the one guest interpreter, on
+every host. An unknown instruction or an instruction fetch outside main RAM and the scratchpad is a
+named fault. A reference emulator or software-GPU oracle is test-only and cannot be selected by
+product config, command line, or UI.
 
 The oracle may share canonical state/memory interfaces, but comparison code never becomes a required
-player dependency. A consumer's `run.sh` launches the intended Lightrec/native product and never runs
+player dependency. A consumer's `run.sh` launches the intended native/interpreter product and never runs
 tests.
 
 ## Player setup
@@ -99,8 +95,8 @@ A title is migrated only when:
 - relevant module reuse and executable invalidation work in the running product;
 - timing, interrupts, memory, and relevant device state are compared at named boundaries;
 - each released host architecture meets its declared correctness and frame-time budget;
-- product-link and selector audits find no standalone interpreter mode or generated guest bodies,
-  and fallback counters remain below the declared threshold; and
+- product-link and selector audits find no second engine, engine selector or generated guest
+  bodies; and
 - the launcher, goals, state, codemap, issues, and player docs match the shipped path.
 
 Finish this title before beginning title-specific work for another PSX game.

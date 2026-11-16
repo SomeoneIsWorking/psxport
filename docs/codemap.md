@@ -25,22 +25,21 @@ Dependency direction: title repo → `runtime/psx/game/` (the title interface) �
 - `runtime/psx/core/guest_code_module.*` — runtime-loaded relocatable code module / overlay as an executable residency, identity and generation
 - `runtime/psx/cpu/r3000.h`, `cpu_divide.*` — R3000A register file, GPR names, COP0 numbers, context save scope, DIV/DIVU LO/HI results and divide by zero
 - `runtime/psx/cpu/gte*.h`, `projected_vertex.h` — GTE / COP2 per Core: register file, register and command numbers, execute, rotation, light matrix and translation load/store, raw save and restore, pre-op observer; screen vertices handed out as `ProjectedVertex` (SXY word plus sub-pixel place and view depth), `DepthUnit` scope
-- `runtime/psx/cpu/vertex_places.*` — PGXP-style place shadow over guest memory: the unrounded place, depth and storing SWC2 site of each vertex word, kept while the word stands and carried through LW/SW (fed by `cpu/lightrec_executor`)
-- `runtime/psx/cpu/beetle/` — Beetle GTE adapter, register transfer to and from Lightrec, PGXP hooks off
-- `runtime/cpu/lightrec_executor.*`, `fallback_policy.h`, `segment_clock.*` — Lightrec dynarec / JIT lifetime per Core, state sync, bounded execution, store observation, fallback, segment instruction commit
+- `runtime/psx/cpu/vertex_places.*` — PGXP-style place shadow over guest memory: the unrounded place, depth and storing SWC2 site of each vertex word, kept while the word stands and carried through LW/SW (fed by `cpu/guest_executor`)
+- `runtime/psx/cpu/beetle/` — Beetle GTE adapter, GTE register export for diagnostics and snapshots, PGXP hooks off
+- `runtime/cpu/guest_executor.*`, `segment_clock.*` — R3000 interpreter per Core (`Core::executor()`): bounded execution on Core's registers, branch and load delay slots, block entries, store observation, segment instruction commit
 - `runtime/cpu/execution_exit.*`, `execution_control.*`, `execution_services.*`, `execution_ledger.*` — typed executor exits, budgets, break and syscall results, exit requests, executor counters ledger
 - `runtime/cpu/image_identity.*` — code image catalog: authenticated resident and module identity, generation, covered ranges
 - `runtime/cpu/native_dispatch.*`, `native_function.h`, `guest_call*.*` — native overrides / HLE by guest address, original calls, native-to-guest call, jal call sites, call attribution
 - `runtime/cpu/resumable_guest_call.*`, `guest_call_census.*` — guest call across host turns / fields: return latch, turn cap, refusal, save-state form of a suspended call, a suspended turn's register written for its resume, run census
 - `runtime/cpu/host_dispatch_cache.h`, `dispatch_epoch.h`, `guest_host_dispatch_kind.h` — what a guest address is (guest code, host service, unclaimed): the verdict cache and the epoch its input owners advance
-- `runtime/cpu/invalidation.*`, `executable_write_source.h` — self-modifying code / executable writes invalidating translated blocks and dispatch verdicts
+- `runtime/cpu/invalidation.*`, `executable_write_source.h` — self-modifying code / executable writes: dispatch verdicts revoked, executor invalidations counted
 - `runtime/cpu/override_differential*`, `machine_snapshot.*`, `side_effect_journal.*` — override differential: original vs native shadow run, O32 contract, CPU/RAM snapshot, device side-effect journal and replay
 - `runtime/cpu/function_reach.*` — reached guest functions per code image report
 - `runtime/cpu/store_observe.*` — store-instruction PC observer
 - `runtime/cpu/guest_writer_latch.h` — guest writer latch / shadow call stack: innermost guest function (called by `jal`/`jalr` or entered by the host, `HostCall`), block-entry PC, dispatched entry of a store
 - `runtime/cpu/host_turn.*` — host turn clock: one display field owed per field period of guest time, PW_HOST
-- `cmake/lightrec_dependency.cmake` — pinned Lightrec revision and worktree
-- `cmake/dependency_prefix.cmake`, `cmake/deps/` — RmlUi, libchdr, Lucent and Lightrec built once per source content and toolchain into `~/.cache/psxport/deps/<dep>/<compiler>-<config>-<key>` (`PSXPORT_DEPENDENCY_ROOT`), found with find_package; libpsxport, bug-report and setup-ui stay per build tree
+- `cmake/dependency_prefix.cmake`, `cmake/deps/` — RmlUi, libchdr and Lucent built once per source content and toolchain into `~/.cache/psxport/deps/<dep>/<compiler>-<config>-<key>` (`PSXPORT_DEPENDENCY_ROOT`), found with find_package; libpsxport, bug-report and setup-ui stay per build tree
 - `cmake/build_policy.cmake` — per-build-type flags (line tables + zstd debug sections for RelWithDebInfo, no debug info in Release, full `-g` only in Debug) and lld for Clang
 - `cmake/toolchains/llvm-mingw-x86_64.cmake` — the Windows x86-64 cross toolchain (`docs/windows.md`)
 - `runtime/psx/hle/hle.*`, `hle_heap.cpp`, `hle_interrupt.cpp`, `kernel_syscall.cpp`, `syscall_exception.*` — BIOS / kernel HLE: A0/B0/C0 tables, events, heap, interrupt chain, syscall exception entry and return
@@ -117,6 +116,6 @@ Dependency direction: title repo → `runtime/psx/game/` (the title interface) �
 - `tools/decomp_pipeline.py`, `tools/decomp/` — Ghidra headless decompilation, callers, refs
 - `tools/formats/`, `tools/mips/`, `tools/disasm.*`, `tools/discdump.cpp`, `tools/crt0_extract.cpp`, `tools/fmv_export/` — PS-X EXE reader, MIPS decode, disassembly, disc listing and extract, crt0 dump, STR export through the shipping decode
 - `tools/dbgclient.py`, `tools/psx_pad.py`, `tools/prof_hot.py` — control-channel client, pad bit table, host profile symbols
-- `tools/psxport_fetch.py`, `scripts/bootstrap_workspace.py`, `scripts/*submodule*.py` — a title's `external/psxport` link, Lightrec worktree, workspace clone and submodules
+- `tools/psxport_fetch.py`, `scripts/bootstrap_workspace.py`, `scripts/*submodule*.py` — a title's `external/psxport` link, workspace clone and submodules
 - `CMakeLists.txt`, `cmake/`, `tools/CMakeLists.txt`, `tools/build.py`, `tools/project.py`, `tools/automation/`, `pyproject.toml`, `uv.lock`, `.github/` — build composition, Clang / Ninja build, the locked Python environment, build-only CI
 - `vendor/` (beetle-psx, lucent, rmlui, bug-report, setup-ui), `external/psycross`, `patches/beetle-psx/` — pinned forks: Beetle devices, Lucent logging and CVars and text, RmlUi, bug report, setup UI

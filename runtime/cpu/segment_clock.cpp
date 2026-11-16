@@ -12,7 +12,7 @@ std::uint32_t SegmentClockLedger::commitThrough(std::uint64_t executedInstructio
   if (executed <= committedInstructions_) {
     return 0;
   }
-  // A segment's budget is bounded by Lightrec's 32-bit cycle target, so a delta fits.
+  // The executor bounds a segment to 32 bits of instructions, so a delta fits.
   const auto instructions = static_cast<std::uint32_t>(executed - committedInstructions_);
   committedInstructions_ = executed;
   return instructions;

@@ -1,6 +1,6 @@
 # 0159: first-run translation stalls two frames at a code hand-off
 
-Status: open
+Status: closed (2026-11-16), superseded.
 
 ## Observed
 Tomba! 1 real-window play check (2026-10-16): after the attract movie, at the New Game hand-off, two consecutive
@@ -19,3 +19,6 @@ budget.
 Moving translation off the frame (Lightrec's threaded compiler runs the block on its interpreter meanwhile,
 which the product rules allow only as reason-coded fallback) or translating loaded code ahead of its first
 call is an executor design change, not made here.
+
+## Superseded (2026-11-16)
+Lightrec was replaced by the interpreter (`runtime/cpu/guest_executor.*`).

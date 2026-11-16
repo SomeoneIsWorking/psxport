@@ -13,7 +13,7 @@
 #include "gpu_device.h"
 #include "guest_call.h"
 #include "input_injection.h"
-#include "lightrec_executor.h"
+#include "guest_executor.h"
 #include "machine_state.h"
 #include "ordering_table.h"
 #include "ot_attr.h"
@@ -312,7 +312,7 @@ void cvar(const Call &call) {
 }
 
 void guestLedger(const Call &call) {
-  for (const std::string &line : psx::cpu::ledgerLines(call.core.lightrecExecutor().counters())) {
+  for (const std::string &line : psx::cpu::ledgerLines(call.core.executor().counters())) {
     call.reply(line);
   }
 }

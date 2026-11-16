@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Drivable core sessions for the state-aligned oracle comparison (docs/oracle.md, compare.py).
 
-Two cores, one narrow interface: a Lightrec product driven through the framework REPL over pipes,
+Two cores, one narrow interface: a psxport product driven through the framework REPL over pipes,
 and the independent Beetle full-console reference driven through `tools/oracle/console.py`'s JSON
 protocol. A title's comparison policy drives either without knowing which it is: `hold(buttons)`,
 `step(frames)`, `read(address, size)`.

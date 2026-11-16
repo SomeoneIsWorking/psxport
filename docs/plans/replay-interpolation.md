@@ -35,14 +35,15 @@ interpolation in its Tomba 2, Ape Escape and Vigilante 8 ports with `docs/RENDER
 
 1. **Guest vertex places (PGXP-style).** `VertexDepths` becomes `VertexPlaces`: each word holds the
    full place (sub-pixel x, y, view depth, sort back) of the vertex stored to it, kept while the word
-   still holds that value. Lightrec hands every memory callback the opcode, so `LightrecExecutor`
+   still holds that value. The interpreter decodes every load and store, so `GuestExecutor`
    notes `SWC2` of SXY0..2 with the GTE FIFO place, and carries a place through `LW` into a register
    and `SW` out of it while the register still holds the loaded word. The record tap and
    `PacketChainWalker` read places for guest packets as they do for producer packets. A title names
    its world draw functions and their depth unit (`DepthUnit` scale and `DepthMark`) by guest
    function; the mark travels with the place, so `DepthTest` no longer needs a producer key. Cost: one
    table write per placed store, one bit test per guest load and store while depth is on or ires is above 1
-   (every RAM access reaches a Lightrec callback); nothing scales with ires. Measured on Spyro 1 Stone Hill
+   (every RAM access passes through the executor); nothing scales with ires. Measured, before the
+   interpreter replaced the recompiler, on Spyro 1 Stone Hill
    (ires 0 = 8x, fps60, sink 3840x2160, unpaced, 600 logic frames holding up after the warp, user instructions
    and task clock of the emulation thread per logic frame, `perf stat --per-thread`, two runs each): places off
    134.8M / 9.4 ms; on 156.8M / 11.6 ms, +22.0M (+16 %), the same as before the placed-word bitmap replaced
@@ -63,7 +64,7 @@ interpolation in its Tomba 2, Ape Escape and Vigilante 8 ports with `docs/RENDER
    instead of the device, and that record is the in-between, rastered onto the VRAM before S as a
    composed record is today. A replay that reaches a device, uploads, or does not return refuses that
    in-between only; the present shows S. It stops at its first device access, out of host code at once
-   and from translated code at the end of that segment, so a guest poll never spins out the runaway
+   and from guest code at its next block entry, so a guest poll never spins out the runaway
    budget; a root counter's value reads its held count and is no device access (`SideEffectMode::Discard`).
    The critical-section syscalls run, since the redraw puts back COP0 and the kernel flag; libc `rand`
    keeps its seed in guest RAM, so a draw's random numbers roll back with the rest.

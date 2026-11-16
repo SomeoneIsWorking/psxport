@@ -243,7 +243,7 @@ the `motion` debug channel counts each track's paired records.
   where it lay before the word rounded it. The GTE hands SXY FIFO entries out only as that type
   (`Gte::projected`, the place from Beetle's projection push); `readData` of SXY0..SXYP aborts, and `writeData` to
   the FIFO places the entry on its word's pixel. `saveRaw`/`restoreRaw` (`GteGuard`, `MachineSnapshot`) carry the
-  places; a Lightrec register import or a save-state load puts each entry whose word it replaces on that word's
+  places; a save-state load puts each entry whose word it replaces on that word's
   pixel (`placeReplacedScreenEntries`), so a direct guest write never pairs with an old place. A body stores a vertex with `EmitMemory::storeVertex` and reads
   one back with `loadVertex`; over a `HostMemory` the destination word keeps the place until another
   write covers it, so scratch slots, queued pieces and packets carry it as long as each copy goes through
@@ -339,7 +339,7 @@ trim over Spyro's feet, a wall seam over the floor), and leaves everything else 
   low-detail mesh never covers near terrain, as its slot never does. A guest draw whose translation a
   native site wrote takes its unit from that word: the site notes the TRZ word with a `NotedPlace.translation`
   (scale, nearer), an `LW` carries it in the GPR, and a guest `CTC2` of TRZ hands it to the GTE
-  (`Gte::carryTranslation`, fed by `LightrecExecutor::cop2Transfer`), whose projections multiply it into the open
+  (`Gte::carryTranslation`, fed by `GuestExecutor`'s `cop2Transfer`), whose projections multiply it into the open
   unit until the next TRZ write; an untagged word or a host write carries nothing. Spyro 2/3's moby walk tags each
   render-list entry's centre z this way for the guest moby drawer, with the `slot` of its per-face buckets, which
   each projection's `back` gains, and the entry's address as its `model`, which each projection's place carries
@@ -353,7 +353,7 @@ trim over Spyro's feet, a wall seam over the floor), and leaves everything else 
 - **Face sort.** A guest drawer that buckets each face by its summed SZ less a bias in its face word
   (`psx::cpu::FaceSort`, `VertexPlaces::sortFaces`) names its function, the `LW` opcode that reads each face
   word, its bin and the face word's bias in slots. That load opens the face (`VertexPlaces::faceLoaded`, from
-  `LightrecExecutor`'s load callback behind a one-bit opcode prefilter); each vertex word the drawer then loads
+  `GuestExecutor`'s load path behind a one-bit opcode prefilter); each vertex word the drawer then loads
   back from where it projected it and stores into the packet is noted that many slots nearer (a slot: `bin` plus
   the vertex's `back`) and its `back` that much farther, so the face tests where the guest sorts it and leaves
   its own depth. Spyro 2/3's moby drawer, `lw $s0, 4($fp)`.
@@ -365,7 +365,7 @@ trim over Spyro's feet, a wall seam over the floor), and leaves everything else 
   entry notes the GTE's place under the enclosing guest function (`GuestWriterLatch`, which also holds a function
   the host enters without a `jal`: `dispatchGuest`, `callOriginal` and the resumes push it for the call's extent); `MFC2` of an SXY entry and
   `LW` of a placed word carry the place in the GPR, and `SW` of that GPR while it still holds the word notes it at
-  the new address (`LightrecExecutor` feeds all four from Lightrec's opcode-carrying callbacks). A native
+  the new address (`GuestExecutor` feeds all four as it executes each instruction). A native
   override's `EmitMemory::storeVertex` notes its place under the override's entry (`Core::active_native_address`).
   Every guest store (`Core::bookStore`) forgets the words it touches, so a later writer of the same word, a reused
   packet buffer included, never inherits a stale place; a replay's stores forget too. Every change to the table
@@ -604,7 +604,7 @@ and deadline; `paceSubframeFields`, `waitPresentedFields` and `hostScreenPace` p
 
 Each present, real or in-between, is built, then its show is scheduled for its deadline
 (`DisplayPresenter::showAt`). The show happens at the first executor segment boundary past the deadline
-(`LightrecExecutor` calls `DisplayPresenter::showIfDue` after every segment), at the next ordering-table node or
+(`GuestExecutor` calls `DisplayPresenter::showIfDue` after every segment), at the next ordering-table node or
 GPU DMA block when a DMA2 transfer straddles it (`gpu::submitOrderingTable`, `gpu::dma2Block`: one Spyro DrawOTag
 is 2-3 ms of host work inside a single segment), or, waiting for the deadline,
 before the next build, show, repaint or pacer plan (`finishShow`), and `FramePresenter::commit` finishes it

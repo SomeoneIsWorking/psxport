@@ -1,11 +1,11 @@
 ---
 id: 47
 title: Pin a dynarec-default Lightrec product dependency per Core
-status: open
+status: resolved
 symptom: the pinned Lightrec backend cannot yet own multiple live machines safely
 tags: lightrec,dynarec,dependency,core,product
 created: 2026-09-04
-updated: 2026-09-04
+updated: 2026-11-16
 ---
 state_items: S012, S016
 
@@ -32,3 +32,6 @@ translated blocks on both, and prove their Lightrec state, callbacks, counters, 
 do not cross. Product inspection must name every gameplay source/selector scanned and find no
 explicit interpreter mode or offline guest source. Positive tests exercise every fallback reason and
 both threshold breaches.
+
+## Superseded (2026-11-16)
+Lightrec was replaced by the interpreter (`runtime/cpu/guest_executor.*`).

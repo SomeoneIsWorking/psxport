@@ -2,7 +2,7 @@
 
 #include "core.h"
 #include "game.h"
-#include "lightrec_executor.h"
+#include "guest_executor.h"
 #include "logic_frame.h"
 #include "runtime.h"
 
@@ -16,7 +16,7 @@ void FrameDriver::stepFrame(Core &core, std::uint32_t frame) {
   const psx::cpu::ExecutionBudget field = psx::cpu::ExecutionBudget::fromCycles(
       psx::frame::displayFieldCpuTicks(1, 1, psx::frame::fieldRateMilliHz(game_.timing.displayFieldRate())));
   for (int boundary = 0; boundary < kMaxFieldsPerFrame; ++boundary) {
-    const psx::cpu::ExecutionResult result = core.lightrecExecutor().executeUntilExit(core.pc, field);
+    const psx::cpu::ExecutionResult result = core.executor().executeUntilExit(core.pc, field);
     if (result.reason == psx::cpu::ExecutionExitReason::BudgetExhausted) {
       continue;
     }

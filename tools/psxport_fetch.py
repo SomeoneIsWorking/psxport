@@ -9,15 +9,10 @@ submodules.
 
 No git command runs with its cwd at `external/psxport` or through a link this tool did not create
 (issue 0142); a staged tree or link is published by one atomic rename.
-
-`--lightrec` materialises the Lightrec revision pinned in this checkout's
-`cmake/lightrec_dependency.cmake` as a detached worktree, first cloning the Lightrec fork into the
-workspace's `shared/lightrec` on a machine that has none.
 """
 
 import argparse
 import os
-import re
 import shutil
 import subprocess
 import sys
@@ -26,12 +21,10 @@ import tempfile
 LINK_REL = os.path.join("external", "psxport")
 DEFAULT_URL = "https://github.com/SomeoneIsWorking/psxport.git"
 DEFAULT_BRANCH = "main"
-LIGHTREC_URL = "https://github.com/SomeoneIsWorking/lightrec.git"
 # The build's submodules are every `.gitmodules` path under vendor/, init'd non-recursively (beetle has a
 # URL-less nested gitlink that makes `--recursive` fail outright), then that nested gitlink.
 VENDOR_PREFIX = "vendor/"
 NESTED_SUBMODULES = (("vendor/beetle-psx", "deps/libchdr"),)
-REVISION_DECLARATION = r'set\s*\(\s*PSXPORT_{}_REVISION\s+"([0-9a-f]{{40}})"'
 
 
 def git(args, cwd):
@@ -176,58 +169,6 @@ def do_ensure(repo, link):
     return do_clone(link)
 
 
-def pinned_revision(repo, name):
-    """The LIGHTREC or LIGHTNING revision psxport pins, read from cmake/lightrec_dependency.cmake, the
-    pins' one home."""
-    source = os.path.join(repo, "cmake", "lightrec_dependency.cmake")
-    if not os.path.isfile(source):
-        return None
-    with open(source, encoding="utf-8") as handle:
-        found = re.findall(REVISION_DECLARATION.format(name), handle.read())
-    return found[0] if len(found) == 1 else None
-
-
-def do_lightrec(repo):
-    """Ensure the pinned Lightrec revision exists as a detached worktree under the shared Lightrec
-    checkout, and print its path. `cmake/lightrec_dependency.cmake` probes `scratch/pins/<revision>/`
-    before the plain checkout and refuses a checkout that is not at the pinned revision, so a Lightrec
-    commit landing under a running consumer cannot change what that consumer builds."""
-    sha = pinned_revision(repo, "LIGHTREC")
-    if not sha:
-        print("[psxport] REFUSED: no PSXPORT_LIGHTREC_REVISION in cmake/lightrec_dependency.cmake, so "
-              "there is no Lightrec commit to pin to.")
-        return 2
-    parent = os.path.dirname(os.path.abspath(repo))
-    roots = []
-    if os.environ.get("SHARED_DIR"):
-        roots.append(os.path.join(os.environ["SHARED_DIR"], "lightrec"))
-    roots += [os.path.join(parent, "shared", "lightrec"),
-              os.path.join(os.path.dirname(parent), "shared", "lightrec")]
-    if not any(os.path.isfile(os.path.join(candidate, "CMakeLists.txt")) for candidate in roots):
-        # A fresh machine: the workspace's shared/ beside the framework's parent, which CMake also probes.
-        fresh = roots[-1]
-        if git(["clone", "--quiet", LIGHTREC_URL, fresh], repo)[1] != 0:
-            print(f"[psxport] REFUSED: could not clone {LIGHTREC_URL} into {fresh}.")
-            return 2
-        print(f"[psxport] Lightrec cloned into {fresh}")
-    for candidate in roots:
-        if not os.path.isfile(os.path.join(candidate, "CMakeLists.txt")):
-            continue
-        target = os.path.join(candidate, "scratch", "pins", sha)
-        if not os.path.isdir(target):
-            os.makedirs(os.path.dirname(target), exist_ok=True)
-            # `git -C` names the real checkout; cwd stays here, never inside the published worktree.
-            if git(["-C", candidate, "worktree", "add", "--detach", target, sha], repo)[1] != 0:
-                print(f"[psxport] REFUSED: could not create the pinned Lightrec worktree at {target}. "
-                      f"It was NOT touched.")
-                return 2
-            print(f"[psxport] Lightrec worktree created at {sha[:12]}")
-        print(f"[psxport] Lightrec worktree at {sha[:12]} -> {target}")
-        return 0
-    print("[psxport] REFUSED: no shared Lightrec checkout found. Looked in: " + ", ".join(roots))
-    return 2
-
-
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("--repo", default=os.getcwd(),
@@ -235,11 +176,7 @@ def main(argv=None):
     ap.add_argument("--auto", action="store_true",
                     help="the default and only action: point external/psxport at the live framework, "
                          "cloning psxport main when this machine has no sibling checkout")
-    ap.add_argument("--lightrec", action="store_true",
-                    help="instead, ensure the pinned Lightrec worktree and print its path")
     args = ap.parse_args(argv)
-    if args.lightrec:
-        return do_lightrec(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
     repo = os.path.abspath(args.repo)
     return do_ensure(repo, os.path.join(repo, LINK_REL))
 

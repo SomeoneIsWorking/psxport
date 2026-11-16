@@ -54,9 +54,6 @@ jobs:
           enable-cache: false
       - name: Install the build host's tools
         run: |
-          brew install autoconf automake libtool texinfo ninja shaderc spirv-cross
-          echo "$(brew --prefix libtool)/libexec/gnubin" >> "$GITHUB_PATH"
-      - name: Check out the pinned Lightrec
-        run: uv run --frozen python tools/psxport_fetch.py --lightrec
+          brew install ninja shaderc spirv-cross
       - name: Build against the macOS target libraries
         run: uv run --frozen python tools/build.py --platform macos
