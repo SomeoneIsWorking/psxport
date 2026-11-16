@@ -1,12 +1,14 @@
 // render_device.h — the SDL3 GPU device and its window, plus the samplers, pipelines and transfers every Game
 // presenting through it shares. Per-Game targets live on RenderState.
 #pragma once
+#include "gpu_work.h"
 #include "pixel_size.h"
 #include "render_shader.h"
 #include "render_window.h"
 
 #include <SDL3/SDL_gpu.h>
 
+#include <array>
 #include <cstdint>
 #include <memory>
 #include <span>
@@ -145,6 +147,22 @@ public:
   bool submit(SDL_GPUCommandBuffer *cmd, const char *where);
   // Submit and wait with a wall-clock bound; false (and latched) on failure or timeout.
   bool submitAndWait(SDL_GPUCommandBuffer *cmd, const char *where);
+  // Submit, returning a fence that retired() polls and release() frees; null on failure, or when submits are timed
+  // (the submit already waited).
+  SDL_GPUFence *submitFenced(SDL_GPUCommandBuffer *cmd, const char *where);
+  // Whether the GPU finished the work before `fence`; a null fence has.
+  bool retired(SDL_GPUFence *fence) const;
+  // Diagnostic (the `gputime` channel): every submit waits for the GPU and the wait is charged to its label, so the
+  // charge is that work's GPU time. It serializes the CPU and the GPU: pacing under it is not the player's.
+  static constexpr std::size_t kSubmitLabels = 16;
+  void timeSubmits(bool on) {
+    timeSubmits_ = on;
+  }
+  bool timingSubmits() const {
+    return timeSubmits_;
+  }
+  // The waits charged since the last take, by label; labels past kSubmitLabels go to the last slot.
+  std::array<SubmitTime, kSubmitLabels> takeSubmitTimes();
 
   // A depth target's format and the test a pipeline runs against it.
   struct DepthTarget {
@@ -179,6 +197,7 @@ public:
   void release(SDL_GPUTransferBuffer *&buffer);
   void release(SDL_GPUBuffer *&buffer);
   void release(SDL_GPUGraphicsPipeline *&pipeline);
+  void release(SDL_GPUFence *&fence);
 
 private:
   // Record the fault for the next process to report.
@@ -192,6 +211,9 @@ private:
 
   bool enabled_ = true;
   bool faulted_ = false;
+  bool timeSubmits_ = false;
+  std::array<SubmitTime, kSubmitLabels> submitTimes_{};
+  bool waitTimed(SDL_GPUCommandBuffer *cmd, const char *where);
   FaultCause cause_ = FaultCause::Device;
   std::string fault_; // where and detail of the latched fault
   const char *windowTitle_ = nullptr;

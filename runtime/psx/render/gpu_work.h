@@ -17,4 +17,11 @@ struct GpuWork {
   std::uint64_t uploadBytes = 0;
 };
 
+// Diagnostic `gputime`: the GPU time one submit label was waited for, measured on the host, unlike GpuWork.
+struct SubmitTime {
+  const char *where = nullptr;
+  std::uint64_t ns = 0;
+  std::uint64_t submits = 0;
+};
+
 } // namespace psx::render

@@ -36,6 +36,10 @@ public:
   SDL_Window *window() const {
     return window_;
   }
+  // Mapped for the player, not a tool's unmapped window.
+  bool shown() const {
+    return shown_;
+  }
   SDL_GPUTextureFormat swapchainFormat() const {
     return swapchainFormat_;
   }

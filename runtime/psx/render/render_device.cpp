@@ -340,4 +340,11 @@ void RenderDevice::release(SDL_GPUGraphicsPipeline *&pipeline) {
   }
 }
 
+void RenderDevice::release(SDL_GPUFence *&fence) {
+  if (fence != nullptr) {
+    SDL_ReleaseGPUFence(device_, fence);
+  }
+  fence = nullptr;
+}
+
 } // namespace psx::render

@@ -9,6 +9,8 @@
 #include "render_pane.h"
 #include "viewport_layout.h"
 
+#include <lucent/log.h>
+
 #include <cstdint>
 #include <memory>
 #include <optional>
@@ -164,6 +166,12 @@ private:
   };
   std::optional<RestoredPicture> restored_;
   bool presentsRecord_ = false;
+  // The GPU work of the last present ends at this fence; dropsInBetween() reads it.
+  SDL_GPUFence *lastPresentFence_ = nullptr;
+  std::uint64_t droppedInBetweens_ = 0;
+  bool dropsInBetween();
+  // `gputime` (with `perf`): every submit waits for the GPU and the wait is charged per present (RenderDevice).
+  lucent::Channel gpuTime_{"gputime"};
   int recordFade_[4] = {}; // mode, r, g, b
   // The last present's display rect in VRAM, for a Device-path shot.
   gpu::VramRect lastDisplay_{0, 0, 320, 240};

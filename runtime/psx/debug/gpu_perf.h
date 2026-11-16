@@ -15,6 +15,7 @@
 #include <cstdint>
 #include <map>
 #include <optional>
+#include <span>
 #include <string>
 
 namespace psx::present {
@@ -70,6 +71,8 @@ public:
   }
   // The record rasterization of one present.
   void presentWork(const psx::render::GpuWork &work);
+  // Diagnostic `gputime`: one present's GPU time, waited for submit by submit and charged by submit label.
+  void presentGpuTime(std::span<const psx::render::SubmitTime> labels);
 
   // The next present holds its picture for `fields` more display fields: the deadline a pacer gave it.
   // Calls before one present add up.
@@ -134,6 +137,9 @@ private:
 
   static constexpr std::size_t kGpuCounts = 8;
   std::array<lucent::perf::CountHistogram, kGpuCounts> mGpuWork;
+  lucent::perf::CountHistogram mGpuTime; // ns per present
+  static constexpr std::size_t kGpuLabels = 16;
+  std::array<psx::render::SubmitTime, kGpuLabels> mGpuLabelTime{};
 
   // The planned schedule shown on a simulated 60.00 Hz display: each vblank shows the newest present due by it.
   double mPlanHeldFields = 0.0;

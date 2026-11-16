@@ -52,6 +52,7 @@ RenderState::~RenderState() {
     return;
   }
   record_.reset();
+  device_.release(lastPresentFence_);
   for (SDL_GPUTexture **texture : {&vramTexture_, &hostImage_, &presentImage_, &screenImage_}) {
     device_.release(*texture);
   }
@@ -147,6 +148,9 @@ void RenderState::buildDisplay(gpu::VramRect display, present::ScanoutWindow win
   const int width = present::presentDisplayWidth(
       present::widePresentation(core), present::widePresentationWidth(core), display.width);
   lastDisplay_ = {display.x, display.y, width, display.height};
+  if (dropsInBetween()) {
+    return;
+  }
   SDL_GPUCommandBuffer *cmd = device_.acquire();
   present::PresentInputs inputs = presentInputs(lastDisplay_, display.width, window);
   presentRecord(inputs);
@@ -173,8 +177,24 @@ void RenderState::buildDisplay(gpu::VramRect display, present::ScanoutWindow win
   if (plan.build) {
     buildPresentImage(cmd, plan);
   }
-  device_.submit(cmd, "present build");
+  device_.release(lastPresentFence_);
+  lastPresentFence_ = device_.submitFenced(cmd, "present build");
   finishBuild(plan.build);
+}
+
+// A shown window whose GPU has not finished the last present is falling behind. Drawing a present it cannot show only
+// pushes it further behind, so an in-between (drawn on copies, leaving the chain where it is) is dropped; a present
+// that brings the chain forward is always drawn. A tool's unmapped window drops nothing, so its captures stay exact.
+bool RenderState::dropsInBetween() {
+  if (!device_.window().shown() || device_.retired(lastPresentFence_) || !recordPresents()) {
+    return false;
+  }
+  if (game_.presentation.composedRecord() == nullptr || game_.presentation.composedAdvances()) {
+    return false;
+  }
+  ++droppedInBetweens_;
+  lucent::debug("present", "in-between dropped: the GPU is still on the last present ({} so far)", droppedInBetweens_);
+  return true;
 }
 
 void RenderState::finishBuild(bool built) {
@@ -242,6 +262,10 @@ void RenderState::showPresentImage(SDL_GPUCommandBuffer *cmd) {
   }
   recordScreen(cmd, swapchain, {static_cast<int>(width), static_cast<int>(height)});
   device_.submit(cmd, "show");
+  if (device_.timingSubmits()) {
+    game_.perf.presentGpuTime(device_.takeSubmitTimes());
+  }
+  device_.timeSubmits(game_.perf.counting() && static_cast<bool>(gpuTime_));
   game_.perf.presented(std::chrono::steady_clock::now(), device_.window().refreshPeriodMs());
   takeHostEvents();
 }

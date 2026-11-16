@@ -9,6 +9,7 @@
 #include <cstdlib>
 #include <format>
 #include <string>
+#include <string_view>
 
 namespace {
 
@@ -182,6 +183,28 @@ void GpuPerf::presentWork(const psx::render::GpuWork &work) {
                 work.uploadBytes);
 }
 
+void GpuPerf::presentGpuTime(std::span<const psx::render::SubmitTime> labels) {
+  std::uint64_t total = 0;
+  std::string line;
+  for (const psx::render::SubmitTime &label : labels) {
+    if (label.where == nullptr) {
+      continue;
+    }
+    total += label.ns;
+    line += std::format(" {}={:.3f}", label.where, static_cast<double>(label.ns) * 1e-6);
+    std::size_t slot = 0;
+    while (slot + 1 < mGpuLabelTime.size() && mGpuLabelTime[slot].where != nullptr &&
+           std::string_view(mGpuLabelTime[slot].where) != label.where) {
+      ++slot;
+    }
+    mGpuLabelTime[slot].where = mGpuLabelTime[slot].where != nullptr ? mGpuLabelTime[slot].where : label.where;
+    mGpuLabelTime[slot].ns += label.ns;
+    mGpuLabelTime[slot].submits += label.submits;
+  }
+  mGpuTime.add(total);
+  lucent::debug(mFrameChannel, "present gpu-ms: total={:.3f}{}", static_cast<double>(total) * 1e-6, line);
+}
+
 void GpuPerf::planned(const psx::present::PresentNote &note, double fieldMs) {
   ++mPlannedPresents;
   std::optional<double> moment;
@@ -280,6 +303,26 @@ void GpuPerf::reportCost() const {
     line(kSpanNames[span], mSpanWork[span]);
   }
   line("frame", mFrameWork);
+  if (mGpuTime.count() != 0) {
+    lucent::debug("perf",
+                  "gpu time: p50 {:.3f} p99 {:.3f} max {:.3f} ms/present over {} presents, total {:.1f} ms; each submit "
+                  "waited for, so the CPU and GPU ran serialized",
+                  static_cast<double>(mGpuTime.percentile(0.50)) * 1e-6,
+                  static_cast<double>(mGpuTime.percentile(0.99)) * 1e-6,
+                  static_cast<double>(mGpuTime.max()) * 1e-6,
+                  mGpuTime.count(),
+                  static_cast<double>(mGpuTime.total()) * 1e-6);
+    for (const psx::render::SubmitTime &label : mGpuLabelTime) {
+      if (label.where != nullptr) {
+        lucent::debug("perf",
+                      "gpu time {}: {:.3f} ms/present, {} submits, total {:.1f} ms",
+                      label.where,
+                      static_cast<double>(label.ns) * 1e-6 / static_cast<double>(mGpuTime.count()),
+                      label.submits,
+                      static_cast<double>(label.ns) * 1e-6);
+      }
+    }
+  }
   lucent::debug("perf", "gpu run-end: {} record presents metered", mGpuWork[0].count());
   for (std::size_t count = 0; count < kGpuCounts; ++count) {
     const GpuCount &named = kGpuCountNames[count];

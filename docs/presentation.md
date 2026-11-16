@@ -714,8 +714,11 @@ channel is on (`PSXPORT_DEBUG=perf`, REPL `debug perf`); off, each hook is a cac
 - **GPU, per record present.** `RecordRasterizer` counts what each `show` records (`render/gpu_work.h`): draws,
   pipeline binds, render passes, texture copies, triangles, pixels its draws cover at the internal resolution (the
   raster plan's quads, once per draw), copy pixels and bytes uploaded. These follow from the record, ires and the
-  canvas. The sink pass into the present image (fixed by the sink) is not counted. GPU time is not measured: SDL_GPU
-  has no timestamp queries.
+  canvas. The sink pass into the present image (fixed by the sink) is not counted.
+- **GPU time, by waiting.** SDL_GPU has no timestamp queries, so with `gputime` on as well as `perf`, every submit
+  waits for its fence (`RenderDevice::timeSubmits`) and the wait is charged to the submit's label: that is the GPU's
+  time for the work, since nothing else is in flight. It serializes the CPU and the GPU, so pacing and CPU lines
+  under it are not the player's; use it for GPU cost alone, hidden and unpaced like any meter run.
 - **Cadence, from the plan.** Every scheduled present (`DisplayPresenter::showAt`) is due the fields its pacer held
   it for (`GpuPerf::heldFor`) after the one before, a field lasting the guest's field period. The guest moment it
   shows is `from + t (shown - from)` in records (logic ticks). A simulated 60.00 Hz display shows at each vblank the
@@ -728,9 +731,11 @@ Lines. At run end, always: `[playcheck] cadence: vblanks=… planned_presents=�
 60.00 Hz vblank: 0.50x… 0.00x…`. With `perf` on: `[perf] cpu run-end: <frames> logic frames metered in <unit>`, one
 `[perf] cpu <phase>: p50 p99 max Minsn/frame, total Minsn` line per phase and one for the whole `frame`, then
 `[perf] gpu run-end: <n> record presents metered` and one `[perf] gpu <count>: p50 p99 max <unit>/present, total`
-line per count. Percentiles are at most 1.6% high (`lucent::perf::CountHistogram`); max and total are exact. With
+line per count; with `gputime`, `[perf] gpu time: p50 p99 max ms/present` and one `[perf] gpu time <label>:
+ms/present` line per submit label (`record`, `record composed`, `present build`, `show`, …). Percentiles are at most
+1.6% high (`lucent::perf::CountHistogram`); max and total are exact. With
 `perfframe` on, one `frame N insn: pre=… total=…` line per logic frame and one `present gpu: …` line per present,
-raw counts, for diffing two runs frame by frame.
+raw counts, for diffing two runs frame by frame; with `gputime`, also a `present gpu-ms:` line per present.
 
 Comparing two builds follows the `perf-units` skill: the same deterministic recipe (a warp and held buttons,
 `PSXPORT_NOPACE=1`, the judgement ires and sink) on each with `perf` on, at least two runs a side, and

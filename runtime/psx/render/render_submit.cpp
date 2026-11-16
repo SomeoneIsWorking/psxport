@@ -11,6 +11,7 @@
 
 #include <algorithm>
 #include <cstdio>
+#include <cstring>
 #include <filesystem>
 #include <optional>
 #include <string>
@@ -124,11 +125,69 @@ bool RenderDevice::submit(SDL_GPUCommandBuffer *cmd, const char *where) {
   if (cmd == nullptr) {
     return false;
   }
+  if (timeSubmits_) {
+    return waitTimed(cmd, where);
+  }
   if (SDL_SubmitGPUCommandBuffer(cmd)) {
     return true;
   }
   failDevice(where, SDL_GetError());
   return false;
+}
+
+SDL_GPUFence *RenderDevice::submitFenced(SDL_GPUCommandBuffer *cmd, const char *where) {
+  if (cmd == nullptr) {
+    return nullptr;
+  }
+  if (timeSubmits_) {
+    waitTimed(cmd, where);
+    return nullptr;
+  }
+  SDL_GPUFence *fence = SDL_SubmitGPUCommandBufferAndAcquireFence(cmd);
+  if (fence == nullptr) {
+    failDevice(where, SDL_GetError());
+  }
+  return fence;
+}
+
+bool RenderDevice::retired(SDL_GPUFence *fence) const {
+  return fence == nullptr || SDL_QueryGPUFence(device_, fence);
+}
+
+// Spins on the fence rather than sleeping, so the charge is not rounded up to the scheduler's tick.
+bool RenderDevice::waitTimed(SDL_GPUCommandBuffer *cmd, const char *where) {
+  const Uint64 begin = SDL_GetTicksNS();
+  SDL_GPUFence *fence = SDL_SubmitGPUCommandBufferAndAcquireFence(cmd);
+  if (fence == nullptr) {
+    failDevice(where, SDL_GetError());
+    return false;
+  }
+  while (!SDL_QueryGPUFence(device_, fence)) {
+    if (SDL_GetTicksNS() - begin >= kFenceBudgetMs * SDL_NS_PER_MS) {
+      SDL_ReleaseGPUFence(device_, fence);
+      failDevice(where, "fence did not signal within the wall-clock budget");
+      return false;
+    }
+  }
+  SDL_ReleaseGPUFence(device_, fence);
+  const Uint64 ns = SDL_GetTicksNS() - begin;
+  std::size_t slot = 0;
+  while (slot + 1 < submitTimes_.size() && submitTimes_[slot].where != nullptr &&
+         std::strcmp(submitTimes_[slot].where, where) != 0) {
+    ++slot;
+  }
+  if (submitTimes_[slot].where == nullptr) {
+    submitTimes_[slot].where = where;
+  }
+  submitTimes_[slot].ns += ns;
+  ++submitTimes_[slot].submits;
+  return true;
+}
+
+std::array<SubmitTime, RenderDevice::kSubmitLabels> RenderDevice::takeSubmitTimes() {
+  std::array<SubmitTime, kSubmitLabels> taken = submitTimes_;
+  submitTimes_ = {};
+  return taken;
 }
 
 // SDL_WaitForGPUFences has no timeout, so the bound is built from the non-blocking query.
