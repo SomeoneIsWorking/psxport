@@ -110,7 +110,10 @@ def session_display(environment: Mapping[str, str]) -> dict[str, str]:
     """The user's display for the unmapped window, found in XDG_RUNTIME_DIR when the caller has none.
 
     Background agent shells inherit no WAYLAND_DISPLAY; the window still belongs on the user's session.
+    macOS and Windows have one window server per login and need nothing named.
     """
+    if sys.platform in ("darwin", "win32"):
+        return {}
     if environment.get("WAYLAND_DISPLAY") or environment.get("DISPLAY"):
         return {}
     runtime = environment.get("XDG_RUNTIME_DIR", "")

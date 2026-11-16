@@ -90,10 +90,13 @@ Products: `spyro_port`, `toystory2_port`, `crashbash_port`, `crash_port`, `ctr_p
   `psx-toy-story-2/scratch/{bin,flat,raw}`, `psx-crash-bash/scratch/bin/`. Each holds a `.scratch-keep` marker, which
   `scratch_gc.py` honours for the whole subtree; a provisioner that creates such a dir writes the marker.
   Sweep only your own `scratch/<activity>/`.
-- Disc images live under `/mnt/Boy/ROM/PSX CHD/`; each repo's `.env` points at its disc.
-- Agent runs keep the product's window unmapped: `PSXPORT_SHOW_WINDOW` unset or 0 (`agent_environment` sets 0), never
-  1. It is the player's window, presented at real speed, so a run without `PSXPORT_NOPACE` measures pacing
-  (`[playcheck] presents:`); it needs the user's Wayland session (`psxport/docs/presentation.md`).
+- Disc images live under `/mnt/Boy/ROM/PSX CHD/` (on a Mac, `~/Games/PSX/`); each repo's `.env` points at its disc.
+- Agent runs are windowless and silent, on every machine and for every binary, installed apps included:
+  `PSXPORT_SHOW_WINDOW=0` and `PSXPORT_NOAUDIO=1`, never a shown window or audible sound. Start runs through
+  `agent_environment` (`tools/port/launch_environment.py`), which sets both and gives the run its own settings
+  file, so the player's settings are never read or written. The shown window is the player's, presented at real
+  speed, so a run without `PSXPORT_NOPACE` measures pacing (`[playcheck] presents:`); that needs the user's
+  display session, so pacing is measured only when the user asks for it (`psxport/docs/presentation.md`).
 - Every judgement run plays the way the player does: `ires=0` (auto, 8x on this sink), `fps60=1`,
   `PSXPORT_PRESENT_SINK=3840x2160`. Judder is motion that jumps: a draw that moves only on real presents, steps
   by whole native pixels, lands off the halfway point of its neighbours, snaps or goes backwards. An occasional
