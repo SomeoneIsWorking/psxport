@@ -203,12 +203,17 @@ void main() {
         uint(n.y & 1) == ((flags & kOpSkipParity) != 0u ? 1u : 0u)) {
         discard;
     }
-#ifdef RECORD_FETCH
-    uint dst = halfword(subpassLoad(u_targetNow).rg);
-#else
-    uint dst = halfword(texelFetch(u_target, target, 0).rg);
-#endif
     bool maskCheck = (flags & kOpMaskCheck) != 0u;
+    // Only a blend or a mask test reads the target (RecordRasterizer runs every other op through pipelines that never
+    // fetch it, so on Metal they keep the GPU's free ordering and hidden-surface removal).
+    uint dst = 0u;
+    if ((flags & (kOpSemi | kOpMaskCheck)) != 0u) {
+#ifdef RECORD_FETCH
+        dst = halfword(subpassLoad(u_targetNow).rg);
+#else
+        dst = halfword(texelFetch(u_target, target, 0).rg);
+#endif
+    }
     uint maskSet = (flags & kOpMaskSet) != 0u ? 0x8000u : 0u;
     int vramWidth = kVramWidth * S;
     int vramHeight = kVramHeight * S;

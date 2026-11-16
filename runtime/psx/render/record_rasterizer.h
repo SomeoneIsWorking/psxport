@@ -219,18 +219,26 @@ private:
   void releaseImage();
 
   RenderDevice &device_;
-  SDL_GPUGraphicsPipeline *pipeline_ = nullptr;
-  // With a depth target: slot order (no test, no write); a depth group's test, colour where it passes, marked in
-  // stencil; the group's depth written where marked, moved back by its bin; an object over the scene, writing its
-  // depth.
-  SDL_GPUGraphicsPipeline *slotPipeline_ = nullptr;
-  SDL_GPUGraphicsPipeline *groupTestPipeline_ = nullptr;
-  SDL_GPUGraphicsPipeline *groupMarkPipeline_ = nullptr;
-  SDL_GPUGraphicsPipeline *objectPipeline_ = nullptr;
-  SDL_GPUGraphicsPipeline *modelTestPipeline_ = nullptr;
-  SDL_GPUGraphicsPipeline *modelPaintPipeline_ = nullptr;
-  SDL_GPUGraphicsPipeline *modelMarkPipeline_ = nullptr;
-  SDL_GPUGraphicsPipeline *modelClearPipeline_ = nullptr;
+  // One draw path's pipelines: without a depth target, everything in record order; with one, slot order (no test,
+  // no write), a depth group's test (colour where it passes, marked in stencil) and the group's depth written where
+  // marked, moved back by its bin, an object over the scene writing its depth, and a Model's four.
+  struct Pipelines {
+    SDL_GPUGraphicsPipeline *plain = nullptr;
+    SDL_GPUGraphicsPipeline *slot = nullptr;
+    SDL_GPUGraphicsPipeline *groupTest = nullptr;
+    SDL_GPUGraphicsPipeline *groupMark = nullptr;
+    SDL_GPUGraphicsPipeline *object = nullptr;
+    SDL_GPUGraphicsPipeline *modelTest = nullptr;
+    SDL_GPUGraphicsPipeline *modelPaint = nullptr;
+    SDL_GPUGraphicsPipeline *modelMark = nullptr;
+    SDL_GPUGraphicsPipeline *modelClear = nullptr;
+  };
+  Pipelines makePipelines(bool fetch);
+  void release(Pipelines &pipelines);
+  // The ops that read the target (a blend or a mask test) draw through `reads_`; the rest through `writes_`. Where the
+  // device fetches its target in-pass, only `reads_` fetches; elsewhere both read the snapshot and are one set.
+  Pipelines writes_;
+  Pipelines reads_;
   const present::DepthTest *depthTest_ = nullptr; // this present's
   gpu::RecordPlanner planner_;
   Plane vram_;
