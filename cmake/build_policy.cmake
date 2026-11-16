@@ -32,8 +32,10 @@ function(_psxport_debug_info_flags out)
   endif()
   set(CMAKE_REQUIRED_FLAGS "${_lines} -gz=zstd")
   set(CMAKE_REQUIRED_QUIET ON)
-  check_cxx_source_compiles("int main() { return 0; }" PSXPORT_HAVE_GZ_ZSTD)
-  if(PSXPORT_HAVE_GZ_ZSTD)
+  # Apple's clang accepts the flag with a warning and compresses nothing.
+  check_cxx_source_compiles("int main() { return 0; }" PSXPORT_DEBUG_INFO_COMPRESSES
+    FAIL_REGEX "cannot compress debug sections")
+  if(PSXPORT_DEBUG_INFO_COMPRESSES)
     set(${out} "${_lines} -gz=zstd" PARENT_SCOPE)
   else()
     set(${out} "${_lines}" PARENT_SCOPE)
@@ -52,4 +54,10 @@ if(CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")
         "Release flags (psxport build policy)" FORCE)
     set(CMAKE_${_lang}_FLAGS_DEBUG "-g" CACHE STRING "Debug flags (psxport build policy)" FORCE)
   endforeach()
+endif()
+
+# CMake repeats static libraries for single-pass linkers (psxport and a title runtime reference each other);
+# Apple's linker searches every archive until nothing resolves, so the repeats are expected there.
+if(APPLE)
+  add_link_options(LINKER:-no_warn_duplicate_libraries)
 endif()

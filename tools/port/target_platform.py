@@ -33,6 +33,7 @@ MACOS_DEPLOYMENT_TARGET = "13.3"
 MOLTENVK_RELEASE = "v1.4.2"
 MOLTENVK_URL = f"https://github.com/KhronosGroup/MoltenVK/releases/download/{MOLTENVK_RELEASE}/MoltenVK-macos.tar"
 MOLTENVK_SHA256 = "f95765a6229cb7b915990a2890ce12ebe36a730b021545d3d52ae69ce4c4024e"
+MACOS_TRIPLE = "x86_64-apple-darwin"
 PLATFORMS = ("windows", "macos")
 
 
@@ -110,15 +111,16 @@ def provision(platform: str, environment: Mapping[str, str]) -> list[str]:
         shaping = (LLVM_MINGW_NAME.encode(), WINDOWS_TOOLCHAIN_FILE.read_bytes())
         compiler, host = str(toolchain / "bin" / f"{WINDOWS_TRIPLE}-clang"), WINDOWS_TRIPLE
     else:
-        library_arguments = [f"-DCMAKE_OSX_DEPLOYMENT_TARGET={MACOS_DEPLOYMENT_TARGET}"]
-        shaping = (MACOS_DEPLOYMENT_TARGET.encode(),)
-        compiler, host = "clang", None
+        # Intel on every Mac: Lightrec has no proven Apple-silicon JIT (MAP_JIT), so Apple silicon runs it under Rosetta.
+        library_arguments = [f"-DCMAKE_OSX_DEPLOYMENT_TARGET={MACOS_DEPLOYMENT_TARGET}", "-DCMAKE_OSX_ARCHITECTURES=x86_64"]
+        shaping = (MACOS_DEPLOYMENT_TARGET.encode(), MACOS_TRIPLE.encode())
+        compiler, host = "clang", MACOS_TRIPLE
     libraries = _keyed(root, platform, "libraries", *shaping, target_libraries.PINS.read_bytes(),
                        Path(target_libraries.__file__).read_bytes())
     lightning = _keyed(root, platform, "lightning", *shaping, lightning_revision.encode(),
                        Path(target_libraries.__file__).read_bytes())
     prefix = libraries / "prefix"
-    profile = "windows-x86_64" if platform == "windows" else "macos-x86_64"
+    profile = f"{platform}-x86_64"
     lightning_install = lightning / "lightning" / "build" / "install" / profile
     try:
         if not (libraries / "complete").is_file():

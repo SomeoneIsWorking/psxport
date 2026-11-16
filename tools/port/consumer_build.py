@@ -6,7 +6,7 @@
 
 Run from the title root. The configure is the launcher's (`launcher.configure_consumer`), so the
 compiler, Lightrec and Lightning choices are the player's, at RelWithDebInfo. `--platform windows`
-cross-compiles with llvm-mingw into `build/windows`; `--platform macos` builds on an Intel Mac into
+cross-compiles with llvm-mingw into `build/windows`; `--platform macos` builds the Intel app on any Mac into
 `build/macos`, both against the pinned target libraries (`port/target_platform.py`).
 """
 

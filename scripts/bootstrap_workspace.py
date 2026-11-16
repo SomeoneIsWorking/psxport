@@ -11,6 +11,8 @@ from pathlib import Path
 GITHUB_ROOT = "https://github.com/SomeoneIsWorking"
 REMOTE_BACKED = ("psx-spyro", "psx-spider-man", "psx-tomba", "psx-vagrant-story", "psx-mega-man-x4", "psx-crash", "psx-crash-team-racing", "psx-crash-bash", "psx-tekken-3", "psx-toy-story-2", "psx-c12")
 LOCAL_ONLY: tuple[str, ...] = ()
+# Libraries cmake/shared_dependency.cmake builds from a `shared/<repo>` sibling, ahead of the vendored copy.
+SHARED_LIVE = ("bug-report", "setup-ui")
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "tools"))
 from psxport_fetch import init_submodules, submodules  # noqa: E402
@@ -43,6 +45,32 @@ def sync_game_framework(framework: Path, game: Path) -> None:
         say(f"{game.name}: psxport_fetch.py did not resolve external/psxport")
 
 
+def refresh_shared(shared: Path) -> None:
+    """Bring each live shared checkout up to its remote when that loses nothing; name the ones it cannot move."""
+    for name in SHARED_LIVE:
+        checkout = shared / name
+        if not (checkout / ".git").exists():
+            continue
+        run(["git", "fetch", "--quiet", "origin"], cwd=checkout)
+        upstream = run(["git", "rev-parse", "origin/HEAD"], cwd=checkout, required=False).stdout.strip() or \
+            run(["git", "rev-parse", "origin/main"], cwd=checkout).stdout.strip()
+        head = run(["git", "rev-parse", "HEAD"], cwd=checkout).stdout.strip()
+        if head == upstream:
+            say(f"shared/{name}: current ({head[:12]})")
+        elif run(["git", "status", "--porcelain"], cwd=checkout).stdout.strip():
+            say(f"shared/{name}: STALE with local changes, left at {head[:12]}; the build uses it ahead of vendor/{name}")
+        elif run(["git", "merge-base", "--is-ancestor", head, upstream], cwd=checkout, required=False).returncode == 0:
+            branch = run(["git", "symbolic-ref", "--quiet", "--short", "HEAD"], cwd=checkout, required=False).stdout.strip()
+            if branch:
+                run(["git", "merge", "--ff-only", "--quiet", upstream], cwd=checkout)
+            else:
+                run(["git", "checkout", "--quiet", "--detach", upstream], cwd=checkout)
+            say(f"shared/{name}: {head[:12]} -> {upstream[:12]}")
+        else:
+            say(f"shared/{name}: STALE, {head[:12]} is not in origin's history; left as is, and the build uses it "
+                f"ahead of vendor/{name}")
+
+
 def main() -> int:
     framework = Path(__file__).resolve().parent.parent
     workspace = framework.parent
@@ -50,6 +78,7 @@ def main() -> int:
         say(f"framework dev clone: {framework}")
         initialize_framework_vendors(framework)
         run(["git", "submodule", "update", "--init", "external/psycross"], cwd=framework)
+        refresh_shared(workspace.parent / "shared")
 
         cloned = 0
         present = 0
