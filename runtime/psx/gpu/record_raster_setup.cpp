@@ -219,6 +219,11 @@ PlottedSpan plottedSpan(const TrianglePart &part, int row) {
 
 // `area` narrowed to the columns any of its rows covers. Each edge is linear in the row. A canvas also covers the
 // unwrapped columns, which lie past VRAM's.
+// Native rows a triangle part's quads span at most (RecordPlanner::Builder::addTriangle). Spyro 1 at 8x on an M2:
+// quad pixels 47 -> 28 Mpx a present and GPU 18.4 -> 14.8 ms at 4; 2 is no faster and 1 slower, the quads costing more
+// than the pixels they save.
+constexpr int kTriangleBandRows = 4;
+
 RecordRect coveredColumns(const TrianglePart &part, RecordRect area, bool canvas) {
   const PlottedSpan a = plottedSpan(part, area.y0);
   const PlottedSpan b = plottedSpan(part, area.y1 - 1);
@@ -1124,9 +1129,12 @@ void RecordPlanner::Builder::addTriangle(const TriVertex scaled[3],
       const TrianglePart &part = walk->parts[i];
       const int rowLow = std::max(part.rowLow, clip.y0 * s);
       const int rowHigh = std::min(part.rowHigh, (clip.y1 + 1) * s);
-      if (rowLow < rowHigh) {
-        const RecordRect covered =
-            coveredColumns(part, {clip.x0 * s, rowLow, (clip.x1 + 1) * s, rowHigh}, unwraps(planeClip.plane));
+      // In bands of kTriangleBandRows native rows, each its own covered columns: a part's bounding box is about half
+      // outside it, and every fragment there runs the shader only to be discarded.
+      const int band = kTriangleBandRows * s;
+      for (int bandLow = rowLow; bandLow < rowHigh; bandLow += band) {
+        const RecordRect covered = coveredColumns(
+            part, {clip.x0 * s, bandLow, (clip.x1 + 1) * s, std::min(bandLow + band, rowHigh)}, unwraps(planeClip.plane));
         if (covered.x0 < covered.x1) {
           place({.x0 = covered.x0,
                  .y0 = covered.y0,
