@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import argparse
 import ast
+import json
 import os
 import re
 import shutil
@@ -28,7 +29,10 @@ OP_LAYOUT_NAME = "record_op.glsl"
 class Shader(NamedTuple):
     source: str
     array: str
-    define: str | None = None  # a variant of `source` compiled with this macro defined
+    defines: tuple[str, ...] = ()  # a variant of `source` compiled with these macros defined
+    # Only the Metal form exists: the variant reads its colour target in-pass (framebuffer fetch), which the
+    # SPIR-V path cannot express through SDL_GPU.
+    msl_only: bool = False
 
 
 SHADERS = (
@@ -41,9 +45,20 @@ SHADERS = (
     Shader("pane.frag", "spv_g_pane_frag"),
     Shader("record.vert", "spv_g_record_vert"),
     Shader("record.frag", "spv_g_record_frag"),
-    Shader("record.frag", "spv_g_record_depth_frag", "RECORD_DEPTH"),
-    Shader("record.frag", "spv_g_record_depth_back_frag", "RECORD_DEPTH_BACK"),
+    Shader("record.frag", "spv_g_record_depth_frag", ("RECORD_DEPTH",)),
+    Shader("record.frag", "spv_g_record_depth_back_frag", ("RECORD_DEPTH_BACK",)),
+    Shader("record.frag", "spv_g_record_fetch_frag", ("RECORD_FETCH",), msl_only=True),
+    Shader("record.frag", "spv_g_record_fetch_depth_frag", ("RECORD_FETCH", "RECORD_DEPTH"), msl_only=True),
+    Shader("record.frag", "spv_g_record_fetch_depth_back_frag", ("RECORD_FETCH", "RECORD_DEPTH_BACK"), msl_only=True),
 )
+
+# The Metal Shading Language version the translated shaders target: framebuffer fetch on macOS needs 2.3.
+MSL_VERSION = "20300"
+
+# SPIR-V words the binding rewrite reads.
+_OP_DECORATE = 71
+_DECORATION_BINDING = 33
+_DECORATION_DESCRIPTOR_SET = 34
 
 
 class GeneratorError(RuntimeError):
@@ -105,13 +120,12 @@ def op_layout_glsl(root: Path) -> str:
 
 
 def compile_shader(
-    glslc: str, include_dirs: list[Path], shader_dir: Path, source_name: str, output: Path, define: str | None
+    glslc: str, include_dirs: list[Path], shader_dir: Path, source_name: str, output: Path, defines: tuple[str, ...]
 ) -> None:
     command = [glslc]
     for include_dir in include_dirs:
         command += ["-I", str(include_dir)]
-    if define is not None:
-        command.append(f"-D{define}")
+    command += [f"-D{define}" for define in defines]
     command += [str(shader_dir / source_name), "-o", str(output)]
     result = subprocess.run(command, capture_output=True, text=True, check=False)
     if result.returncode != 0:
@@ -122,6 +136,82 @@ def compile_shader(
         sys.stdout.write(result.stdout)
     if result.stderr:
         sys.stderr.write(result.stderr)
+
+
+def find_spirv_cross(search_path: str | None = None) -> str:
+    spirv_cross = shutil.which("spirv-cross", path=search_path)
+    if spirv_cross is None:
+        raise GeneratorError("spirv-cross not found (macOS: brew install spirv-cross; it ships with the Vulkan SDK)")
+    return spirv_cross
+
+
+def metal_slots(reflection: dict) -> dict[tuple[int, int], int]:
+    """Each buffer's (set, binding) and the [[buffer]] index SDL_GPU's Metal backend binds it at.
+
+    SDL_GPU's SPIR-V layout numbers a stage's sampled textures, then storage textures, then storage buffers in one
+    set, and its uniform buffers from 0 in the next; its Metal layout keeps the texture order and puts the uniform
+    buffers first in [[buffer]], the storage buffers after them. Textures and uniform buffers keep their binding.
+    """
+    uniforms = reflection.get("ubos", [])
+    slots = {(ubo["set"], ubo["binding"]): ubo["binding"] for ubo in uniforms}
+    storage = sorted(reflection.get("ssbos", []), key=lambda ssbo: ssbo["binding"])
+    for index, ssbo in enumerate(storage):
+        slots[(ssbo["set"], ssbo["binding"])] = len(uniforms) + index
+    return slots
+
+
+def rebind_spirv(data: bytes, slots: dict[tuple[int, int], int]) -> bytes:
+    """`data` with each Binding decoration in `slots` replaced by its Metal index."""
+    words = list(struct.unpack(f"<{len(data) // 4}I", data))
+    sets: dict[int, int] = {}
+    bindings: dict[int, int] = {}  # target id -> index of its Binding literal
+    at = 5
+    while at < len(words):
+        count, opcode = words[at] >> 16, words[at] & 0xFFFF
+        if count == 0:
+            raise GeneratorError("malformed SPIR-V: zero-length instruction")
+        if opcode == _OP_DECORATE and count >= 4:
+            if words[at + 2] == _DECORATION_DESCRIPTOR_SET:
+                sets[words[at + 1]] = words[at + 3]
+            elif words[at + 2] == _DECORATION_BINDING:
+                bindings[words[at + 1]] = at + 3
+        at += count
+    for target, literal in bindings.items():
+        slot = slots.get((sets.get(target, 0), words[literal]))
+        if slot is not None:
+            words[literal] = slot
+    return struct.pack(f"<{len(words)}I", *words)
+
+
+def translate_msl(spirv_cross: str, spv_path: Path, output: Path) -> str:
+    """The Metal source of `spv_path`, its bindings at SDL_GPU's Metal indices and its subpass input fetched."""
+    reflected = subprocess.run([spirv_cross, str(spv_path), "--reflect"], capture_output=True, text=True, check=False)
+    if reflected.returncode != 0:
+        raise GeneratorError(f"spirv-cross --reflect failed for {spv_path.name}\n{reflected.stderr.strip()}")
+    rebound = output.with_suffix(".metal.spv")
+    rebound.write_bytes(rebind_spirv(spv_path.read_bytes(), metal_slots(json.loads(reflected.stdout))))
+    command = [spirv_cross, str(rebound), "--msl", "--msl-version", MSL_VERSION, "--msl-decoration-binding",
+               "--msl-framebuffer-fetch", "--output", str(output)]
+    result = subprocess.run(command, capture_output=True, text=True, check=False)
+    if result.returncode != 0:
+        raise GeneratorError(f"spirv-cross --msl failed for {spv_path.name}\n{(result.stderr or result.stdout).strip()}")
+    return output.read_text(encoding="utf-8")
+
+
+def msl_array(source: str, array_name: str) -> str:
+    """`source` as a NUL-terminated byte array; the _len excludes the terminator."""
+    data = source.encode("utf-8")
+    lines = [f"static const unsigned char {array_name}[] = {{"]
+    for start in range(0, len(data), 24):
+        lines.append("  " + ", ".join(f"0x{byte:02x}" for byte in data[start : start + 24]) + ",")
+    lines.append("  0x00,")
+    lines.append("};")
+    lines.append(f"static const unsigned {array_name}_len = {len(data)};")
+    return "\n".join(lines) + "\n"
+
+
+def msl_name(array: str) -> str:
+    return "msl_" + array.removeprefix("spv_")
 
 
 def spirv_array(path: Path, array_name: str) -> str:
@@ -146,7 +236,9 @@ def generate(
     tool_path: Path | None = None,
     stamp: Path | None = None,
     announce: bool = True,
+    spirv_cross: str | None = None,
 ) -> bool:
+    """Writes the header; with `spirv_cross` it also carries every shader as Metal source (msl_g_*)."""
     tool_path = tool_path or Path(__file__).resolve()
     shader_dir = root / SHADER_DIR_REL
     dependencies = dependency_paths(root, tool_path)
@@ -166,13 +258,26 @@ def generate(
     with tempfile.TemporaryDirectory(prefix="gen_gpu_shaders-", dir=output.parent) as temp_name:
         temp_dir = Path(temp_name)
         header = [
-            "// GENERATED by tools/gen_gpu_shaders.py — do not edit. SPIR-V for the SDL_GPU renderer.\n",
+            "// GENERATED by tools/gen_gpu_shaders.py — do not edit. SPIR-V (and, where built, Metal) for the SDL_GPU\n",
+            "// renderer.\n",
             "#include <stdint.h>\n",
         ]
+        # PSXPORT_MSL(name) is a ShaderCode's Metal pair for msl_g_<name>, or none when Metal was not built.
+        if spirv_cross is not None:
+            header.append("#define PSXPORT_GPU_SHADERS_MSL 1\n")
+            header.append("#define PSXPORT_MSL(name) msl_g_##name, msl_g_##name##_len\n")
+        else:
+            header.append("#define PSXPORT_MSL(name) nullptr, 0\n")
         for shader in SHADERS:
+            if shader.msl_only and spirv_cross is None:
+                continue
             spv_path = temp_dir / f"{shader.array}.spv"
-            compile_shader(glslc, [shader_dir, output.parent], shader_dir, shader.source, spv_path, shader.define)
-            header.append(spirv_array(spv_path, shader.array))
+            compile_shader(glslc, [shader_dir, output.parent], shader_dir, shader.source, spv_path, shader.defines)
+            if not shader.msl_only:
+                header.append(spirv_array(spv_path, shader.array))
+            if spirv_cross is not None:
+                source = translate_msl(spirv_cross, spv_path, temp_dir / f"{shader.array}.metal")
+                header.append(msl_array(source, msl_name(shader.array)))
         temp_header = temp_dir / output.name
         temp_header.write_text("".join(header), encoding="utf-8")
         header_changed = not output.is_file() or temp_header.read_bytes() != output.read_bytes()
@@ -203,6 +308,11 @@ def main() -> int:
         type=Path,
         help="CMake dependency stamp; updated only after every shader compiles successfully",
     )
+    parser.add_argument(
+        "--msl",
+        action="store_true",
+        help="also translate every shader to Metal (spirv-cross), for SDL_GPU's Metal backend",
+    )
     args = parser.parse_args()
     root = Path(__file__).resolve().parent.parent
     try:
@@ -211,7 +321,8 @@ def main() -> int:
         stamp = args.stamp
         if stamp is None:
             stamp = root / "scratch/gen_gpu_shaders.stamp"
-        generate(root, find_glslc(), output=args.output, stamp=stamp)
+        generate(root, find_glslc(), output=args.output, stamp=stamp,
+                 spirv_cross=find_spirv_cross() if args.msl else None)
     except GeneratorError as error:
         print(f"gen_gpu_shaders: {error}", file=sys.stderr)
         return 1

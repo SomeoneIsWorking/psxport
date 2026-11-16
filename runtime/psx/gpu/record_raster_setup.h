@@ -242,6 +242,11 @@ public:
   RecordPlanner(const RecordPlanner &) = delete;
   RecordPlanner &operator=(const RecordPlanner &) = delete;
 
+  // The rasterizer reads a draw's destination in-pass, as the draws before it in the batch left it (Metal framebuffer
+  // fetch), so a draw that reads its destination where the batch already wrote starts no new batch. Only a draw that
+  // samples, as a texture, what the batch wrote still does.
+  void setDestinationReadsInPass(bool inPass);
+
   // Every entry of a complete record, in order, into VRAM and into each canvas it reaches. A primitive
   // whose draw area spans exactly a canvas's buffer columns and covers its rows draws there with the
   // horizontal clip widened by the margin; any other write lands in a canvas only where it lands in the

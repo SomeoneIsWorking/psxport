@@ -90,6 +90,11 @@ public:
   SDL_GPUDevice *handle() const {
     return device_;
   }
+  // A fragment shader reads its colour target as earlier draws of the same pass left it (Metal framebuffer fetch),
+  // so a draw over them needs no snapshot of the target.
+  bool fetchesTarget() const {
+    return fetchesTarget_;
+  }
   const RenderWindow &window() const {
     return window_;
   }
@@ -195,6 +200,7 @@ private:
   bool namedSink_ = false;
   RenderWindow window_;
   SDL_GPUDevice *device_ = nullptr;
+  bool fetchesTarget_ = false;
   SDL_GPUSampler *nearest_ = nullptr;
   SDL_GPUSampler *linear_ = nullptr;
   SDL_GPUGraphicsPipeline *presentPipeline_ = nullptr;

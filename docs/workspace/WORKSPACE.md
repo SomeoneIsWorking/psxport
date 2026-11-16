@@ -72,6 +72,9 @@ missing (`uv run --no-project https://raw.githubusercontent.com/SomeoneIsWorking
 and `scripts/bootstrap_workspace.py` runs it for every title. Lightrec stays pinned at `PSXPORT_LIGHTREC_REVISION`
 (`psxport/cmake/lightrec_dependency.cmake`, `psxport_fetch.py --lightrec`).
 
+The record rasterizer follows re-harness's in-pass destination rule: Metal framebuffer fetch on macOS today, the
+other backends as our SDL fork (`SomeoneIsWorking/SDL`, pinned in `tools/port/target-libraries.json`) gains them.
+
 ## Build
 
 There are no unit tests or gates. Each repo is checked by building its product with Clang:

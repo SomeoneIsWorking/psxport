@@ -129,7 +129,7 @@ jobs:
         run: uv run --no-project https://raw.githubusercontent.com/SomeoneIsWorking/psxport/main/tools/psxport_fetch.py --auto
       - name: Install the build host's tools
         run: |
-          brew install autoconf automake libtool texinfo ninja shaderc
+          brew install autoconf automake libtool texinfo ninja shaderc spirv-cross
           echo "$(brew --prefix libtool)/libexec/gnubin" >> "$GITHUB_PATH"
       - name: Check out the pinned Lightrec
         run: uv run --no-project python external/psxport/tools/psxport_fetch.py --lightrec

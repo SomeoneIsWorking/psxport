@@ -590,6 +590,11 @@ private:
   std::vector<RecordRect> opReads_;
   bool reaches_ = false;
   int lines_ = 0;                          // line primitives planned
+
+public:
+  bool destinationInPass = false; // RecordPlanner::setDestinationReadsInPass
+
+private:
   std::optional<RecordReadBack> readBack_; // what primitives sample
   std::optional<RecordReadBack> declared_; // this record's declaration, from the next record on
   bool declares_ = false;
@@ -908,7 +913,7 @@ void RecordPlanner::Builder::commit(const RecordOp &op, bool readsDestination, c
   for (const RecordRect &read : opReads_) {
     conflict = conflict || written_[0].any(read);
   }
-  if (readsDestination) {
+  if (readsDestination && !destinationInPass) {
     for (const PlaneRect &write : opWrites_) {
       conflict = conflict || written_[static_cast<std::size_t>(write.plane)].any(write.rect);
     }
@@ -1605,6 +1610,10 @@ RecordCanvas cropCanvas(const RecordRect &display, int p, int q, int unit) {
 RecordPlanner::RecordPlanner() : builder_(std::make_unique<Builder>()) {}
 
 RecordPlanner::~RecordPlanner() = default;
+
+void RecordPlanner::setDestinationReadsInPass(bool inPass) {
+  builder_->destinationInPass = inPass;
+}
 
 const RecordRasterPlan &RecordPlanner::plan(const FrameRecord &record,
                                             int scale,

@@ -17,8 +17,8 @@ struct RmlUbo {
   float uViewport[2];
 };
 
-constexpr psx::render::ShaderCode kRmlVertex{spv_g_rml_vert, spv_g_rml_vert_len, {0, 1, 0}};
-constexpr psx::render::ShaderCode kRmlFragment{spv_g_rml_frag, spv_g_rml_frag_len, {1, 0, 0}};
+constexpr psx::render::ShaderCode kRmlVertex{spv_g_rml_vert, spv_g_rml_vert_len, {0, 1, 0}, PSXPORT_MSL(rml_vert)};
+constexpr psx::render::ShaderCode kRmlFragment{spv_g_rml_frag, spv_g_rml_frag_len, {1, 0, 0}, PSXPORT_MSL(rml_frag)};
 
 } // namespace
 

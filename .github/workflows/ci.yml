@@ -54,7 +54,7 @@ jobs:
           enable-cache: false
       - name: Install the build host's tools
         run: |
-          brew install autoconf automake libtool texinfo ninja shaderc
+          brew install autoconf automake libtool texinfo ninja shaderc spirv-cross
           echo "$(brew --prefix libtool)/libexec/gnubin" >> "$GITHUB_PATH"
       - name: Check out the pinned Lightrec
         run: uv run --frozen python tools/psxport_fetch.py --lightrec

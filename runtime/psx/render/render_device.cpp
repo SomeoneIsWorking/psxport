@@ -19,11 +19,11 @@
 namespace psx::render {
 namespace {
 
-constexpr ShaderCode kFullscreenVertex{spv_g_fullscreen_vert, spv_g_fullscreen_vert_len, {0, 0, 0}};
-constexpr ShaderCode kPresentFragment{spv_g_present_frag, spv_g_present_frag_len, {1, 1, 0}};
-constexpr ShaderCode kImageFragment{spv_g_image_frag, spv_g_image_frag_len, {1, 1, 0}};
-constexpr ShaderCode kPaneVertex{spv_g_pane_vert, spv_g_pane_vert_len, {0, 1, 0}};
-constexpr ShaderCode kPaneFragment{spv_g_pane_frag, spv_g_pane_frag_len, {1, 1, 0}};
+constexpr ShaderCode kFullscreenVertex{spv_g_fullscreen_vert, spv_g_fullscreen_vert_len, {0, 0, 0}, PSXPORT_MSL(fullscreen_vert)};
+constexpr ShaderCode kPresentFragment{spv_g_present_frag, spv_g_present_frag_len, {1, 1, 0}, PSXPORT_MSL(present_frag)};
+constexpr ShaderCode kImageFragment{spv_g_image_frag, spv_g_image_frag_len, {1, 1, 0}, PSXPORT_MSL(image_frag)};
+constexpr ShaderCode kPaneVertex{spv_g_pane_vert, spv_g_pane_vert_len, {0, 1, 0}, PSXPORT_MSL(pane_vert)};
+constexpr ShaderCode kPaneFragment{spv_g_pane_frag, spv_g_pane_frag_len, {1, 1, 0}, PSXPORT_MSL(pane_frag)};
 constexpr int kMaxSinkSide = 16384;
 
 } // namespace
@@ -134,11 +134,29 @@ void RenderDevice::bringUp() {
   }
   window_.create(shown(), windowTitle_ != nullptr ? windowTitle_ : "psxport (untitled game)", sinkSize(), namedSink_);
   reportRecordedFault();
+  SDL_GPUShaderFormat formats = SDL_GPU_SHADERFORMAT_SPIRV;
+  const char *wanted = nullptr; // SDL's own choice, or SDL_GPU_DRIVER's
+#if defined(__APPLE__) && defined(PSXPORT_GPU_SHADERS_MSL)
+  // Metal is native here and reads a colour target in-pass (framebuffer fetch), which the record rasterizer draws
+  // through instead of a snapshot copy per batch. SDL_GPU_DRIVER=vulkan still picks MoltenVK.
+  formats |= SDL_GPU_SHADERFORMAT_MSL;
+  if (SDL_GetHint(SDL_HINT_GPU_DRIVER) == nullptr) {
+    wanted = "metal";
+  }
+#endif
   useBundledMoltenVK();
-  device_ = SDL_CreateGPUDevice(SDL_GPU_SHADERFORMAT_SPIRV, psx::config::gpu_validation(), nullptr);
+  device_ = SDL_CreateGPUDevice(formats, psx::config::gpu_validation(), wanted);
+  if (device_ == nullptr && wanted != nullptr) {
+    lucent::warn("render", "no {} device ({}); letting SDL choose", wanted, SDL_GetError());
+    device_ = SDL_CreateGPUDevice(formats, psx::config::gpu_validation(), nullptr);
+  }
   GPUCHK(device_, "SDL_CreateGPUDevice");
   const char *driver = SDL_GetGPUDeviceDriver(device_);
-  lucent::info("render", "SDL_GPU device up (driver: {})", driver != nullptr ? driver : "(null)");
+  fetchesTarget_ = driver != nullptr && std::strcmp(driver, "metal") == 0;
+  lucent::info("render",
+               "SDL_GPU device up (driver: {}; colour target read {})",
+               driver != nullptr ? driver : "(null)",
+               fetchesTarget_ ? "in-pass" : "from a snapshot");
   window_.claim(device_);
   nearest_ = makeSampler(SDL_GPU_FILTER_NEAREST);
   linear_ = makeSampler(SDL_GPU_FILTER_LINEAR);

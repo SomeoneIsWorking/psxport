@@ -16,12 +16,18 @@ function(psxport_add_gpu_shaders psxport_root target)
   set(shader_header ${CMAKE_CURRENT_BINARY_DIR}/psxport_generated/render_shaders.h)
   set(shader_stamp ${CMAKE_CURRENT_BINARY_DIR}/psxport_gpu_shaders.stamp)
   set(shader_generator ${psxport_root}/tools/gen_gpu_shaders.py)
+  # Apple builds also carry Metal source (spirv-cross), which RenderDevice runs on SDL_GPU's Metal backend.
+  set(shader_msl "")
+  if(APPLE)
+    set(shader_msl --msl)
+  endif()
 
   # The stamp owns dependency freshness; the generated header is replaced only when its bytes
   # change. A timestamp-only shader edit recompiles GLSL without rebuilding header consumers.
   add_custom_command(OUTPUT ${shader_stamp}
     BYPRODUCTS ${shader_header}
     COMMAND "${Python3_EXECUTABLE}" ${shader_generator} --output ${shader_header} --stamp ${shader_stamp}
+      ${shader_msl}
     DEPENDS ${shader_sources} ${shader_generator}
     WORKING_DIRECTORY ${psxport_root}
     COMMENT "Generating SDL_GPU SPIR-V header (render_shaders.h)"
@@ -31,6 +37,7 @@ function(psxport_add_gpu_shaders psxport_root target)
   # existence guard invokes the same authoritative generator before any C++ target can include it.
   add_custom_target(gen_gpu_shaders
     COMMAND "${Python3_EXECUTABLE}" ${shader_generator} --output ${shader_header} --stamp ${shader_stamp}
+      ${shader_msl}
     DEPENDS ${shader_stamp}
     WORKING_DIRECTORY ${psxport_root}
     VERBATIM)

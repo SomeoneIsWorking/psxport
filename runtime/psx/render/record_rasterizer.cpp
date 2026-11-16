@@ -15,11 +15,34 @@ using gpu::RecordCanvas;
 using gpu::RecordRect;
 
 constexpr SDL_GPUTextureFormat kVramFormat = SDL_GPU_TEXTUREFORMAT_R8G8_UNORM;
-constexpr ShaderCode kRecordVertex{spv_g_record_vert, spv_g_record_vert_len, {0, 1, 1}};
-constexpr ShaderCode kRecordFragment{spv_g_record_frag, spv_g_record_frag_len, {5, 1, 3}};
-constexpr ShaderCode kRecordDepthFragment{spv_g_record_depth_frag, spv_g_record_depth_frag_len, {5, 1, 3}};
+constexpr ShaderCode kRecordVertex{spv_g_record_vert, spv_g_record_vert_len, {0, 1, 1}, PSXPORT_MSL(record_vert)};
+constexpr ShaderCode kRecordFragment{spv_g_record_frag, spv_g_record_frag_len, {5, 1, 3}, PSXPORT_MSL(record_frag)};
+constexpr ShaderCode kRecordDepthFragment{spv_g_record_depth_frag, spv_g_record_depth_frag_len, {5, 1, 3}, PSXPORT_MSL(record_depth_frag)};
 constexpr ShaderCode kRecordDepthBackFragment{
-    spv_g_record_depth_back_frag, spv_g_record_depth_back_frag_len, {5, 1, 3}};
+    spv_g_record_depth_back_frag, spv_g_record_depth_back_frag_len, {5, 1, 3}, PSXPORT_MSL(record_depth_back_frag)};
+// The same three reading the target in-pass (RECORD_FETCH): Metal only, so they exist only where Metal was built.
+#if defined(PSXPORT_GPU_SHADERS_MSL)
+constexpr ShaderCode kRecordFetchFragment{nullptr, 0, {5, 1, 3}, PSXPORT_MSL(record_fetch_frag)};
+constexpr ShaderCode kRecordFetchDepthFragment{nullptr, 0, {5, 1, 3}, PSXPORT_MSL(record_fetch_depth_frag)};
+constexpr ShaderCode kRecordFetchDepthBackFragment{nullptr, 0, {5, 1, 3}, PSXPORT_MSL(record_fetch_depth_back_frag)};
+#endif
+
+// The record fragment shaders `device` draws with: the in-pass reading ones where it fetches its target.
+struct RecordFragments {
+  const ShaderCode *plain = &kRecordFragment;
+  const ShaderCode *depth = &kRecordDepthFragment;
+  const ShaderCode *depthBack = &kRecordDepthBackFragment;
+};
+
+RecordFragments recordFragments(const RenderDevice &device) {
+#if defined(PSXPORT_GPU_SHADERS_MSL)
+  if (device.fetchesTarget()) {
+    return {&kRecordFetchFragment, &kRecordFetchDepthFragment, &kRecordFetchDepthBackFragment};
+  }
+#endif
+  (void)device;
+  return {};
+}
 constexpr std::uint32_t kDepthRunFlags =
     gpu::kOpDepthTest | gpu::kOpDepthObject | gpu::kOpDepthModel | gpu::kOpDepthGroup;
 // Stencil: the high bit marks where a run's test draw passed, until its write draw clears it; the low bits name the
@@ -124,8 +147,10 @@ std::uint32_t paddedBytes(std::size_t bytes) {
 } // namespace
 
 RecordRasterizer::RecordRasterizer(RenderDevice &device)
-    : device_(device), pipeline_(device.makePipeline(kRecordVertex, kRecordFragment, kVramFormat)),
+    : device_(device), pipeline_(device.makePipeline(kRecordVertex, *recordFragments(device).plain, kVramFormat)),
       depthFormat_(depthFormat(device.handle())) {
+  const RecordFragments fragments = recordFragments(device);
+  planner_.setDestinationReadsInPass(device.fetchesTarget());
   const RenderDevice::DepthTarget slot = depthTarget(depthFormat_, SDL_GPU_COMPAREOP_ALWAYS, false);
   const RenderDevice::DepthTarget tests = withStencil(depthTarget(depthFormat_, SDL_GPU_COMPAREOP_LESS_OR_EQUAL, false),
                                                       SDL_GPU_COMPAREOP_ALWAYS,
@@ -158,19 +183,19 @@ RecordRasterizer::RecordRasterizer(RenderDevice &device)
   SDL_GPUColorTargetBlendState noColour = {};
   noColour.enable_color_write_mask = true;
   noColour.color_write_mask = 0;
-  slotPipeline_ = device.makePipeline(kRecordVertex, kRecordFragment, kVramFormat, nullptr, nullptr, &slot);
-  groupTestPipeline_ = device.makePipeline(kRecordVertex, kRecordDepthFragment, kVramFormat, nullptr, nullptr, &tests);
+  slotPipeline_ = device.makePipeline(kRecordVertex, *fragments.plain, kVramFormat, nullptr, nullptr, &slot);
+  groupTestPipeline_ = device.makePipeline(kRecordVertex, *fragments.depth, kVramFormat, nullptr, nullptr, &tests);
   groupMarkPipeline_ =
-      device.makePipeline(kRecordVertex, kRecordDepthBackFragment, kVramFormat, &noColour, nullptr, &marks);
-  objectPipeline_ = device.makePipeline(kRecordVertex, kRecordDepthFragment, kVramFormat, nullptr, nullptr, &covers);
+      device.makePipeline(kRecordVertex, *fragments.depthBack, kVramFormat, &noColour, nullptr, &marks);
+  objectPipeline_ = device.makePipeline(kRecordVertex, *fragments.depth, kVramFormat, nullptr, nullptr, &covers);
   modelTestPipeline_ =
-      device.makePipeline(kRecordVertex, kRecordDepthFragment, kVramFormat, nullptr, nullptr, &modelTests);
+      device.makePipeline(kRecordVertex, *fragments.depth, kVramFormat, nullptr, nullptr, &modelTests);
   modelPaintPipeline_ =
-      device.makePipeline(kRecordVertex, kRecordDepthFragment, kVramFormat, nullptr, nullptr, &modelPaints);
+      device.makePipeline(kRecordVertex, *fragments.depth, kVramFormat, nullptr, nullptr, &modelPaints);
   modelMarkPipeline_ =
-      device.makePipeline(kRecordVertex, kRecordDepthBackFragment, kVramFormat, &noColour, nullptr, &leaves);
+      device.makePipeline(kRecordVertex, *fragments.depthBack, kVramFormat, &noColour, nullptr, &leaves);
   modelClearPipeline_ =
-      device.makePipeline(kRecordVertex, kRecordDepthFragment, kVramFormat, &noColour, nullptr, &clears);
+      device.makePipeline(kRecordVertex, *fragments.depth, kVramFormat, &noColour, nullptr, &clears);
   canvases_.reserve(gpu::kRecordMaxCanvases);
 }
 

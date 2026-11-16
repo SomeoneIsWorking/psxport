@@ -12,6 +12,11 @@
 layout(location = 0) flat in uvec4 v_info;
 layout(location = 0) out vec4 o_col;
 layout(set = 2, binding = 0) uniform sampler2D u_target; // the target plane before this batch
+#ifdef RECORD_FETCH
+// The target pixel as the draws before this fragment left it, read in-pass (Metal framebuffer fetch): every earlier
+// draw of the batch is already in it, so a draw over them needs neither a new batch nor the snapshot.
+layout(input_attachment_index = 0, set = 2, binding = 8) uniform subpassInput u_targetNow;
+#endif
 layout(set = 2, binding = 1) uniform sampler2D u_vram;   // the VRAM image before this batch
 layout(set = 2, binding = 2) uniform sampler2D u_readBack; // the read-back capture (RecordReadBack)
 layout(set = 2, binding = 3) uniform sampler2D u_outlineFields;  // present::OutlineAtlas::fields, filtered
@@ -198,7 +203,11 @@ void main() {
         uint(n.y & 1) == ((flags & kOpSkipParity) != 0u ? 1u : 0u)) {
         discard;
     }
+#ifdef RECORD_FETCH
+    uint dst = halfword(subpassLoad(u_targetNow).rg);
+#else
     uint dst = halfword(texelFetch(u_target, target, 0).rg);
+#endif
     bool maskCheck = (flags & kOpMaskCheck) != 0u;
     uint maskSet = (flags & kOpMaskSet) != 0u ? 0x8000u : 0u;
     int vramWidth = kVramWidth * S;
