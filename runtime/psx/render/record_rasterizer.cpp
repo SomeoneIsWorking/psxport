@@ -20,6 +20,9 @@ constexpr ShaderCode kRecordFragment{spv_g_record_frag, spv_g_record_frag_len, {
 constexpr ShaderCode kRecordDepthFragment{spv_g_record_depth_frag, spv_g_record_depth_frag_len, {5, 1, 3}, PSXPORT_MSL(record_depth_frag)};
 constexpr ShaderCode kRecordDepthBackFragment{
     spv_g_record_depth_back_frag, spv_g_record_depth_back_frag_len, {5, 1, 3}, PSXPORT_MSL(record_depth_back_frag)};
+// A depth group's mark: coverage and depth alone, so it never reads the target and both pipeline sets share it.
+constexpr ShaderCode kRecordDepthMarkFragment{
+    spv_g_record_depth_mark_frag, spv_g_record_depth_mark_frag_len, {5, 1, 3}, PSXPORT_MSL(record_depth_mark_frag)};
 // The same three reading the target in-pass (RECORD_FETCH): Metal only, so they exist only where Metal was built.
 #if defined(PSXPORT_GPU_SHADERS_MSL)
 constexpr ShaderCode kRecordFetchFragment{nullptr, 0, {5, 1, 3}, PSXPORT_MSL(record_fetch_frag)};
@@ -201,7 +204,7 @@ RecordRasterizer::Pipelines RecordRasterizer::makePipelines(bool fetch) {
   pipelines.slot = device_.makePipeline(kRecordVertex, *fragments.plain, kVramFormat, nullptr, nullptr, &slot);
   pipelines.groupTest = device_.makePipeline(kRecordVertex, *fragments.depth, kVramFormat, nullptr, nullptr, &tests);
   pipelines.groupMark =
-      device_.makePipeline(kRecordVertex, *fragments.depthBack, kVramFormat, &noColour, nullptr, &marks);
+      device_.makePipeline(kRecordVertex, kRecordDepthMarkFragment, kVramFormat, &noColour, nullptr, &marks);
   pipelines.object = device_.makePipeline(kRecordVertex, *fragments.depth, kVramFormat, nullptr, nullptr, &covers);
   pipelines.modelTest =
       device_.makePipeline(kRecordVertex, *fragments.depth, kVramFormat, nullptr, nullptr, &modelTests);

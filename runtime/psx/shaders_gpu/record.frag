@@ -4,6 +4,10 @@
 // The target is a plane: the VRAM image or a display canvas, whose pixel p is VRAM-space pixel p + origin * scale.
 // A crop canvas's UI quads (kMappingCropUi) map instead at the UI scale from the UI origin.
 #include "record_op.glsl"
+// A depth group's mark: only the polygon's coverage and its moved-back depth (see main).
+#ifdef RECORD_DEPTH_MARK
+#define RECORD_DEPTH_BACK
+#endif
 // A draw that leaves its depth moved back by the plane's kDepthBin (RecordRasterizer::drawQuads).
 #ifdef RECORD_DEPTH_BACK
 #define RECORD_DEPTH
@@ -197,6 +201,23 @@ void main() {
 #ifdef RECORD_DEPTH
     // Only depth-tested ops reach this variant.
     gl_FragDepth = fragmentDepth((vec2(p) + 0.5) / float(S));
+#endif
+#ifdef RECORD_DEPTH_MARK
+    // The group's test draw marked in stencil exactly the pixels it drew, and a group's polygons cover no pixel twice,
+    // so inside this polygon's own edges a marked pixel is its own: the texel, blend and mask work that decided those
+    // pixels is not repeated. A quad covers its sprite or line pixel exactly; a triangle's covers more.
+    if (kind == kRecordOpKindTriangle) {
+        int vramWidth = kVramWidth * S;
+        uint part = kOpParts + v_info.y * kPartWords;
+        int yi = p.y - int(word(part + kPartRowShift));
+        int left = edgeX(part + kPartLeft, part + kPartLeftStep, yi);
+        int right = edgeX(part + kPartRight, part + kPartRightStep, yi);
+        int x0 = p.x < 0 || p.x >= vramWidth ? left : wrap(left + vramWidth, 2 * vramWidth) - vramWidth;
+        if (p.x < x0 || p.x >= x0 + (right - left)) {
+            discard;
+        }
+    }
+    return;
 #endif
     // A crop canvas shows every row; a transfer's op carries the image's field weave.
     if ((flags & kOpSkipRows) != 0u && v_info.z == kMappingPlane &&
