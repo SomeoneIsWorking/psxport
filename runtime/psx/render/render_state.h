@@ -6,6 +6,7 @@
 #include "present_plan.h"
 #include "present_sink.h"
 #include "record_rasterizer.h"
+#include "renderdoc_capture.h"
 #include "render_pane.h"
 #include "viewport_layout.h"
 
@@ -166,6 +167,7 @@ private:
   };
   std::optional<RestoredPicture> restored_;
   bool presentsRecord_ = false;
+  debug::RenderDocCapture renderDoc_;
   // The GPU work of the last present ends at this fence; dropsInBetween() reads it.
   SDL_GPUFence *lastPresentFence_ = nullptr;
   std::uint64_t droppedInBetweens_ = 0;

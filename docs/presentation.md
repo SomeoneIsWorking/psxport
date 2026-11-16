@@ -719,6 +719,12 @@ channel is on (`PSXPORT_DEBUG=perf`, REPL `debug perf`); off, each hook is a cac
   waits for its fence (`RenderDevice::timeSubmits`) and the wait is charged to the submit's label: that is the GPU's
   time for the work, since nothing else is in flight. It serializes the CPU and the GPU, so pacing and CPU lines
   under it are not the player's; use it for GPU cost alone, hidden and unpaced like any meter run.
+- **RenderDoc captures.** An unmapped window never presents a swapchain frame, so RenderDoc's own frame boundaries
+  never come. On Linux, `PSXPORT_RENDERDOC_AT=<present indices>` under `renderdoccmd capture -w -c <file> <binary>`
+  captures each listed present from its record rasterization to its present-build submit through RenderDoc's in-app
+  API (`debug::RenderDocCapture`). RenderDoc 1.45 hooks X11 windows only, so a Wayland session also sets
+  `SDL_VIDEO_DRIVER=offscreen`. `tools/renderdoc_times.py` lists a capture's draws by GPU time, headless; its times
+  rank draws roughly and overstate small ones (see the script).
 - **Cadence, from the plan.** Every scheduled present (`DisplayPresenter::showAt`) is due the fields its pacer held
   it for (`GpuPerf::heldFor`) after the one before, a field lasting the guest's field period. The guest moment it
   shows is `from + t (shown - from)` in records (logic ticks). A simulated 60.00 Hz display shows at each vblank the

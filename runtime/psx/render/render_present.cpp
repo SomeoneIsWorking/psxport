@@ -151,6 +151,7 @@ void RenderState::buildDisplay(gpu::VramRect display, present::ScanoutWindow win
   if (dropsInBetween()) {
     return;
   }
+  renderDoc_.begin(presentSerial_ + 1);
   SDL_GPUCommandBuffer *cmd = device_.acquire();
   present::PresentInputs inputs = presentInputs(lastDisplay_, display.width, window);
   presentRecord(inputs);
@@ -179,6 +180,7 @@ void RenderState::buildDisplay(gpu::VramRect display, present::ScanoutWindow win
   }
   device_.release(lastPresentFence_);
   lastPresentFence_ = device_.submitFenced(cmd, "present build");
+  renderDoc_.end();
   finishBuild(plan.build);
 }
 

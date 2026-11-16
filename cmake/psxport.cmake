@@ -104,6 +104,7 @@ set(PSXPORT_FRAMEWORK_SRC
   ${PSXPORT_ROOT}/runtime/psx/gpu/draw_list_cycle.cpp # a draw list that never ends, refused before the GPU
   ${PSXPORT_ROOT}/runtime/psx/debug/image_writer.cpp      # one checked RGB24 capture-file boundary, stills and clips
   ${PSXPORT_ROOT}/runtime/psx/debug/gpu_debug.cpp
+  ${PSXPORT_ROOT}/runtime/psx/debug/renderdoc_capture.cpp # RenderDoc captures of chosen presents (Linux)
   ${PSXPORT_ROOT}/runtime/psx/debug/text_capture.cpp    # a FILE*-writing view captured as text
   ${PSXPORT_ROOT}/runtime/psx/debug/host_backtrace.cpp  # host call stacks for fault and watch reports
   ${PSXPORT_ROOT}/runtime/psx/audio/spu_audio.cpp

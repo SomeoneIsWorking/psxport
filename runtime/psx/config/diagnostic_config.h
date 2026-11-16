@@ -31,6 +31,7 @@ SnapshotSchedule snapshot_schedule();
 
 long present_dump_first_fence();                  // PSXPORT_FPS60_DUMP_FROM
 std::vector<std::uint32_t> present_shot_frames(); // PSXPORT_PRESENT_SHOT_AT: present indices
+std::vector<std::uint32_t> renderdoc_presents();  // PSXPORT_RENDERDOC_AT: present indices to capture
 
 std::string gpu_dump_dir();                   // PSXPORT_GPU_DUMP
 std::vector<std::uint32_t> gpu_shot_frames(); // PSXPORT_SHOT_AT: present indices
