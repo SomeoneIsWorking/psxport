@@ -52,7 +52,7 @@ public:
     linking_ = false;
   }
   // The executor's block entry, which a linked entry runs: true when the entry stops the segment at a boundary.
-  void setBlockEntry(bool (*enter)(void *, std::uint32_t), void *context) {
+  void setBlockEntry(bool (*enter)(void *, std::uint32_t, RememberedVerdict *), void *context) {
     enterBlock_ = enter;
     enterContext_ = context;
   }
@@ -95,7 +95,7 @@ private:
   // The translated block running now, whose own invalidation sends the rest of it to the interpreter.
   const CompiledBlock *running_ = nullptr;
   std::uint64_t segmentStart_ = 0;
-  bool (*enterBlock_)(void *, std::uint32_t) = nullptr;
+  bool (*enterBlock_)(void *, std::uint32_t, RememberedVerdict *) = nullptr;
   void *enterContext_ = nullptr;
   // The site the last translated block left through, unlinked: patched to the next block when it is translated.
   CompiledBlock *linkFrom_ = nullptr;

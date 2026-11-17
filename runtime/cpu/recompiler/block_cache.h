@@ -4,6 +4,7 @@
 
 #include "block_scan.h"
 #include "guest_address_range.h"
+#include "host_dispatch_cache.h"
 
 #include <array>
 #include <cstddef>
@@ -50,6 +51,8 @@ struct CompiledBlock {
   std::uint32_t entryConflicts = 0;
   // Null for a block the interpreter runs, for `refusal`.
   BlockCode code = nullptr;
+  // The block entry's dispatch verdict, for entries made through a link (NativeDispatcher::classify).
+  RememberedVerdict verdict;
   // Null unless the backend links blocks.
   const void *linkedEntry = nullptr;
   std::vector<OutgoingLink> sites;

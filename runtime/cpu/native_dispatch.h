@@ -53,6 +53,23 @@ public:
     }
     return classifyUncached(guestAddress);
   }
+  // The same answer, from `remembered` when it still holds: its epoch is current and no suppression is armed (a
+  // suppression moves one address's verdict without moving the epoch). Otherwise classified as above and, when the
+  // answer reads no live guest memory and no suppression is armed, remembered.
+  GuestHostDispatchKind classify(std::uint32_t guestAddress, RememberedVerdict &remembered) {
+    if (!suppressions_.empty()) {
+      return classify(guestAddress);
+    }
+    const std::uint64_t epoch = epoch_.value();
+    if (remembered.epoch == epoch) {
+      return remembered.kind;
+    }
+    const GuestHostDispatchKind kind = classify(guestAddress);
+    if (const auto verdict = verdicts_.find(guestAddress, epoch); verdict && !verdict->live) {
+      remembered = {epoch, kind};
+    }
+    return kind;
+  }
 
 private:
   struct NativeKeyHash {

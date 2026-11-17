@@ -20,6 +20,7 @@
 #include <lucent/log.h>
 
 #include <algorithm>
+#include <cstring>
 #include <limits>
 #include <optional>
 #include <utility>
@@ -30,8 +31,8 @@ struct GuestExecutor::Impl {
   explicit Impl(Core &owner) : core(owner), state(owner), recompiler(recompiler::Recompiler::create(state)) {
     if (recompiler != nullptr) {
       recompiler->setBlockEntry(
-          [](void *impl, std::uint32_t pc) {
-            return static_cast<Impl *>(impl)->enterBlock(pc);
+          [](void *impl, std::uint32_t pc, RememberedVerdict *verdict) {
+            return static_cast<Impl *>(impl)->enterBlock(pc, verdict);
           },
           this);
     }
@@ -74,8 +75,10 @@ struct GuestExecutor::Impl {
 
   // ---- Block entries ---------------------------------------------------------------------------
 
-  // The block entry at `guestPc`: true when the segment stops here for the boundary's reason.
-  bool enterBlock(std::uint32_t guestPc) {
+  // The block entry at `guestPc`: true when the segment stops here for the boundary's reason. `verdict`, when the
+  // caller keeps one for this entry (a translated block entered through a link), answers native dispatch while it
+  // holds.
+  bool enterBlock(std::uint32_t guestPc, RememberedVerdict *verdict = nullptr) {
     ++state.counters.executedBlocks;
     enteredPc = guestPc;
     if (trace) {
@@ -94,7 +97,8 @@ struct GuestExecutor::Impl {
       boundary.reason = BoundaryReason::PendingWork;
     }
     if (boundary.reason == BoundaryReason::None && boundary.dispatchHostServices &&
-        core.nativeDispatcher().classify(guestPc) != GuestHostDispatchKind::ExecuteGuest) {
+        (verdict != nullptr ? core.nativeDispatcher().classify(guestPc, *verdict)
+                            : core.nativeDispatcher().classify(guestPc)) != GuestHostDispatchKind::ExecuteGuest) {
       boundary.reason = BoundaryReason::HostDispatch;
     }
     if (boundary.reason == BoundaryReason::None) {
@@ -107,10 +111,24 @@ struct GuestExecutor::Impl {
   // Every block entry passes here, so a store is attributed to its block and enclosing call.
   void latchWriter(std::uint32_t guestPc) {
     const std::uint32_t ra = core.r[kRa];
-    GuestWriterLatch &latch = core.writerLatch;
-    const std::uint32_t callWord =
-        latch.needsCallWord(ra) && mainRamOffset(ra - kJalReturnOffset) ? core.mem_r32(ra - kJalReturnOffset) : 0u;
-    latch.enterBlock(guestPc, ra, core.r, callWord);
+    core.writerLatch.enterBlock(guestPc, ra, core.r, [this, ra] {
+      return callWordBefore(ra);
+    });
+  }
+
+  // The word at ra - 8 when it is in main RAM (read as Core::mem_r32 reads it), else 0.
+  std::uint32_t callWordBefore(std::uint32_t ra) const {
+    const std::uint32_t site = ra - kJalReturnOffset;
+    const std::optional<std::uint32_t> offset = mainRamOffset(site);
+    if (!offset) {
+      return 0u;
+    }
+    if (*offset > kMainRamBytes - 4u) {
+      return core.mem_r32(site); // straddles the end of RAM: mem_r32's own answer
+    }
+    std::uint32_t word = 0;
+    std::memcpy(&word, &core.ram[*offset], sizeof(word));
+    return word;
   }
 
   // ---- Segments --------------------------------------------------------------------------------
@@ -165,8 +183,9 @@ struct GuestExecutor::Impl {
   }
 
   [[nodiscard]] bool pendingWorkDeliverable() const {
-    return core.game && core.active_native_address == 0 && core.pending_guest_redirect == 0 &&
-           __atomic_load_n(&core.pending_work, __ATOMIC_RELAXED) != 0;
+    // Pending work first: it is almost always clear, so the common entry reads one word.
+    return __atomic_load_n(&core.pending_work, __ATOMIC_RELAXED) != 0 && core.game && core.active_native_address == 0 &&
+           core.pending_guest_redirect == 0;
   }
 
   // Pending work served where the guest stopped; a result when the caller, not this executor, resumes the guest.

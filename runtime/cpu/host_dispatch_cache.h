@@ -15,6 +15,13 @@ struct DispatchVerdict {
   bool live = false;
 };
 
+// A non-live verdict a caller keeps beside the code it describes (a translated block), valid while the dispatch
+// epoch is the one it was read under and no suppression is armed (NativeDispatcher::classify).
+struct RememberedVerdict {
+  std::uint64_t epoch = 0; // never a live epoch: empty
+  GuestHostDispatchKind kind = GuestHostDispatchKind::ExecuteGuest;
+};
+
 // The answer to "what is this guest address" for every block boundary the executor crosses: a direct-mapped table
 // of verdicts, each valid only under the DispatchEpoch it was stored with. Single-threaded, like the dispatcher.
 class HostDispatchVerdictCache {

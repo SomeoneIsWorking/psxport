@@ -241,7 +241,7 @@ std::uint32_t Recompiler::helperEnterLinked(JitContext *context, std::uint32_t p
   if (self.enterBlock_ == nullptr || self.state_.storeReport.armed || target == nullptr || target->code == nullptr) {
     return 2;
   }
-  if (self.enterBlock_(self.enterContext_, pc)) {
+  if (self.enterBlock_(self.enterContext_, pc, &target->verdict)) {
     return 1;
   }
   self.running_ = target;

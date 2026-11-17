@@ -14,9 +14,11 @@ namespace psx::cpu {
 
 class GuestWriterLatch {
 public:
-  // A block entry at `pc` with `$ra` = `ra` and the GPR file `gpr`; `callWord` is the instruction at ra - 8,
-  // read only when `ra` changed since the last entry (`needsCallWord`).
-  void enterBlock(std::uint32_t pc, std::uint32_t ra, const std::uint32_t *gpr, std::uint32_t callWord) {
+  // A block entry at `pc` with `$ra` = `ra` and the GPR file `gpr`. `readCallWord()` returns the instruction at
+  // ra - 8; it is called only when that word decides the entry: `ra` changed since it was last decoded and the entry
+  // is neither a return nor at `ra` itself.
+  template <typename ReadCallWord>
+  void enterBlock(std::uint32_t pc, std::uint32_t ra, const std::uint32_t *gpr, ReadCallWord &&readCallWord) {
     blockPc_ = pc;
     if (depth_ != 0 && pc == frames_[top()].returnPc) {
       --depth_;
@@ -34,7 +36,7 @@ public:
     }
     if (ra != decodedRa_) {
       decodedRa_ = ra;
-      callWord_ = callWord;
+      callWord_ = readCallWord();
     }
     if (!callsTo(GuestCallSite{pc, ra}, gpr)) {
       return;
@@ -46,9 +48,6 @@ public:
     frames_[top()] = {pc, ra};
   }
 
-  bool needsCallWord(std::uint32_t ra) const {
-    return ra != decodedRa_;
-  }
   std::uint32_t blockPc() const {
     return blockPc_;
   }
