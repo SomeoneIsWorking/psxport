@@ -25,7 +25,7 @@ All public under `github.com/SomeoneIsWorking`, side by side, no superproject.
 | `psx-spider-man/` | Spider-Man 1/2 | not split (none exists: ours to create) |
 | `psx-vagrant-story/` | Vagrant Story (`SLUS_010.40`) | split: fork `rood-reverse` (CC0) |
 | `psx-mega-man-x4/` | Mega Man X4 (vendors the AGPL `mmx4` decomp — never lift it into psxport) | not split (`mmx4`, AGPL) |
-| `psx-tekken-3/` | Tekken 3 | not split (`tekken3-xport`, MIT) |
+| `psx-tekken-3/` | Tekken 3 | split: `tekken3-decomp` (ours) |
 | `psx-c12/` | C-12: Final Resistance (`SCUS_946.66`) | split: `c12-decomp` (ours) |
 
 Fresh machine: `git clone https://github.com/SomeoneIsWorking/psxport.git ~/repo/psx/psxport && cd ~/repo/psx/psxport && uv run --frozen python scripts/bootstrap_workspace.py`.
