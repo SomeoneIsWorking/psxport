@@ -23,7 +23,7 @@ All public under `github.com/SomeoneIsWorking`, side by side, no superproject.
 | `psx-crash-team-racing/` | Crash Team Racing | not split (`ctr-native`, GPL-3, evidence) |
 | `psx-tomba/` | Tomba! 2 (`SCUS_944.54` → `MAIN.EXE`) and Tomba! 1 | Tomba 2 split: `tomba2-decomp` (ours); Tomba 1 split: `tomba1-decomp` (ours) |
 | `psx-spider-man/` | Spider-Man 1/2 | not split (none exists: ours to create) |
-| `psx-vagrant-story/` | Vagrant Story (vendors the CC0 `rood-reverse` decomp) | not split (`rood-reverse`, CC0) |
+| `psx-vagrant-story/` | Vagrant Story (`SLUS_010.40`) | split: fork `rood-reverse` (CC0) |
 | `psx-mega-man-x4/` | Mega Man X4 (vendors the AGPL `mmx4` decomp — never lift it into psxport) | not split (`mmx4`, AGPL) |
 | `psx-tekken-3/` | Tekken 3 | not split (`tekken3-xport`, MIT) |
 | `psx-c12/` | C-12: Final Resistance (`SCUS_946.66`) | split: `c12-decomp` (ours) |
