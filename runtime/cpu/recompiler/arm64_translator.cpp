@@ -3,6 +3,7 @@
 #include "arm64_assembler.h"
 #include "guest_memory_map.h"
 #include "jit_context.h"
+#include "load_arrival.h"
 #include "r3000.h"
 #include "r3000_decode.h"
 #include "vertex_places.h"
@@ -31,45 +32,6 @@ constexpr Reg kTarget = 26; // the target of JR/JALR
 constexpr Reg kImm = 17;    // scratch for immediates that need a register
 
 #define CTX(field) static_cast<std::uint32_t>(offsetof(JitContext, field))
-
-// What a load still in flight at an instruction does there (the interpreter's arriving/pending pair, resolved here).
-enum class Arrival : std::uint8_t {
-  None,
-  LandBefore, // the instruction neither reads nor writes it: land first
-  Hold,       // the instruction reads the old value: land after it, unless it writes the register
-  Drop,       // the instruction loads the same register: the first load never lands
-  Merge,      // LWL/LWR into the same register merges into the value in flight, which never lands itself
-};
-
-std::uint32_t bit(std::uint32_t reg) {
-  return reg == 0 ? 0u : 1u << reg;
-}
-
-bool isStoreWord(std::uint32_t word) {
-  return isStore(primaryOpcode(word));
-}
-
-bool leavesEngine(std::uint32_t word) {
-  return unknownInstructionFault(word) != nullptr ||
-         (primaryOpcode(word) == kSpecial && (functField(word) == kSyscall || functField(word) == kBreak));
-}
-
-Arrival arrivalAt(std::uint32_t inFlight, std::uint32_t word) {
-  if (inFlight == 0) {
-    return Arrival::None;
-  }
-  if (leavesEngine(word)) {
-    return Arrival::LandBefore; // the interpreter lands it as the instruction leaves
-  }
-  if (delayedLoadTarget(word) == inFlight) {
-    const std::uint32_t op = primaryOpcode(word);
-    return op == kLwl || op == kLwr ? Arrival::Merge : Arrival::Drop;
-  }
-  if ((gprReads(word) & bit(inFlight)) != 0) {
-    return Arrival::Hold;
-  }
-  return Arrival::LandBefore;
-}
 
 class Translator {
 public:
