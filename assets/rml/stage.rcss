@@ -1,4 +1,5 @@
-/* The selector's bottom band, drawn over the stage like the menu (same fonts and hint line). */
+/* The selector's bottom band, drawn over the stage like the menu (same fonts and hint line).
+   Sized in vh: the context is the window's size, so the band reads the same on any display. */
 
 * {
 	box-sizing: border-box;
@@ -8,7 +9,7 @@ body {
 	width: 100%;
 	height: 100%;
 	font-family: "Fira Sans";
-	font-size: 15dp;
+	font-size: 1.6vh;
 	color: #E0DBC8;
 }
 
@@ -17,7 +18,7 @@ body {
 	left: 0;
 	right: 0;
 	bottom: 0;
-	padding: 14dp 32dp 12dp 32dp;
+	padding: 1.3vh 3vh 1.1vh 3vh;
 	background-color: rgba(0, 0, 0, 78%);
 	text-align: center;
 }
@@ -26,12 +27,12 @@ body {
 	display: block;
 	font-family: "Fira Sans Condensed";
 	font-weight: bold;
-	font-size: 24dp;
+	font-size: 2.6vh;
 }
 
 .stage-title {
 	display: inline-block;
-	margin: 0 18dp;
+	margin: 0 1.7vh;
 	color: rgba(224, 219, 200, 38%);
 }
 
@@ -41,8 +42,8 @@ body {
 
 .hint {
 	display: block;
-	margin-top: 6dp;
-	font-size: 15dp;
+	margin-top: 0.5vh;
+	font-size: 1.6vh;
 	color: rgba(224, 219, 200, 55%);
 }
 

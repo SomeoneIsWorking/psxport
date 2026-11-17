@@ -19,8 +19,9 @@ namespace psx::host {
 class TitleSession;
 struct SessionServices;
 
-// Every title is loaded at once in its own machine. Only the focused one runs; every other one is paused
-// and executes nothing. The picked one is handed to the play loop and comes back on a return, never rebooted.
+// Every title is loaded at once in its own machine. Only the focused one runs; every other one runs silent
+// until it has a picture, then is paused and executes nothing. The picked one is handed to the play loop and
+// comes back on a return, never rebooted.
 class PanelSessions {
 public:
   // One unbooted session per panel of `content`, in panel order. The sessions reference the content's
@@ -42,8 +43,8 @@ public:
   bool panelReady(int panel) const;
   // The panel's newest picture at the size its session built it; invalid while the panel is not ready.
   psx::render::PresentedImage picture(int panel) const;
-  // The logo to draw over this panel: its title's own logo, read from the running title or saved from an
-  // earlier read, except while the panel's picture already shows it.
+  // The panel's icon while it has no picture: its title's own logo, read from the running title or saved from an
+  // earlier read.
   PanelLogo *logo(int panel);
 
   // Move the focus: the old panel pauses and goes silent, the new one resumes and is heard.

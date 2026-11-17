@@ -9,9 +9,9 @@
 namespace psx::host {
 namespace {
 
-// An unselected panel is grey and dimmed.
+// An unselected panel is pure greyscale.
 constexpr float kUnselectedDesaturation = 1.0f;
-constexpr float kUnselectedBrightness = 0.78f;
+constexpr float kUnselectedBrightness = 1.0f;
 
 // A divider is half a percent of the surface height (at least one pixel), in the selection's gold.
 constexpr float kDividerPerHeight = 0.005f;
@@ -90,8 +90,9 @@ std::span<const psx::render::Pane> PickerPanes::build(const PickerLayout &layout
       panes_.push_back(tile);
     }
 
-    // The title's own logo at whole texels and every panel's one scale, so the nearest sampler keeps it sharp.
-    if (source.logo != nullptr && !source.logo->empty()) {
+    // A tile's icon: the title's own logo at whole texels and every panel's one scale, so the nearest sampler keeps it
+    // sharp. A live picture is drawn alone.
+    if (!source.picture.valid() && source.logo != nullptr && !source.logo->empty()) {
       const psx::present::PaneRect box =
           geometry.logoRect(LogoSize{source.logo->width(), source.logo->height()}, largest);
       psx::render::Pane logo{};

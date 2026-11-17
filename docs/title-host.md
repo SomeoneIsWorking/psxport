@@ -150,16 +150,19 @@ The selector is the Slant Stage (the `slant-stage` skill): the titles themselves
   its width and brings the next ring title in on this one (`StageSides::step`, `PickerLayout::snap`), after
   which the edge eases on as usual. `select <slug>` puts a title that is not on the stage on the unselected
   side.
-- **Only the focused title runs.** Each selector iteration steps the focused session exactly once, as an
-  ordinary paced step on its own `FramePacer`. No other session is stepped, so it executes zero guest
+- **Only the focused title advances.** Each selector iteration steps the focused session exactly once, as
+  an ordinary paced step on its own `FramePacer`. A title that has not yet presented a title picture also
+  runs, silent and unseen by the player, one step per iteration until it has one (`showsTitlePicture`), so
+  the other side always holds a picture; after that an unfocused session is paused and executes zero guest
   instructions (`panels:` reports each panel's executed instruction count). The old focus is paused (its
   guest, VRAM and last present stay exactly as they were) and released from the audio device; the new one
   resumes from the frame where it stopped and claims audio. No panel sees the player's pad.
-- **A side with no frame yet is a plain tile** under its title's logo (`PickerPanes`); a side whose title has
-  presented shows its newest present, greyed and darkened when it is not selected.
+- **The held side is the title's last picture in pure greyscale** (desaturated, not dimmed;
+  `PickerPanes`). Only before a title has presented anything is its side a plain tile, with the title's
+  saved logo as its icon.
 - **The band.** A dark band along the bottom (`assets/rml/stage.rml`, `psx::ui::StageBand`, drawn by the
   selector Game's `RmlOverlay` like the menu, under it) lists every title, the selected one bright, and the
-  hint line in the glyphs of the device last pressed (`MenuPrompts`).
+  hint line in the glyphs of the device last pressed (`MenuPrompts`). It is sized in `vh`, from the window.
 - **Pick is a hand-over.** Cross or Start (or `pick <slug>`) hides the band and slides the edge out: the
   picked side widens to the whole window while its seams stand up (`PickerLayout::pick`), the title still
   running. When the layout settles, the selector's Game is destroyed, the other instances are unloaded, and
@@ -181,8 +184,8 @@ The selector is the Slant Stage (the `slant-stage` skill): the titles themselves
   its live machine (its title screen's own draws from VRAM while that screen is up), taken on the second step
   in a row its gate is open and saved (`SavedLogo`, `picker-logo.rgba` in the title's user-data directory);
   later selectors load it when they create the panel. No committed image of game art is drawn.
-  `PanelLayout::logoRect` sizes it at whole texels inside the seams; it is hidden while
-  `GameRuntime::showsOwnLogo(Core &)` says the picture already shows it.
+  `PanelLayout::logoRect` sizes it at whole texels inside the seams. It is the tile's icon: a side with a live
+  picture draws the picture alone.
 - **One process, one window.** The window and GPU device are `ProductHost`'s and outlive every session.
   Each instance binds its own Beetle devices (SPU, GTE, MDEC each power on at their first bind; the GPU is
   parked and restored through its serialized state, texture cache included) and its own native CDC.

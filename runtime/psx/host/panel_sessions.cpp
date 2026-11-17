@@ -102,17 +102,7 @@ PanelLogo *PanelSessions::logo(int panel) {
   if (panel < 0 || panel >= count()) {
     return nullptr;
   }
-  PanelLogo *held = logos_[static_cast<std::size_t>(panel)].get();
-  if (held == nullptr) {
-    return nullptr;
-  }
-  TitleSession *session = sessions_[static_cast<std::size_t>(panel)].get();
-  if (session == nullptr || !session->booted()) {
-    return held;
-  }
-  // A paused machine still holds the state its last picture was drawn from.
-  Core &core = session->core();
-  return core.runtime.showsOwnLogo(core) ? nullptr : held;
+  return logos_[static_cast<std::size_t>(panel)].get();
 }
 
 void PanelSessions::takeLogo(int panel, TitleSession &session) {
@@ -166,6 +156,17 @@ unsigned long long PanelSessions::advance() {
   TitleSession &current = *held;
   if (!current.booted() || current.end() != TitleSession::End::Running || current.returnRequested()) {
     return 0;
+  }
+  // A panel never seen runs, silent, until it has a picture to hold.
+  for (int panel = 0; panel < count(); ++panel) {
+    TitleSession *other = session(panel);
+    if (panel == focused_ || other == nullptr || !other->booted() || other->showsTitlePicture() ||
+        other->end() != TitleSession::End::Running) {
+      continue;
+    }
+    other->resume();
+    other->step();
+    other->pause();
   }
   // The selector's menu writes the settings; the panel that runs shows them.
   current.core().game->mods.reload();
