@@ -110,6 +110,13 @@ public:
   bool showsTitlePicture() const {
     return showsTitlePicture_;
   }
+  // The picture the selector's stage holds for this title has been presented: its title screen when the title
+  // names its logo (GameRuntime::logoTextures, showsOwnLogo), else its first title picture. Latched.
+  bool holdsStagePicture() const {
+    return holdsStagePicture_;
+  }
+  // Run unseen to that picture: unpaced and unheard (SessionControl::setPreRolling).
+  void setPreRolling(bool preRolling);
   // The newest presented frame, at the size this session built it.
   psx::render::PresentedImage presentedPicture() const;
 
@@ -167,6 +174,7 @@ private:
   bool paneDestination_ = false;
   psx::present::PixelSize paneImage_;
   bool showsTitlePicture_ = false;
+  bool holdsStagePicture_ = false;
   std::uint64_t steps_ = 0;
   unsigned long long lastStepPacedFields_ = 0;
   // A pane host attached before boot(), waiting for a machine to attach it to.

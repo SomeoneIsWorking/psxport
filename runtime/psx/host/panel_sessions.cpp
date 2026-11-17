@@ -157,17 +157,6 @@ unsigned long long PanelSessions::advance() {
   if (!current.booted() || current.end() != TitleSession::End::Running || current.returnRequested()) {
     return 0;
   }
-  // A panel never seen runs, silent, until it has a picture to hold.
-  for (int panel = 0; panel < count(); ++panel) {
-    TitleSession *other = session(panel);
-    if (panel == focused_ || other == nullptr || !other->booted() || other->showsTitlePicture() ||
-        other->end() != TitleSession::End::Running) {
-      continue;
-    }
-    other->resume();
-    other->step();
-    other->pause();
-  }
   // The selector's menu writes the settings; the panel that runs shows them.
   current.core().game->mods.reload();
   current.step();
@@ -181,14 +170,36 @@ unsigned long long PanelSessions::advance() {
   return current.lastStepPacedFields();
 }
 
+void PanelSessions::preRoll() {
+  std::vector<TitleSession *> unseen;
+  for (int panel = 0; panel < count(); ++panel) {
+    TitleSession *held = session(panel);
+    if (panel != focused_ && held != nullptr && held->booted() && !held->holdsStagePicture()) {
+      held->setPreRolling(true);
+      held->resume();
+      unseen.push_back(held);
+    }
+  }
+  for (bool running = !unseen.empty(); running;) {
+    running = false;
+    for (TitleSession *held : unseen) {
+      if (held->holdsStagePicture() || held->end() != TitleSession::End::Running) {
+        continue;
+      }
+      held->step();
+      running = true;
+    }
+  }
+  for (TitleSession *held : unseen) {
+    held->pause();
+    held->setPreRolling(false);
+    lucent::info("picker", "{} holds its stage picture after {} step(s)", held->title().identity->displayName, held->steps());
+  }
+}
+
 std::unique_ptr<TitleSession> PanelSessions::handOver() {
   if (session(focused_) == nullptr) {
     return nullptr;
-  }
-  for (int panel = 0; panel < count(); ++panel) {
-    if (panel != focused_) {
-      sessions_[static_cast<std::size_t>(panel)].reset();
-    }
   }
   std::unique_ptr<TitleSession> picked = std::move(sessions_[static_cast<std::size_t>(focused_)]);
   lucent::info("picker", "picked {}", content_.panelTitle(focused_).identity->displayName);
@@ -204,11 +215,6 @@ void PanelSessions::takeBack(std::unique_ptr<TitleSession> session) {
   } else {
     session.reset();
     create(focused_);
-  }
-  for (int panel = 0; panel < count(); ++panel) {
-    if (sessions_[static_cast<std::size_t>(panel)] == nullptr) {
-      create(panel);
-    }
   }
   sessions_[index]->resume();
   sessions_[index]->setAudible(true);

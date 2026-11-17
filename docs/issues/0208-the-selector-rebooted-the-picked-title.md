@@ -30,3 +30,6 @@ logo until it has a frame. A bottom band carries the titles and the hint line. A
 hands the running instance over (`TitleSession::handOver`), and a return hands it back (`takeBack`).
 `Pad::setPlayerInputSuppressed` hides a press held across the hand-over until it is released. Each instance's
 SPU powers on at its own first bind. Logs: `picker: on <title>`, `picker: picked <title>`.
+Every unfocused title runs unseen to its stage picture (its title screen where the title names its logo) before
+the selector's first frame, and stays loaded through play, so no side is ever empty. A held side is pure
+greyscale. Each title's existing Start skips act in preview (Spyro 1/2/3, Spider-Man 1; Tomba already did).

@@ -38,9 +38,17 @@ public:
   bool preview() const {
     return mPreview;
   }
+  // A preview running unseen to the picture the stage holds: unpaced and unheard.
+  void setPreRolling(bool preRolling) {
+    mPreRolling = preRolling;
+  }
+  bool preRolling() const {
+    return mPreRolling;
+  }
 
 private:
   bool mPreview = false;
+  bool mPreRolling = false;
   bool mReturnAvailable = false;
   bool mReturnRequested = false;
 };

@@ -70,6 +70,16 @@ void PickerSession::attachPaneHost(const PickerLayout &layout) {
   }
 }
 
+void PickerSession::routePanes(const PickerLayout &layout) {
+  // Each title builds its picture at the size its side is shown at; the window is the host's.
+  for (int panel = 0; panel < panels_->count(); ++panel) {
+    if (TitleSession *session = panels_->session(panel)) {
+      const int side = panel == panels_->focused() ? sides_.selectedSide() : 1 - sides_.selectedSide();
+      session->presentToPane(layout.imageSize(side));
+    }
+  }
+}
+
 void PickerSession::applyMove(StageSides::Move move, int dir, PickerLayout &layout) {
   if (!move.changed) {
     return;
@@ -132,6 +142,9 @@ PickerSession::Result PickerSession::run() {
   // the selector holds it.
   host_->dbg_server.start();
   panels_->bootAll();
+  layout.setSurface(services_.presentation.sinkSize().width, services_.presentation.sinkSize().height);
+  routePanes(layout);
+  panels_->preRoll();
   host_->dbg_server.routeMachineVerbsToPanel(panels_->focusedMachine());
   // The overlay exists before the first build.
   if (services_.presentation.enabled()) {
@@ -171,13 +184,7 @@ PickerSession::Result PickerSession::run() {
       host_->rml_overlay.hideStageBand();
       lucent::info("picker", "picking {}", content_.panelTitle(panels_->focused()).identity->displayName);
     }
-    // Each title builds its picture at the size its side is shown at; the window is the host's.
-    for (int panel = 0; panel < panels_->count(); ++panel) {
-      if (TitleSession *session = panels_->session(panel)) {
-        const int side = panel == panels_->focused() ? sides_.selectedSide() : 1 - sides_.selectedSide();
-        session->presentToPane(layout.imageSize(side));
-      }
-    }
+    routePanes(layout);
 
     // The width animation runs on the same frame, so a selection change is drawn from its first frame.
     const unsigned long long pacedFields = panels_->advance();

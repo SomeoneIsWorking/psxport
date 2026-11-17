@@ -138,9 +138,9 @@ return` or the ESC row ends it as `ReturnedToSelector` and the selector is rebui
 
 The selector is the Slant Stage (the `slant-stage` skill): the titles themselves are the menu.
 
-- **Every title is loaded at once.** `PanelSessions` (the stage) creates one `TitleSession` per panel when
-  `runSelector` starts and boots every one of them (`bootAll`) once the selector's Game holds the control
-  channel. It is the only thing that boots, steps, pauses, resumes, hands over or destroys one, and it owns the
+- **Every title is loaded at once and stays loaded.** `PanelSessions` (the stage) creates one `TitleSession` per
+  panel when `runSelector` starts and boots every one of them (`bootAll`) once the selector's Game holds the
+  control channel. It is the only thing that boots, steps, pauses, resumes, hands over or destroys one, and it owns the
   focus: which title the player is on (`focus`, which logs `picker: on <title>`). No title is booted twice
   while its instance lives.
 - **Two sides, one edge.** The window shows two titles split by one slanted edge (`StageSides`,
@@ -150,10 +150,13 @@ The selector is the Slant Stage (the `slant-stage` skill): the titles themselves
   its width and brings the next ring title in on this one (`StageSides::step`, `PickerLayout::snap`), after
   which the edge eases on as usual. `select <slug>` puts a title that is not on the stage on the unselected
   side.
+- **Every side holds a picture from the first frame.** Before the selector's first frame, every unfocused
+  title runs unseen, unpaced and silent (`PanelSessions::preRoll`, `SessionControl::preRolling`), through its
+  own preview skips, until it presents its stage picture (`TitleSession::holdsStagePicture`): its title screen
+  when the title names its logo (`GameRuntime::logoTextures`, `showsOwnLogo`: Spyro 1/2/3), else its first
+  title picture. Logs `picker: <title> holds its stage picture after N step(s)`.
 - **Only the focused title advances.** Each selector iteration steps the focused session exactly once, as
-  an ordinary paced step on its own `FramePacer`. A title that has not yet presented a title picture also
-  runs, silent and unseen by the player, one step per iteration until it has one (`showsTitlePicture`), so
-  the other side always holds a picture; after that an unfocused session is paused and executes zero guest
+  an ordinary paced step on its own `FramePacer`. An unfocused session is paused and executes zero guest
   instructions (`panels:` reports each panel's executed instruction count). The old focus is paused (its
   guest, VRAM and last present stay exactly as they were) and released from the audio device; the new one
   resumes from the frame where it stopped and claims audio. No panel sees the player's pad.
@@ -165,16 +168,16 @@ The selector is the Slant Stage (the `slant-stage` skill): the titles themselves
   hint line in the glyphs of the device last pressed (`MenuPrompts`). It is sized in `vh`, from the window.
 - **Pick is a hand-over.** Cross or Start (or `pick <slug>`) hides the band and slides the edge out: the
   picked side widens to the whole window while its seams stand up (`PickerLayout::pick`), the title still
-  running. When the layout settles, the selector's Game is destroyed, the other instances are unloaded, and
-  `PanelSessions::handOver` logs `picker: picked <title>` and makes the session the product
-  (`TitleSession::handOver`): its presents go to the window, the player's pad goes live, it is heard, it
-  holds the control channel and it is no longer a preview. A press still held from the selector stays hidden
-  from the guest until released (`Pad::setPlayerInputSuppressed`).
+  running. When the layout settles, the selector's Game is destroyed and `PanelSessions::handOver` logs
+  `picker: picked <title>` and makes the session the product (`TitleSession::handOver`): its presents go to the
+  window, the player's pad goes live, it is heard, it holds the control channel and it is no longer a preview.
+  A press still held from the selector stays hidden from the guest until released
+  (`Pad::setPlayerInputSuppressed`). The other titles stay loaded and paused through play, holding their
+  pictures, so the stage is whole again the moment the player returns.
 - **Return is a hand-back.** `session return` or the menu row ends the product's loop; `runSelector` gives
   the session back to the stage (`PanelSessions::takeBack`, `TitleSession::takeBack`): paused where it
   stopped, a silent preview again, its return request answered and the control channel released for the new
-  selector Game. The instances unloaded at the pick get new sessions and boot again. A title that ended its
-  own run (`TitleEnded`) cannot go on and is replaced by a new session.
+  selector Game. A title that ended its own run (`TitleEnded`) cannot go on and is replaced by a new session.
 - **The attract demo is the title's own.** A focused panel runs its title's boot path with no input:
   publisher cards, title screen, and the demo the title itself starts when its title screen times out. A
   panel's Game is a preview (`Game::session.preview()`, set by `TitleSession::boot` for `Role::Panel` and

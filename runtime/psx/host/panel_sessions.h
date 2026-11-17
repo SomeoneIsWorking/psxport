@@ -19,9 +19,9 @@ namespace psx::host {
 class TitleSession;
 struct SessionServices;
 
-// Every title is loaded at once in its own machine. Only the focused one runs; every other one runs silent
-// until it has a picture, then is paused and executes nothing. The picked one is handed to the play loop and
-// comes back on a return, never rebooted.
+// Every title is loaded at once in its own machine and stays loaded. Only the focused one runs; every other
+// one is paused and executes nothing once it holds its stage picture. The picked one is handed to the play loop
+// and comes back on a return, never rebooted.
 class PanelSessions {
 public:
   // One unbooted session per panel of `content`, in panel order. The sessions reference the content's
@@ -36,6 +36,9 @@ public:
   }
   // Boot every panel not booted yet; a refused one is logged once and stays empty.
   void bootAll();
+  // Run every unfocused panel, unpaced and silent, until it holds its stage picture
+  // (TitleSession::holdsStagePicture), so the stage never shows an empty side.
+  void preRoll();
   // The session behind a panel, or null (none, or handed over).
   TitleSession *session(int panel);
   const TitleSession *session(int panel) const;
@@ -58,11 +61,11 @@ public:
   // One step of the focused session. Returns the display fields that step waited for, so the loop paces
   // the frame itself only when the panel did not.
   unsigned long long advance();
-  // The focused session, running, handed over as the product (TitleSession::handOver); every other
-  // instance is unloaded.
+  // The focused session, running, handed over as the product (TitleSession::handOver); the others stay
+  // loaded and paused, holding their pictures.
   std::unique_ptr<TitleSession> handOver();
-  // The product back onto its panel, paused where it stopped; the unloaded panels get new, unbooted
-  // sessions. A title that ended its own run cannot go on and is replaced by an unbooted one too.
+  // The product back onto its panel, paused where it stopped. A title that ended its own run cannot go on and
+  // is replaced by an unbooted one.
   void takeBack(std::unique_ptr<TitleSession> session);
   // What the sessions are doing: `panels: [0]*slug picture steps=… insns=… [1] slug cold ...`.
   std::string summary() const;

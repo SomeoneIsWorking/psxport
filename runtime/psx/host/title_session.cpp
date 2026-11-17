@@ -214,6 +214,10 @@ void TitleSession::step() {
   services_.frameLoop.step(game.core, static_cast<std::uint32_t>(steps_));
   showsTitlePicture_ = showsTitlePicture_ || (pastPrefix && game.core.gpuDevice().displayArea().enabled &&
                                               game.render().presentSerial() != presentsBefore);
+  if (!holdsStagePicture_ && showsTitlePicture_) {
+    const psx::game::GameRuntime &runtime = game.core.runtime;
+    holdsStagePicture_ = runtime.logoTextures().empty() || runtime.showsOwnLogo(game.core);
+  }
   if (product) {
     services_.budget.step();
     game.repl.afterStep();
@@ -284,6 +288,12 @@ void TitleSession::setPlayerInput(bool live) {
   playerInput_ = live;
   if (parts_->booted) {
     parts_->game->pad.setPlayerInputSuppressed(!live);
+  }
+}
+
+void TitleSession::setPreRolling(bool preRolling) {
+  if (parts_->booted) {
+    parts_->game->session.setPreRolling(preRolling);
   }
 }
 

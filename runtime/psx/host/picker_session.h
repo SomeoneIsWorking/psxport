@@ -50,6 +50,8 @@ private:
   // both sides took new titles, starts again from the side the move came from).
   void applyMove(StageSides::Move move, int dir, PickerLayout &layout);
 
+  // Every title presents into its own image at its side's size, never the window.
+  void routePanes(const PickerLayout &layout);
   // The selector's present: each side's current picture built into the host's present image.
   void build(const PickerLayout &layout);
   // Attach the host to the focused panel and detach it from every other.
