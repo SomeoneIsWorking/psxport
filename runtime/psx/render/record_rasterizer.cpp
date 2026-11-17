@@ -441,9 +441,40 @@ std::span<const RecordCanvas> RecordRasterizer::canvasShapes(present::Horizontal
   return {shapes_.data(), canvases_.size()};
 }
 
+bool RecordRasterizer::drewCanvas(const gpu::RecordRasterPlan &plan, std::size_t index) const {
+  if (!plan.shapes[1 + index].empty()) {
+    return true;
+  }
+  const Canvas &canvas = canvases_[index];
+  return !canvas.shape.crop() && std::ranges::any_of(plan.batches, [&](const gpu::RecordBatch &batch) {
+    const RecordRect &dirty = batch.planes[0].dirty;
+    const RecordRect &buffer = canvas.shape.buffer;
+    return dirty.x0 < buffer.x1 && buffer.x0 < dirty.x1 && dirty.y0 < buffer.y1 && buffer.y0 < dirty.y1;
+  });
+}
+
+void RecordRasterizer::copyInteriors(const RecordRect &written, bool inBetween) {
+  for (Canvas &canvas : canvases_) {
+    if (canvas.shape.crop()) {
+      continue;
+    }
+    const RecordRect &buffer = canvas.shape.buffer;
+    const RecordRect inside{std::max(written.x0, buffer.x0),
+                            std::max(written.y0, buffer.y0),
+                            std::min(written.x1, buffer.x1),
+                            std::min(written.y1, buffer.y1)};
+    copyTexture({.from = inBetween ? vram_.inBetween : vram_.image,
+                 .source = inside,
+                 .to = inBetween ? canvas.plane.inBetween : canvas.plane.image,
+                 .toX = inside.x0 - canvas.plane.originX,
+                 .toY = inside.y0 - canvas.plane.originY,
+                 .scale = scale_});
+  }
+}
+
 void RecordRasterizer::adoptWindows(const gpu::RecordRasterPlan &plan, const present::RecordWindows &windows) {
   for (std::size_t i = 0; i < canvases_.size(); i++) {
-    if (!plan.shapes[1 + i].empty()) {
+    if (drewCanvas(plan, i)) {
       setWindow(canvases_[i].shape, windows.drawn);
       canvases_[i].view = windows.view;
     }
@@ -759,8 +790,7 @@ bool RecordRasterizer::drawInBetween(const present::FrameRecord &record, int sca
   }
   stage("record snapshot restore");
   const Canvas *shown = canvasFor(view);
-  const bool drewShown =
-      shown != nullptr && !plan.shapes[1 + static_cast<std::size_t>(shown - canvases_.data())].empty();
+  const bool drewShown = shown != nullptr && drewCanvas(plan, static_cast<std::size_t>(shown - canvases_.data()));
   present(view, true, drewShown ? &windows : nullptr);
   selectField(record);
   return true;
@@ -884,9 +914,12 @@ void RecordRasterizer::capture(const gpu::RecordCapture &capture) {
 }
 
 void RecordRasterizer::execute(const gpu::RecordRasterPlan &plan, bool inBetween) {
+  // The image's pixels the plan wrote so far, which margin canvases take into their buffer columns.
+  RecordRect written{gpu::kVramWidth, gpu::kVramHeight, 0, 0};
   // Only a plan that advances the image declares, so a capture never sees an in-between.
   const auto captureBefore = [&](std::size_t batch) {
     if (plan.capture && plan.capture->beforeBatch == batch) {
+      copyInteriors(written, false);
       capture(*plan.capture);
     }
   };
@@ -1047,7 +1080,11 @@ void RecordRasterizer::execute(const gpu::RecordRasterPlan &plan, bool inBetween
       const gpu::RecordPlaneBatch &range = batch.planes[static_cast<std::size_t>(p)];
       Plane &target = plane(p);
       // The pass drew no farther than the snapshot refresh reaches.
-      if (p == 0) {
+      if (p == 0 && range.dirty.x0 < range.dirty.x1 && range.dirty.y0 < range.dirty.y1) {
+        written = {std::min(written.x0, range.dirty.x0),
+                   std::min(written.y0, range.dirty.y0),
+                   std::max(written.x1, range.dirty.x1),
+                   std::max(written.y1, range.dirty.y1)};
         (inBetween ? target.snapshotDiffers : target.beforeDiffers).add(range.dirty);
         target.inBetweenDiffers.add(range.dirty);
       }
@@ -1061,6 +1098,7 @@ void RecordRasterizer::execute(const gpu::RecordRasterPlan &plan, bool inBetween
     stage("record snapshot");
   }
   captureBefore(plan.batches.size());
+  copyInteriors(written, inBetween);
 }
 
 void RecordRasterizer::drawShapes(SDL_GPURenderPass *pass,

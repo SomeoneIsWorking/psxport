@@ -206,6 +206,10 @@ private:
   Canvas *canvasFor(const RecordView &view);
   // The shapes the planner draws `margins` into, in plane order.
   std::span<const gpu::RecordCanvas> canvasShapes(present::HorizontalMargins margins);
+  // Whether `plan` changed canvas `index`: drew into it, or into the image inside a margin canvas's buffer.
+  bool drewCanvas(const gpu::RecordRasterPlan &plan, std::size_t index) const;
+  // A margin canvas draws only its margins (RecordPlanner); its buffer's columns take the image's pixels `written`.
+  void copyInteriors(const gpu::RecordRect &written, bool inBetween);
   // A canvas `plan` drew into takes its windows.
   void adoptWindows(const gpu::RecordRasterPlan &plan, const present::RecordWindows &windows);
   // The part of plane `index` a record of `margins` can change or show: the canvas windows before and after it.

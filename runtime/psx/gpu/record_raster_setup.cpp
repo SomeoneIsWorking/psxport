@@ -79,7 +79,8 @@ struct PlaneClip {
   int plane = 0;
   Clip clip;
 };
-using PlaneClips = FixedList<PlaneClip, kRecordPlanes>;
+// The image, then each margin canvas's two margins.
+using PlaneClips = FixedList<PlaneClip, 1 + 2 * kRecordMaxCanvases>;
 
 // gpu_polygon_sub.c Calc_UVOffsets_Adjust_Verts, in exact integer arithmetic.
 void adjustUv(TriVertex vertices[3], int one, bool &offU, bool &offV) {
@@ -686,23 +687,22 @@ PlaneClips RecordPlanner::Builder::planeClips(const RecordDrawState &state) cons
     return clips;
   }
   clips.push_back({0, area});
+  // A margin canvas draws only its margins: its buffer's columns are the image's, copied in after the record
+  // (RecordRasterizer::copyInteriors), so each pixel is shaded once.
   for (std::size_t i = 0; i < canvases_.size(); i++) {
     const RecordCanvas &canvas = canvases_[i];
-    if (canvas.crop()) {
+    if (canvas.crop() || !drawAreaSpansBuffer(state, canvas.buffer)) {
       continue;
     }
     const RecordRect &buffer = canvas.buffer;
-    const bool drawsBuffer = drawAreaSpansBuffer(state, buffer);
-    Clip clip{std::max(area.x0, buffer.x0),
-              std::max(area.y0, buffer.y0),
-              std::min(area.x1, buffer.x1 - 1),
-              std::min(area.y1, buffer.y1 - 1)};
-    if (drawsBuffer) {
-      clip.x0 = buffer.x0 - canvas.left;
-      clip.x1 = buffer.x1 - 1 + canvas.right;
-    }
-    if (clip.x0 <= clip.x1 && clip.y0 <= clip.y1) {
-      clips.push_back(PlaneClip{1 + static_cast<int>(i), clip});
+    const int y0 = std::max(area.y0, buffer.y0);
+    const int y1 = std::min(area.y1, buffer.y1 - 1);
+    const Clip margins[] = {{buffer.x0 - canvas.left, y0, buffer.x0 - 1, y1},
+                            {buffer.x1, y0, buffer.x1 - 1 + canvas.right, y1}};
+    for (const Clip &clip : margins) {
+      if (clip.x0 <= clip.x1 && clip.y0 <= clip.y1) {
+        clips.push_back(PlaneClip{1 + static_cast<int>(i), clip});
+      }
     }
   }
   return clips;
@@ -937,28 +937,12 @@ void RecordPlanner::Builder::emit(const RecordRect &written, const RecordShape &
   reaches_ = true;
 }
 
+// A margin canvas's buffer columns come from the image (planeClips), so a transfer writes the image alone.
 void RecordPlanner::Builder::emitTransferRects(const WrappedRects &rects) {
   target(0);
   for (const RecordRect &rect : rects) {
     emit(rect);
   }
-  for (std::size_t i = 0; i < canvases_.size(); i++) {
-    if (canvases_[i].crop()) {
-      continue;
-    }
-    const RecordRect &buffer = canvases_[i].buffer;
-    target(1 + static_cast<int>(i));
-    for (const RecordRect &rect : rects) {
-      const RecordRect inside{std::max(rect.x0, buffer.x0),
-                              std::max(rect.y0, buffer.y0),
-                              std::min(rect.x1, buffer.x1),
-                              std::min(rect.y1, buffer.y1)};
-      if (inside.x0 < inside.x1 && inside.y0 < inside.y1) {
-        emit(inside);
-      }
-    }
-  }
-  target(0);
 }
 
 void RecordPlanner::Builder::emitCropTransferRects(const WrappedRects &rects, bool ui) {
@@ -987,29 +971,8 @@ void RecordPlanner::Builder::emitCropTransferRects(const WrappedRects &rects, bo
 }
 
 void RecordPlanner::Builder::emitPlacedTransfer(const RecordRect &written, const RecordShape &quad) {
-  const int s = plan_.scale;
   target(0);
   emit(written, quad);
-  for (std::size_t i = 0; i < canvases_.size(); i++) {
-    if (canvases_[i].crop()) {
-      continue;
-    }
-    const RecordRect &buffer = canvases_[i].buffer;
-    target(1 + static_cast<int>(i));
-    const RecordRect inside{std::max(written.x0, buffer.x0),
-                            std::max(written.y0, buffer.y0),
-                            std::min(written.x1, buffer.x1),
-                            std::min(written.y1, buffer.y1)};
-    if (inside.x0 < inside.x1 && inside.y0 < inside.y1) {
-      RecordShape clipped = quad;
-      clipped.x0 = std::max(quad.x0, buffer.x0 * s);
-      clipped.y0 = std::max(quad.y0, buffer.y0 * s);
-      clipped.x1 = std::min(quad.x1, buffer.x1 * s);
-      clipped.y1 = std::min(quad.y1, buffer.y1 * s);
-      emit(inside, clipped);
-    }
-  }
-  target(0);
 }
 
 void RecordPlanner::Builder::commit(const RecordOp &op, bool readsDestination, const RecordOp *plane) {
