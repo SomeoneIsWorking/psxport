@@ -8,6 +8,7 @@
 // RECORD_OPAQUE: only ops that never discard (see its main).
 // RECORD_LEAN: only triangles, sprites, line pixels and fills, texturing from VRAM alone (no read-back or outline
 // text); the smaller shader keeps more pixels in flight, and RecordRasterizer runs every other op through the full one.
+// RECORD_TRIANGLE, RECORD_SPRITE (with RECORD_LEAN): a lean shader for that kind of op alone.
 // RECORD_DEPTH_MARK: a depth group's or Model's mark, only the polygon's coverage and its moved-back depth (see main).
 // Every other depth-tested draw tests and writes the 1/z record.vert interpolates, so it keeps early depth testing.
 
@@ -17,6 +18,7 @@ layout(location = 2) noperspective in vec2 v_uv;     // its texel interpolants
 layout(location = 3) flat in uint v_texels;          // the texels it samples (RecordShape::texels)
 layout(location = 4) flat in uvec4 v_op;     // its op's kOpFlags, kOpColour and kOpClut (record.vert)
 layout(location = 5) flat in uvec4 v_window; // its op's texture window: kOpWindowXAnd, XAdd, YAnd, YAdd
+layout(location = 6) flat in ivec4 v_sprite; // a sprite's texel base and place (record.vert)
 layout(location = 0) out vec4 o_col;
 layout(set = 2, binding = 0) uniform sampler2D u_target; // the target plane before this batch
 #ifdef RECORD_FETCH
@@ -125,13 +127,21 @@ uint outlineTexel(uint u, uint v, uint fu, uint fv, uint flags) {
     return clutEntry(v_op.z + index);
 }
 
-uint pack(int r, int g, int b) { return 0x8000u | uint(r >> 3) | (uint(g >> 3) << 5) | (uint(b >> 3) << 10); }
+// Colour as whole channel values 0..255 in floats. Each step below is exact: the products stay under 2^24 and every
+// scale is a power of two, so these are gpu.c's integer shifts and clamps bit for bit.
+uint packChannels(uvec3 c) { return c.r | (c.g << 5) | (c.b << 10); }
 
-uint channel(int value) { return uint(clamp(value >> 3, 0, 31)); }
+uint pack(vec3 rgb) { return 0x8000u | packChannels(uvec3(rgb * 0.125)); }
 
-uint modulate(uint t, int r, int g, int b) {
-    return (t & 0x8000u) | channel(int(((t & 0x1Fu) * uint(r)) >> 4)) |
-           (channel(int(((t & 0x3E0u) * uint(g)) >> 9)) << 5) | (channel(int(((t & 0x7C00u) * uint(b)) >> 14)) << 10);
+// The gouraud colour at this pixel: gpu.c's whole part of each interpolant, clamped.
+vec3 gouraud() { return clamp(floor(v_colour), vec3(0.0), vec3(255.0)); }
+
+vec3 flatColour(uint colour) { return vec3(uvec3(colour, colour >> 8, colour >> 16) & 0xFFu); }
+
+// gpu.c: each 5-bit texel channel times the colour, >> 7, at most 31.
+uint modulate(uint t, vec3 rgb) {
+    vec3 t5 = vec3((uvec3(t) >> uvec3(0u, 5u, 10u)) & 0x1Fu);
+    return (t & 0x8000u) | packChannels(uvec3(min(t5 * rgb * (1.0 / 128.0), vec3(31.0))));
 }
 
 // gpu_common.h PlotPixelBlend.
@@ -182,12 +192,11 @@ void main() {
     }
     uint fore;
     if (kind == kRecordOpKindLinePixel) {
-        fore = pack(int(v_info.y & 0xFFu), int((v_info.y >> 8) & 0xFFu), int((v_info.y >> 16) & 0xFFu));
+        fore = pack(flatColour(v_info.y));
     } else if (kind == kRecordOpKindTriangle) {
-        ivec3 rgb = clamp(ivec3(floor(v_colour)), ivec3(0), ivec3(255));
-        fore = pack(rgb.r, rgb.g, rgb.b);
+        fore = pack(gouraud());
     } else {
-        fore = pack(int(v_op.y & 0xFFu), int((v_op.y >> 8) & 0xFFu), int((v_op.y >> 16) & 0xFFu));
+        fore = pack(flatColour(v_op.y));
     }
     if ((flags & kOpSemi) != 0u) {
 #ifdef RECORD_FETCH
@@ -235,10 +244,12 @@ void main() {
     uint maskSet = (flags & kOpMaskSet) != 0u ? 0x8000u : 0u;
     int vramWidth = kVramWidth * S;
     int vramHeight = kVramHeight * S;
+#if !defined(RECORD_TRIANGLE) && !defined(RECORD_SPRITE)
     if (kind == kRecordOpKindFill) {
         write(v_op.y);
         return;
     }
+#endif
 #ifndef RECORD_LEAN
     if (kind == kRecordOpKindCopy) {
         int rx = wrap(p.x - int(word(kOpOriginX)) * S, vramWidth);
@@ -266,25 +277,28 @@ void main() {
     }
 #endif
     bool textured = (flags & kOpTextured) != 0u;
-    uint colour = v_op.y;
-    int r = int(colour & 0xFFu);
-    int g = int((colour >> 8) & 0xFFu);
-    int b = int((colour >> 16) & 0xFFu);
     uint fore;
+#if !defined(RECORD_TRIANGLE) && !defined(RECORD_SPRITE)
     if (kind == kRecordOpKindLinePixel) {
-        fore = pack(int(v_info.y & 0xFFu), int((v_info.y >> 8) & 0xFFu), int((v_info.y >> 16) & 0xFFu));
-    } else {
+        fore = pack(flatColour(v_info.y));
+    } else
+#endif
+    {
+        vec3 rgb;
         uint u = 0u;
         uint v = 0u;
         uint fu = 0u;
         uint fv = 0u;
+#if defined(RECORD_TRIANGLE)
+        {
+#elif defined(RECORD_SPRITE)
+        if (false) {
+#else
         if (kind == kRecordOpKindTriangle) {
+#endif
             // gpu.c takes the whole part of each 8.24 interpolant, u and v mod 256, and the fraction's top byte picks
             // the target pixel inside a texel's scaled block.
-            ivec3 rgb = clamp(ivec3(floor(v_colour)), ivec3(0), ivec3(255));
-            r = rgb.r;
-            g = rgb.g;
-            b = rgb.b;
+            rgb = gouraud();
             uvec4 limits = (uvec4(v_texels) >> uvec4(0u, 8u, 16u, 24u)) & 0xFFu;
             vec2 uv = clamp(v_uv, vec2(limits.xz), vec2(limits.yw) + 255.0 / 256.0);
             vec2 whole = floor(uv);
@@ -292,20 +306,24 @@ void main() {
             v = uint(int(whole.y)) & 0xFFu;
             fu = min(uint((uv.x - whole.x) * 256.0), 255u);
             fv = min(uint((uv.y - whole.y) * 256.0), 255u);
-        } else {
+        }
+#if !defined(RECORD_TRIANGLE)
+        else {
+            rgb = flatColour(v_op.y);
             int du = (flags & kOpFlipX) != 0u ? -1 : 1;
             int dv = (flags & kOpFlipY) != 0u ? -1 : 1;
             // The native pixel of the sprite this fragment shows, the sprite moved by its place.
-            ivec2 shift = ivec2(int(word(kOpShiftX)), int(word(kOpShiftY)));
+            ivec2 shift = v_sprite.zw;
             ivec2 m = (p - shift + kVramWidth * S) / S - kVramWidth;
-            u = uint(int(word(kOpSourceX)) + (m.x - int(word(kOpOriginX))) * du) & 0xFFu;
-            v = uint(int(word(kOpSourceY)) + (m.y - int(word(kOpOriginY))) * dv) & 0xFFu;
+            u = uint(v_sprite.x + m.x * du) & 0xFFu;
+            v = uint(v_sprite.y + m.y * dv) & 0xFFu;
             // A sprite's texel spans its native pixel: the target pixel inside it, mirrored when flipped.
             ivec2 inside = p - shift - m * S;
             inside = ivec2(du < 0 ? S - 1 - inside.x : inside.x, dv < 0 ? S - 1 - inside.y : inside.y);
             fu = uint((inside.x * 256 + 128) / S);
             fv = uint((inside.y * 256 + 128) / S);
         }
+#endif
         if (textured) {
 #ifdef RECORD_LEAN
             fore = texel(u, v, fu, fv, flags);
@@ -322,10 +340,10 @@ void main() {
                 discard;
             }
             if ((flags & kOpModulate) != 0u) {
-                fore = modulate(fore, r, g, b);
+                fore = modulate(fore, rgb);
             }
         } else {
-            fore = pack(r, g, b);
+            fore = pack(rgb);
         }
     }
     if ((flags & kOpSemi) != 0u && (fore & 0x8000u) != 0u) {

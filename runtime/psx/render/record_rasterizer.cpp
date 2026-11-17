@@ -22,6 +22,10 @@ constexpr ShaderCode kRecordLeanFragment{
     spv_g_record_lean_frag, spv_g_record_lean_frag_len, {5, 1, 3}, PSXPORT_MSL(record_lean_frag)};
 constexpr ShaderCode kRecordOpaqueFragment{
     spv_g_record_opaque_frag, spv_g_record_opaque_frag_len, {5, 1, 3}, PSXPORT_MSL(record_opaque_frag)};
+constexpr ShaderCode kRecordTriangleFragment{
+    spv_g_record_triangle_frag, spv_g_record_triangle_frag_len, {5, 1, 3}, PSXPORT_MSL(record_triangle_frag)};
+constexpr ShaderCode kRecordSpriteFragment{
+    spv_g_record_sprite_frag, spv_g_record_sprite_frag_len, {5, 1, 3}, PSXPORT_MSL(record_sprite_frag)};
 // A mark: coverage and the moved-back depth alone, for a depth group or Model draw that writes no colour where the
 // test draw already passed (stencil), so it never samples a texel or reads the target; both pipeline sets share it.
 constexpr ShaderCode kRecordDepthMarkFragment{
@@ -31,6 +35,8 @@ constexpr ShaderCode kRecordDepthMarkFragment{
 constexpr ShaderCode kRecordFetchFragment{nullptr, 0, {5, 1, 3}, PSXPORT_MSL(record_fetch_frag)};
 constexpr ShaderCode kRecordFetchLeanFragment{nullptr, 0, {5, 1, 3}, PSXPORT_MSL(record_fetch_lean_frag)};
 constexpr ShaderCode kRecordFetchOpaqueFragment{nullptr, 0, {5, 1, 3}, PSXPORT_MSL(record_fetch_opaque_frag)};
+constexpr ShaderCode kRecordFetchTriangleFragment{nullptr, 0, {5, 1, 3}, PSXPORT_MSL(record_fetch_triangle_frag)};
+constexpr ShaderCode kRecordFetchSpriteFragment{nullptr, 0, {5, 1, 3}, PSXPORT_MSL(record_fetch_sprite_frag)};
 #endif
 
 // The record fragment shader `device` draws with: the in-pass reading one where it fetches its target. Depth-tested
@@ -38,15 +44,35 @@ constexpr ShaderCode kRecordFetchOpaqueFragment{nullptr, 0, {5, 1, 3}, PSXPORT_M
 const ShaderCode &recordFragment(bool fetch, RecordShader shader) {
 #if defined(PSXPORT_GPU_SHADERS_MSL)
   if (fetch) {
-    return shader == RecordShader::Opaque ? kRecordFetchOpaqueFragment
-           : shader == RecordShader::Lean ? kRecordFetchLeanFragment
-                                          : kRecordFetchFragment;
+    switch (shader) {
+    case RecordShader::Opaque:
+      return kRecordFetchOpaqueFragment;
+    case RecordShader::Triangle:
+      return kRecordFetchTriangleFragment;
+    case RecordShader::Sprite:
+      return kRecordFetchSpriteFragment;
+    case RecordShader::Lean:
+      return kRecordFetchLeanFragment;
+    case RecordShader::Full:
+      break;
+    }
+    return kRecordFetchFragment;
   }
 #endif
   (void)fetch;
-  return shader == RecordShader::Opaque ? kRecordOpaqueFragment
-         : shader == RecordShader::Lean ? kRecordLeanFragment
-                                        : kRecordFragment;
+  switch (shader) {
+  case RecordShader::Opaque:
+    return kRecordOpaqueFragment;
+  case RecordShader::Triangle:
+    return kRecordTriangleFragment;
+  case RecordShader::Sprite:
+    return kRecordSpriteFragment;
+  case RecordShader::Lean:
+    return kRecordLeanFragment;
+  case RecordShader::Full:
+    break;
+  }
+  return kRecordFragment;
 }
 constexpr std::uint32_t kDepthRunFlags =
     gpu::kOpDepthTest | gpu::kOpDepthObject | gpu::kOpDepthModel | gpu::kOpDepthGroup;
@@ -158,7 +184,7 @@ bool readsTarget(const gpu::RecordRasterPlan &plan, const gpu::RecordShape &shap
 
 // The record.frag variant the op needs: the full one for a copy, an upload, or texels from the read-back or the outline
 // atlas; the opaque one for an op that can never discard (no texel that may be transparent, no mask test, no skipped
-// rows); the lean one for the rest.
+// rows); the triangle or sprite one for the other triangles and sprites; the lean one for the rest.
 RecordShader recordShader(const gpu::RecordRasterPlan &plan, const gpu::RecordShape &shape) {
   const std::uint32_t flags = plan.ops[shape.op][gpu::kOpFlags];
   const auto kind = static_cast<gpu::RecordOpKind>(flags & gpu::kOpKindMask);
@@ -166,8 +192,12 @@ RecordShader recordShader(const gpu::RecordRasterPlan &plan, const gpu::RecordSh
       (flags & (gpu::kOpReadBack | gpu::kOpOutline)) != 0u) {
     return RecordShader::Full;
   }
-  return (flags & (gpu::kOpTextured | gpu::kOpMaskCheck | gpu::kOpSkipRows)) == 0u ? RecordShader::Opaque
-                                                                                    : RecordShader::Lean;
+  if ((flags & (gpu::kOpTextured | gpu::kOpMaskCheck | gpu::kOpSkipRows)) == 0u) {
+    return RecordShader::Opaque;
+  }
+  return kind == gpu::RecordOpKind::Triangle ? RecordShader::Triangle
+         : kind == gpu::RecordOpKind::Sprite ? RecordShader::Sprite
+                                             : RecordShader::Lean;
 }
 
 struct DepthRun {

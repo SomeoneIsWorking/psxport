@@ -43,9 +43,11 @@ struct RecordView {
 };
 
 // The record.frag variant an op draws through: Opaque (RECORD_OPAQUE) for an op that never discards, so Apple GPUs keep
-// hidden-surface removal; Lean (RECORD_LEAN) for the other triangles, sprites, line pixels and fills; Full for the rest.
-enum class RecordShader : std::uint8_t { Opaque, Lean, Full };
-inline constexpr std::size_t kRecordShaders = 3;
+// hidden-surface removal; Triangle and Sprite (RECORD_LEAN with RECORD_TRIANGLE, RECORD_SPRITE) for the other triangles
+// and sprites, each shader that kind's code alone; Lean (RECORD_LEAN) for the other line pixels and fills; Full for the
+// rest.
+enum class RecordShader : std::uint8_t { Opaque, Triangle, Sprite, Lean, Full };
+inline constexpr std::size_t kRecordShaders = 5;
 
 // The image is VRAM at an integer scale, RG8 holding 1555 halfwords. Each record applies on top of
 // the one before it; when that chain breaks, the device's VRAM is uploaded instead. With a reach,

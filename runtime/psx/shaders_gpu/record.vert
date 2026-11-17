@@ -21,6 +21,9 @@ layout(location = 3) flat out uint v_texels;
 // The op words every fragment reads, read here once a vertex rather than from the buffer every fragment.
 layout(location = 4) flat out uvec4 v_op;     // kOpFlags, kOpColour, kOpClut
 layout(location = 5) flat out uvec4 v_window; // kOpWindowXAnd, XAdd, YAnd, YAdd
+// A sprite's texel at native pixel m: (x + m.x * du, y + m.y * dv) mod 256, du and dv -1 when flipped; zw its place
+// past its whole pixel (kOpShiftX, kOpShiftY), target pixels.
+layout(location = 6) flat out ivec4 v_sprite;
 void main() {
     Shape q = shapes[gl_VertexIndex / 6];
     int corner = gl_VertexIndex % 6;
@@ -49,4 +52,10 @@ void main() {
     v_op = uvec4(ops[at + kOpFlags], ops[at + kOpColour], ops[at + kOpClut], 0u);
     v_window = uvec4(ops[at + kOpWindowXAnd], ops[at + kOpWindowXAdd], ops[at + kOpWindowYAnd], ops[at + kOpWindowYAdd]);
     v_texels = q.texels.x;
+    int du = (v_op.x & kOpFlipX) != 0u ? -1 : 1;
+    int dv = (v_op.x & kOpFlipY) != 0u ? -1 : 1;
+    v_sprite = ivec4(int(ops[at + kOpSourceX]) - int(ops[at + kOpOriginX]) * du,
+                     int(ops[at + kOpSourceY]) - int(ops[at + kOpOriginY]) * dv,
+                     int(ops[at + kOpShiftX]),
+                     int(ops[at + kOpShiftY]));
 }

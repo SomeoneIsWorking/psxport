@@ -48,9 +48,13 @@ SHADERS = (
     Shader("record.frag", "spv_g_record_depth_mark_frag", ("RECORD_DEPTH_MARK",)),
     Shader("record.frag", "spv_g_record_lean_frag", ("RECORD_LEAN",)),
     Shader("record.frag", "spv_g_record_opaque_frag", ("RECORD_OPAQUE",)),
+    Shader("record.frag", "spv_g_record_triangle_frag", ("RECORD_LEAN", "RECORD_TRIANGLE")),
+    Shader("record.frag", "spv_g_record_sprite_frag", ("RECORD_LEAN", "RECORD_SPRITE")),
     Shader("record.frag", "spv_g_record_fetch_frag", ("RECORD_FETCH",), msl_only=True),
     Shader("record.frag", "spv_g_record_fetch_lean_frag", ("RECORD_FETCH", "RECORD_LEAN"), msl_only=True),
     Shader("record.frag", "spv_g_record_fetch_opaque_frag", ("RECORD_FETCH", "RECORD_OPAQUE"), msl_only=True),
+    Shader("record.frag", "spv_g_record_fetch_triangle_frag", ("RECORD_FETCH", "RECORD_LEAN", "RECORD_TRIANGLE"), msl_only=True),
+    Shader("record.frag", "spv_g_record_fetch_sprite_frag", ("RECORD_FETCH", "RECORD_LEAN", "RECORD_SPRITE"), msl_only=True),
 )
 
 # The Metal Shading Language version the translated shaders target: framebuffer fetch on macOS needs 2.3.
