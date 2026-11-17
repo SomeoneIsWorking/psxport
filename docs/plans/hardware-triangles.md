@@ -105,7 +105,7 @@ stages it did not touch):
 | b97b60d | lean `record.frag` (no copy, upload, read-back or outline paths) for the runs that need none | 17.5 / 17.4 | 10.8 / 10.8 |
 | be373cf | margin canvases shade only their margins; their buffer columns come from the image (shaded 58.7 → 34.1 Mpx) | 16.1 / 16.2 | 8.1 / 8.1 |
 | 3a1959f | a margin canvas's before, in-between and snapshot copies take only its margin strips | 14.4 / 14.4 | 8.0 / 8.0 |
-| (opaque) | ops that never discard (fills, untextured, no mask test or skipped rows) through a `record.frag` with no `discard`, so the GPU keeps hidden-surface removal | 13.0 / 13.0 | 6.3 / 6.1 |
+| 11cd44f | ops that never discard (fills, untextured, no mask test or skipped rows) through a `record.frag` with no `discard`, so the GPU keeps hidden-surface removal | 13.0 / 13.0 | 6.3 / 6.1 |
 
 p10 went 16.9 → 10.3. Hardware depth was level on Spyro (it draws back to front, so early depth testing finds
 little to reject) but leaves the test draws as plain pipelines. Copied pixels went 72 → 46 Mpx a present. The
