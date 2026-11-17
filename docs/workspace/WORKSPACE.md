@@ -149,6 +149,9 @@ gamescope session's (`ls /run/user/1000/wayland-*`). A clean build of one title 
   repeated present (the 59.82 Hz NTSC field pacing on a 60.00 Hz display, a load hold) is not judder. The unmapped window
   never scans out, so simulate the player's 60.00 Hz display from the `presentseq` times (each vblank shows the
   newest present before it) and judge the motion across the shown sequence.
+- A picture-identity check ("byte-identical", "unchanged") compares at least two runs of the same binary, and
+  they must match each other as well as the reference: one matching run hides run-to-run differences (missed
+  on 2026-11-17 for 33c6cc1's lazy snapshots, whose pictures differed in bands between runs).
 - Only pacing needs real time on a quiet host. Composition, identity and halfway motion are judged unpaced
   (`PSXPORT_NOPACE=1`, same ires and sink) at any load.
 - Cost is measured as the `perf-units` skill says. The meter is `PSXPORT_DEBUG=perf`: the run-end `[perf] cpu …`
