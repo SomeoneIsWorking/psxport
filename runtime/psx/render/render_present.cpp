@@ -261,18 +261,19 @@ void RenderState::showPresentImage(SDL_GPUCommandBuffer *cmd) {
   Uint32 width = 0;
   Uint32 height = 0;
   SDL_GPUTexture *swapchain = acquireSink(sink_, cmd, device_.window().window(), &width, &height);
-  if (swapchain == nullptr) {
-    device_.submit(cmd, "show");
-    takeHostEvents();
-    return;
+  if (swapchain != nullptr) {
+    recordScreen(cmd, swapchain, {static_cast<int>(width), static_cast<int>(height)});
   }
-  recordScreen(cmd, swapchain, {static_cast<int>(width), static_cast<int>(height)});
   device_.submit(cmd, "show");
+  // GPU time is charged whether or not the window gave an image: an unmapped window on macOS never does, and
+  // agent meter runs are hidden, so returning early here left `gputime` silently empty there.
   if (device_.timingSubmits()) {
     game_.perf.presentGpuTime(device_.takeSubmitTimes());
   }
   device_.timeSubmits(game_.perf.counting() && static_cast<bool>(gpuTime_));
-  game_.perf.presented(std::chrono::steady_clock::now(), device_.window().refreshPeriodMs());
+  if (swapchain != nullptr) {
+    game_.perf.presented(std::chrono::steady_clock::now(), device_.window().refreshPeriodMs());
+  }
   takeHostEvents();
 }
 
