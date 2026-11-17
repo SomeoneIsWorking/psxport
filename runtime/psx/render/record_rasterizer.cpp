@@ -492,6 +492,18 @@ RecordRect RecordRasterizer::copiedRect(int index, present::HorizontalMargins ma
   return {std::min(now.x0, then.x0), 0, std::max(now.x1, then.x1), target.height};
 }
 
+std::array<RecordRect, 2> RecordRasterizer::copiedStrips(int index, present::HorizontalMargins margins) {
+  const RecordRect copied = copiedRect(index, margins);
+  const Canvas &canvas = canvases_[static_cast<std::size_t>(index - 1)];
+  if (canvas.shape.crop()) {
+    return {copied, RecordRect{}};
+  }
+  const int x0 = canvas.shape.buffer.x0 - canvas.plane.originX;
+  const int x1 = canvas.shape.buffer.x1 - canvas.plane.originX;
+  return {RecordRect{copied.x0, copied.y0, std::min(copied.x1, x0), copied.y1},
+          RecordRect{std::max(copied.x0, x1), copied.y0, copied.x1, copied.y1}};
+}
+
 RecordRasterizer::Plane &RecordRasterizer::plane(int index) {
   return index == 0 ? vram_ : canvases_[static_cast<std::size_t>(index - 1)].plane;
 }
@@ -692,8 +704,10 @@ void RecordRasterizer::apply(const present::FrameRecord &record) {
   vram_.beforeDiffers.clear();
   for (int index = 1; index <= static_cast<int>(canvases_.size()); index++) {
     const Plane &target = plane(index);
-    const RecordRect copied = copiedRect(index, record.windows().drawn);
-    copyTexture({.from = target.image, .source = copied, .to = target.before, .toX = copied.x0, .scale = target.scale});
+    for (const RecordRect &copied : copiedStrips(index, record.windows().drawn)) {
+      copyTexture(
+          {.from = target.image, .source = copied, .to = target.before, .toX = copied.x0, .scale = target.scale});
+    }
   }
   stage("record keep before");
   const gpu::RecordRasterPlan &plan =
@@ -765,15 +779,16 @@ bool RecordRasterizer::drawInBetween(const present::FrameRecord &record, int sca
   }
   for (int index = 1; index <= static_cast<int>(canvases_.size()); index++) {
     const Plane &target = plane(index);
-    const RecordRect copied = copiedRect(index, margins);
-    copyTexture({.from = onImage ? target.image : target.before,
-                 .source = copied,
-                 .to = target.inBetween,
-                 .toX = copied.x0,
-                 .scale = target.scale});
-    if (!onImage) {
-      copyTexture(
-          {.from = target.before, .source = copied, .to = target.snapshot, .toX = copied.x0, .scale = target.scale});
+    for (const RecordRect &copied : copiedStrips(index, margins)) {
+      copyTexture({.from = onImage ? target.image : target.before,
+                   .source = copied,
+                   .to = target.inBetween,
+                   .toX = copied.x0,
+                   .scale = target.scale});
+      if (!onImage) {
+        copyTexture(
+            {.from = target.before, .source = copied, .to = target.snapshot, .toX = copied.x0, .scale = target.scale});
+      }
     }
   }
   stage("record in-between seed");
@@ -784,9 +799,10 @@ bool RecordRasterizer::drawInBetween(const present::FrameRecord &record, int sca
   vram_.snapshotDiffers.clear();
   for (int index = 1; index <= static_cast<int>(canvases_.size()); index++) {
     const Plane &target = plane(index);
-    const RecordRect copied = copiedRect(index, margins);
-    copyTexture(
-        {.from = target.image, .source = copied, .to = target.snapshot, .toX = copied.x0, .scale = target.scale});
+    for (const RecordRect &copied : copiedStrips(index, margins)) {
+      copyTexture(
+          {.from = target.image, .source = copied, .to = target.snapshot, .toX = copied.x0, .scale = target.scale});
+    }
   }
   stage("record snapshot restore");
   const Canvas *shown = canvasFor(view);
@@ -1098,7 +1114,8 @@ void RecordRasterizer::execute(const gpu::RecordRasterPlan &plan, bool inBetween
     stage("record snapshot");
   }
   captureBefore(plan.batches.size());
-  copyInteriors(written, inBetween);
+  // An in-between canvas is seeded in its margins alone, so it takes the whole of its buffer's columns.
+  copyInteriors(inBetween ? RecordRect{0, 0, gpu::kVramWidth, gpu::kVramHeight} : written, inBetween);
 }
 
 void RecordRasterizer::drawShapes(SDL_GPURenderPass *pass,

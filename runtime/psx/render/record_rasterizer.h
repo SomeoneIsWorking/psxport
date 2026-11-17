@@ -214,6 +214,9 @@ private:
   void adoptWindows(const gpu::RecordRasterPlan &plan, const present::RecordWindows &windows);
   // The part of plane `index` a record of `margins` can change or show: the canvas windows before and after it.
   gpu::RecordRect copiedRect(int index, present::HorizontalMargins margins);
+  // copiedRect less a margin canvas's buffer columns, which its before, in-between and snapshot copies never read:
+  // only its margins are drawn, and its buffer's columns come from the image's own copies (copyInteriors).
+  std::array<gpu::RecordRect, 2> copiedStrips(int index, present::HorizontalMargins margins);
   Plane &plane(int index);
   // Shows the canvas's windows, or `windows` for an in-between that drew the canvas.
   void present(const RecordView &view, bool inBetween, const present::RecordWindows *windows);

@@ -502,13 +502,17 @@ be filled is therefore pillarboxed in place: the picture moves on the sink only 
 the drawn windows before and after the record (Mega Man X4 at a camera bound and at a far layer's map end,
 psx-mega-man-x4 issue 0044). Each record entry is planned once per plane:
 
+- A canvas is shaded only in its margins. Its buffer's columns are the image's: `RecordRasterizer::copyInteriors` copies
+  the image's written pixels in after each record and before a capture of the canvas, and the canvas's before,
+  in-between and snapshot copies take only its margin strips (`copiedStrips`). So each pixel is shaded once.
 - A primitive whose draw area spans the buffer's columns (x range equal, rows inside the buffer; a title may inset its rows) draws into the
-  canvas with its x clip widened to the record's window. Any other primitive lands in the canvas only inside the buffer.
+  canvas's margins, its x clip widened to the record's window (`planeClips`, two clips, one a side). Any other
+  primitive reaches the canvas only through the image.
   Inside VRAM's columns a canvas plots as `gpu.c` does; past them (left of 0, right of 1023) it plots the
   unwrapped position, where the device's 11-bit x would wrap, so a buffer at column 704 keeps its right margin
   (`coveredColumns`, `record.frag`, `addSprite`, `addLine`; psx-tomba Tomba 1 field foliage).
 - A fill spanning the buffer's columns also fills the margins on its rows. So does a flat untextured rectangle (a sprite, an axis-aligned quad, or a horizontal or vertical line) reaching both edges of the buffer's columns, such as a screen fade (`addCanvasMargins`, psx-spyro issue 0199); the margin continues from the rectangle's own edge. A producer quad placed between rows (an in-between letterbox edge) keeps its rows' fraction, so the margins end on the same scaled row as the centre.
-- Copies and uploads land in the buffer region 1:1.
+- Copies, uploads and fills land in the image, and so in the buffer's columns 1:1.
 - **Render-to-texture.** Textures, CLUTs and copy sources read the VRAM image, which stays exactly the
   device's. A draw into the display buffer that the guest later samples is read at its 4:3 extent,
   except through a read-back texture.
