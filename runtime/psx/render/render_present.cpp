@@ -168,8 +168,9 @@ void RenderState::buildDisplay(gpu::VramRect display, present::ScanoutWindow win
   bringUp();
   latchDisplay(display);
   const Core &core = game_.core;
-  const int width = present::presentDisplayWidth(
-      present::widePresentation(core), present::widePresentationWidth(core), display.width);
+  // A 24bpp scanout is VRAM bytes at the display's own width; only the record picture widens.
+  const bool wide = present::widePresentation(core) && !game_.core.gpuDevice().displayArea().depth24;
+  const int width = present::presentDisplayWidth(wide, present::widePresentationWidth(core), display.width);
   lastDisplay_ = {display.x, display.y, width, display.height};
   if (dropsInBetween()) {
     return;
