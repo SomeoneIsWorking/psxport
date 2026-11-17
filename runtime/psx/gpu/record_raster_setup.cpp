@@ -23,6 +23,9 @@ using present::RecordDrawState;
 
 // Two's-complement wrap of `value` into [-half, half).
 std::int64_t wrapSigned(std::int64_t value, std::int64_t half) {
+  if (value >= -half && value < half) {
+    return value;
+  }
   const std::int64_t range = half * 2;
   std::int64_t wrapped = (value + half) % range;
   if (wrapped < 0) {
@@ -222,7 +225,7 @@ PlottedSpan plottedSpan(const TrianglePart &part, int row) {
 // unwrapped columns, which lie past VRAM's.
 RecordRect coveredColumns(const TrianglePart &part, RecordRect area, bool canvas) {
   const PlottedSpan a = plottedSpan(part, area.y0);
-  const PlottedSpan b = plottedSpan(part, area.y1 - 1);
+  const PlottedSpan b = area.y1 - 1 == area.y0 ? a : plottedSpan(part, area.y1 - 1);
   if (a.shift == b.shift) {
     std::int64_t x0 = std::min(a.x0, b.x0);
     std::int64_t x1 = std::max(a.x1, b.x1);
