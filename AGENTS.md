@@ -2,7 +2,7 @@
 
 This file is the canonical project-local authority for psxport. `CLAUDE.md` is a discovery symlink;
 never edit it separately. The portfolio-wide native-port methodology lives in the shared
-`dynarec-*` skills (named for their history; on PSX the guest runs on an interpreter). Local
+`dynarec-*` skills (on PSX the guest runs on psxport's own recompiler, with the interpreter as reference). Local
 migration requirements, intent, factual capability state, ownership, and atomic work live in
 `docs/migration.md`, `docs/project-goals.md`, `docs/project-state.md`, `docs/codemap.md`, and
 `docs/issues/` respectively.
@@ -14,18 +14,25 @@ Before framework work, read `docs/workspace/PROTOCOL.md` (short), `docs/codemap.
 psxport's intended product is a game-agnostic native/interpreter hybrid:
 
 - verified native functions and subsystems execute in host code;
-- every remaining guest instruction executes on demand on psxport's own R3000 interpreter
-  (`runtime/cpu/guest_executor.*`); and
+- every remaining guest instruction executes on demand on psxport's own guest executor: a
+  recompiler that translates guest blocks to host code at run time, like DuckStation's, with the
+  R3000 interpreter (`runtime/cpu/guest_executor.*`) as its reference and the path on any host
+  the recompiler has no backend for; and
 - the user's authenticated PSX image remains runtime data. No build, install, provisioning, or
   release path emits guest functions as C/C++, object files, or a precompiled title substrate.
+  Translation happens only at run time, from guest memory, and is never saved.
 
-There is one guest executor on every host and no engine choice: no recompiler, no translation cache,
-no fallback tier, no player or test setting that selects another. Lightrec was removed on 2026-11-16
-because a recompiler's cache, invalidation, executable-memory and per-host backend costs bought speed
-the native-heavy titles do not need. Do not reintroduce a recompiler or a block cache without the
-user's explicit decision; make the interpreter faster in place instead. The removed guest-source
-pipeline and `PSXPORT_ENGINE` selector are not extension points. Follow `docs/migration.md`; do not
-add another derived guest-source feature, engine choice, or static compatibility path.
+The user decided on 2026-11-17 that psxport gets a recompiler like DuckStation's, to cut CPU use
+(heat, battery). Lightrec had been removed on 2026-11-16 for its cache, invalidation,
+executable-memory and per-host backend costs; the new recompiler is psxport's own, written to the
+executor contract below, and answers those costs rather than inheriting them: every translated
+block is invalidated through the one invalidation owner, executable memory is one bounded RAII
+owner, and each host backend (ARM64 first for the Mac and Android, x86-64 for Linux and the Ally)
+passes the same differential checks against the interpreter. DuckStation is a design reference
+only: its licence (CC BY-NC-ND 4.0) forbids copying its code. Lightrec is not brought back. The
+removed guest-source pipeline and `PSXPORT_ENGINE` selector are not extension points; there is no
+player setting that picks an engine. Follow `docs/migration.md`; do not add another derived
+guest-source feature or static compatibility path.
 
 ## Executor contract
 
@@ -78,7 +85,7 @@ active authenticated image/module identity, its load generation, and guest addre
 All writes that can modify executable bytes use one invalidation owner. CPU stores, DMA, CD/module
 loads, decompression into executable RAM, debugger writes, and savestate restore report normalized
 guest ranges after the write becomes visible. The owner invalidates any derived image-generation
-decision (the interpreter itself caches no code). Positive changed-byte and controlled no-change/out-of-range
+decision and every recompiled block over the range. Positive changed-byte and controlled no-change/out-of-range
 tests are required; a diagnostic that only prints on invalidation is not evidence it scanned anything.
 
 ## Structure is part of correctness
@@ -113,7 +120,8 @@ repository. Game repositories are part of the caller set even though psxport rem
 Configuration has one owner. It ingests CLI, environment, settings, and live diagnostic changes,
 validates them, and passes typed immutable values to subsystem constructors. Product modules do not
 call `getenv`, read config files, or infer execution mode. There is no CPU-engine setting: the
-gameplay executor is the interpreter by construction. A test oracle is selected by building/running a
+gameplay executor is the recompiler wherever the host has a backend, the interpreter otherwise, by
+construction. A test oracle is selected by building/running a
 different test target, not by a gameplay CVar or menu choice.
 
 All product logging goes through Lucent. Use `lucent::info`/`warn`/`error` for normal-run messages and

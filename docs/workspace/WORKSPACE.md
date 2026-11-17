@@ -70,7 +70,8 @@ checkout (a fresh clone) it is a shallow clone of psxport `main`. psxport's `too
 makes it; no title carries a copy. A title's launcher runs it from psxport `main` while the link is
 missing (`uv run --no-project https://raw.githubusercontent.com/SomeoneIsWorking/psxport/main/tools/psxport_fetch.py --auto`),
 and `scripts/bootstrap_workspace.py` runs it for every title. psxport has no third-party CPU dependency to pin:
-guest code runs on its own interpreter (`runtime/cpu/guest_executor.*`).
+guest code runs on its own executor: a run-time recompiler like DuckStation's (decided 2026-11-17), with the
+interpreter (`runtime/cpu/guest_executor.*`) as reference and fallback.
 
 The record rasterizer follows re-harness's in-pass destination rule: Metal framebuffer fetch on macOS today, the
 other backends as our SDL fork (`SomeoneIsWorking/SDL`, pinned in `tools/port/target-libraries.json`) gains them.
