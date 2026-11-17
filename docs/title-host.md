@@ -180,6 +180,8 @@ The selector is the Slant Stage (the `slant-stage` skill): the titles themselves
   panel's Game is a preview (`Game::session.preview()`, set by `TitleSession::boot` for `Role::Panel` and
   cleared at the hand-over): a title may end the screens the player does not control (cards, movies) at their
   own terminal transitions, as a Start skip would. Each such skip is the title's own; the host skips nothing.
+  Spyro 1/2/3, Tomba! 1/2 and Spider-Man 1 skip in preview; Crash 1/2/3 and Spider-Man 2 have no Start skips
+  and run their boot screens through.
 - **The logo comes from the running game.** `GameRuntime::panelLogo(Core &)` reads the title's own logo from
   its live machine (its title screen's own draws from VRAM while that screen is up), taken on the second step
   in a row its gate is open and saved (`SavedLogo`, `picker-logo.rgba` in the title's user-data directory);
