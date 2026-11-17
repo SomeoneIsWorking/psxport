@@ -184,7 +184,7 @@ struct GuestExecutor::Impl {
 
   [[nodiscard]] bool pendingWorkDeliverable() const {
     // Pending work first: it is almost always clear, so the common entry reads one word.
-    return __atomic_load_n(&core.pending_work, __ATOMIC_RELAXED) != 0 && core.game && core.active_native_address == 0 &&
+    return __atomic_load_n(&core.pending_work, __ATOMIC_RELAXED) != 0 && core.game && !core.inNativeHostCode() &&
            core.pending_guest_redirect == 0;
   }
 

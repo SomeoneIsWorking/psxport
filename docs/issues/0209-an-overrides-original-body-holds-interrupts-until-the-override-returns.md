@@ -1,6 +1,6 @@
 # 0209 — An override's original body holds interrupts until the override returns
 
-Status: open. Owner: `runtime/cpu/native_dispatch.cpp` (`NativeExecutionScope`, `executeOriginal`), with
+Status: fixed (2026-11-18). Owner: `runtime/cpu/native_dispatch.cpp` (`NativeExecutionScope`, `executeOriginal`), with
 `runtime/cpu/guest_executor.cpp` (`pendingWorkDeliverable`).
 
 ## Observed
@@ -20,3 +20,14 @@ Deliver pending work at block entries of an original body called from an overrid
 `resumeOriginal`, `resumeGuestToReturn`), as an ordinary guest call would, with the nested run servicing it rather
 than exiting with `HostService`. It changes interrupt timing in every title that has such overrides, so it is
 checked in real time on Tomba 2 and Spyro.
+
+## Fix
+`OriginalBodyScope` (`executeOriginal`, `resumeOriginal`) marks the override whose original body runs
+(`Core::native_original_address`); `Core::inNativeHostCode` is true only while an override's own host code runs, and
+`pendingWorkDeliverable` and `Hle::canDispatchInterrupt` test it, so interrupts and pending work reach an original body
+at its block entries as on hardware and still wait in host code.
+
+## Proof
+Same replay to field 6,000 with the override bound: `msInThisLEV` 108951, race clock 99826 and all eight drivers equal
+to the build without the override. Tomba! 2 (`warp 0/0`) and Spyro 1's demo run with faults 0 and no refused
+in-betweens, their pictures unchanged.

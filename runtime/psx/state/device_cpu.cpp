@@ -56,6 +56,7 @@ bool readCpuSection(Core &core, psx::platform::BlobReader &in, std::string &erro
   core.pending_work = pendingWork;
   // Saves are taken between frames, never inside an override.
   core.active_native_address = 0;
+  core.native_original_address = 0;
   return true;
 }
 

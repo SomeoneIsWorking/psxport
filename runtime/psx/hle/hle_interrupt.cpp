@@ -101,7 +101,7 @@ void Hle::irqDeq(uint32_t elem) {
 }
 
 bool Hle::canDispatchInterrupt(const Core &core) const {
-  return irq_enabled && !in_irq && !core.active_native_address && !core.pending_guest_redirect;
+  return irq_enabled && !in_irq && !core.inNativeHostCode() && !core.pending_guest_redirect;
 }
 
 bool Hle::irqDeliverable(Core &core, bool cdDeliveryPath) const {

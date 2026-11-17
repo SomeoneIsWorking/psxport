@@ -102,6 +102,13 @@ public:
 
   // Address of the currently active native override, used to suppress recursive self-interception.
   uint32_t active_native_address = 0;
+  // The override whose host code is waiting on an original guest body it called (native_dispatch), 0 for none.
+  uint32_t native_original_address = 0;
+
+  // An override's own host code is running, not an original body it called: interrupts and pending work wait.
+  [[nodiscard]] bool inNativeHostCode() const {
+    return active_native_address != 0 && active_native_address != native_original_address;
+  }
 
   // The override differential's journal for the path currently executing, or null (the product
   // state). Non-owning; set and restored only by `psx::cpu::SideEffectJournal::Scope`. The device

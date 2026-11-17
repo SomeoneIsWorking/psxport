@@ -3,8 +3,8 @@
 #include "core.h"
 #include "execution_control.h"
 #include "game.h"
-#include "guest_memory_map.h"
 #include "guest_executor.h"
+#include "guest_memory_map.h"
 #include "override_differential.h"
 #include "platform_hle.h"
 #include "side_effect_journal.h"
@@ -135,6 +135,24 @@ private:
   std::uint32_t previousPc_ = 0;
   std::uint32_t previousActiveAddress_ = 0;
   std::uint32_t continuation_ = 0;
+};
+
+// The original guest body an override called runs as guest code: interrupts reach it as on hardware.
+class OriginalBodyScope {
+public:
+  explicit OriginalBodyScope(Core &core)
+      : core_(core), previous_(std::exchange(core.native_original_address, core.active_native_address)) {}
+  ~OriginalBodyScope() {
+    core_.native_original_address = previous_;
+  }
+  OriginalBodyScope(const OriginalBodyScope &) = delete;
+  OriginalBodyScope &operator=(const OriginalBodyScope &) = delete;
+  OriginalBodyScope(OriginalBodyScope &&) = delete;
+  OriginalBodyScope &operator=(OriginalBodyScope &&) = delete;
+
+private:
+  Core &core_;
+  std::uint32_t previous_ = 0;
 };
 
 class NativeCallerContextScope {
@@ -355,6 +373,7 @@ namespace {
 ExecutionResult executeOriginal(Core &core, NativeKey key, ExecutionBudget budget) {
   NativeCallerContextScope callerContext(core);
   SuppressionScope suppression(core.nativeDispatcher(), key);
+  OriginalBodyScope body(core);
   auto writer = core.writerLatch.hostCall(key.address, core.r[31]);
   return core.executor().executeFunction(key.address, core.r[31], budget);
 }
@@ -365,6 +384,7 @@ ExecutionResult
 resumeOriginal(Core &core, NativeKey key, std::uint32_t resumePc, std::uint32_t returnPc, ExecutionBudget budget) {
   NativeCallerContextScope callerContext(core);
   SuppressionScope suppression(core.nativeDispatcher(), key);
+  OriginalBodyScope body(core);
   auto attribution = core.callAttribution.scope(key.address);
   auto writer = core.writerLatch.hostCall(key.address, returnPc);
   return core.executor().executeFunction(resumePc, returnPc, budget);
