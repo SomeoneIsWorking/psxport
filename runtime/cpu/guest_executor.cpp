@@ -5,6 +5,7 @@
 #include "execution_ledger.h"
 #include "execution_services.h"
 #include "executor_state.h"
+#include "executor_trace.h"
 #include "function_reach.h"
 #include "game.h"
 #include "guest_call_site.h"
@@ -70,6 +71,9 @@ struct GuestExecutor::Impl {
   bool enterBlock(std::uint32_t guestPc) {
     ++state.counters.executedBlocks;
     enteredPc = guestPc;
+    if (trace) {
+      trace->enter(core, state, guestPc, state.counters.executedBlocks);
+    }
     latchWriter(guestPc);
     if (reach) {
       reach->observe(guestPc);
@@ -194,6 +198,7 @@ struct GuestExecutor::Impl {
   volatile std::uint32_t enteredPc = 0;
   BoundaryContext *running = nullptr;
   std::unique_ptr<FunctionReach> reach;
+  std::unique_ptr<ExecutorTrace> trace;
 };
 
 GuestExecutor::GuestExecutor(Core &core) : impl_(std::make_unique<Impl>(core)) {}
@@ -201,6 +206,15 @@ GuestExecutor::GuestExecutor(Core &core) : impl_(std::make_unique<Impl>(core)) {
 GuestExecutor::~GuestExecutor() {
   logLedger(impl_->state.counters, "shutdown", lucent::Level::Info);
   psx::cpu::reportStoreObserver(impl_->state.storeReport);
+}
+
+void GuestExecutor::interpretOnly() {
+  impl_->recompiler.reset();
+  lucent::info("executor", "every guest block runs on the interpreter (PSXPORT_EXEC_INTERPRET)");
+}
+
+void GuestExecutor::attachTrace(std::unique_ptr<ExecutorTrace> trace) {
+  impl_->trace = std::move(trace);
 }
 
 void GuestExecutor::attachFunctionReach(std::unique_ptr<FunctionReach> reach) {

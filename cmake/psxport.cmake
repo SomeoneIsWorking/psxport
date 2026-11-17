@@ -68,6 +68,7 @@ set(PSXPORT_FRAMEWORK_SRC
   ${PSXPORT_ROOT}/runtime/cpu/guest_executor.cpp
   ${PSXPORT_ROOT}/runtime/cpu/executor_state.cpp # loads in flight, segment clock, the memory/COP access both engines share
   ${PSXPORT_ROOT}/runtime/cpu/guest_interpreter.cpp # R3000 interpreter, one block at a time
+  ${PSXPORT_ROOT}/runtime/cpu/executor_trace.cpp # block-entry state trace for the recompiler differential
   ${PSXPORT_ROOT}/runtime/cpu/recompiler/recompiler.cpp # run-time recompiler: translate, run, invalidate
   ${PSXPORT_ROOT}/runtime/cpu/recompiler/block_scan.cpp
   ${PSXPORT_ROOT}/runtime/cpu/recompiler/block_cache.cpp

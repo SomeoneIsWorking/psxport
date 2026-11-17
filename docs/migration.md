@@ -41,6 +41,14 @@ capable runtime path that uses the same guest executor, boundary identity, and t
 the native hosts. A release claim stays blocked until web parity is represented in the acceptance
 gates.
 
+The differential check holds the recompiler to the interpreter. One recipe runs twice, once with
+`PSXPORT_EXEC_INTERPRET=1` and once on the recompiler, each with `PSXPORT_EXEC_TRACE=<file>`, which records the
+committed CPU state (GPRs, HI/LO, COP0, loads in flight, a GTE hash, and at intervals a RAM and scratchpad hash)
+at every `PSXPORT_EXEC_TRACE_EVERY`-th block entry. `tools/exec_trace_compare.py` names the first disagreeing
+checkpoint and the `PSXPORT_EXEC_TRACE_FROM`/`_TO` window that, rerun, names the first divergent block. Run the
+two sides one after the other: runs sharing a memory card see each other's saves. These knobs are run-only
+diagnostics; no player setting picks an engine.
+
 ## Hosts
 
 The recompiler's backend is ARM64 (macOS on Apple silicon, Android, Linux on ARM64). Every other host, and a

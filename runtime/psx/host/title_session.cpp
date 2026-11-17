@@ -3,6 +3,7 @@
 #include "config.h"
 #include "core.h"
 #include "dbg_server.h"
+#include "executor_trace.h"
 #include "field_turn.h"
 #include "frame_loop_shell.h"
 #include "game.h"
@@ -131,6 +132,9 @@ bool TitleSession::boot() {
   // picker and a running title share one.
   game.dbg_server.start();
   psx::cpu::configureStoreObserver(core);
+  if (role_ == Role::Product) {
+    psx::cpu::configureExecutorDiagnostics(core);
+  }
   lucent::info("boot",
                "live control channel {}, store observer armed",
                psx::debug::debugServerLive() ? "attached" : "not requested");

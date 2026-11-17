@@ -45,6 +45,15 @@ long movie_max_frames(); // PSXPORT_FMV_MAXFRAMES (0 all)
 bool movie_dc_only();    // PSXPORT_FMV_DCONLY
 bool movie_dump_codes(); // PSXPORT_FMV_DUMPCODES
 
+// PSXPORT_EXEC_TRACE (path, empty off), _EVERY, _RAM_EVERY, _FROM, _TO: the executor's differential trace
+// (runtime/cpu/executor_trace.h); PSXPORT_EXEC_INTERPRET runs every guest block on the interpreter.
+std::string exec_trace_path();
+long exec_trace_every();
+long exec_trace_ram_every();
+long exec_trace_from();
+long exec_trace_to();
+bool exec_interpret();
+
 std::string wav_capture_path();                     // PSXPORT_WAV
 std::optional<std::uint32_t> spu_write_backtrace(); // PSXPORT_SPUBT: hex SPU register offset
 

@@ -216,6 +216,9 @@ void Recompiler::logReport() const {
       refused += lucent::format(" {}={}", refusalName(static_cast<Refusal>(reason)), counters_.interpreted[reason]);
     }
   }
+  if (counters_.translatedRuns == 0 && interpreted == 0) {
+    return; // dropped before any block ran (PSXPORT_EXEC_INTERPRET)
+  }
   lucent::info("recompiler",
                "translated={} blocks ({} guest instructions, {} KiB of host code in use) translated_runs={} "
                "interpreted_runs={} resumes={} invalidations_that_dropped={} flushes={}; interpreted by reason:{}",

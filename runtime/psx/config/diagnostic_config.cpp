@@ -39,8 +39,20 @@ Var<std::string> cv_pad_dump_frames("PSXPORT_PAD_DUMP_AT", "", kRunOnly);
 Var<bool> cv_no_host_pads("PSXPORT_PAD_NOPAD", false, kRunOnly);
 Var<bool> cv_memory_census("PSXPORT_MEMCENSUS", false, kRunOnly);
 Var<std::string> cv_memory_census_path("PSXPORT_MEMCENSUS_OUT", "", kRunOnly);
+Var<std::string> cv_exec_trace("PSXPORT_EXEC_TRACE", "", kRunOnly);
+Var<long> cv_exec_trace_every("PSXPORT_EXEC_TRACE_EVERY", 4096, kRunOnly);
+Var<long> cv_exec_trace_ram_every("PSXPORT_EXEC_TRACE_RAM_EVERY", 64, kRunOnly);
+Var<long> cv_exec_trace_from("PSXPORT_EXEC_TRACE_FROM", 0, kRunOnly);
+Var<long> cv_exec_trace_to("PSXPORT_EXEC_TRACE_TO", 0, kRunOnly);
+Var<bool> cv_exec_interpret("PSXPORT_EXEC_INTERPRET", false, kRunOnly);
 
 const Registration kRegistration{
+    cv_exec_trace,
+    cv_exec_trace_every,
+    cv_exec_trace_ram_every,
+    cv_exec_trace_from,
+    cv_exec_trace_to,
+    cv_exec_interpret,
     cv_store_watch,
     cv_store_watch_limit,
     cv_store_watch_registers,
@@ -142,6 +154,25 @@ std::vector<std::uint32_t> present_shot_frames() {
 
 std::vector<std::uint32_t> renderdoc_presents() {
   return frameList(cv_renderdoc_presents);
+}
+
+std::string exec_trace_path() {
+  return cv_exec_trace.get();
+}
+long exec_trace_every() {
+  return cv_exec_trace_every.get();
+}
+long exec_trace_ram_every() {
+  return cv_exec_trace_ram_every.get();
+}
+long exec_trace_from() {
+  return cv_exec_trace_from.get();
+}
+long exec_trace_to() {
+  return cv_exec_trace_to.get();
+}
+bool exec_interpret() {
+  return cv_exec_interpret.get();
 }
 
 std::string gpu_dump_dir() {

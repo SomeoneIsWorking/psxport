@@ -94,10 +94,12 @@ struct ExecutorCounters {
   std::uint64_t budgetExitPcOutsideCodeImage = 0;
 };
 
-// Runs guest code on an R3000 interpreter over Core's registers and memory. Blocks keep the
-// recompiler's shape (one ends after an unconditional jump's delay slot, at a syscall or a
-// Status/Cause write, or at a taken branch that leaves it), and each block entry is where host
+// Runs guest code over Core's registers and memory, each block on the run-time recompiler where the host has a
+// backend and on the reference interpreter otherwise. A block ends after an unconditional jump's delay slot, at a
+// syscall or a Status/Cause write, or at a taken branch that leaves it, and each block entry is where host
 // dispatch, the requested guest return and pending work are checked.
+class ExecutorTrace;
+
 class GuestExecutor {
 public:
   explicit GuestExecutor(Core &core);
@@ -110,7 +112,7 @@ public:
   ExecutionResult executeFunction(std::uint32_t guestAddress, std::uint32_t returnAddress, ExecutionBudget budget);
   // Ends the running segment at its next block entry; safe from another thread.
   void requestStop();
-  // Guest code is read from memory as it runs, so a write flushes nothing; these only count.
+  // Guest bytes changed: every translated block read from them is dropped, and the write is counted.
   void invalidate(GuestAddressRange range, ExecutableWriteSource source = ExecutableWriteSource::Native);
   void invalidateAll(ExecutableWriteSource source = ExecutableWriteSource::Native);
   // Diagnostic only. Empty targets plus null callback/context disarm. The callback must not mutate
@@ -122,6 +124,10 @@ public:
   // Record every guest pc passing a block entry into `reach` (runtime/cpu/function_reach.h).
   void attachFunctionReach(std::unique_ptr<FunctionReach> reach);
   const ExecutorCounters &counters() const;
+  // Diagnostic only, before the first guest instruction: run every block on the interpreter (the reference side of
+  // the recompiler differential), and record block entries to `trace` (runtime/cpu/executor_trace.h).
+  void interpretOnly();
+  void attachTrace(std::unique_ptr<ExecutorTrace> trace);
 
 private:
   ExecutionResult executeWithBoundary(std::uint32_t guestAddress,
