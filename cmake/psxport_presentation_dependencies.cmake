@@ -69,6 +69,16 @@ function(psxport_configure_presentation_dependencies)
                         "Install the package(s) above and re-run ./run.sh")
   endif()
 
+  # A Mac links the pinned SDL fork (tools/port/target-libraries.json) that target_platform.py builds into a prefix
+  # it stamps; any other SDL3 (Homebrew's) lacks the fork's renderer work, so the configure stops here.
+  if(APPLE)
+    if(NOT EXISTS "${SDL3_PREFIX}/psxport-target-libraries.json")
+      message(FATAL_ERROR
+        "psxport: SDL3 at '${SDL3_PREFIX}' is not the pinned fork from tools/port/target-libraries.json. "
+        "Configure through tools/build.py or tools/port/consumer_build.py (--build build/<name>, "
+        "-DPSXPORT_DIR=<checkout> for another framework tree), which pass the pinned prefix in CMAKE_PREFIX_PATH.")
+    endif()
+  endif()
   target_include_directories(psxport_presentation_dependencies INTERFACE
     "${SDL3_INCLUDE_DIRS}" "${SDL3_IMAGE_INCLUDE_DIRS}" "${FREETYPE_INCLUDE_DIRS}")
   target_compile_options(psxport_presentation_dependencies INTERFACE

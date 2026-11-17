@@ -32,6 +32,8 @@ LLVM_MINGW_URL = (f"https://github.com/mstorsjo/llvm-mingw/releases/download/{LL
 LLVM_MINGW_SHA256 = "bb7bb7654b33d5aa8712acb837c963b2e0c56352560c76105270a3268c665c21"
 # The oldest macOS the package runs on: std::format of floating point needs 13.3.
 MACOS_DEPLOYMENT_TARGET = "13.3"
+# Written into a pinned library prefix; a macOS host configure refuses an SDL3 from a prefix without it.
+PINNED_PREFIX_STAMP = "psxport-target-libraries.json"
 MOLTENVK_RELEASE = "v1.4.2"
 MOLTENVK_URL = f"https://github.com/KhronosGroup/MoltenVK/releases/download/{MOLTENVK_RELEASE}/MoltenVK-macos.tar"
 MOLTENVK_SHA256 = "f95765a6229cb7b915990a2890ce12ebe36a730b021545d3d52ae69ce4c4024e"
@@ -172,6 +174,10 @@ def provision(platform: str, environment: Mapping[str, str]) -> list[str]:
             (libraries / "complete").touch()
     except target_libraries.Refused as error:
         raise ToolError(f"{platform} target dependencies: {error}") from error
+    # What psxport_presentation_dependencies.cmake checks a macOS host configure's SDL3 against.
+    stamp = prefix / PINNED_PREFIX_STAMP
+    if not stamp.is_file():
+        stamp.write_bytes(target_libraries.PINS.read_bytes())
     definitions = [*library_arguments, f"-DCMAKE_PREFIX_PATH={prefix}"]
     if platform == "windows":
         definitions += [f"-DPSXPORT_TARGET_DEPENDENCY_PREFIX={prefix}", f"-DCMAKE_FIND_ROOT_PATH={prefix}",

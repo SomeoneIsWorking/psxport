@@ -2,13 +2,14 @@
 """Configure and build a title repository against this psxport checkout with Ninja.
 
     CC=clang CXX=clang++ uv run --frozen python external/psxport/tools/port/consumer_build.py \\
-        [--build build/agent|build/ci] [--platform host|windows|macos|android] [--target NAME]... [-DNAME=VALUE]...
+        [--build build/agent|build/ci|build/<name>] [--platform host|windows|macos|android] [--target NAME]... [-DNAME=VALUE]...
 
 Run from the title root. The configure is the launcher's (`launcher.configure_consumer`), so the
 compiler choice is the player's, at RelWithDebInfo. `--platform windows`
 cross-compiles with llvm-mingw into `build/windows`; `--platform macos` builds the Mac's own architecture into
 `build/macos`, both against the pinned target libraries (`port/target_platform.py`). On a Mac, `host` is
-`macos` built into the host tree, since the Mac's libraries come from those pins.
+`macos` built into the host tree, since the Mac's libraries come from those pins. `-DPSXPORT_DIR=<checkout>`
+builds against another framework tree (an exported commit) with the same pins; never configure a title by hand.
 """
 
 from __future__ import annotations

@@ -34,7 +34,7 @@ CI_BUILD = Path("build/ci")
 APPIMAGE_BUILD = Path("build/appimage")
 # The release platforms' build trees (tools/port/target_platform.py).
 PLATFORM_BUILDS = {"windows": Path("build/windows"), "macos": Path("build/macos"), "android": Path("build/android")}
-# The trees a maintainer build may name; one tree per purpose, never one per task.
+# The purpose trees; a build may also name its own tree under build/ (a kept before/after pair).
 MAINTAINER_BUILDS = (AGENT_BUILD, CI_BUILD, APPIMAGE_BUILD, *PLATFORM_BUILDS.values())
 FRAMEWORK_TOOLS_BUILD = Path("build/player-tools")
 # Set by the desktop shortcut: launch the newest product already built instead of building.
@@ -235,12 +235,12 @@ def configure(source: Path, build: Path, build_type: str, definitions: Sequence[
 
 
 def maintainer_build(root: Path, requested: Path) -> Path:
-    """``root/requested`` when it names a maintainer purpose tree; refuses a per-task tree."""
+    """``root/requested`` when it is a tree under ``root/build`` (a purpose tree or one's own), configured with the
+    same compiler and pinned libraries as any other; refuses a tree elsewhere."""
     build = (requested if requested.is_absolute() else root / requested).absolute()
-    allowed = [root / tree for tree in MAINTAINER_BUILDS]
-    if build not in allowed:
-        raise ToolError(f"{build} is not a purpose build tree; use one of: "
-                        + ", ".join(str(tree) for tree in MAINTAINER_BUILDS))
+    if not build.is_relative_to(root / "build") or build == root / "build":
+        raise ToolError(f"{build} is not a build tree under {root / 'build'}; use one of: "
+                        + ", ".join(str(tree) for tree in MAINTAINER_BUILDS) + ", or build/<name>")
     return build
 
 
