@@ -1,4 +1,5 @@
-// hud_anchor_packets.h — a guest HUD element drawn at an authored 4:3 place, moved to the drawn picture's edge under a widening.
+// hud_anchor_packets.h — a guest HUD element drawn at an authored 4:3 place, moved to the drawn picture's edge under a
+// widening.
 #pragma once
 
 #include "core.h"
