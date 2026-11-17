@@ -127,6 +127,7 @@ public:
   // Diagnostic only, before the first guest instruction: run every block on the interpreter (the reference side of
   // the recompiler differential), and record block entries to `trace` (runtime/cpu/executor_trace.h).
   void interpretOnly();
+  void noLinking(); // translated blocks never jump to each other directly (PSXPORT_EXEC_NOLINK)
   void attachTrace(std::unique_ptr<ExecutorTrace> trace);
 
 private:

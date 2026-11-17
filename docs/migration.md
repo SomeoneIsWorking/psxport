@@ -33,6 +33,25 @@ a block that overwrites itself finishes on the interpreter. A block whose shape 
 the interpreter, counted by reason in the run-end `[recompiler]` line. Main-RAM and scratchpad loads are read
 inline unless the vertex places would note them (`VertexPlaces::LoadGate`).
 
+Translated blocks link: a direct exit with no load in flight (a link site) jumps straight into the next
+translated block instead of returning to the dispatcher. Linking is opt-in per backend (`block_cache.h`
+`LinkSite`/`LinkedCode`, a translator that returns them, and the backend's `patchLink`/`unpatchLink`); a backend
+without it leaves every block through the dispatcher. A site starts unlinked and is patched lazily the next
+time the dispatcher resolves its target to a translated block; JR/JALR exits stay unlinked. The jump lands on
+the target's linked entry, which makes the checks the dispatcher makes between blocks (segment budget, stop,
+interrupt) and then calls the executor's own block entry (`kHelperEnterLinked`), so native dispatch, the guest
+return, pending work, the writer latch and the trace run at every block entry exactly as unlinked. Whatever
+stops there leaves for the dispatcher as an unlinked exit would. Dropping a block repoints every site linked to
+it back at its unlinked exit; a flush of the code mapping forgets every link. `PSXPORT_EXEC_NOLINK=1` is a
+run-only diagnostic that leaves every site unlinked, the before side of a linking measurement; the run-end
+`[recompiler]` line counts `linked_entries` and `links_patched`.
+
+Measured 2026-11-17 on an M2, Tekken 3's gameplay window: about half of all block entries go through a link,
+and executor time is unchanged within the noise. The trip linking removes (`runBlock`, the cache lookup, the
+`runSegment` loop) was the cheap part; `enterBlock` itself is about 40% of executor time either way (the writer
+latch's call-word read through `Core::host_ptr` alone about 7%), and a linked entry still runs it. Linking pays
+once `enterBlock` is cheaper.
+
 There is no player-selectable engine. Independent reference emulators remain separately built test
 tools and are never linked into gameplay.
 

@@ -31,6 +31,9 @@ constexpr Reg kCond = 25;   // the taken flag of the branch whose delay slot run
 constexpr Reg kTarget = 26; // the target of JR/JALR
 constexpr Reg kImm = 17;    // scratch for immediates that need a register
 
+// A link site unlinked: B to the next word, its exit to the dispatcher.
+constexpr std::uint32_t kUnlinkedSite = 0x14000001u;
+
 #define CTX(field) static_cast<std::uint32_t>(offsetof(JitContext, field))
 
 class Translator {
@@ -39,6 +42,7 @@ public:
 
   void translate() {
     prologue();
+    a.bind(start_);
     const std::vector<ScannedInstruction> &code = block_.code;
     for (std::size_t i = 0; i < code.size(); ++i) {
       const ScannedInstruction &ins = code[i];
@@ -83,9 +87,19 @@ public:
       exitSequence(s.exit, s.pc, s.k, s.pendingReg);
     }
     epilogue();
+    linkedEntry();
   }
 
   Assembler a;
+  // Word offsets of the linked entry and of each link site with its target.
+  std::size_t linkedEntryWord() const {
+    return static_cast<std::size_t>(linked_.position);
+  }
+  struct SiteWord {
+    std::uint32_t pc = 0;
+    std::size_t word = 0;
+  };
+  std::vector<SiteWord> sites_;
 
 private:
   struct Terminal {
@@ -153,9 +167,46 @@ private:
     if (k != 0) {
       a.addxi(kExec, kExec, k);
     }
+    if (exit == JitExit::Entry && pendingReg == 0) {
+      // A link site: this branch to the next word is repointed at the target's linked entry once both are translated.
+      sites_.push_back({pc, a.size()});
+      a.emit(kUnlinkedSite);
+      a.movw(9, static_cast<std::uint32_t>(sites_.size()));
+      a.strw(9, kCtx, CTX(linkSite));
+    }
     a.movw(9, pc);
     a.strw(9, kCtx, CTX(exitPc));
     a.movw(0, static_cast<std::uint32_t>(exit));
+    a.b(exit_);
+  }
+
+  // Entered by a linked exit of another block, in its frame and with its pinned registers: the checks the dispatcher
+  // makes between blocks (budget, stop, interrupt), then the executor's own block entry; any of them leaves for the
+  // dispatcher exactly as an unlinked exit to this block would.
+  void linkedEntry() {
+    Label leave;
+    a.bind(linked_);
+    a.ldrx(9, kCtx, CTX(executed));
+    a.strx(kExec, 9, 0);
+    a.ldrx(10, kCtx, CTX(segmentEnd));
+    a.cmpx(kExec, 10);
+    a.bcond(kHs, leave);
+    a.ldrx(10, kCtx, CTX(stop));
+    a.ldrb(10, 10, 0);
+    a.cbnz(10, leave);
+    a.ldrx(10, kCtx, CTX(checkInterrupt));
+    a.ldrb(10, 10, 0);
+    a.cbnz(10, leave);
+    a.movw(1, block_.pc);
+    callHelper(kHelperEnterLinked);
+    a.cbz(0, start_);
+    a.cmpwi(0, 1);
+    a.bcond(kNe, leave);
+    a.strw(0, kCtx, CTX(entered));
+    a.bind(leave);
+    a.movw(9, block_.pc);
+    a.strw(9, kCtx, CTX(exitPc));
+    a.movw(0, static_cast<std::uint32_t>(JitExit::Entry));
     a.b(exit_);
   }
 
@@ -696,19 +747,21 @@ private:
   std::vector<Label> labels_;
   std::deque<Stub> stubs_;
   Label exit_;
+  Label start_;
+  Label linked_;
   // Instructions run since kExec was last advanced; every label is bound at 0.
   std::uint32_t k_ = 0;
 };
 
 } // namespace
 
-BlockCode translateArm64(const ScannedBlock &block, CodeMemory &memory) {
+LinkedCode translateArm64(const ScannedBlock &block, CodeMemory &memory) {
   Translator translator(block);
   translator.translate();
   const std::vector<std::uint32_t> &words = translator.a.words();
   const std::size_t bytes = words.size() * sizeof(std::uint32_t);
   if (bytes > memory.remaining()) {
-    return nullptr;
+    return {};
   }
   std::uint8_t *const destination = memory.cursor();
   {
@@ -716,7 +769,35 @@ BlockCode translateArm64(const ScannedBlock &block, CodeMemory &memory) {
     std::memcpy(destination, words.data(), bytes);
   }
   memory.commit(bytes);
-  return reinterpret_cast<BlockCode>(destination);
+  LinkedCode out;
+  out.code = reinterpret_cast<BlockCode>(destination);
+  out.linkedEntry = destination + translator.linkedEntryWord() * 4u;
+  out.sites.reserve(translator.sites_.size());
+  for (const auto &site : translator.sites_) {
+    out.sites.push_back({site.pc, destination + site.word * 4u});
+  }
+  return out;
+}
+
+namespace {
+
+void rewriteSite(CodeMemory &memory, void *site, std::uint32_t word) {
+  {
+    const CodeMemory::WriteScope writable(memory);
+    std::memcpy(site, &word, sizeof(word));
+  }
+  __builtin___clear_cache(static_cast<char *>(site), static_cast<char *>(site) + sizeof(word));
+}
+
+} // namespace
+
+void patchLinkArm64(CodeMemory &memory, void *site, const void *linkedEntry) {
+  const auto delta = (reinterpret_cast<std::intptr_t>(linkedEntry) - reinterpret_cast<std::intptr_t>(site)) / 4;
+  rewriteSite(memory, site, 0x14000000u | (static_cast<std::uint32_t>(delta) & 0x03FFFFFFu));
+}
+
+void unpatchLinkArm64(CodeMemory &memory, void *site) {
+  rewriteSite(memory, site, kUnlinkedSite);
 }
 
 } // namespace psx::cpu::recompiler

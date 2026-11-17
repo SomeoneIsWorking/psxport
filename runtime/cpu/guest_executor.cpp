@@ -28,6 +28,13 @@ namespace psx::cpu {
 
 struct GuestExecutor::Impl {
   explicit Impl(Core &owner) : core(owner), state(owner), recompiler(recompiler::Recompiler::create(state)) {
+    if (recompiler != nullptr) {
+      recompiler->setBlockEntry(
+          [](void *impl, std::uint32_t pc) {
+            return static_cast<Impl *>(impl)->enterBlock(pc);
+          },
+          this);
+    }
     psx::platform::Watchdog::watchGuest(&enteredPc, core.r);
   }
 
@@ -137,6 +144,9 @@ struct GuestExecutor::Impl {
       }
       // A block entry at `pc`.
       pc = block.pc;
+      if (block.entered) {
+        return leave(SegmentExit::Boundary, pc); // a linked entry ran it and met a boundary
+      }
       if (state.checkInterrupt || state.stopRequested.load(std::memory_order_relaxed)) {
         return leave(SegmentExit::CheckInterrupt, pc);
       }
@@ -211,6 +221,13 @@ GuestExecutor::~GuestExecutor() {
 void GuestExecutor::interpretOnly() {
   impl_->recompiler.reset();
   lucent::info("executor", "every guest block runs on the interpreter (PSXPORT_EXEC_INTERPRET)");
+}
+
+void GuestExecutor::noLinking() {
+  if (impl_->recompiler != nullptr) {
+    impl_->recompiler->disableLinking();
+    lucent::info("executor", "translated blocks stay unlinked (PSXPORT_EXEC_NOLINK)");
+  }
 }
 
 void GuestExecutor::attachTrace(std::unique_ptr<ExecutorTrace> trace) {

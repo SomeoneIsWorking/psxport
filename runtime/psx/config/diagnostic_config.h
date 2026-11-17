@@ -53,6 +53,7 @@ long exec_trace_ram_every();
 long exec_trace_from();
 long exec_trace_to();
 bool exec_interpret();
+bool exec_nolink(); // PSXPORT_EXEC_NOLINK: translated blocks never link
 
 std::string wav_capture_path();                     // PSXPORT_WAV
 std::optional<std::uint32_t> spu_write_backtrace(); // PSXPORT_SPUBT: hex SPU register offset

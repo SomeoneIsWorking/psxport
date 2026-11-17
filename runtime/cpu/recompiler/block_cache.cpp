@@ -41,6 +41,9 @@ void BlockCache::drop(CompiledBlock &block) {
   }
   block.valid = false;
   --live_;
+  if (dropHook_ != nullptr) {
+    dropHook_(dropContext_, block);
+  }
   CompiledBlock *&slot = entries_[block.ramBegin >> 2];
   if (slot == &block) {
     slot = nullptr;

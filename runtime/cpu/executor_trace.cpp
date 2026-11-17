@@ -89,6 +89,9 @@ void configureExecutorDiagnostics(Core &core) {
   if (psx::config::exec_interpret()) {
     core.executor().interpretOnly();
   }
+  if (psx::config::exec_nolink()) {
+    core.executor().noLinking();
+  }
   const std::string path = psx::config::exec_trace_path();
   if (path.empty()) {
     return;

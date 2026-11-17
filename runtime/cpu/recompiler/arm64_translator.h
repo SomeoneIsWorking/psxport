@@ -7,7 +7,11 @@
 
 namespace psx::cpu::recompiler {
 
-// Translates `block` (scanned with no refusal) into `memory`; null when the mapping has no room for it.
-BlockCode translateArm64(const ScannedBlock &block, CodeMemory &memory);
+// Translates `block` (scanned with no refusal) into `memory`; a null `code` when the mapping has no room for it.
+// Every direct exit with no load in flight is a link site (block_cache.h LinkSite).
+LinkedCode translateArm64(const ScannedBlock &block, CodeMemory &memory);
+// Points `site` at a block's linked entry, or back at its own unlinked exit. The caller holds no WriteScope.
+void patchLinkArm64(CodeMemory &memory, void *site, const void *linkedEntry);
+void unpatchLinkArm64(CodeMemory &memory, void *site);
 
 } // namespace psx::cpu::recompiler

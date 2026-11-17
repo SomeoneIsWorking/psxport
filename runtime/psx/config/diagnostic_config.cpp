@@ -45,6 +45,7 @@ Var<long> cv_exec_trace_ram_every("PSXPORT_EXEC_TRACE_RAM_EVERY", 64, kRunOnly);
 Var<long> cv_exec_trace_from("PSXPORT_EXEC_TRACE_FROM", 0, kRunOnly);
 Var<long> cv_exec_trace_to("PSXPORT_EXEC_TRACE_TO", 0, kRunOnly);
 Var<bool> cv_exec_interpret("PSXPORT_EXEC_INTERPRET", false, kRunOnly);
+Var<bool> cv_exec_nolink("PSXPORT_EXEC_NOLINK", false, kRunOnly);
 
 const Registration kRegistration{
     cv_exec_trace,
@@ -53,6 +54,7 @@ const Registration kRegistration{
     cv_exec_trace_from,
     cv_exec_trace_to,
     cv_exec_interpret,
+    cv_exec_nolink,
     cv_store_watch,
     cv_store_watch_limit,
     cv_store_watch_registers,
@@ -173,6 +175,9 @@ long exec_trace_to() {
 }
 bool exec_interpret() {
   return cv_exec_interpret.get();
+}
+bool exec_nolink() {
+  return cv_exec_nolink.get();
 }
 
 std::string gpu_dump_dir() {

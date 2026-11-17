@@ -70,6 +70,9 @@ Recompiler::Recompiler(ExecutorState &state, std::unique_ptr<CodeMemory> memory)
   context_.helpers[kHelperRfe] = reinterpret_cast<void *>(&helperRfe);
   context_.helpers[kHelperDiv] = reinterpret_cast<void *>(&helperDiv);
   context_.helpers[kHelperDivu] = reinterpret_cast<void *>(&helperDivu);
+  context_.helpers[kHelperEnterLinked] = reinterpret_cast<void *>(&helperEnterLinked);
+  context_.checkInterrupt = reinterpret_cast<const std::uint8_t *>(&state.checkInterrupt);
+  cache_.onDrop(&unlinkIncoming, this);
 }
 
 Recompiler::~Recompiler() {
@@ -96,19 +99,26 @@ CompiledBlock *Recompiler::compile(std::uint32_t pc) {
   }
   if (scanned.refusal == Refusal::None) {
     block.entryConflicts = loadDelayConflicts(scanned.code.front().word);
-    block.code = translateArm64(scanned, *memory_);
-    if (block.code == nullptr) {
+    LinkedCode translated = translateArm64(scanned, *memory_);
+    if (translated.code == nullptr) {
       if (running_ != nullptr) {
         block.refusal = Refusal::CodeMemoryBusy;
         return nullptr;
       }
       cache_.clear();
       memory_->reset();
+      linkFrom_ = nullptr;
       ++counters_.flushes;
-      block.code = translateArm64(scanned, *memory_);
-      if (block.code == nullptr) {
+      translated = translateArm64(scanned, *memory_);
+      if (translated.code == nullptr) {
         block.refusal = Refusal::TooLong;
       }
+    }
+    block.code = translated.code;
+    block.linkedEntry = translated.linkedEntry;
+    block.sites.reserve(translated.sites.size());
+    for (const LinkSite &site : translated.sites) {
+      block.sites.push_back({site, nullptr});
     }
     if (block.code != nullptr) {
       ++counters_.translated;
@@ -135,6 +145,9 @@ BlockOutcome Recompiler::runBlock(std::uint32_t pc, SegmentLimits limits) {
   if (block->code == nullptr) {
     return interpret(pc, limits, block->refusal);
   }
+  if (linkFrom_ != nullptr) {
+    link(*block);
+  }
   DelayedLoad &pending = state_.pending;
   if (pending.reg != 0) {
     if ((block->entryConflicts & (1u << pending.reg)) != 0) {
@@ -146,18 +159,26 @@ BlockOutcome Recompiler::runBlock(std::uint32_t pc, SegmentLimits limits) {
   context_.segmentEnd = limits.start + limits.budget;
   context_.selfModified = 0;
   context_.pendingReg = 0;
+  context_.linkSite = 0;
+  context_.entered = 0;
   segmentStart_ = limits.start;
   running_ = block;
-  const auto exit = static_cast<JitExit>(block->code(&context_));
-  running_ = nullptr;
   ++counters_.translatedRuns;
+  const auto exit = static_cast<JitExit>(block->code(&context_));
+  // A linked chain ends in whichever block it reached.
+  CompiledBlock *const last = const_cast<CompiledBlock *>(running_);
+  running_ = nullptr;
+  if (linking_ && context_.linkSite != 0 && last->valid) {
+    linkFrom_ = last;
+    linkSite_ = context_.linkSite - 1u;
+  }
   if (context_.pendingReg != 0) {
     pending = {context_.pendingReg, context_.pendingValue};
   }
   const std::uint32_t exitPc = context_.exitPc;
   switch (exit) {
   case JitExit::Entry:
-    return {BlockEnd::Entry, exitPc, exitPc + 4u, nullptr};
+    return {BlockEnd::Entry, exitPc, exitPc + 4u, nullptr, context_.entered != 0};
   case JitExit::Syscall:
     return {BlockEnd::Syscall, exitPc, exitPc + 4u, nullptr};
   case JitExit::Break:
@@ -171,9 +192,62 @@ BlockOutcome Recompiler::runBlock(std::uint32_t pc, SegmentLimits limits) {
   }
   case JitExit::Resume:
     ++counters_.resumes;
-    return interpretBlock(state_, exitPc, block->pc, limits);
+    return interpretBlock(state_, exitPc, last->pc, limits);
   }
   return {BlockEnd::Fault, exitPc, exitPc + 4u, "translated block returned an unknown exit"};
+}
+
+// The site the previous block left through, patched to `target` when it is what that site reaches.
+void Recompiler::link(CompiledBlock &target) {
+  CompiledBlock &from = *linkFrom_;
+  linkFrom_ = nullptr;
+  if (!from.valid || !target.valid || target.linkedEntry == nullptr || linkSite_ >= from.sites.size()) {
+    return;
+  }
+  OutgoingLink &site = from.sites[linkSite_];
+  if (site.site.targetPc != target.pc || site.linkedTo != nullptr) {
+    return;
+  }
+#if defined(__aarch64__)
+  patchLinkArm64(*memory_, site.site.site, target.linkedEntry);
+#endif
+  site.linkedTo = &target;
+  target.incoming.emplace_back(&from, linkSite_);
+  ++counters_.linksPatched;
+}
+
+// A dropped block's incoming sites go back to their unlinked exits; its own links are forgotten with it.
+void Recompiler::unlinkIncoming(void *self, CompiledBlock &block) {
+  auto &recompiler = *static_cast<Recompiler *>(self);
+  for (const auto &[from, index] : block.incoming) {
+    OutgoingLink &site = from->sites[index];
+    if (site.linkedTo == &block) {
+#if defined(__aarch64__)
+      unpatchLinkArm64(*recompiler.memory_, site.site.site);
+#endif
+      site.linkedTo = nullptr;
+    }
+  }
+  block.incoming.clear();
+  if (recompiler.linkFrom_ == &block) {
+    recompiler.linkFrom_ = nullptr;
+  }
+}
+
+// A linked exit reached `pc`'s block: the executor's block entry runs as the dispatcher would run it.
+std::uint32_t Recompiler::helperEnterLinked(JitContext *context, std::uint32_t pc) {
+  auto &self = *static_cast<Recompiler *>(context->owner);
+  CompiledBlock *const target = self.cache_.find(pc);
+  if (self.enterBlock_ == nullptr || self.state_.storeReport.armed || target == nullptr || target->code == nullptr) {
+    return 2;
+  }
+  if (self.enterBlock_(self.enterContext_, pc)) {
+    return 1;
+  }
+  self.running_ = target;
+  ++self.counters_.translatedRuns;
+  ++self.counters_.linkedEntries;
+  return 0;
 }
 
 void Recompiler::invalidate(GuestAddressRange range) {
@@ -221,11 +295,14 @@ void Recompiler::logReport() const {
   }
   lucent::info("recompiler",
                "translated={} blocks ({} guest instructions, {} KiB of host code in use) translated_runs={} "
-               "interpreted_runs={} resumes={} invalidations_that_dropped={} flushes={}; interpreted by reason:{}",
+               "linked_entries={} links_patched={} interpreted_runs={} resumes={} invalidations_that_dropped={} "
+               "flushes={}; interpreted by reason:{}",
                counters_.translated,
                counters_.translatedInstructions,
                memory_->used() >> 10,
                counters_.translatedRuns,
+               counters_.linkedEntries,
+               counters_.linksPatched,
                interpreted,
                counters_.resumes,
                counters_.dropped,

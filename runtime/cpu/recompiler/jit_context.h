@@ -31,6 +31,7 @@ enum Helper : std::uint32_t {
   kHelperRfe,           // (ctx)
   kHelperDiv,           // (ctx, numerator, denominator)
   kHelperDivu,          // (ctx, numerator, denominator)
+  kHelperEnterLinked,   // (ctx, pc) -> 0 run the body, 1 entered at a boundary, 2 not entered: leave unlinked
   kHelperCount,
 };
 
@@ -55,6 +56,11 @@ struct JitContext {
   std::uint32_t pendingValue = 0;
   // Set by the store helper when a store dropped the running block.
   std::uint32_t selfModified = 0;
+  // Block linking: the 1-based index of the unlinked site the block left through (0 for none), whether the exit's
+  // block entry already ran (a linked entry that met a boundary), and the executor's interrupt check flag.
+  std::uint32_t linkSite = 0;
+  std::uint32_t entered = 0;
+  const std::uint8_t *checkInterrupt = nullptr;
   void *owner = nullptr; // the Recompiler
   void *helpers[kHelperCount] = {};
 };

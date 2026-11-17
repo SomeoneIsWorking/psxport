@@ -17,6 +17,28 @@ struct JitContext;
 // A translated block: returns a BlockEnd code and leaves its exit pc in the context.
 using BlockCode = std::uint32_t (*)(JitContext *context);
 
+// Block linking (opt-in per backend). A link site is one patchable direct exit of a translated block: unlinked it
+// leaves for the dispatcher like any exit; linked it jumps to the target block's linked entry, which repeats the
+// dispatcher's between-block checks and runs the executor's block entry before the body (JitContext,
+// kHelperEnterLinked).
+struct LinkSite {
+  std::uint32_t targetPc = 0;
+  void *site = nullptr;
+};
+// What a linking backend's translator returns: the block's entry, its linked entry, and its link sites.
+struct LinkedCode {
+  BlockCode code = nullptr;
+  const void *linkedEntry = nullptr;
+  std::vector<LinkSite> sites;
+};
+
+struct CompiledBlock;
+// A link site of a block and the block it is patched to, if any.
+struct OutgoingLink {
+  LinkSite site;
+  CompiledBlock *linkedTo = nullptr;
+};
+
 struct CompiledBlock {
   // The virtual entry pc it was translated at (KUSEG/KSEG0/KSEG1 names differ in their jump targets).
   std::uint32_t pc = 0;
@@ -28,6 +50,11 @@ struct CompiledBlock {
   std::uint32_t entryConflicts = 0;
   // Null for a block the interpreter runs, for `refusal`.
   BlockCode code = nullptr;
+  // Null unless the backend links blocks.
+  const void *linkedEntry = nullptr;
+  std::vector<OutgoingLink> sites;
+  // The sites patched to this block, as (block, site index); unpatched when this block is dropped.
+  std::vector<std::pair<CompiledBlock *, std::uint32_t>> incoming;
   Refusal refusal = Refusal::None;
   bool valid = true;
 };
@@ -48,6 +75,11 @@ public:
   bool invalidateRam(std::uint32_t begin, std::uint32_t end);
   // Drops every block.
   void clear();
+  // Called for each block as it is dropped (not on clear), before its entry leaves the index.
+  void onDrop(void (*hook)(void *, CompiledBlock &), void *context) {
+    dropHook_ = hook;
+    dropContext_ = context;
+  }
 
   [[nodiscard]] std::size_t liveBlocks() const {
     return live_;
@@ -66,6 +98,8 @@ private:
   // The blocks overlapping each 4 KiB page, live or dropped since the page was last re-marked.
   std::array<std::vector<CompiledBlock *>, kPages> pages_;
   std::vector<std::unique_ptr<CompiledBlock>> blocks_;
+  void (*dropHook_)(void *, CompiledBlock &) = nullptr;
+  void *dropContext_ = nullptr;
   std::size_t live_ = 0;
 };
 

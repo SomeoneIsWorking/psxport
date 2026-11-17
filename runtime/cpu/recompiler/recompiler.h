@@ -25,6 +25,9 @@ struct RecompilerCounters {
   std::uint64_t resumes = 0;
   std::uint64_t flushes = 0;
   std::uint64_t dropped = 0;
+  // Block linking: sites patched, and block entries made through a link (each one a kHelperEnterLinked call).
+  std::uint64_t linksPatched = 0;
+  std::uint64_t linkedEntries = 0;
 };
 
 // One executor's recompiler. It translates from guest memory at run time, never saves a translation, and keeps the
@@ -44,6 +47,15 @@ public:
   // A physical guest range whose bytes changed (runtime/cpu/invalidation.cpp): every block read from it is dropped.
   void invalidate(GuestAddressRange physicalRange);
   void invalidateAll();
+  // Diagnostic: leave every link site unlinked (PSXPORT_EXEC_NOLINK), the recompiler before block linking.
+  void disableLinking() {
+    linking_ = false;
+  }
+  // The executor's block entry, which a linked entry runs: true when the entry stops the segment at a boundary.
+  void setBlockEntry(bool (*enter)(void *, std::uint32_t), void *context) {
+    enterBlock_ = enter;
+    enterContext_ = context;
+  }
 
   [[nodiscard]] const RecompilerCounters &counters() const {
     return counters_;
@@ -71,6 +83,9 @@ private:
   static void helperRfe(JitContext *context);
   static void helperDiv(JitContext *context, std::uint32_t numerator, std::uint32_t denominator);
   static void helperDivu(JitContext *context, std::uint32_t numerator, std::uint32_t denominator);
+  static std::uint32_t helperEnterLinked(JitContext *context, std::uint32_t pc);
+  static void unlinkIncoming(void *self, CompiledBlock &block);
+  void link(CompiledBlock &target);
 
   ExecutorState &state_;
   std::unique_ptr<CodeMemory> memory_;
@@ -80,6 +95,12 @@ private:
   // The translated block running now, whose own invalidation sends the rest of it to the interpreter.
   const CompiledBlock *running_ = nullptr;
   std::uint64_t segmentStart_ = 0;
+  bool (*enterBlock_)(void *, std::uint32_t) = nullptr;
+  void *enterContext_ = nullptr;
+  // The site the last translated block left through, unlinked: patched to the next block when it is translated.
+  CompiledBlock *linkFrom_ = nullptr;
+  bool linking_ = true;
+  std::uint32_t linkSite_ = 0;
 };
 
 } // namespace psx::cpu::recompiler

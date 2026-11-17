@@ -22,6 +22,8 @@ struct BlockOutcome {
   // The instruction after `pc`: pc + 4 unless `pc` was reached in a delay slot (a branch in a branch's delay slot).
   std::uint32_t next = 0;
   const char *fault = nullptr;
+  // The block entry at `pc` already ran and met a boundary (a recompiler linked entry): the segment stops there.
+  bool entered = false;
 };
 
 // Runs from `pc` until the block that began at `blockStart` ends: after an unconditional jump's delay slot, after a
