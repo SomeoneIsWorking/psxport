@@ -60,7 +60,7 @@ psx::present::PaneRect PanelLayout::logoRect(LogoSize logo, LogoSize largest) co
 }
 
 PickerLayout::PickerLayout(int panelCount, Motion motion)
-    : mPanelCount(std::clamp(panelCount, 0, kMaxPickerPanels)),
+    : mPanelCount(std::max(panelCount, 0)),
       mSelectedShare(std::clamp(motion.selectedShare, 0.0f, 1.0f)), mSlantPerWidth(motion.slantPerWidth),
       mResponse(std::clamp(motion.responsePerFrame, 0.01f, 1.0f)) {
   retarget(0);
@@ -69,6 +69,20 @@ PickerLayout::PickerLayout(int panelCount, Motion motion)
 
 void PickerLayout::setSelection(int selected) {
   retarget(selected);
+}
+
+void PickerLayout::snap(int selected) {
+  retarget(selected);
+  mShare = mTargetShare;
+}
+
+void PickerLayout::pick(int selected) {
+  if (mPanelCount <= 0) {
+    return;
+  }
+  mTargetShare.assign(static_cast<std::size_t>(mPanelCount), 0.0f);
+  mTargetShare[static_cast<std::size_t>(std::clamp(selected, 0, mPanelCount - 1))] = 1.0f;
+  mTargetSlantScale = 0.0f;
 }
 
 void PickerLayout::retarget(int selected) {
@@ -96,6 +110,12 @@ bool PickerLayout::advance() {
     return false;
   }
   bool settling = false;
+  if (std::fabs(mTargetSlantScale - mSlantScale) <= kSettled) {
+    mSlantScale = mTargetSlantScale;
+  } else {
+    mSlantScale += (mTargetSlantScale - mSlantScale) * mResponse;
+    settling = true;
+  }
   for (int i = 0; i < mPanelCount; ++i) {
     const std::size_t index = static_cast<std::size_t>(i);
     const float remaining = mTargetShare[index] - mShare[index];
@@ -111,15 +131,15 @@ bool PickerLayout::advance() {
 }
 
 PanelLayout PickerLayout::panel(int index) const {
-  return layoutAt(index, mShare);
+  return layoutAt(index, mShare, mSlantScale);
 }
 
 psx::present::PixelSize PickerLayout::imageSize(int index) const {
-  const psx::present::PaneRect cover = layoutAt(index, mTargetShare).cover;
+  const psx::present::PaneRect cover = layoutAt(index, mTargetShare, mTargetSlantScale).cover;
   return {cover.w, cover.h};
 }
 
-PanelLayout PickerLayout::layoutAt(int index, const std::vector<float> &shares) const {
+PanelLayout PickerLayout::layoutAt(int index, const std::vector<float> &shares, float slantScale) const {
   PanelLayout out;
   if (mPanelCount <= 0 || index < 0 || index >= mPanelCount || mSurfaceW <= 0 || mSurfaceH <= 0) {
     return out;
@@ -140,7 +160,7 @@ PanelLayout PickerLayout::layoutAt(int index, const std::vector<float> &shares) 
   out.bounds = psx::present::PaneRect{x, 0, std::max(right - x, 0), mSurfaceH};
   // A fraction of the width, not the height: the slant is a horizontal displacement, and a
   // fraction of the height makes it invisible on a wide window.
-  out.slantX = static_cast<int>(std::lround(mSlantPerWidth * static_cast<float>(mSurfaceW)));
+  out.slantX = static_cast<int>(std::lround(mSlantPerWidth * slantScale * static_cast<float>(mSurfaceW)));
   // At the tiling edge the seam is half a slant left at the top and half a slant right at the
   // bottom. The row's two outer edges are the window's own and stand vertical, or each panel's
   // corner falls outside the surface it is meant to fill.

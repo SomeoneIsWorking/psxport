@@ -14,7 +14,6 @@
 #include "psx_exe_image.h"
 #include "run_end_report.h"
 #include "saved_disc.h"
-#include "spu_beetle.h"
 #include "state/state_command.h"
 #include "store_observe.h"
 
@@ -26,11 +25,10 @@
 namespace psx::host {
 namespace {
 
-// The process devices initialised, then bound to this Core through the shell, so its next step
+// This Core's devices bound through the shell (each powers on at its first bind), so its next step
 // knows what is bound; then `a0`/`a1` as the BIOS leaves them.
 void bindPerCoreDevices(Game &game, psx::frame::FrameLoopShell &shell) {
   Core &core = game.core;
-  psx::audio::spu::init();
   shell.bindRunningCore(core);
   game.spu_audio.init();
   game.pad.init();
@@ -302,6 +300,39 @@ void TitleSession::setAudible(bool audible) {
   if (parts_->booted) {
     parts_->game->spu_audio.output().setClaimed(audible);
   }
+}
+
+void TitleSession::handOver() {
+  role_ = Role::Product;
+  resume();
+  presentToWindow();
+  setPaneHost({});
+  setPlayerInput(true);
+  setAudible(true);
+  if (!parts_->booted) {
+    return;
+  }
+  Game &game = *parts_->game;
+  game.session.setPreview(false);
+  claimDebugEndpoint();
+  // The stage's frames were the selector's; the play check measures the run from here.
+  game.perf.restartPresentSeries();
+}
+
+void TitleSession::takeBack() {
+  role_ = Role::Panel;
+  end_ = End::Running;
+  setPlayerInput(false);
+  setAudible(false);
+  pause();
+  if (!parts_->booted) {
+    return;
+  }
+  Game &game = *parts_->game;
+  game.session.clearReturn();
+  game.session.setPreview(true);
+  game.rml_overlay.setVisible(false);
+  game.dbg_server.releaseEndpoint();
 }
 
 void TitleSession::claimDebugEndpoint() {

@@ -20,8 +20,6 @@ struct DebugCounters {
   long dmaWords = 0;
 };
 
-// Create and power the process SPU state each SpuDevice binds over.
-void init();
 void write(std::uint32_t addr, std::uint32_t val);
 std::uint32_t read(std::uint32_t addr);
 void dmaWrite(const std::uint32_t *words, int count);

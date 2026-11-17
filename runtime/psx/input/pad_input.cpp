@@ -36,6 +36,7 @@ void Pad::pollHostInput() {
 }
 
 void Pad::setPlayerInputSuppressed(bool suppressed) {
+  mTakeHeldOver = mPlayerInputSuppressed && !suppressed;
   mPlayerInputSuppressed = suppressed;
   mHost.setOverlayLive(&game->rml_overlay, !suppressed);
 }
@@ -85,6 +86,13 @@ void Pad::serviceFrame() {
     buttons = psx::input::kNoButtons;
     mPort2Buttons = psx::input::kNoButtons;
   }
+  const auto held = static_cast<uint16_t>(~buttons);
+  if (mTakeHeldOver) {
+    mTakeHeldOver = false;
+    mHeldOver = held;
+  }
+  mHeldOver &= held;
+  buttons |= mHeldOver;
 
   if (!mSession.configured()) {
     mSession.configure(psx::input::PadSessionConfig{

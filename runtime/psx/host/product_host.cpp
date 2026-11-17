@@ -109,26 +109,24 @@ int ProductHost::runSelector() {
   if (std::ranges::none_of(probe.probe(), &TitleAvailability::available) && !firstRun()) {
     return 0;
   }
+  // Probed once: the stage's sessions hold their titles' entries for the whole process.
+  const std::vector<TitleAvailability> titles = probe.probe();
+  // Empty (the default) is every provisioned title.
+  const std::string panelList = psx::config::picker_titles();
+  const std::vector<std::string_view> panelSlugs = psx::config::splitList(panelList, psx::config::kListSeparators);
+  const PickerContent content(titles, panelSlugs);
+  PanelSessions stage(catalog_, content, state.services);
   for (;;) {
-    // Re-probed on every return: a title provisioned while another ran becomes available.
-    const std::vector<TitleAvailability> titles = probe.probe();
-    // Empty (the default) is every provisioned title.
-    const std::string panelList = psx::config::picker_titles();
-    const std::vector<std::string_view> panelSlugs = psx::config::splitList(panelList, psx::config::kListSeparators);
-    const PickerContent content(titles, panelSlugs);
-    PanelSessions stage(catalog_, content, state.services);
     PickerSession picker(pickerRuntime, catalog_, content, stage, state.services);
-    const PickerSession::Result choice = picker.run();
+    PickerSession::Result choice = picker.run();
     if (choice.outcome == PickerSession::Outcome::DrawFault) {
       return endOnDrawFault();
     }
     if (choice.outcome != PickerSession::Outcome::Chosen || choice.session == nullptr) {
       return 0;
     }
-    // The panel's demo was a preview; the player chose the title, not the moment its
-    // attract loop had reached.
     lucent::info("host",
-                 "starting {} ({})",
+                 "playing {} ({}) on from its stage frame",
                  choice.session->title().identity->displayName,
                  choice.session->title().identity->serial);
     const TitleSession::End end = runToEnd(*choice.session);
@@ -141,7 +139,8 @@ int ProductHost::runSelector() {
     if (end != TitleSession::End::ReturnedToSelector && end != TitleSession::End::TitleEnded) {
       return 0; // a quit or the spent run budget ends the process
     }
-    // Back to the top, with a fresh probe, so a title provisioned in the meantime gets a panel.
+    // Back onto the stage where it stopped.
+    stage.takeBack(std::move(choice.session));
   }
 }
 
@@ -202,8 +201,7 @@ TitleSession::End ProductHost::runToEnd(TitleSession &session) {
     lucent::error("boot", "{} could not be started", session.title().identity->displayName);
     return TitleSession::End::Refused;
   }
-  // The selector's Game died with the PickerSession above, so the channel would answer
-  // nobody for the rest of the run.
+  // A session handed over from the stage claimed the channel already; a direct one claims it here.
   session.claimDebugEndpoint();
   while (session.end() == TitleSession::End::Running) {
     session.step();

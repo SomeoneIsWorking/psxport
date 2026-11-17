@@ -9,6 +9,7 @@
 #include "rmlui_render_gpu.h"
 
 #include "../ui/menu_document.h"
+#include "../ui/stage_band.h"
 #include "../ui/ui_assets.h"
 
 #include <utility>
@@ -98,6 +99,8 @@ void RmlOverlay::shutdown() {
   // The components deregister their listeners from still-live elements before the context goes.
   mBugReport.reset();
   mMenu.reset();
+  mStage.reset();
+  mStageShown = false;
   if (Rml::Context *base = ctx_(mCtx)) {
     base->UnloadAllDocuments();
     Rml::RemoveContext(base->GetName());
@@ -240,6 +243,9 @@ void RmlOverlay::newFrame() {
   if (mMenu) {
     mMenu->update(); // no-op while hidden
   }
+  if (mStage && mStageShown) {
+    mStage->update();
+  }
   c->Update();
 }
 
@@ -249,13 +255,51 @@ void RmlOverlay::recordGpu(SDL_GPUCommandBuffer *cmd, SDL_GPURenderPass *rp, int
   if (!mInited || !c) {
     return;
   }
-  if (!visible() && !mBugReport) {
+  if (!visible() && !mBugReport && !mStageShown) {
     return;
   }
   RmlRenderInterfaceGpu &r = mLibrary->renderer();
   r.BeginFrame(cmd, rp, win_w, win_h);
   c->Render();
   r.EndFrame();
+}
+
+// ---- the selector's band -------------------------------------------------------------------------------
+bool RmlOverlay::showStageBand(std::span<const std::string> titles) {
+  Rml::Context *c = ctx_(mCtx);
+  if (!mInited || !c) {
+    return false;
+  }
+  if (!mStage) {
+    psx::ui::AssetSet assets;
+    assets.open();
+    std::string path;
+    Rml::ElementDocument *d = assets.require("stage.rml", path) ? c->LoadDocument(path.c_str()) : nullptr;
+    if (!d) {
+      lucent::error("rmlui", "the selector band did not load from {}", path);
+      return false;
+    }
+    mStage = std::make_unique<psx::ui::StageBand>(d, game != nullptr ? &game->hostInput.glyphs() : nullptr);
+    // The menu opens over the band.
+    d->PushToBack();
+  }
+  mStage->setTitles(titles);
+  mStage->show();
+  mStageShown = true;
+  return true;
+}
+
+void RmlOverlay::selectStageTitle(int title) {
+  if (mStage) {
+    mStage->select(title);
+  }
+}
+
+void RmlOverlay::hideStageBand() {
+  if (mStage) {
+    mStage->hide();
+  }
+  mStageShown = false;
 }
 
 // ---- the bug report form -----------------------------------------------------------------------------

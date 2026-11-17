@@ -75,7 +75,8 @@ public:
     mLiveInputOnly = true;
   }
   // The host owns the player's input; the guest, the recording and a replay all see nothing pressed,
-  // the P / '.' / B debug keys do nothing here and this Game's overlay takes no host events.
+  // the P / '.' / B debug keys do nothing here and this Game's overlay takes no host events. When the input
+  // comes back, buttons still held from the host's screen stay hidden from the guest until released.
   void setPlayerInputSuppressed(bool suppressed);
 
   // The one way to press PSX buttons (kButton bits, active high) on port `port`'s virtual gamepad (0 is port 1). A
@@ -97,4 +98,7 @@ private:
   psx::input::PadRecordReplay mSession;
   bool mLiveInputOnly = false;
   bool mPlayerInputSuppressed = false;
+  // Active high: held across the hand-over, hidden until released.
+  uint16_t mHeldOver = 0;
+  bool mTakeHeldOver = false;
 };

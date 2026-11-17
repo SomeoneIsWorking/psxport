@@ -20,7 +20,7 @@ public:
   int depth = 0; // 1: the title's marked world geometry tests depth (present::DepthTest); 0 draws slot order only
   // The title selector's layout: the selected panel's share of the width, the seam slant per width,
   // and the share of the remaining travel a width animation covers per frame.
-  float pickerSelectedShare = 0.6f;
+  float pickerSelectedShare = 0.64f;
   float pickerSlantPerWidth = 0.1f;
   float pickerWidthResponse = 0.25f;
 

@@ -41,10 +41,9 @@ struct SessionServices {
 // step() advances one step, and destruction is the whole teardown. The window and presentation
 // device are the product's and survive every session.
 //
-// Steppable rather than a self-running loop because the picker needs its titles alive at the same
-// time: three sessions, one advancing and two paused, each showing its own picture. A loop that
-// owns itself cannot be paused, and rebuilding a title to show its panel would restart it from
-// power-on every time the player moved the selection.
+// Steppable rather than a self-running loop because the selector needs its titles alive at the same
+// time: one advancing and the others paused, each showing its own picture, and the picked one handed
+// to the play loop and back without a reboot. A loop that owns itself cannot be paused or handed over.
 //
 // `services` must outlive this session.
 class TitleSession {
@@ -132,6 +131,16 @@ public:
   }
   // This session alone may be heard. Exactly one session in a process holds it at a time.
   void setAudible(bool audible);
+  // The picked panel becomes the product and plays on in the same machine: the window, the player's
+  // controller (a press still held from the selector stays hidden until released), the sound and the
+  // control channel are its; it is no longer a preview.
+  void handOver();
+  // The product goes back onto the selector's stage, paused where it stopped: a silent preview again, with
+  // no controller and no control channel, its return request answered.
+  void takeBack();
+  Role role() const {
+    return role_;
+  }
   // A claim does not outlive a Game, and confirming destroys the picker Game, so the session that
   // becomes the product must claim it or later commands time out on a healthy run. See
   // psxport::DbgServer::claimEndpoint.

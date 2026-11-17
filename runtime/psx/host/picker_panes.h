@@ -1,4 +1,5 @@
-// The title selector's picture: each panel's own present image 1:1, its title's logo, and the dividers.
+// The title selector's picture: each side's own present image 1:1 (a plain tile before it has one), its
+// title's logo, and the divider.
 #pragma once
 
 #include "picker_layout.h"

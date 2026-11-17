@@ -6,6 +6,7 @@
 #include <SDL3/SDL.h>
 #include <cstdint>
 #include <memory>
+#include <span>
 #include <string>
 
 class Game;
@@ -18,6 +19,7 @@ class Form;
 namespace psx::ui {
 class MenuDocument;
 class RmlUiLibrary;
+class StageBand;
 } // namespace psx::ui
 
 class RmlOverlay {
@@ -67,6 +69,14 @@ public:
   bug_report::Form *showBugReport(const bug_report::Draft &draft);
   void closeBugReport();
 
+  // ---- the title selector's band (assets/rml/stage.rml) ----------------------------------------------
+  // Drawn over the window like the menu, under it when both are up. False when the overlay is not up or
+  // the document did not load.
+  bool showStageBand(std::span<const std::string> titles);
+  // The selected title's index in the band; -1 dims every title.
+  void selectStageTitle(int title);
+  void hideStageBand();
+
   // Every tab, pane and row with its live value, to the log (control channel `menu`).
   void dumpMenu() const;
 
@@ -81,4 +91,7 @@ private:
   std::unique_ptr<psx::ui::MenuDocument> mMenu;
 
   std::unique_ptr<bug_report::Form> mBugReport;
+
+  std::unique_ptr<psx::ui::StageBand> mStage;
+  bool mStageShown = false;
 };

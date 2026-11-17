@@ -185,6 +185,10 @@ bool DbgServer::claimEndpoint() {
   return DebugChannel::process.claim(this);
 }
 
+void DbgServer::releaseEndpoint() {
+  DebugChannel::process.release(this);
+}
+
 void DbgServer::start() {
   const int port = psx::config::debug_server_port();
   if (port == 0 || !DebugChannel::process.claim(this)) {

@@ -24,12 +24,13 @@ catalog contract a title implements (`title_catalog.h`, `single_title_catalog`, 
 | `title_session.{h,cpp}` | `TitleSession`: one boot-to-exit run of one title as a steppable owner; destruction is the whole teardown |
 | `session_run.h` (`runtime/psx/game/`) | `SessionRun`, held per `Game` as `Game::run`: a title's request to end its run |
 | `run_budget.{h,cpp}` | `RunBudget`: the process's run cap in presentation-fence steps, decided once from `PSXPORT_NATIVE_FRAMES` |
-| `panel_sessions.{h,cpp}` | `PanelSessions`: panel session lifetime and focus: one session per panel (the available titles `PSXPORT_PICKER_TITLES` asks for), only the focused one runs |
+| `panel_sessions.{h,cpp}` | `PanelSessions`: the stage: one live session per panel (the available titles `PSXPORT_PICKER_TITLES` asks for), all booted at start, only the focused one runs; hand-over and take-back |
+| `stage_sides.{h,cpp}` | `StageSides`: which two titles stand on the stage's sides and which is selected; the ring for three or more |
 | `picker_session.{h,cpp}` | `PickerSession`: the selector frame loop; the focused panel steps once per iteration |
 | `picker_runtime.{h,cpp}` | `PickerRuntime`: the selector's own `GameRuntime`; the control commands `picker`, `pick`, `select` |
 | `picker_content.{h,cpp}` | `PickerContent`: the available titles and the panel-to-title mapping |
-| `picker_layout.{h,cpp}` | `PickerLayout`: panel geometry, seams, the width animation and each panel's present size |
-| `picker_panes.{h,cpp}` | `PickerPanes`: the panes one selector frame draws: each panel's picture 1:1, its logo, the seams |
+| `picker_layout.{h,cpp}` | `PickerLayout`: side geometry, seams, the width animation, the pick's slide and each side's present size |
+| `picker_panes.{h,cpp}` | `PickerPanes`: the panes one selector frame draws: each side's picture 1:1 or a plain tile, its logo, the divider |
 | `panel_logo.{h,cpp}` | `PanelLogo`: a `LogoImage` plus its lazily uploaded texture; `SavedLogo`: the last logo read from the running title, `<user data>/<slug>/picker-logo.rgba` |
 | `logo_image.h` | `LogoImage`: straight-alpha RGBA8, included by `game_runtime.h` without SDL |
 | `product_host.{h,cpp}` | `ProductHost`: the process top level; owns the command line and help, the window and device, the `QuitScope`, the `RunBudget` and the process watchdog |
@@ -135,78 +136,81 @@ return` or the ESC row ends it as `ReturnedToSelector` and the selector is rebui
 
 ### The selector
 
-- **One owner for panel lifetime.** `PanelSessions` creates one unbooted `TitleSession` per panel, and
-  is the only thing that boots, steps, pauses, resumes or destroys one. It also owns the focus: which
-  panel the player is on (`focus`, `step`).
-- **Only the focused panel runs.** Each selector iteration steps the focused session exactly once, as
-  an ordinary paced step on its own `FramePacer`, so its title runs at the game's own field rate. There
-  is no pre-roll, no fast-forward and no shared selector clock: no unfocused session is stepped, ever,
-  so an unfocused panel executes zero guest instructions (`panels:` reports each panel's executed
-  instruction count).
-- **Focus change.** The old focus is paused (its guest, VRAM and last present stay exactly as they
-  were) and released from the audio device; the new one is resumed, or booted from power-on the first
-  time it is focused, and claims audio. No panel ever sees the player's pad: Spyro 1's demo ends on any
-  button, and a triangle tap on the selector during it leaves the demo running.
+The selector is the Slant Stage (the `slant-stage` skill): the titles themselves are the menu.
+
+- **Every title is loaded at once.** `PanelSessions` (the stage) creates one `TitleSession` per panel when
+  `runSelector` starts and boots every one of them (`bootAll`) once the selector's Game holds the control
+  channel. It is the only thing that boots, steps, pauses, resumes, hands over or destroys one, and it owns the
+  focus: which title the player is on (`focus`, which logs `picker: on <title>`). No title is booted twice
+  while its instance lives.
+- **Two sides, one edge.** The window shows two titles split by one slanted edge (`StageSides`,
+  `PickerLayout`). The selected side's share of the width is the settings file's `picker_selected_share`
+  (default 0.64). Two titles stop at the window's edges. Three or more form a ring: the stage shows the
+  selected title and one neighbour, and a move past the selected side steps it across to the other side at
+  its width and brings the next ring title in on this one (`StageSides::step`, `PickerLayout::snap`), after
+  which the edge eases on as usual. `select <slug>` puts a title that is not on the stage on the unselected
+  side.
+- **Only the focused title runs.** Each selector iteration steps the focused session exactly once, as an
+  ordinary paced step on its own `FramePacer`. No other session is stepped, so it executes zero guest
+  instructions (`panels:` reports each panel's executed instruction count). The old focus is paused (its
+  guest, VRAM and last present stay exactly as they were) and released from the audio device; the new one
+  resumes from the frame where it stopped and claims audio. No panel sees the player's pad.
+- **A side with no frame yet is a plain tile** under its title's logo (`PickerPanes`); a side whose title has
+  presented shows its newest present, greyed and darkened when it is not selected.
+- **The band.** A dark band along the bottom (`assets/rml/stage.rml`, `psx::ui::StageBand`, drawn by the
+  selector Game's `RmlOverlay` like the menu, under it) lists every title, the selected one bright, and the
+  hint line in the glyphs of the device last pressed (`MenuPrompts`).
+- **Pick is a hand-over.** Cross or Start (or `pick <slug>`) hides the band and slides the edge out: the
+  picked side widens to the whole window while its seams stand up (`PickerLayout::pick`), the title still
+  running. When the layout settles, the selector's Game is destroyed, the other instances are unloaded, and
+  `PanelSessions::handOver` logs `picker: picked <title>` and makes the session the product
+  (`TitleSession::handOver`): its presents go to the window, the player's pad goes live, it is heard, it
+  holds the control channel and it is no longer a preview. A press still held from the selector stays hidden
+  from the guest until released (`Pad::setPlayerInputSuppressed`).
+- **Return is a hand-back.** `session return` or the menu row ends the product's loop; `runSelector` gives
+  the session back to the stage (`PanelSessions::takeBack`, `TitleSession::takeBack`): paused where it
+  stopped, a silent preview again, its return request answered and the control channel released for the new
+  selector Game. The instances unloaded at the pick get new sessions and boot again. A title that ended its
+  own run (`TitleEnded`) cannot go on and is replaced by a new session.
 - **The attract demo is the title's own.** A focused panel runs its title's boot path with no input:
-  publisher cards, title screen, and the demo the title itself starts when its title screen times
-  out, looping as on the console. A panel's Game is a preview (`Game::session.preview()`, set by
-  `TitleSession::boot` for `Role::Panel`): a title may end the screens the player does not control (cards,
-  movies) at their own terminal transitions, as a Start skip would, so its panel reaches the demo. Each such
-  skip is the title's own; the host skips nothing. Walked in the selector (issue 0196): Spyro 1,
-  Crash 2, Spider-Man 1 and Tomba! 2 reach their demos; Crash 3 hangs on the way (psx-crash 0035),
-  Enter Electro presents only black (psx-spider-man 0039); Tomba! 1 has no gameplay demo: its title
-  timeout replays the story intro `OP_INST.STR`, and its panel reaches that attract within 2 s; Spyro 2/3 and Crash 1 reach
-  theirs per their title docs, not walked here.
-- **Unfocused panels show their still.** A paused panel draws its newest present (the frame it was on
-  when it lost focus) greyed, and its logo. A panel never focused yet has no picture; it shows its logo
-  on black when one is saved.
-- **The logo comes from the running game.** `GameRuntime::panelLogo(Core &)` reads the title's own
-  logo from its live machine (its title screen's own draws from VRAM while that screen is up). It is taken on
-  the second step in a row its gate is open, so the frame read was drawn wholly inside the gate. The first read in a selector
-  replaces the panel's logo and is saved (`SavedLogo`, `picker-logo.rgba` in the title's user-data
-  directory, beside `disc-path`); every later selector loads it when it creates its panels, so a panel
-  shows its logo from the selector's first frame without running its title. A title never focused on
-  this machine has no logo until its title screen first shows. No committed image of game art is drawn:
-  the saved file is read from the player's own disc at run time. `PanelLayout::logoRect` sizes it
-  at the largest whole multiple at which the selector's largest logo stays inside the panel's seams over the
-  rows it covers (shrunk to fit only when one multiple does not), so panels of one width draw every logo at
-  one texel scale, as large against each other as on their own title screens; its centre at a fifth of the panel's height, so the
-  nearest sampler keeps it sharp and a narrow panel never cuts it. It is hidden while
-  `GameRuntime::showsOwnLogo(Core &)` says the panel's picture already shows it. The question is asked of
-  every panel's machine, focused or paused: a paused machine holds the state its still was drawn from.
+  publisher cards, title screen, and the demo the title itself starts when its title screen times out. A
+  panel's Game is a preview (`Game::session.preview()`, set by `TitleSession::boot` for `Role::Panel` and
+  cleared at the hand-over): a title may end the screens the player does not control (cards, movies) at their
+  own terminal transitions, as a Start skip would. Each such skip is the title's own; the host skips nothing.
+- **The logo comes from the running game.** `GameRuntime::panelLogo(Core &)` reads the title's own logo from
+  its live machine (its title screen's own draws from VRAM while that screen is up), taken on the second step
+  in a row its gate is open and saved (`SavedLogo`, `picker-logo.rgba` in the title's user-data directory);
+  later selectors load it when they create the panel. No committed image of game art is drawn.
+  `PanelLayout::logoRect` sizes it at whole texels inside the seams; it is hidden while
+  `GameRuntime::showsOwnLogo(Core &)` says the picture already shows it.
 - **One process, one window.** The window and GPU device are `ProductHost`'s and outlive every session.
+  Each instance binds its own Beetle devices (SPU, GTE, MDEC each power on at their first bind; the GPU is
+  parked and restored through its serialized state, texture cache included) and its own native CDC.
 
 The selector's frame follows the focused panel's presents: the picker is that panel's pane host
-(`TitleSession::setPaneHost`), building at each pane build and showing at each pane show, so an
-interpolated logic frame's in-between reaches the window. The loop builds, paces and shows itself only
-on an iteration where the panel did not present, and paces only when the panel's step paced nothing.
-The selector is the host Game's screen: it builds through `DisplayPresenter::buildPanes` and shows
-through the same present, overlay and RmlUi menu as a title frame, so ESC opens the menu over it and a
-changed setting reaches the focused panel (`Mods::reload`). D-pad Left/Right and `select left|right`
-move the focus with wrap; Cross or Start confirms. The selector's Game holds the control channel; a
-verb its own menu does not name and that acts on a machine (`DebugCommands::reachesMachine`: memory,
-registers, the machine's picture, its devices, a title's own verbs) runs on the focused panel's machine
-once it has booted (`DbgServer::routeMachineVerbsToPanel`) and is refused with `focused panel not booted` before
-that, and window, host-input and configuration verbs
-(`pshot`, `gamepad`, `cvar`) stay on the selector. Panel 0 starts focused. Each panel presents at its
-settled cover size and is drawn 1:1 (`presentation.md`). The focused panel's share of the window width
-is the settings file's `picker_selected_share` (default 0.6) and the others split the rest evenly
-(`PickerLayout::retarget`), so two titles are 60/40 and three 60/20/20. A panel is ready once its title
-is past its boot prefix and has presented a field with the guest display enabled (GP1(03),
-`DisplayArea::enabled`; `TitleSession::showsTitlePicture`); no pixels are sampled. The selector logs its
-end state with the panel summary (`selector ended ... ; panels: [0]*slug picture steps=… insns=… ...`).
+(`TitleSession::setPaneHost`), building at each pane build and showing at each pane show. The loop builds,
+paces and shows itself only on an iteration where the panel did not present, and paces only when the panel's
+step paced nothing. The selector is the host Game's screen: it builds through `DisplayPresenter::buildPanes`
+and shows through the same present, overlay and RmlUi menu as a title frame, so ESC opens the menu over it
+and a changed setting reaches the focused panel (`Mods::reload`). The selector's Game holds the control
+channel; a verb that acts on a machine runs on the focused panel's machine
+(`DbgServer::routeMachineVerbsToPanel`), and window, host-input and configuration verbs stay on the
+selector. The focused title presents at its side's settled cover size and is drawn 1:1 (`presentation.md`).
+A panel is ready once its title is past its boot prefix and has presented a field with the guest display
+enabled (`TitleSession::showsTitlePicture`). The selector logs its end state with the panel summary.
 
 `ProductHost` hands every session its `SessionServices`: the presentation device, the process
 `QuitScope`, the `RunBudget` and whether `PSXPORT_LOAD_STATE` is still owed (only the process's first
-product session loads it; a title picked after a return boots from power-on). A session is a `Role::Panel` (a picker panel) or a
-`Role::Product` (the confirmed title, or the executable `runExecutable` was given).
+product session loads it; a title picked after a return boots from power-on). A session is a `Role::Panel` (on the stage) or a
+`Role::Product` (the picked title, or the executable `runExecutable` was given); a stage session changes role
+at the hand-over and back.
 
 `TitleSession::boot`, in order: refuse a boot entry the image cannot honour; read the executable;
 install the title's runtime and build its `Game`; attach the
 `QuitScope` to its `HostInput`; panel defaults (pane route, suppressed pad, audibility);
 the disc key from the title's `TitleIdentity`; `GameRuntime::admitExecutable`; the configuration audit
-(`psx::config::report_once`); the per-Core device binds (init then bind, then `Pad::overridesInit`, then
-the `a0`/`a1` seed); `GameRuntime::registerOverrides` then `FrameLoopShell::prepareProduct`;
+(`psx::config::report_once`); the per-Core device binds (each device powers on at its first bind, then the
+pad and memory card, then the `a0`/`a1` seed); `GameRuntime::registerOverrides` then `FrameLoopShell::prepareProduct`;
 `DbgServer::start` and `store_observe_attach`; for a product only, a `DisplayPresenter` transition present;
 `GameRuntime::startProgram`; for the first product session only,
 `psx::state::applyConfiguredState` (fatal on failure); then the present-to-present series restarts, so the boot's gap
@@ -221,8 +225,8 @@ The body is `FieldTurn::beginField`, `FrameLoopShell::step` (one presentation fe
 `RunBudget::step` and `Repl::afterStep` for a product, `FieldTurn::endField`.
 A product session's destructor prints the one `RunEndReport` (`run complete`, the executor
 ledger, guest-call census, present intervals, record stability, audio queue, `reportRun`). `Quit` and
-`BudgetSpent` end the process; `ReturnedToSelector` and `TitleEnded` rebuild the selector when the
-run came from it, and end the process under `runExecutable`.
+`BudgetSpent` end the process; `ReturnedToSelector` and `TitleEnded` hand the session back to the stage when
+the run came from it, and end the process under `runExecutable`.
 
 ### RunBudget
 

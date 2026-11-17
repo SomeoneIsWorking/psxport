@@ -231,6 +231,7 @@ set(PSXPORT_FRAMEWORK_SRC
   ${PSXPORT_ROOT}/runtime/psx/host/picker_session.cpp
   ${PSXPORT_ROOT}/runtime/psx/host/picker_runtime.cpp
   ${PSXPORT_ROOT}/runtime/psx/host/picker_layout.cpp
+  ${PSXPORT_ROOT}/runtime/psx/host/stage_sides.cpp
   ${PSXPORT_ROOT}/runtime/psx/host/picker_panes.cpp
   ${PSXPORT_ROOT}/runtime/psx/host/picker_content.cpp
   ${PSXPORT_ROOT}/runtime/psx/host/executable_provisioner.cpp
@@ -279,6 +280,7 @@ set(PSXPORT_FRAMEWORK_SRC
   ${PSXPORT_ROOT}/runtime/ui/menu_prompts.cpp       # the button prompts in the active pad's glyphs
   ${PSXPORT_ROOT}/runtime/ui/menu_readouts.cpp      # the live video, debug status and title readout lines
   ${PSXPORT_ROOT}/runtime/ui/menu_document.cpp      # the tree over assets/rml/menu.rml
+  ${PSXPORT_ROOT}/runtime/ui/stage_band.cpp         # the selector band over assets/rml/stage.rml
   ${PSXPORT_ROOT}/vendor/rmlui/Backends/RmlUi_Platform_SDL.cpp)
 
 add_library(psxport STATIC ${PSXPORT_FRAMEWORK_SRC})

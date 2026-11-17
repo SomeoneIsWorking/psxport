@@ -1,0 +1,14 @@
+<rml>
+<head>
+	<title>stage</title>
+	<link type="text/rcss" href="rml.rcss"/>
+	<link type="text/rcss" href="stage.rcss"/>
+</head>
+<body>
+	<!-- The selector's band: psx::ui::StageBand fills #stage-titles; the prompts are drawn by MenuPrompts. -->
+	<div id="band">
+		<div id="stage-titles"></div>
+		<p class="hint"><glyph button="left"/><glyph button="right"/> choose &#183; <glyph button="cross"/> play</p>
+	</div>
+</body>
+</rml>

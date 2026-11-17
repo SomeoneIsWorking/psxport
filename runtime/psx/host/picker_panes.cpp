@@ -20,6 +20,11 @@ constexpr float kDividerRed = 0.76f;
 constexpr float kDividerGreen = 0.64f;
 constexpr float kDividerBlue = 0.18f;
 
+// A side with no frame yet is a plain tile under its logo.
+constexpr float kTileRed = 0.11f;
+constexpr float kTileGreen = 0.11f;
+constexpr float kTileBlue = 0.13f;
+
 // Every pane of a panel is cut by the panel's own two seams, so nothing leaks over a neighbour.
 void cutBy(const PanelLayout &geometry, psx::render::Pane &pane) {
   pane.seamLeftTop = static_cast<float>(geometry.seams.leftTopX);
@@ -70,6 +75,19 @@ std::span<const psx::render::Pane> PickerPanes::build(const PickerLayout &layout
       cutBy(geometry, picture);
       shade(isSelected, picture);
       panes_.push_back(picture);
+    } else {
+      psx::render::Pane tile{};
+      tile.solid = true;
+      tile.x = static_cast<float>(geometry.cover.x);
+      tile.y = static_cast<float>(geometry.cover.y);
+      tile.width = static_cast<float>(geometry.cover.w);
+      tile.height = static_cast<float>(geometry.cover.h);
+      cutBy(geometry, tile);
+      shade(isSelected, tile);
+      tile.tintR *= kTileRed;
+      tile.tintG *= kTileGreen;
+      tile.tintB *= kTileBlue;
+      panes_.push_back(tile);
     }
 
     // The title's own logo at whole texels and every panel's one scale, so the nearest sampler keeps it sharp.

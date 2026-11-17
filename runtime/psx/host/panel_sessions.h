@@ -1,4 +1,5 @@
-// The selector's panel sessions: their lifetime and which one the player is focused on.
+// The selector's stage: one live instance per title, their lifetime across picks and returns, and which one
+// the player is on.
 #pragma once
 
 #include "panel_logo.h"
@@ -18,11 +19,12 @@ namespace psx::host {
 class TitleSession;
 struct SessionServices;
 
-// Only the focused panel's session runs; every other one is paused and executes nothing.
+// Every title is loaded at once in its own machine. Only the focused one runs; every other one is paused
+// and executes nothing. The picked one is handed to the play loop and comes back on a return, never rebooted.
 class PanelSessions {
 public:
   // One unbooted session per panel of `content`, in panel order. The sessions reference the content's
-  // probed entries, which outlive the picker.
+  // probed entries, which outlive the stage.
   PanelSessions(const TitleCatalog &catalog, const PickerContent &content, SessionServices &services);
   ~PanelSessions();
   PanelSessions(const PanelSessions &) = delete;
@@ -31,7 +33,9 @@ public:
   int count() const {
     return static_cast<int>(sessions_.size());
   }
-  // The session behind a panel, or null.
+  // Boot every panel not booted yet; a refused one is logged once and stays empty.
+  void bootAll();
+  // The session behind a panel, or null (none, or handed over).
   TitleSession *session(int panel);
   const TitleSession *session(int panel) const;
   // Whether the panel has a picture of its own to draw.
@@ -42,22 +46,23 @@ public:
   // earlier read, except while the panel's picture already shows it.
   PanelLogo *logo(int panel);
 
-  // Move the focus: the old panel pauses and goes silent, the new one resumes (or boots) and is heard.
+  // Move the focus: the old panel pauses and goes silent, the new one resumes and is heard.
   void focus(int panel);
-  // One panel left (-1) or right (+1), wrapping at the ends: the pad and `select left|right` alike.
-  void step(int dir);
   int focused() const {
     return focused_;
   }
   // The focused panel's machine once it has booted; null before.
   Core *focusedMachine();
 
-  // One step of the focused session, booting it first if it never ran. Returns the display fields that
-  // step waited for, so the loop paces the frame itself only when the panel did not.
+  // One step of the focused session. Returns the display fields that step waited for, so the loop paces
+  // the frame itself only when the panel did not.
   unsigned long long advance();
-  // Ends every session and hands back a fresh unbooted session for the focused title: the demo was a
-  // preview, so choosing a game starts it at power-on.
-  std::unique_ptr<TitleSession> confirm();
+  // The focused session, running, handed over as the product (TitleSession::handOver); every other
+  // instance is unloaded.
+  std::unique_ptr<TitleSession> handOver();
+  // The product back onto its panel, paused where it stopped; the unloaded panels get new, unbooted
+  // sessions. A title that ended its own run cannot go on and is replaced by an unbooted one too.
+  void takeBack(std::unique_ptr<TitleSession> session);
   // What the sessions are doing: `panels: [0]*slug picture steps=… insns=… [1] slug cold ...`.
   std::string summary() const;
   // Log the summary at `lucent::debug`.
@@ -69,11 +74,13 @@ private:
   void takeLogo(int panel, TitleSession &session);
   // Guest instructions this panel's machine has executed; 0 before it boots.
   std::uint64_t executedInstructions(int panel) const;
+  // A new paused, silent, unbooted session for this panel.
+  void create(int panel);
 
   const TitleCatalog &catalog_;
   const PickerContent &content_;
   std::vector<std::unique_ptr<TitleSession>> sessions_;
-  // Kept because confirm() builds the fresh session the player gets.
+  // Kept because takeBack() builds the sessions it replaces.
   SessionServices &services_;
   // A boot was attempted, so a refused one is not retried every frame.
   std::vector<bool> tried_;

@@ -88,11 +88,6 @@ void IRQ_Assert(int which, bool asserted) {
 // so every access first runs the SPU to the guest's time (catchUp).
 namespace psx::audio::spu {
 
-void init() {
-  SPU_Init();
-  SPU_Power();
-}
-
 void write(uint32_t addr, uint32_t val) {
   const uint32_t off = addr & 0x3FF;
   SpuDevice &spu = *SpuDevice::bound();

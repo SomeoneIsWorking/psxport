@@ -11,9 +11,6 @@ namespace psx::host {
 // A logo's vertical centre, as a fraction of the panel's height.
 inline constexpr double logoCentrePerHeight = 0.2;
 
-// A catalog longer than this is refused rather than laid out at zero width.
-inline constexpr int kMaxPickerPanels = 8;
-
 // A logo's size in texels.
 struct LogoSize {
   int width = 0;
@@ -55,6 +52,10 @@ public:
 
   // Every panel moves towards the shares this selection calls for on the next advance().
   void setSelection(int selected);
+  // The shares this selection calls for, at once: the stage's sides took new titles.
+  void snap(int selected);
+  // The picked panel widens to the whole surface and its seams stand up, so the edge leaves the window.
+  void pick(int selected);
 
   // A resize re-derives every rectangle from the current shares, so the animation continues.
   void setSurface(int width, int height);
@@ -71,14 +72,10 @@ public:
   // panel shows its picture 1:1 rather than rebuilt at every width it passes through.
   psx::present::PixelSize imageSize(int index) const;
 
-  static constexpr int maxPanels() {
-    return kMaxPickerPanels;
-  }
-
 private:
   // The shares the selection calls for; advance() walks each panel there.
   void retarget(int selected);
-  PanelLayout layoutAt(int index, const std::vector<float> &shares) const;
+  PanelLayout layoutAt(int index, const std::vector<float> &shares, float slantScale) const;
 
   int mPanelCount;
   float mSelectedShare;
@@ -88,6 +85,9 @@ private:
   // The animation is the difference between the current share and its target.
   std::vector<float> mShare;
   std::vector<float> mTargetShare;
+  // The seams' lean as a fraction of the configured slant: 1, easing to 0 on a pick.
+  float mSlantScale = 1.0f;
+  float mTargetSlantScale = 1.0f;
 };
 
 } // namespace psx::host

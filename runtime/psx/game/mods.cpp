@@ -19,7 +19,7 @@ Var<long> cv_ires("ires", 1, {lucent::cvar::Persistence::Saved, "PSXPORT_IRES"})
 Var<bool> cv_fps60("fps60", false, {lucent::cvar::Persistence::Saved, "PSXPORT_FPS60"});
 Var<bool> cv_depth("depth", true, {lucent::cvar::Persistence::Saved, "PSXPORT_DEPTH"});
 Var<double> cv_picker_selected_share("picker_selected_share",
-                                     0.6,
+                                     0.64,
                                      {lucent::cvar::Persistence::Saved, "PSXPORT_PICKER_SELECTED_SHARE"});
 Var<double> cv_picker_slant("picker_slant", 0.1, {lucent::cvar::Persistence::Saved, "PSXPORT_PICKER_SLANT"});
 Var<double> cv_picker_width_response("picker_width_response",

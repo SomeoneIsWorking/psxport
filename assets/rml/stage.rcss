@@ -1,0 +1,53 @@
+/* The selector's bottom band, drawn over the stage like the menu (same fonts and hint line). */
+
+* {
+	box-sizing: border-box;
+}
+
+body {
+	width: 100%;
+	height: 100%;
+	font-family: "Fira Sans";
+	font-size: 15dp;
+	color: #E0DBC8;
+}
+
+#band {
+	position: absolute;
+	left: 0;
+	right: 0;
+	bottom: 0;
+	padding: 14dp 32dp 12dp 32dp;
+	background-color: rgba(0, 0, 0, 78%);
+	text-align: center;
+}
+
+#stage-titles {
+	display: block;
+	font-family: "Fira Sans Condensed";
+	font-weight: bold;
+	font-size: 24dp;
+}
+
+.stage-title {
+	display: inline-block;
+	margin: 0 18dp;
+	color: rgba(224, 219, 200, 38%);
+}
+
+.stage-title.on {
+	color: #F4EFDC;
+}
+
+.hint {
+	display: block;
+	margin-top: 6dp;
+	font-size: 15dp;
+	color: rgba(224, 219, 200, 55%);
+}
+
+glyph {
+	font-family: PromptFont;
+	font-size: 1.3em;
+	color: #E0DBC8;
+}

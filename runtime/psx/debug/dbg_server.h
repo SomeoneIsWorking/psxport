@@ -25,8 +25,10 @@ public:
 
   // Starts the listener when PSXPORT_DEBUG_SERVER names a port and claims it for this Game.
   void start();
-  // Takes the endpoint after the claiming Game was destroyed; false while another Game holds it.
+  // Takes the endpoint after the claiming Game was destroyed or released it; false while another Game holds it.
   bool claimEndpoint();
+  // Lets the endpoint go while this Game lives on: a title handed back to the selector's stage.
+  void releaseEndpoint();
   // From now on machine verbs this Game's own menu does not name go to a selector's focused panel: `machine`, or a
   // refusal while that panel has not booted.
   void routeMachineVerbsToPanel(Core *machine) {

@@ -4,6 +4,7 @@
 #include "picker_layout.h"
 #include "picker_panes.h"
 #include "picker_runtime.h"
+#include "stage_sides.h"
 #include "title_catalog.h"
 
 #include <memory>
@@ -18,13 +19,14 @@ class PanelSessions;
 class TitleSession;
 struct SessionServices;
 
-// The title selector: a product screen of live panels, presented by the host Game like a game frame.
+// The title selector (Slant Stage): two of the stage's live titles side by side, presented by the host Game
+// like a game frame; picking slides the edge out and hands the running title over.
 class PickerSession {
 public:
   enum class Outcome : std::uint8_t { Chosen, Ended, DrawFault };
   struct Result {
     Outcome outcome = Outcome::Ended;
-    std::unique_ptr<TitleSession> session; // the chosen title's session, set when Chosen
+    std::unique_ptr<TitleSession> session; // the picked title's session, handed over, set when Chosen
   };
 
   // `content` names the panels and `stage` holds their sessions; both, and `catalog`, outlive this
@@ -41,11 +43,14 @@ public:
   Result run();
 
 private:
-  // Read the pad and the control channel for one frame and act on them. Returns the chosen panel,
-  // or -1 to keep the selector up.
-  int serviceInput(PickerLayout &layout);
+  // Read the pad and the control channel for one frame and act on them. True when the selected title was
+  // picked.
+  bool serviceInput(PickerLayout &layout);
+  // Apply a move of the stage's sides: the focus follows the selected side and the edge eases (or, when
+  // both sides took new titles, starts again from the side the move came from).
+  void applyMove(StageSides::Move move, int dir, PickerLayout &layout);
 
-  // The selector's present: every panel's current picture built into the host's present image.
+  // The selector's present: each side's current picture built into the host's present image.
   void build(const PickerLayout &layout);
   // Attach the host to the focused panel and detach it from every other.
   void attachPaneHost(const PickerLayout &layout);
@@ -59,6 +64,7 @@ private:
   PickerPanes panes_;
   PanelSessions *panels_;
   std::vector<PanelSource> sources_;
+  StageSides sides_;
   // A panel presented during this loop iteration, so the loop must not build or pace a second time.
   bool built_ = false;
   // The panel the host is attached to.
