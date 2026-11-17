@@ -10,6 +10,7 @@ void VertexPlaces::track(bool on) {
   carriedMask_ = 0;
   if (!on) {
     std::vector<std::uint64_t>().swap(placed_);
+    placedWords_ = nullptr;
     std::vector<Stored>().swap(stored_);
     std::vector<std::uint32_t>().swap(keptRun_);
   }
@@ -30,6 +31,7 @@ void VertexPlaces::note(std::uint32_t address, std::uint32_t word, const NotedPl
 void VertexPlaces::allocate() {
   if (placed_.empty()) {
     placed_.resize((kSlots + 63u) / 64u);
+    placedWords_ = placed_.data();
     keptRun_.resize(placed_.size());
     stored_.resize(kSlots);
   }

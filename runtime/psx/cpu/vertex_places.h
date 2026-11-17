@@ -63,6 +63,25 @@ public:
   [[nodiscard]] bool tracking() const {
     return tracking_;
   }
+  // What a translated guest load reads to tell, inline, that `loaded`/`overwrote` would do nothing for it: tracking
+  // off, or (a) its register carries no place, and for a whole-word load (b) its opcode is no face load and (c) the
+  // word's slot holds no place. Every pointer stays valid for the table's lifetime.
+  struct LoadGate {
+    const std::uint8_t *tracking = nullptr;
+    const std::uint32_t *carriedMask = nullptr;
+    const std::uint32_t *faceLoadMask = nullptr;
+    // The placed-slot bitmap (one bit per slot: main-RAM words, then the scratchpad's), or null before the first note.
+    std::uint64_t *const *placedWords = nullptr;
+  };
+  [[nodiscard]] LoadGate loadGate() const {
+    return {reinterpret_cast<const std::uint8_t *>(&tracking_), &carriedMask_, &faceLoadMask_, &placedWords_};
+  }
+  // The face-load mask bit of a load instruction.
+  [[nodiscard]] static constexpr std::uint32_t faceLoadBit(std::uint32_t opcode) {
+    return opcodeBit(opcode);
+  }
+  // The slot of the first scratchpad word: main RAM's words come first.
+  static constexpr std::uint32_t kScratchpadSlot = kMainRamBytes / 4u;
   // `word`, a vertex at `noted`, was stored at `address`.
   void note(std::uint32_t address, std::uint32_t word, const NotedPlace &noted);
   // A store of `bytes` at `address` ends the place of every word it touches.
@@ -178,6 +197,7 @@ private:
   bool tracking_ = false;
   // One bit per slot, so a load or store of an unplaced word tests only its bit; allocated by the first note.
   std::vector<std::uint64_t> placed_;
+  std::uint64_t *placedWords_ = nullptr; // placed_.data(), or null while it is empty
   std::vector<Stored> stored_;
   std::vector<std::uint32_t> keptRun_; // per placed_ word, the rollback run that last kept it
   std::uint32_t carriedMask_ = 0;      // the GPRs carrying a place

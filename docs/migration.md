@@ -6,21 +6,32 @@ replacement executor is accepted. `runtime/cpu/` is the sole guest-execution bou
 
 ## Guest executor
 
-psxport's own R3000 interpreter, `psx::cpu::GuestExecutor` in `runtime/cpu/guest_executor.*`, runs every
-guest instruction no native override claims. `Core::executor()` reaches it. There is one executor on every
-host and no engine choice: no recompiler, no translation cache, no fallback tier. The executor:
+`psx::cpu::GuestExecutor` in `runtime/cpu/guest_executor.*` runs every guest instruction no native override
+claims; `Core::executor()` reaches it. It runs guest blocks on psxport's own run-time recompiler
+(`runtime/cpu/recompiler/`) where the host has a backend, and on psxport's own R3000 interpreter
+(`runtime/cpu/guest_interpreter.*`) everywhere else. The interpreter is the reference: the recompiler must leave
+`Core` and memory exactly as it would. Both engines share `ExecutorState` (`runtime/cpu/executor_state.*`): loads
+in flight, the segment clock and every memory, COP0 and GTE access. The executor:
 
 - runs directly on `Core`'s registers, with no second register file to copy in or out;
-- reads code from guest memory as it runs, so an invalidation has nothing to flush and is only counted;
-- sends every load and store through `Core::mem_r*`/`mem_w*`, and commits the elapsed guest time before a
-  hardware-register access;
+- sends every store and every load outside main RAM and the scratchpad through `Core::mem_r*`/`mem_w*`, and
+  commits the elapsed guest time before a hardware-register access;
 - executes real branch and load delay slots;
 - keeps the classic recompiler block shape: a block ends after an unconditional jump's delay slot, at a
   SYSCALL or an MTC0/CTC0 to Status/Cause, or at a taken branch that leaves it. Every block entry checks
-  native dispatch, the requested guest return and pending work, and latches the writer;
+  native dispatch, the requested guest return and pending work, and latches the writer, whichever engine ran
+  the block;
 - charges one guest clock tick per instruction; and
 - returns a named fault for an unknown instruction or an instruction fetch outside main RAM and the
   scratchpad.
+
+The recompiler translates a block from guest memory the first time it is entered and never saves a
+translation. Every executable write (CPU stores, DMA, module loads, the debugger, savestates) reaches it through
+the one invalidation owner (`runtime/cpu/invalidation.cpp`), which drops every block read from the changed bytes;
+a block that overwrites itself finishes on the interpreter. A block whose shape the translator does not take
+(for example a branch into a delay slot, or a load in flight to a register its first instruction uses) runs on
+the interpreter, counted by reason in the run-end `[recompiler]` line. Main-RAM and scratchpad loads are read
+inline unless the vertex places would note them (`VertexPlaces::LoadGate`).
 
 There is no player-selectable engine. Independent reference emulators remain separately built test
 tools and are never linked into gameplay.
@@ -32,8 +43,13 @@ gates.
 
 ## Hosts
 
-The interpreter generates no host code. Every host runs the same executor, with no writable/executable
-memory, instruction-cache synchronization or per-architecture backend to qualify.
+The recompiler's backend is ARM64 (macOS on Apple silicon, Android, Linux on ARM64). Every other host, and a
+host that refuses executable memory, runs the interpreter; an x86-64 backend is next. Translated code lives in
+one bounded mapping per executor (`recompiler/code_memory.*`): 32 MiB, bump-allocated, dropped whole when full.
+On macOS it is `MAP_JIT`, written only inside `pthread_jit_write_protect_np` scopes; the release build is
+signed ad hoc without the hardened runtime, so it needs no JIT entitlement (a notarized build would need
+`com.apple.security.cs.allow-jit`). Elsewhere the mapping is read-write-execute, and each sealed block has its
+instruction cache synchronized.
 
 ## Framework contract
 

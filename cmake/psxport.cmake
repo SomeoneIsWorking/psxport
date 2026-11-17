@@ -66,6 +66,13 @@ set(PSXPORT_FRAMEWORK_SRC
   ${PSXPORT_ROOT}/runtime/cpu/resumable_guest_call.cpp # one guest call across display fields: latch, cap, classify
   ${PSXPORT_ROOT}/runtime/cpu/invalidation.cpp
   ${PSXPORT_ROOT}/runtime/cpu/guest_executor.cpp
+  ${PSXPORT_ROOT}/runtime/cpu/executor_state.cpp # loads in flight, segment clock, the memory/COP access both engines share
+  ${PSXPORT_ROOT}/runtime/cpu/guest_interpreter.cpp # R3000 interpreter, one block at a time
+  ${PSXPORT_ROOT}/runtime/cpu/recompiler/recompiler.cpp # run-time recompiler: translate, run, invalidate
+  ${PSXPORT_ROOT}/runtime/cpu/recompiler/block_scan.cpp
+  ${PSXPORT_ROOT}/runtime/cpu/recompiler/block_cache.cpp
+  ${PSXPORT_ROOT}/runtime/cpu/recompiler/code_memory.cpp
+  ${PSXPORT_ROOT}/runtime/cpu/recompiler/arm64_translator.cpp
   ${PSXPORT_ROOT}/runtime/cpu/machine_snapshot.cpp # CPU/GTE/RAM capture and invalidating restore
   ${PSXPORT_ROOT}/runtime/cpu/native_dispatch.cpp
   ${PSXPORT_ROOT}/runtime/cpu/override_differential.cpp # per-function override differential (shadow mode)
@@ -335,7 +342,8 @@ target_include_directories(psxport SYSTEM PUBLIC ${PSXPORT_ROOT}/vendor/rmlui/Ba
 # Framework internals no title includes; framework tools link psxport_internal for them.
 add_library(psxport_internal INTERFACE)
 set(PSXPORT_INTERNAL_INCLUDES
-  ${PSXPORT_ROOT}/${RT}/boot ${PSXPORT_ROOT}/${RT}/host ${PSXPORT_ROOT}/${RT}/cpu/beetle)
+  ${PSXPORT_ROOT}/${RT}/boot ${PSXPORT_ROOT}/${RT}/host ${PSXPORT_ROOT}/${RT}/cpu/beetle
+  ${PSXPORT_ROOT}/runtime/cpu/recompiler)
 target_include_directories(psxport_internal INTERFACE ${PSXPORT_INTERNAL_INCLUDES})
 target_include_directories(psxport PRIVATE ${PSXPORT_INTERNAL_INCLUDES})
 
