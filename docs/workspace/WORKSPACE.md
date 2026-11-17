@@ -57,6 +57,8 @@ autosave icon. A title that saves only by hand (save points, a save menu) also a
 transitions, to an autosave slot of its own so a manual save is never overwritten (Tomba! 2, psx-tomba G008).
 Every title that saves, retail autosave included (Spyro, psx-spyro G008), leads its title menu
 with a selected "Continue" that loads the newest save.
+Every autosave keeps the newest save plus three backups, rotated by one psxport owner as host files beside the
+player's memory card, never extra card blocks; "Continue" loads the newest, and the menu can restore a backup.
 
 Start skips what the player does not control (logos, movies, flybys, transition and load fades) in every title.
 Each skip is title-owned, one screen at a time, taken through that screen's own guest terminal transition and
