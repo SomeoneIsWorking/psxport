@@ -30,6 +30,13 @@ struct SteppedRange {
   constexpr long stepped(long value, int direction) const {
     return clamp(clamp(value) + step * direction);
   }
+
+  // `value` moved one step up, past the top back to `min`: what pressing a toggle does.
+  constexpr long cycled(long value) const {
+    const long current = clamp(value);
+    const long next = clamp(current + step);
+    return next == current ? min : next;
+  }
 };
 
 } // namespace psx::config

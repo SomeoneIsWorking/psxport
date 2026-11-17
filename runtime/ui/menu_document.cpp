@@ -13,7 +13,9 @@
 
 #include <SDL3/SDL.h>
 
+#include <cstddef>
 #include <cstdlib>
+#include <optional>
 #include <span>
 #include <string>
 #include <string_view>
@@ -26,9 +28,12 @@ constexpr const char *kAttrAction = "action";
 constexpr const char *kAttrToggle = "toggle";
 constexpr const char *kAttrAdjust = "adjust";
 
-// A title's declared settings: adjust rows with this id prefix, added under `#title_settings`.
+// A title's declared settings: adjust rows with this id prefix, added under `#title_settings` on the Mods tab, which a
+// title with none does not have.
 constexpr std::string_view kTitleSettingPrefix = "title:";
 constexpr const char *kTitleSettingsHostId = "title_settings";
+constexpr const char *kModsTabId = "mods_tab";
+constexpr const char *kModsPaneId = "mods_pane";
 // The title's debug menu rows and the About lines.
 constexpr const char *kTitleDebugHostId = "title_debug";
 constexpr const char *kAboutHostId = "about";
@@ -98,32 +103,41 @@ MenuDocument::MenuDocument(Rml::Context *ctx, Rml::ElementDocument *doc, Game *g
 
 MenuDocument::~MenuDocument() = default;
 
-const psx::game::TitleIntSetting *MenuDocument::find_title_setting(std::string_view id) const {
+std::optional<psx::game::TitleSettingRow> MenuDocument::find_title_setting_row(std::string_view id) const {
   if (!mGame) {
-    return nullptr;
+    return std::nullopt;
   }
-  for (const psx::game::TitleIntSetting &setting : mGame->runtime.titleIntSettings()) {
-    if (id == setting.id) {
-      return &setting;
+  const std::span<const psx::game::TitleIntSetting> settings = mGame->runtime.titleIntSettings();
+  for (std::size_t i = 0; i < settings.size(); ++i) {
+    if (id == settings[i].id) {
+      return psx::game::titleSettingRowAt(settings, i);
     }
   }
-  return nullptr;
+  return std::nullopt;
 }
 
 void MenuDocument::add_title_setting_rows() {
-  Rml::Element *host = mDoc->GetElementById(kTitleSettingsHostId);
-  if (!host || !mGame) {
-    return;
-  }
-  const std::span<const psx::game::TitleIntSetting> settings = mGame->runtime.titleIntSettings();
+  const std::span<const psx::game::TitleIntSetting> settings =
+      mGame ? mGame->runtime.titleIntSettings() : std::span<const psx::game::TitleIntSetting>();
   if (settings.empty()) {
+    // Tabs and panes pair by position, so both go.
+    for (const char *id : {kModsTabId, kModsPaneId}) {
+      if (Rml::Element *element = mDoc->GetElementById(id)) {
+        element->GetParentNode()->RemoveChild(element);
+      }
+    }
     return;
   }
-  std::string rml = "<div class=\"section-heading spaced\">Enhancements</div>";
-  for (const psx::game::TitleIntSetting &setting : settings) {
-    rml += std::string("<select-button adjust=\"") + std::string(kTitleSettingPrefix) + setting.id + "\"><key>" +
-           psx::ui::rmlTextMarkup(setting.label) + "</key><value></value></select-button>";
+  Rml::Element *host = mDoc->GetElementById(kTitleSettingsHostId);
+  if (!host) {
+    return;
   }
+  std::string rml;
+  psx::game::forEachTitleSettingRow(settings, [&rml](const psx::game::TitleSettingRow &row) {
+    rml += std::string("<select-button") + (row.shared() ? " class=\"parts\"" : "") + " adjust=\"" +
+           std::string(kTitleSettingPrefix) + row.parts.front().id + "\"><key>" + psx::ui::rmlTextMarkup(row.label()) +
+           "</key><value></value></select-button>";
+  });
   set_markup(host, rml);
 }
 
@@ -202,10 +216,13 @@ std::unique_ptr<RowBinding> MenuDocument::bind_row(Rml::Element *row) {
   id = psx::ui::rmlAttributeText(*row, kAttrAdjust, "");
   if (!id.empty()) {
     if (id.rfind(kTitleSettingPrefix, 0) == 0) {
-      const psx::game::TitleIntSetting *setting =
-          find_title_setting(std::string_view(id).substr(kTitleSettingPrefix.size()));
-      if (setting) {
-        return make_title_setting_binding(setting, &mGame->mods);
+      const std::optional<psx::game::TitleSettingRow> row =
+          find_title_setting_row(std::string_view(id).substr(kTitleSettingPrefix.size()));
+      if (row && row->shared()) {
+        return make_title_setting_row_binding(row->parts, &mGame->mods);
+      }
+      if (row) {
+        return make_title_setting_binding(&row->parts.front(), &mGame->mods);
       }
     }
     mUnknownRows++;
@@ -383,7 +400,10 @@ bool MenuDocument::handle_button(std::uint16_t button) {
 
 void MenuDocument::step_sideways(int dir) {
   MenuRow *r = focused_row();
-  // A row that steps with arrows takes them; otherwise they change tab.
+  // A row of parts moves between them, a row that steps with arrows takes them; otherwise they change tab.
+  if (r && r->move(dir)) {
+    return;
+  }
   if (r && r->steps_with_arrows()) {
     r->step(dir);
   } else if (mTabBar) {

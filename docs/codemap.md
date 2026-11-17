@@ -14,7 +14,7 @@ Dependency direction: title repo → `runtime/psx/game/` (the title interface) �
 - `runtime/psx/game/game.*` — one machine instance: Core, devices, presenters, session wiring
 - `runtime/psx/game/session_run.*` — a title asking to end its run
 - `runtime/psx/game/title_debug_menu.*` — TitleDebugMenu: a title's debug verbs (items, flags, diagnostics), typed parameters (integer range, hex, named enumeration, word list, text, optional), refusals, sections, readouts, sound test, About lines, and the warp catalogue (a named place tree behind the one `warp <path>` verb); one table behind the control channel, REPL, `help` and the Debug tab
-- `runtime/psx/game/title_settings.h`, `mods.*` — per-Game live player settings (aspect / widescreen, internal resolution / ires, fps60, selector layout), the settings file, title-declared integer settings
+- `runtime/psx/game/title_settings.h`, `mods.*` — per-Game live player settings (aspect / widescreen, internal resolution / ires, fps60, selector layout), the settings file, title-declared integer settings and the rows they share
 - `runtime/psx/game/crt0_boot.*`, `crt0_scan.h` — PSY-Q crt0 boot group decoded from the guest prologue and replayed natively: gp, sp, heap, InitHeap, .bss
 - `runtime/psx/game/psx_exe_image.*`, `disc_executable.*` — PS-X EXE header parse, top-level executable load and entry registers, second executable from disc (boot stub hand-off)
 - `runtime/psx/game/guest_packet_pool_windows.*` — guest packet pool / primitive arena layouts a title reports, parity pools
@@ -111,7 +111,7 @@ Dependency direction: title repo → `runtime/psx/game/` (the title interface) �
 - `runtime/psx/debug/ot_attr.*` — OT / GTE submission attribution
 - `runtime/psx/debug/gpu_debug.*`, `gpu_perf.*`, `memcensus.*`, `field_digest.*`, `image_writer.*`, `snapshot.*`, `store_watch.*`, `pad_frame_probes.*`, `frame_schedule.*`, `host_backtrace.*`, `text_capture.*` — diagnostics: scene dump (captured as text), cost and cadence meter (CPU work per phase, GPU work per present, planned 60 Hz cadence, play-check presents; `presentation.md` Cost and cadence; counters and percentiles from `lucent::perf`), memmove census, per-field digest, PNG / APNG / PPM capture, RAM snapshot, store watch, pad-frame probes, host backtrace
 - `runtime/psx/debug/bug_report_session.*` — in-app bug report: reference frame at the next sealed frame, motion clip, reproduction command
-- `runtime/ui/` — RmlUi overlay menu: library (one Rml::Initialise per device), document, tabs, rows, readouts, `<glyph>` button prompts (`menu_prompts`), pad navigation, toggles, wrapped stepping, Debug and About tabs generated from the title debug menu (`title_debug_rows`), SDL_GPU render interface and touch-ui's painter over it (`touch_painter`), assets
+- `runtime/ui/` — RmlUi overlay menu: library (one Rml::Initialise per device), document, tabs, rows, readouts, `<glyph>` button prompts (`menu_prompts`), pad navigation, toggles, wrapped stepping, the Mods tab of the title's settings with rows of parts (`menu_row`), Debug and About tabs generated from the title debug menu (`title_debug_rows`), SDL_GPU render interface and touch-ui's painter over it (`touch_painter`), assets
 - `runtime/ui/stage_band.*` — the title selector's bottom band: every title's name, the selected one bright, the hint line
 - `assets/rml/` — overlay menu and selector band markup, styles, fonts
 - `bios/`, `scripts/build_openbios.py`, `patches/openbios/` — fast-boot OpenBIOS image

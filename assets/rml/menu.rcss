@@ -171,6 +171,29 @@ select-button:focus value {
 	color: #C2A42D;
 }
 
+/* A row of parts (one item's effects): a short label and the parts after it, each lit while on. */
+select-button.parts key {
+	width: 30%;
+}
+
+select-button.parts value {
+	width: 68%;
+	font-size: 17dp;
+}
+
+select-button value span.part.off {
+	color: rgba(224, 219, 200, 35%);
+}
+
+select-button value span.part.on {
+	color: #E0DBC8;
+}
+
+select-button value span.part.selected {
+	color: #C2A42D;
+	text-decoration: underline;
+}
+
 /* --- Scrollbar --------------------------------------------------------------------------- */
 scrollbarvertical {
 	width: 8dp;

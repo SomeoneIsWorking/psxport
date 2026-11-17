@@ -6,6 +6,7 @@
 
 #include <functional>
 #include <memory>
+#include <span>
 #include <string>
 
 class Mods;
@@ -32,6 +33,19 @@ public:
     return false;
   }
 
+  // The value as UI markup (already encoded), shown in place of text(); `focused` marks the row's selected part.
+  virtual bool markup(std::string &out, bool focused) const {
+    (void)out;
+    (void)focused;
+    return false;
+  }
+
+  // Left/Right inside a row of parts: true when the selection moved, false at an end, so the tab changes.
+  virtual bool move(int dir) {
+    (void)dir;
+    return false;
+  }
+
   // Enter / A / click use dir = +1; Left and Right use -1 / +1 on a row that steps with arrows.
   virtual void step(int dir) = 0;
 
@@ -44,6 +58,10 @@ public:
 std::unique_ptr<RowBinding> make_mod_toggle_binding(Mods *mods, std::string id);
 // A title's declared integer setting: shows the value and unit, steps within the declared range and persists.
 std::unique_ptr<RowBinding> make_title_setting_binding(const psx::game::TitleIntSetting *setting, Mods *mods);
+// A row of a title's settings (psx::game::TitleSettingRow), one part per setting: Left/Right choose a part, Cross
+// cycles it, and each part shows its name, lit while on.
+std::unique_ptr<RowBinding> make_title_setting_row_binding(std::span<const psx::game::TitleIntSetting> parts,
+                                                           Mods *mods);
 // `available` (optional) is asked when the row is built: false removes the row, as a declared capability
 // absence (a product with no title selector has no "return to selection" row).
 std::unique_ptr<RowBinding> make_action_binding(std::function<void()> action, std::function<bool()> available = {});
@@ -58,6 +76,8 @@ public:
   void update() override;
 
   void step(int dir);
+  // Left/Right within the row; false when the row has no part that way.
+  bool move(int dir);
   bool steps_with_arrows() const {
     return mBinding && mBinding->steps_with_arrows();
   }

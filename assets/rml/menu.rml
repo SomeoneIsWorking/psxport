@@ -8,6 +8,7 @@
 	<window id="window">
 		<tab-bar id="tab-bar">
 			<tab>Display</tab>
+			<tab id="mods_tab">Mods</tab>
 			<tab>Debug</tab>
 			<tab>Game</tab>
 			<tab>About</tab>
@@ -45,8 +46,15 @@
 				<select-button toggle="ires"><key>Internal Resolution</key><value>Vanilla</value></select-button>
 				<select-button toggle="fps60"><key>60fps Interpolation</key><value>Off</value></select-button>
 				<select-button toggle="depth"><key>Native Depth</key><value>On</value></select-button>
-				<div id="title_settings"></div>
 				<p class="hint"><glyph button="left"/><glyph button="right"/> switch tab &#183; <glyph button="up"/><glyph button="down"/> move &#183; <glyph button="cross"/> change &#183; <glyph button="circle"/> close</p>
+			</pane>
+
+			<!-- The title's own settings (psx::game::TitleIntSetting), one row per item; removed with its tab when the
+			     title declares none. -->
+			<pane id="mods_pane">
+				<div class="section-heading">Mods</div>
+				<div id="title_settings"></div>
+				<p class="hint"><glyph button="left"/><glyph button="right"/> choose an effect or switch tab &#183; <glyph button="up"/><glyph button="down"/> move &#183; <glyph button="cross"/> change &#183; <glyph button="circle"/> close</p>
 			</pane>
 
 			<pane>

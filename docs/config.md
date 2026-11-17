@@ -123,10 +123,13 @@ checkout, current directory, and environment are not player-storage defaults.
 
 A title adds its own stepped integer settings through `GameRuntime::titleIntSettings()`: a
 `TitleIntSetting` names an `IntVar`, a label, a unit and a `psx::config::SteppedRange` (min, max, step;
-`clamp` snaps to the nearest step, `stepped` moves one step and saturates). The settings file stores the
-value under the CVar's name, `Mods::load` clamps it onto the grid, and the menu shows one arrow-stepped row
-per setting under "Enhancements" in the Display pane. A setting with `labels` is a choice: the row shows the label of
-the value's step instead of the number. `enh_int(var)` reads it, and reads 0 in a comparison run.
+`clamp` snaps to the nearest step, `stepped` moves one step and saturates, `cycled` wraps past the top). The settings
+file stores the value under the CVar's name, `Mods::load` clamps it onto the grid, and the menu's Mods tab (absent
+when the title declares none) shows one arrow-stepped row per setting. A setting with `labels` is a choice: the row
+shows the label of the value's step instead of the number. Neighbouring settings that name the same `row` share one
+row (`TitleSettingRow`, `forEachTitleSettingRow`): each is a part named by its `label`, lit while on; Left/Right choose
+a part and pass to the tab bar at either end, Cross cycles it. `enh_int(var)` reads it, and reads 0 in a comparison
+run.
 
 ## Render path
 

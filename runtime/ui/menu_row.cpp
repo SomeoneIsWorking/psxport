@@ -7,6 +7,7 @@
 
 #include <RmlUi/Core/StringUtilities.h>
 
+#include <cstddef>
 #include <utility>
 
 namespace psx::ui {
@@ -54,6 +55,47 @@ private:
   Mods *mMods;
 };
 
+class TitleSettingRowBinding final : public RowBinding {
+public:
+  TitleSettingRowBinding(std::span<const psx::game::TitleIntSetting> parts, Mods *mods) : mParts(parts), mMods(mods) {}
+  bool markup(std::string &out, bool focused) const override {
+    out.clear();
+    for (std::size_t i = 0; i < mParts.size(); ++i) {
+      const psx::game::TitleIntSetting &part = mParts[i];
+      if (i != 0) {
+        out += " &#183; ";
+      }
+      out += std::string("<span class=\"part ") + (part.on() ? "on" : "off") +
+             (focused && i == mSelected ? " selected" : "") + "\">" + psx::ui::rmlTextMarkup(part.label);
+      // A two-state part says its state by its light; a part with more steps also names its value.
+      if (part.range.max - part.range.min != part.range.step) {
+        out += " " + psx::ui::rmlTextMarkup(part.text());
+      }
+      out += "</span>";
+    }
+    return true;
+  }
+  void step(int) override {
+    mParts[mSelected].cycle();
+    if (mMods) {
+      mMods->save();
+    }
+  }
+  bool move(int dir) override {
+    const std::ptrdiff_t next = static_cast<std::ptrdiff_t>(mSelected) + dir;
+    if (next < 0 || next >= static_cast<std::ptrdiff_t>(mParts.size())) {
+      return false;
+    }
+    mSelected = static_cast<std::size_t>(next);
+    return true;
+  }
+
+private:
+  std::span<const psx::game::TitleIntSetting> mParts;
+  Mods *mMods;
+  std::size_t mSelected = 0;
+};
+
 class ActionBinding final : public RowBinding {
 public:
   ActionBinding(std::function<void()> action, std::function<bool()> available)
@@ -80,6 +122,10 @@ std::unique_ptr<RowBinding> make_mod_toggle_binding(Mods *mods, std::string id) 
 std::unique_ptr<RowBinding> make_title_setting_binding(const psx::game::TitleIntSetting *setting, Mods *mods) {
   return std::make_unique<TitleSettingBinding>(setting, mods);
 }
+std::unique_ptr<RowBinding> make_title_setting_row_binding(std::span<const psx::game::TitleIntSetting> parts,
+                                                           Mods *mods) {
+  return std::make_unique<TitleSettingRowBinding>(parts, mods);
+}
 std::unique_ptr<RowBinding> make_action_binding(std::function<void()> action, std::function<bool()> available) {
   return std::make_unique<ActionBinding>(std::move(action), std::move(available));
 }
@@ -96,7 +142,9 @@ MenuRow::MenuRow(Rml::Element *root, std::unique_ptr<RowBinding> binding, std::f
 
 void MenuRow::update() {
   std::string txt;
-  if (mBinding && mBinding->text(txt)) {
+  if (mBinding && mBinding->markup(txt, mRoot && mRoot->IsPseudoClassSet("focus"))) {
+    set_markup(mValue, txt);
+  } else if (mBinding && mBinding->text(txt)) {
     set_text(mValue, txt);
   }
   Component::update();
@@ -107,6 +155,14 @@ void MenuRow::step(int dir) {
     mBinding->step(dir);
   }
   update();
+}
+
+bool MenuRow::move(int dir) {
+  if (!mBinding || !mBinding->move(dir)) {
+    return false;
+  }
+  update();
+  return true;
 }
 
 std::string MenuRow::describe() const {
