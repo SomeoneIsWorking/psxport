@@ -471,7 +471,8 @@ The current SSAO, shadow and light mods are removed, not migrated.
 
 The guest projection is widened through `GuestWidescreenProjection` (Vagrant Story widens its
 canvas, never `H`). Guest 2D is presented as-is, centred; a HUD element moves only when a title
-producer anchors it. The margins show whatever the widened projection draws there. 4:3 stays
+producer anchors it (`anchorHudElement`, `hud_anchor_packets.h`: the packets one drawer took from the pool move to
+the drawn picture's edge on their side of the centre column through `HostPackets::moveX`). The margins show whatever the widened projection draws there. 4:3 stays
 oracle-exact: every widening is gated on the configured aspect.
 
 On the record path `psx::present::latchRecordDisplay` turns the title's aspect into a margin M per side
