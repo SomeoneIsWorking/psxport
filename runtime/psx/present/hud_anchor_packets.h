@@ -22,19 +22,38 @@ struct HudElementPackets {
   std::uint32_t end = 0;
 };
 
-// An element wholly left of `centreColumn` moves to the drawn picture's left edge and one wholly right of it to the
-// right edge, through the host packets of the walk from `walkRoot`; one across it stays. Guest RAM is unchanged, and
-// with no margins drawn nothing moves.
-inline void anchorHudElement(Core &core, std::uint32_t walkRoot, HudElementPackets element, int centreColumn) {
-  const HorizontalMargins edges = frameWindows(core).drawn;
-  if (edges.total() == 0) {
+namespace hud_anchor_detail {
+inline constexpr std::uint32_t kRam = 0x00FFFFFFu;
+inline std::uint32_t packetEnd(Core &core, std::uint32_t packet) {
+  return packet + (core.mem_r8(packet + 3u) + 1u) * 4u;
+}
+} // namespace hud_anchor_detail
+
+// Every packet of `element` moved `dx` columns through the host packets of the walk from `walkRoot`.
+inline void moveHudElement(Core &core, std::uint32_t walkRoot, HudElementPackets element, int dx) {
+  using hud_anchor_detail::kRam;
+  if (dx == 0) {
     return;
   }
-  constexpr std::uint32_t kRam = 0x00FFFFFFu;
+  for (std::uint32_t packet = element.first & kRam; packet < (element.end & kRam);
+       packet = hud_anchor_detail::packetEnd(core, packet)) {
+    core.hostPackets.moveX(core, walkRoot, packet | 0x80000000u, dx);
+  }
+}
+
+// An element wholly left of `centreColumn` moves to the drawn picture's left edge and one wholly right of it to the
+// right edge, through the host packets of the walk from `walkRoot`; one across it stays. The columns it moved, which
+// a partner drawn elsewhere takes too. Guest RAM is unchanged, and with no margins drawn nothing moves.
+inline int anchorHudElement(Core &core, std::uint32_t walkRoot, HudElementPackets element, int centreColumn) {
+  using hud_anchor_detail::kRam;
+  const HorizontalMargins edges = frameWindows(core).drawn;
+  if (edges.total() == 0) {
+    return 0;
+  }
   const std::uint32_t first = element.first & kRam;
   const std::uint32_t end = element.end & kRam;
   const auto packetEnd = [&core](std::uint32_t packet) {
-    return packet + (core.mem_r8(packet + 3u) + 1u) * 4u;
+    return hud_anchor_detail::packetEnd(core, packet);
   };
   int left = INT_MAX;
   int right = INT_MIN;
@@ -58,12 +77,8 @@ inline void anchorHudElement(Core &core, std::uint32_t walkRoot, HudElementPacke
   } else if (left >= centreColumn) {
     dx = edges.right;
   }
-  if (dx == 0) {
-    return;
-  }
-  for (std::uint32_t packet = first; packet < end; packet = packetEnd(packet)) {
-    core.hostPackets.moveX(core, walkRoot, packet | 0x80000000u, dx);
-  }
+  moveHudElement(core, walkRoot, element, dx);
+  return dx;
 }
 
 } // namespace psx::present
