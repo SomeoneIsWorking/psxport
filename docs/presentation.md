@@ -92,19 +92,26 @@ name is refused with a warning and the Core stays on `record`.
   sealed inside an upload is incomplete; one that starts between a quad's two triangles is too.
 - **Raster.** The image is VRAM at scale S (RG8 1555). A record applies only on top of the record
   before it (`sequence == applied + 1`, complete, device not ahead); otherwise the device VRAM is
-  uploaded. Sequence 0 is the presenter's empty record; the device's records start at 1. Coverage and interpolant bases are computed on the CPU exactly as `gpu.c` does at S;
-  `record.frag` evaluates texel, modulation, blend and mask per pixel. It does not dither: the host picture keeps full colour precision while the device dithers as the guest asks, so `recordcheck` counts a dithered draw's pixels as mismatched by design. The console shows 5 bits per channel (low three bits zero), so the host picture reads on average 3-4 levels per channel brighter than the console's (psx-spyro 0213: 71/143/56 against 68/139/53; dropping the product's low three bits removes 2.4-3.9). Each op reads a
+  uploaded. Sequence 0 is the presenter's empty record; the device's records start at 1. A polygon draws as real
+  triangles through the hardware rasterizer (since 2026-11-17, `docs/plans/hardware-triangles.md`): coverage follows
+  the GPU's fill rule, not `gpu.c`'s edge walk, and the CPU sets each corner's colour and texel interpolants from
+  `gpu.c`'s setup at S so the hardware's value at a pixel centre is `gpu.c`'s at that pixel. A triangle is clipped to
+  the draw area on the CPU, and its texels are held to its vertices' UV range (low to one short of high, as
+  DuckStation does), since the hardware covers edge pixels the walk does not. `recordcheck` at 1x therefore also
+  reports polygon edge pixels (Spyro 1's attract demo: 57k to 60k differing display pixels a present, the rest
+  dithering). Sprites, lines and transfers draw as rects. `record.frag` evaluates texel, modulation, blend and mask
+  per pixel. It does not dither: the host picture keeps full colour precision while the device dithers as the guest asks, so `recordcheck` counts a dithered draw's pixels as mismatched by design. The console shows 5 bits per channel (low three bits zero), so the host picture reads on average 3-4 levels per channel brighter than the console's (psx-spyro 0213: 71/143/56 against 68/139/53; dropping the product's low three bits removes 2.4-3.9). Each op reads a
   snapshot of the image; an op whose reads overlap pixels `gpu.c` wrote at 1x earlier in its batch
   starts a new batch, so at 1x reads see VRAM as the device did. Which ops exist and where batches
   split come from the 1x walk at every S: the `record_plan` line's ops and batches for one frame are
-  equal at every S, and only its quads (and the GPU's pixels) grow. The one exception is a triangle whose
+  equal at every S, and only the GPU's pixels grow. The one exception is a triangle whose
   stored places give it area where its words give none, such as a sliver a clip cut between two crossings
-  that round to one word: above 1x it draws the native pixels its quads reach (`addTriangle`); without
+  that round to one word: above 1x it draws the native pixels its triangle reaches (`addTriangle`); without
   it the pieces either side of the sliver leave a seam. It writes no native pixel, as at 1x, so it never splits a
   batch; a later read in its batch sees the snapshot without it. A tested sliver covers its neighbours' native
   pixels, so it starts a depth group. Spyro 1 Stone Hill at 8x has about 48 slivers and 29 extra groups per record
   (psxport issues 0199, 0206). A batch's snapshot refresh
-  covers every scaled pixel its quads can reach. The 1x walk is CPU work every frame at any S; a line plans as one quad
+  covers every scaled pixel its shapes can reach. The 1x walk is CPU work every frame at any S; a line plans as one rect
   per pixel.
 - **Scale.** S is the internal-resolution setting (`setires`, `mods.ires`). Vertices and the draw
   area scale; texels and CLUTs stay on the native grid; sprites, lines and fills cover

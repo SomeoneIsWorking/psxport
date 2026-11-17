@@ -219,11 +219,6 @@ PlottedSpan plottedSpan(const TrianglePart &part, int row) {
 
 // `area` narrowed to the columns any of its rows covers. Each edge is linear in the row. A canvas also covers the
 // unwrapped columns, which lie past VRAM's.
-// Native rows a triangle part's quads span at most (RecordPlanner::Builder::addTriangle). Spyro 1 at 8x on an M2:
-// quad pixels 47 -> 28 Mpx a present and GPU 18.4 -> 14.8 ms at 4; 2 is no faster and 1 slower, the quads costing more
-// than the pixels they save.
-constexpr int kTriangleBandRows = 4;
-
 RecordRect coveredColumns(const TrianglePart &part, RecordRect area, bool canvas) {
   const PlottedSpan a = plottedSpan(part, area.y0);
   const PlottedSpan b = plottedSpan(part, area.y1 - 1);
@@ -374,6 +369,65 @@ std::optional<TriangleWalk> walkTriangle(const TriVertex input[3], int s) {
   return walk;
 }
 
+// A triangle's colour or texel interpolant as a plane over VRAM-space target coordinates, in channel units. At the
+// pixel centre (x + 0.5, y + 0.5) it is gpu.c's value at pixel (x, y), which the hardware's interpolation then gives.
+struct Interpolant {
+  double at = 0.0; // the value at (0, 0)
+  double dx = 0.0;
+  double dy = 0.0;
+
+  double operator()(double x, double y) const {
+    return at + dx * x + dy * y;
+  }
+};
+
+// A clipped triangle's corner, VRAM-space target pixels.
+struct ClipPoint {
+  double x = 0.0;
+  double y = 0.0;
+};
+// A triangle cut by the four sides of a rect gains at most one corner a side.
+using ClipPolygon = std::array<ClipPoint, 7>;
+
+// The first `count` corners of `polygon` cut to x0 <= x <= x1, y0 <= y <= y1 (Sutherland-Hodgman); the count left, 0
+// when nothing with area is.
+int clipPolygon(ClipPolygon &polygon, int count, double x0, double y0, double x1, double y1) {
+  const double bounds[4] = {x0, x1, y0, y1};
+  for (int side = 0; side < 4 && count >= 3; side++) {
+    const double bound = bounds[side];
+    const bool vertical = side < 2;
+    const bool low = (side & 1) == 0;
+    const auto inside = [&](const ClipPoint &p) {
+      const double at = vertical ? p.x : p.y;
+      return low ? at >= bound : at <= bound;
+    };
+    ClipPolygon cut{};
+    int kept = 0;
+    for (int i = 0; i < count; i++) {
+      const ClipPoint &a = polygon[static_cast<std::size_t>(i)];
+      const ClipPoint &b = polygon[static_cast<std::size_t>((i + 1) % count)];
+      const bool aInside = inside(a);
+      if (aInside) {
+        cut[static_cast<std::size_t>(kept++)] = a;
+      }
+      if (aInside != inside(b)) {
+        const double t = vertical ? (bound - a.x) / (b.x - a.x) : (bound - a.y) / (b.y - a.y);
+        cut[static_cast<std::size_t>(kept++)] =
+            vertical ? ClipPoint{bound, a.y + (b.y - a.y) * t} : ClipPoint{a.x + (b.x - a.x) * t, bound};
+      }
+    }
+    polygon = cut;
+    count = kept;
+  }
+  return count >= 3 ? count : 0;
+}
+
+// A colour interpolant as a RecordShape stores it.
+std::uint32_t colourBits(double value) {
+  const double bits = std::round((value - kColourFloor) * kColourStep);
+  return static_cast<std::uint32_t>(std::clamp(bits, 0.0, 65535.0));
+}
+
 bool containsRect(const RecordRect &outer, const RecordRect &inner) {
   return outer.x0 <= inner.x0 && inner.x1 <= outer.x1 && outer.y0 <= inner.y0 && inner.y1 <= outer.y1;
 }
@@ -385,11 +439,6 @@ struct ReadBackShift {
   RecordRect captured;
   std::uint32_t weights = 0;
 };
-
-void storeWords(RecordOp &op, int index, std::uint64_t value) {
-  op[static_cast<std::size_t>(index)] = static_cast<std::uint32_t>(value);
-  op[static_cast<std::size_t>(index) + 1] = static_cast<std::uint32_t>(value >> 32);
-}
 
 // The triangle's 1/depth as a plane over native VRAM coordinates, from its first vertex: 1/z is linear on screen. The
 // depth it leaves lies back by the mark's bin and by what its draw site sorts it back.
@@ -448,8 +497,8 @@ public:
     declares_ = declares;
     sampling_.reset();
     plan_.ops.clear();
-    for (std::vector<RecordQuad> &quads : plan_.quads) {
-      quads.clear();
+    for (std::vector<RecordShape> &shapes : plan_.shapes) {
+      shapes.clear();
     }
     plan_.batches.clear();
     plan_.clutPool = clutPool;
@@ -477,16 +526,16 @@ public:
   const RecordRasterPlan &finish(std::uint64_t sequence) {
     closeBatch();
     plan_.readBack = declared_ ? declared_ : readBack_;
-    std::size_t quads = 0;
-    for (const std::vector<RecordQuad> &plane : plan_.quads) {
-      quads += plane.size();
+    std::size_t shapes = 0;
+    for (const std::vector<RecordShape> &plane : plan_.shapes) {
+      shapes += plane.size();
     }
     lucent::debug("record_plan",
-                  "record {} scale {}: {} ops, {} quads, {} batches, {} depth groups, {} lines",
+                  "record {} scale {}: {} ops, {} shapes, {} batches, {} depth groups, {} lines",
                   sequence,
                   plan_.scale,
                   plan_.ops.size(),
-                  quads,
+                  shapes,
                   plan_.batches.size(),
                   depthGroups_,
                   lines_);
@@ -499,9 +548,9 @@ private:
     std::uint32_t dx[5] = {};
     std::uint32_t dy[5] = {};
   };
-  struct PlaneQuad {
+  struct PlaneShape {
     int plane = 0;
-    RecordQuad quad;
+    RecordShape quad;
   };
   struct PlaneRect {
     int plane = 0;
@@ -527,23 +576,27 @@ private:
   void target(int plane);
   RecordOp primitiveOp(const DrawPrimitive &primitive, RecordOpKind kind) const;
   void textureReads(const RecordDrawState &state, const TexelRange &u, const TexelRange &v);
-  // A quad in VRAM-space scaled pixels placed on the current target plane, its pixels marked written separately.
-  void place(RecordQuad quad);
+  // A rect in VRAM-space scaled pixels placed on the current target plane, its pixels marked written separately.
+  void place(RecordShape quad);
+  // A triangle through `corners` (VRAM-space scaled pixels, moved by `shiftX`/`shiftY` from where its interpolants
+  // lie) placed on the current target plane; returns its bounds there.
+  RecordRect placeTriangle(
+      const ClipPoint *corners, const Interpolant *planes, double shiftX, double shiftY, std::uint32_t texels);
   // `rect`, VRAM-space native pixels, in the current target plane's written-map pixels.
   PlaneRect planeRect(const RecordRect &rect) const;
   // VRAM-space native pixels the op writes on the current target plane.
   void markWritten(const RecordRect &rect);
-  // VRAM-space native pixels a sliver's quads reach on the current target plane, which it does not write at 1x.
+  // VRAM-space native pixels a sliver's triangles reach on the current target plane, which it does not write at 1x.
   void markReached(const RecordRect &rect);
   // A VRAM-space native rect drawn and written on the current target plane.
   void emit(const RecordRect &rect, std::uint32_t param = 0);
   // A VRAM-space scaled quad drawn on the current target plane, `written` its native footprint.
-  void emit(const RecordRect &written, const RecordQuad &quad);
+  void emit(const RecordRect &written, const RecordShape &quad);
   // VRAM rects written by a transfer, into VRAM and where they land in each canvas buffer.
   void emitTransferRects(const WrappedRects &rects);
   // A copy placed past its whole pixels, as emitTransferRects for one rect: `quad` scaled, `written` its footprint.
-  void emitPlacedTransfer(const RecordRect &written, const RecordQuad &quad);
-  // Keeps the op when its native footprint reached a plane, whatever its quads at this scale.
+  void emitPlacedTransfer(const RecordRect &written, const RecordShape &quad);
+  // Keeps the op when its native footprint reached a plane, whatever its shapes at this scale.
   // `plane`, when given, is pushed right after `op`: its DepthPlane.
   void commit(const RecordOp &op, bool readsDestination, const RecordOp *plane = nullptr);
   // The depth group parity of a tested polygon writing opWrites_ and reaching opReaches_: a new group when it covers a
@@ -589,12 +642,12 @@ private:
   int depthGroups_ = 0;
   std::vector<std::uint32_t> models_; // the record's Model models, by first appearance
   std::array<std::uint32_t, kRecordPlanes> batchStart_{};
-  std::vector<PlaneQuad> opQuads_;
+  std::vector<PlaneShape> opShapes_;
   std::vector<PlaneRect> opWrites_;
   std::vector<PlaneRect> opReaches_; // a sliver's: its depth group counts them, its batch does not
   std::vector<RecordRect> opReads_;
   bool reaches_ = false;
-  int lines_ = 0;                          // line primitives planned
+  int lines_ = 0; // line primitives planned
 
 public:
   bool destinationInPass = false; // RecordPlanner::setDestinationReadsInPass
@@ -789,13 +842,49 @@ void RecordPlanner::Builder::textureReads(const RecordDrawState &state, const Te
   }
 }
 
-void RecordPlanner::Builder::place(RecordQuad quad) {
+void RecordPlanner::Builder::place(RecordShape quad) {
   quad.x0 -= scaledOriginX_;
   quad.y0 -= scaledOriginY_;
   quad.x1 -= scaledOriginX_;
   quad.y1 -= scaledOriginY_;
   quad.mapping = mapping_;
-  opQuads_.push_back(PlaneQuad{plane_, quad});
+  opShapes_.push_back(PlaneShape{plane_, quad});
+}
+
+RecordRect RecordPlanner::Builder::placeTriangle(
+    const ClipPoint *corners, const Interpolant *planes, double shiftX, double shiftY, std::uint32_t texels) {
+  RecordShape shape{.mapping = mapping_, .kind = kShapeTriangle, .texels = texels};
+  double x0 = corners[0].x;
+  double y0 = corners[0].y;
+  double x1 = x0;
+  double y1 = y0;
+  for (std::size_t k = 0; k < 3; k++) {
+    const double x = corners[k].x;
+    const double y = corners[k].y;
+    x0 = std::min(x0, x);
+    y0 = std::min(y0, y);
+    x1 = std::max(x1, x);
+    y1 = std::max(y1, y);
+    // Interpolants lie where gpu.c's walk puts them, before an 11-bit wrap moved the plotted pixels.
+    const double ix = x - shiftX;
+    const double iy = y - shiftY;
+    shape.corners.at(k) = {static_cast<float>(x - scaledOriginX_),
+                           static_cast<float>(y - scaledOriginY_),
+                           static_cast<float>(planes[3](ix, iy)),
+                           static_cast<float>(planes[4](ix, iy))};
+    shape.colours.at(k) = {colourBits(planes[0](ix, iy)) | (colourBits(planes[1](ix, iy)) << 16),
+                           colourBits(planes[2](ix, iy))};
+  }
+  const RecordRect bounds{static_cast<int>(std::floor(x0)),
+                          static_cast<int>(std::floor(y0)),
+                          static_cast<int>(std::ceil(x1)),
+                          static_cast<int>(std::ceil(y1))};
+  shape.x0 = bounds.x0 - scaledOriginX_;
+  shape.y0 = bounds.y0 - scaledOriginY_;
+  shape.x1 = bounds.x1 - scaledOriginX_;
+  shape.y1 = bounds.y1 - scaledOriginY_;
+  opShapes_.push_back(PlaneShape{plane_, shape});
+  return bounds;
 }
 
 RecordPlanner::Builder::PlaneRect RecordPlanner::Builder::planeRect(const RecordRect &rect) const {
@@ -824,7 +913,7 @@ void RecordPlanner::Builder::emit(const RecordRect &rect, std::uint32_t param) {
   emit(rect, {.x0 = rect.x0 * s, .y0 = rect.y0 * s, .x1 = rect.x1 * s, .y1 = rect.y1 * s, .param = param});
 }
 
-void RecordPlanner::Builder::emit(const RecordRect &written, const RecordQuad &quad) {
+void RecordPlanner::Builder::emit(const RecordRect &written, const RecordShape &quad) {
   place(quad);
   markWritten(written);
   reaches_ = true;
@@ -879,7 +968,7 @@ void RecordPlanner::Builder::emitCropTransferRects(const WrappedRects &rects, bo
   target(0);
 }
 
-void RecordPlanner::Builder::emitPlacedTransfer(const RecordRect &written, const RecordQuad &quad) {
+void RecordPlanner::Builder::emitPlacedTransfer(const RecordRect &written, const RecordShape &quad) {
   const int s = plan_.scale;
   target(0);
   emit(written, quad);
@@ -894,7 +983,7 @@ void RecordPlanner::Builder::emitPlacedTransfer(const RecordRect &written, const
                             std::min(written.x1, buffer.x1),
                             std::min(written.y1, buffer.y1)};
     if (inside.x0 < inside.x1 && inside.y0 < inside.y1) {
-      RecordQuad clipped = quad;
+      RecordShape clipped = quad;
       clipped.x0 = std::max(quad.x0, buffer.x0 * s);
       clipped.y0 = std::max(quad.y0, buffer.y0 * s);
       clipped.x1 = std::min(quad.x1, buffer.x1 * s);
@@ -907,7 +996,7 @@ void RecordPlanner::Builder::emitPlacedTransfer(const RecordRect &written, const
 
 void RecordPlanner::Builder::commit(const RecordOp &op, bool readsDestination, const RecordOp *plane) {
   if (!reaches_) {
-    opQuads_.clear();
+    opShapes_.clear();
     opWrites_.clear();
     opReaches_.clear();
     opReads_.clear();
@@ -934,10 +1023,10 @@ void RecordPlanner::Builder::commit(const RecordOp &op, bool readsDestination, c
   if (plane != nullptr) {
     plan_.ops.push_back(*plane);
   }
-  for (PlaneQuad &pending : opQuads_) {
+  for (PlaneShape &pending : opShapes_) {
     pending.quad.op = opIndex;
-    plan_.quads[static_cast<std::size_t>(pending.plane)].push_back(pending.quad);
-    const RecordQuad &quad = pending.quad;
+    plan_.shapes[static_cast<std::size_t>(pending.plane)].push_back(pending.quad);
+    const RecordShape &quad = pending.quad;
     // A plane's pixels per native pixel of its written map.
     const int s =
         cropPlane(pending.plane) ? canvases_[static_cast<std::size_t>(pending.plane - 1)].worldScale : plan_.scale;
@@ -954,7 +1043,7 @@ void RecordPlanner::Builder::commit(const RecordOp &op, bool readsDestination, c
       }
     }
   }
-  opQuads_.clear();
+  opShapes_.clear();
   opWrites_.clear();
   opReaches_.clear();
   opReads_.clear();
@@ -1007,7 +1096,7 @@ void RecordPlanner::Builder::closeBatch() {
   RecordBatch batch;
   bool any = false;
   for (std::size_t plane = 0; plane < kRecordPlanes; plane++) {
-    const auto end = static_cast<std::uint32_t>(plan_.quads[plane].size());
+    const auto end = static_cast<std::uint32_t>(plan_.shapes[plane].size());
     batch.planes[plane] =
         RecordPlaneBatch{batchStart_[plane], end, written_[plane].empty() ? RecordRect{} : written_[plane].bounds()};
     any = any || end > batchStart_[plane];
@@ -1092,7 +1181,7 @@ void RecordPlanner::Builder::addTriangle(const TriVertex scaled[3],
   }
   // The native walk decides what the op writes, so ops and batches are the same at every scale. A triangle whose
   // places give it area where its words give none (a sliver a clip cut) writes no native pixel, as at 1x, but its
-  // quads reach native pixels its neighbours cover, which only its depth group counts.
+  // triangles reach native pixels its neighbours cover, which only its depth group counts.
   const std::optional<TriangleWalk> nativeWalk = s == 1 ? walk : walkTriangle(native, 1);
   const TriVertex *vertices = walk->vertices;
   TriangleSetup setup;
@@ -1117,39 +1206,67 @@ void RecordPlanner::Builder::addTriangle(const TriVertex scaled[3],
     setup.base[3] += offU ? offset : 0u;
     setup.base[4] += offV ? offset : 0u;
   }
+  // gpu.c's value at pixel (x, y): its core vertex's, the base's bias (half a step for colour, half a target pixel's
+  // texel for u and v, and a flip's offset), then dx and dy a pixel (8.24). As a plane it lies half a pixel up and
+  // left, where the hardware samples.
+  Interpolant planes[5];
+  constexpr double kFraction = 16777216.0;
+  for (int c = 0; c < 5; c++) {
+    const double dx = static_cast<std::int32_t>(setup.dx[c]) / kFraction;
+    const double dy = static_cast<std::int32_t>(setup.dy[c]) / kFraction;
+    const double bias =
+        static_cast<double>(setup.base[c] & 0xFFFFFFu) / kFraction +
+        static_cast<double>(((setup.base[c] >> 24) - static_cast<std::uint32_t>(coreVertex.*channels[c])) & 0xFFu);
+    const double value = coreVertex.*channels[c] + bias;
+    planes[c] = {value - dx * (coreVertex.x + 0.5) - dy * (coreVertex.y + 0.5), dx, dy};
+  }
   for (int c = 0; c < 5; c++) {
     setup.base[c] += setup.dx[c] * static_cast<std::uint32_t>(-coreVertex.x);
     setup.base[c] += setup.dy[c] * static_cast<std::uint32_t>(-coreVertex.y);
   }
 
+  // gpu.c plots 11-bit positions: the triangle draws moved by the wrap of its top-left corner. A margin canvas
+  // continues the picture past VRAM's columns instead.
+  const std::int64_t half = static_cast<std::int64_t>(kVramWidth) * s;
+  const std::int32_t minX = std::min({scaled[0].x, scaled[1].x, scaled[2].x});
+  const std::int32_t minY = std::min({scaled[0].y, scaled[1].y, scaled[2].y});
+  const auto shiftY = static_cast<double>(wrapSigned(minY, half) - minY);
+  // The texels the polygon samples: from its vertices' lowest to one short of their highest, as DuckStation limits
+  // them, so an edge pixel the hardware covers past gpu.c's walk repeats the polygon's own texel.
+  const auto texelLimits = [&](std::int32_t TriVertex::*channel) {
+    const std::int32_t low = std::min({scaled[0].*channel, scaled[1].*channel, scaled[2].*channel});
+    std::int32_t high = std::max({scaled[0].*channel, scaled[1].*channel, scaled[2].*channel});
+    high -= high > low ? 1 : 0;
+    return static_cast<std::uint32_t>(low & 0xFF) | (static_cast<std::uint32_t>(high & 0xFF) << 8);
+  };
+  const std::uint32_t texels = texelLimits(&TriVertex::u) | (texelLimits(&TriVertex::v) << 16);
   for (const PlaneClip &planeClip : planeClips(primitive.state)) {
     target(planeClip.plane);
     const Clip &clip = planeClip.clip;
-    for (int i = 0; i < 2; i++) {
-      const TrianglePart &part = walk->parts[i];
-      const int rowLow = std::max(part.rowLow, clip.y0 * s);
-      const int rowHigh = std::min(part.rowHigh, (clip.y1 + 1) * s);
-      // In bands of kTriangleBandRows native rows, each its own covered columns: a part's bounding box is about half
-      // outside it, and every fragment there runs the shader only to be discarded.
-      const int band = kTriangleBandRows * s;
-      for (int bandLow = rowLow; bandLow < rowHigh; bandLow += band) {
-        const RecordRect covered = coveredColumns(
-            part, {clip.x0 * s, bandLow, (clip.x1 + 1) * s, std::min(bandLow + band, rowHigh)}, unwraps(planeClip.plane));
-        if (covered.x0 < covered.x1) {
-          place({.x0 = covered.x0,
-                 .y0 = covered.y0,
-                 .x1 = covered.x1,
-                 .y1 = covered.y1,
-                 .param = static_cast<std::uint32_t>(i)});
-          if (!nativeWalk) {
-            reaches_ = true;
-            markReached(nativeReach(covered, s));
-          }
-        }
-      }
+    const double shiftX = unwraps(planeClip.plane) ? 0.0 : static_cast<double>(wrapSigned(minX, half) - minX);
+    ClipPolygon polygon{};
+    for (std::size_t v = 0; v < 3; v++) {
+      polygon.at(v) = {scaled[v].x + shiftX, scaled[v].y + shiftY};
+    }
+    const int corners = clipPolygon(polygon,
+                                    3,
+                                    clip.x0 * s,
+                                    clip.y0 * s,
+                                    (clip.x1 + 1) * static_cast<double>(s),
+                                    (clip.y1 + 1) * static_cast<double>(s));
+    for (int k = 1; k + 1 < corners; k++) {
+      const ClipPoint fan[3] = {
+          polygon[0], polygon.at(static_cast<std::size_t>(k)), polygon.at(static_cast<std::size_t>(k) + 1)};
+      const RecordRect bounds = placeTriangle(fan, planes, shiftX, shiftY, texels);
       if (!nativeWalk) {
-        continue;
+        reaches_ = true;
+        markReached(nativeReach(bounds, s));
       }
+    }
+    if (!nativeWalk) {
+      continue;
+    }
+    for (int i = 0; i < 2; i++) {
       const TrianglePart &nativePart = nativeWalk->parts[i];
       const int nativeLow = std::max(nativePart.rowLow, clip.y0);
       const int nativeHigh = std::min(nativePart.rowHigh, clip.y1 + 1);
@@ -1166,22 +1283,6 @@ void RecordPlanner::Builder::addTriangle(const TriVertex scaled[3],
   target(0);
 
   RecordOp op = primitiveOp(primitive, RecordOpKind::Triangle);
-  // A read-back op keeps its read-back words in the u and v slots.
-  const std::size_t stored = sampling_ ? 3 : 5;
-  for (std::size_t c = 0; c < stored; c++) {
-    op[kOpBase + c] = setup.base[c];
-    op[kOpDx + c] = setup.dx[c];
-    op[kOpDy + c] = setup.dy[c];
-  }
-  for (int i = 0; i < 2; i++) {
-    const int words = kOpParts + i * kPartWords;
-    const TrianglePart &part = walk->parts[i];
-    op[static_cast<std::size_t>(words) + kPartRowShift] = static_cast<std::uint32_t>(part.rowShift);
-    storeWords(op, words + kPartLeft, part.edge[0]);
-    storeWords(op, words + kPartRight, part.edge[1]);
-    storeWords(op, words + kPartLeftStep, part.step[0]);
-    storeWords(op, words + kPartRightStep, part.step[1]);
-  }
   std::optional<RecordOp> plane;
   // The UI layer has its own scale, so it never meets the world's depth.
   if (depthTest_ != nullptr && !(pass_ == Pass::Crop && cropUi_)) {
@@ -1296,7 +1397,7 @@ void RecordPlanner::Builder::addSprite(const DrawPrimitive &primitive) {
   commit(op, primitive.semiTransparent || primitive.state.maskCheck);
 }
 
-// gpu_line.c DrawLine: the pixels are walked here and drawn as single-pixel quads.
+// gpu_line.c DrawLine: the pixels are walked here and drawn as single-pixel rects.
 void RecordPlanner::Builder::addLine(const DrawPrimitive &primitive) {
   present::RecordVertex p0 = primitive.vertices[0];
   present::RecordVertex p1 = primitive.vertices[1];
@@ -1355,11 +1456,11 @@ void RecordPlanner::Builder::addLine(const DrawPrimitive &primitive) {
         const Clip &clip = planeClip.clip;
         if (nx >= clip.x0 && nx <= clip.x1 && ny >= clip.y0 && ny <= clip.y1) {
           target(planeClip.plane);
-          const RecordQuad quad{.x0 = std::max(nx * s + shiftX, clip.x0 * s),
-                                .y0 = std::max(ny * s + shiftY, clip.y0 * s),
-                                .x1 = std::min((nx + 1) * s + shiftX, (clip.x1 + 1) * s),
-                                .y1 = std::min((ny + 1) * s + shiftY, (clip.y1 + 1) * s),
-                                .param = colour};
+          const RecordShape quad{.x0 = std::max(nx * s + shiftX, clip.x0 * s),
+                                 .y0 = std::max(ny * s + shiftY, clip.y0 * s),
+                                 .x1 = std::min((nx + 1) * s + shiftX, (clip.x1 + 1) * s),
+                                 .y1 = std::min((ny + 1) * s + shiftY, (clip.y1 + 1) * s),
+                                 .param = colour};
           if (quad.x0 < quad.x1 && quad.y0 < quad.y1) {
             place(quad);
           }
@@ -1479,10 +1580,10 @@ void RecordPlanner::Builder::addCopy(const present::VramCopy &copy) {
   const present::CopyPlace &place = copy.place;
   if (!overlapping && place != present::CopyPlace{}) {
     const int s = plan_.scale;
-    const RecordQuad quad{.x0 = scaledCoordinate(copy.dstX, place.dstX, s),
-                          .y0 = scaledCoordinate(copy.dstY, place.dstY, s),
-                          .x1 = scaledCoordinate(copy.dstX + copy.width, place.dstX + place.width, s),
-                          .y1 = scaledCoordinate(copy.dstY + copy.height, place.dstY + place.height, s)};
+    const RecordShape quad{.x0 = scaledCoordinate(copy.dstX, place.dstX, s),
+                           .y0 = scaledCoordinate(copy.dstY, place.dstY, s),
+                           .x1 = scaledCoordinate(copy.dstX + copy.width, place.dstX + place.width, s),
+                           .y1 = scaledCoordinate(copy.dstY + copy.height, place.dstY + place.height, s)};
     if (quad.x1 <= quad.x0 || quad.y1 <= quad.y0) {
       return;
     }

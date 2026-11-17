@@ -1,6 +1,7 @@
 #version 450
 #extension GL_GOOGLE_include_directive : require
-// Record rasterizer: one PSX pixel per fragment, by gpu.c's rules; record_raster_setup.h sets up each op.
+// Record rasterizer: one target pixel per fragment, by gpu.c's rules; record_raster_setup.h sets up each op. A
+// triangle's coverage and interpolants are the hardware's; a rect's pixels are worked out here.
 // The target is a plane: the VRAM image or a display canvas, whose pixel p is VRAM-space pixel p + origin * scale.
 // A crop canvas's UI quads (kMappingCropUi) map instead at the UI scale from the UI origin.
 #include "record_op.glsl"
@@ -14,6 +15,9 @@
 #endif
 
 layout(location = 0) flat in uvec4 v_info;
+layout(location = 1) noperspective in vec3 v_colour; // a triangle's colour interpolants, channel units
+layout(location = 2) noperspective in vec2 v_uv;     // its texel interpolants
+layout(location = 3) flat in uint v_texels;          // the texels it samples (RecordShape::texels)
 layout(location = 0) out vec4 o_col;
 layout(set = 2, binding = 0) uniform sampler2D u_target; // the target plane before this batch
 #ifdef RECORD_FETCH
@@ -153,19 +157,6 @@ uint blend(uint f, uint bg, uint mode) {
     return ((sum - carry) | (carry - (carry >> 5))) & 0xFFFFu;
 }
 
-// The integer part of a part edge's 32.32 x at interpolant row yi: edge + yi * step, mod 2^64.
-int edgeX(uint edge, uint step, int yi) {
-    uint yLow = uint(yi);
-    uint yHigh = yi < 0 ? 0xFFFFFFFFu : 0u;
-    uint productHigh;
-    uint productLow;
-    umulExtended(yLow, word(step), productHigh, productLow);
-    productHigh += yLow * word(step + 1u) + yHigh * word(step);
-    uint carry;
-    uaddCarry(word(edge), productLow, carry);
-    return int(word(edge + 1u) + productHigh + carry);
-}
-
 #ifdef RECORD_DEPTH
 // The op's DepthPlane, the op after it.
 float depthWord(uint field) { return uintBitsToFloat(ops[(op + 1u) * kRecordOpWords + field]); }
@@ -204,19 +195,7 @@ void main() {
 #endif
 #ifdef RECORD_DEPTH_MARK
     // The group's test draw marked in stencil exactly the pixels it drew, and a group's polygons cover no pixel twice,
-    // so inside this polygon's own edges a marked pixel is its own: the texel, blend and mask work that decided those
-    // pixels is not repeated. A quad covers its sprite or line pixel exactly; a triangle's covers more.
-    if (kind == kRecordOpKindTriangle) {
-        int vramWidth = kVramWidth * S;
-        uint part = kOpParts + v_info.y * kPartWords;
-        int yi = p.y - int(word(part + kPartRowShift));
-        int left = edgeX(part + kPartLeft, part + kPartLeftStep, yi);
-        int right = edgeX(part + kPartRight, part + kPartRightStep, yi);
-        int x0 = p.x < 0 || p.x >= vramWidth ? left : wrap(left + vramWidth, 2 * vramWidth) - vramWidth;
-        if (p.x < x0 || p.x >= x0 + (right - left)) {
-            discard;
-        }
-    }
+    // so a marked pixel this shape covers is its own: the texel, blend and mask work that decided it is not repeated.
     return;
 #endif
     // A crop canvas shows every row; a transfer's op carries the image's field weave.
@@ -279,27 +258,19 @@ void main() {
         uint fu = 0u;
         uint fv = 0u;
         if (kind == kRecordOpKindTriangle) {
-            uint part = kOpParts + v_info.y * kPartWords;
-            int yi = p.y - int(word(part + kPartRowShift));
-            int left = edgeX(part + kPartLeft, part + kPartLeftStep, yi);
-            int right = edgeX(part + kPartRight, part + kPartRightStep, yi);
-            // A canvas continues the picture past VRAM's columns, where the 11-bit position would wrap.
-            int x0 = p.x < 0 || p.x >= vramWidth ? left : wrap(left + vramWidth, 2 * vramWidth) - vramWidth;
-            if (p.x < x0 || p.x >= x0 + (right - left)) {
-                discard;
-            }
-            uint xi = uint(p.x + (left - x0));
-            uint value[5];
-            for (uint c = 0u; c < 5u; c++) {
-                value[c] = word(kOpBase + c) + word(kOpDx + c) * xi + word(kOpDy + c) * uint(yi);
-            }
-            r = int(value[0] >> 24);
-            g = int(value[1] >> 24);
-            b = int(value[2] >> 24);
-            u = value[3] >> 24;
-            v = value[4] >> 24;
-            fu = (value[3] >> 16) & 0xFFu;
-            fv = (value[4] >> 16) & 0xFFu;
+            // gpu.c takes the whole part of each 8.24 interpolant, u and v mod 256, and the fraction's top byte picks
+            // the target pixel inside a texel's scaled block.
+            ivec3 rgb = clamp(ivec3(floor(v_colour)), ivec3(0), ivec3(255));
+            r = rgb.r;
+            g = rgb.g;
+            b = rgb.b;
+            uvec4 limits = (uvec4(v_texels) >> uvec4(0u, 8u, 16u, 24u)) & 0xFFu;
+            vec2 uv = clamp(v_uv, vec2(limits.xz), vec2(limits.yw) + 255.0 / 256.0);
+            vec2 whole = floor(uv);
+            u = uint(int(whole.x)) & 0xFFu;
+            v = uint(int(whole.y)) & 0xFFu;
+            fu = min(uint((uv.x - whole.x) * 256.0), 255u);
+            fv = min(uint((uv.y - whole.y) * 256.0), 255u);
         } else {
             int du = (flags & kOpFlipX) != 0u ? -1 : 1;
             int dv = (flags & kOpFlipY) != 0u ? -1 : 1;

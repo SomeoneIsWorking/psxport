@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cmath>
 #include <cstring>
 
 namespace psx::render {
@@ -17,7 +18,8 @@ using gpu::RecordRect;
 constexpr SDL_GPUTextureFormat kVramFormat = SDL_GPU_TEXTUREFORMAT_R8G8_UNORM;
 constexpr ShaderCode kRecordVertex{spv_g_record_vert, spv_g_record_vert_len, {0, 1, 1}, PSXPORT_MSL(record_vert)};
 constexpr ShaderCode kRecordFragment{spv_g_record_frag, spv_g_record_frag_len, {5, 1, 3}, PSXPORT_MSL(record_frag)};
-constexpr ShaderCode kRecordDepthFragment{spv_g_record_depth_frag, spv_g_record_depth_frag_len, {5, 1, 3}, PSXPORT_MSL(record_depth_frag)};
+constexpr ShaderCode kRecordDepthFragment{
+    spv_g_record_depth_frag, spv_g_record_depth_frag_len, {5, 1, 3}, PSXPORT_MSL(record_depth_frag)};
 constexpr ShaderCode kRecordDepthBackFragment{
     spv_g_record_depth_back_frag, spv_g_record_depth_back_frag_len, {5, 1, 3}, PSXPORT_MSL(record_depth_back_frag)};
 // A depth group's mark: coverage and depth alone, so it never reads the target and both pipeline sets share it.
@@ -77,13 +79,30 @@ struct ParamsUniform {
   std::array<std::array<std::int32_t, 4>, present::kMaxOutlineFonts> outlineFontSizes{};
 };
 
-std::uint64_t coveredPixels(std::span<const gpu::RecordQuad> quads) {
-  std::uint64_t pixels = 0;
-  for (const gpu::RecordQuad &quad : quads) {
-    pixels += static_cast<std::uint64_t>(std::max(0, quad.x1 - quad.x0)) *
-              static_cast<std::uint64_t>(std::max(0, quad.y1 - quad.y0));
+// A triangle's pixels are its area; a rect's every pixel.
+std::uint64_t coveredPixels(std::span<const gpu::RecordShape> shapes) {
+  double pixels = 0.0;
+  for (const gpu::RecordShape &shape : shapes) {
+    if (shape.kind == gpu::kShapeTriangle) {
+      const gpu::RecordCorner &a = shape.corners[0];
+      const gpu::RecordCorner &b = shape.corners[1];
+      const gpu::RecordCorner &c = shape.corners[2];
+      pixels += std::abs(static_cast<double>((b.x - a.x) * (c.y - a.y) - (c.x - a.x) * (b.y - a.y))) / 2.0;
+    } else {
+      pixels +=
+          static_cast<double>(std::max(0, shape.x1 - shape.x0)) * static_cast<double>(std::max(0, shape.y1 - shape.y0));
+    }
   }
-  return pixels;
+  return static_cast<std::uint64_t>(pixels);
+}
+
+// Hardware triangles a shape draws.
+std::uint64_t shapeTriangles(std::span<const gpu::RecordShape> shapes) {
+  std::uint64_t triangles = 0;
+  for (const gpu::RecordShape &shape : shapes) {
+    triangles += shape.kind == gpu::kShapeTriangle ? 1 : 2;
+  }
+  return triangles;
 }
 
 // record.frag writes log2(z) / 16; 24 bits resolve z far below a bin.
@@ -130,10 +149,10 @@ RenderDevice::DepthTarget withStencil(RenderDevice::DepthTarget target,
   return target;
 }
 
-// A quad's depth flags and, for a Model part, its model's stencil id: consecutive quads with the same draw as one run.
-// Whether the op reads the target pixel: record.frag fetches it only for these.
-bool readsTarget(const gpu::RecordRasterPlan &plan, const gpu::RecordQuad &quad) {
-  return (plan.ops[quad.op][gpu::kOpFlags] & (gpu::kOpSemi | gpu::kOpMaskCheck)) != 0u;
+// A shape's depth flags and, for a Model part, its model's stencil id: consecutive shapes with the same draw as one
+// run. Whether the op reads the target pixel: record.frag fetches it only for these.
+bool readsTarget(const gpu::RecordRasterPlan &plan, const gpu::RecordShape &shape) {
+  return (plan.ops[shape.op][gpu::kOpFlags] & (gpu::kOpSemi | gpu::kOpMaskCheck)) != 0u;
 }
 
 struct DepthRun {
@@ -143,11 +162,11 @@ struct DepthRun {
   bool operator==(const DepthRun &) const = default;
 };
 
-DepthRun depthRun(const gpu::RecordRasterPlan &plan, const gpu::RecordQuad &quad) {
-  const std::uint32_t flags = plan.ops[quad.op][gpu::kOpFlags] & kDepthRunFlags;
+DepthRun depthRun(const gpu::RecordRasterPlan &plan, const gpu::RecordShape &shape) {
+  const std::uint32_t flags = plan.ops[shape.op][gpu::kOpFlags] & kDepthRunFlags;
   return {flags,
-          (flags & gpu::kOpDepthModel) != 0u ? plan.ops[quad.op + 1][gpu::kDepthModel] : 0u,
-          readsTarget(plan, quad)};
+          (flags & gpu::kOpDepthModel) != 0u ? plan.ops[shape.op + 1][gpu::kDepthModel] : 0u,
+          readsTarget(plan, shape)};
 }
 
 // Storage buffers are read as whole words, and never sized zero.
@@ -157,8 +176,7 @@ std::uint32_t paddedBytes(std::size_t bytes) {
 
 } // namespace
 
-RecordRasterizer::RecordRasterizer(RenderDevice &device)
-    : device_(device), depthFormat_(depthFormat(device.handle())) {
+RecordRasterizer::RecordRasterizer(RenderDevice &device) : device_(device), depthFormat_(depthFormat(device.handle())) {
   planner_.setDestinationReadsInPass(device.fetchesTarget());
   writes_ = makePipelines(false);
   reads_ = device.fetchesTarget() ? makePipelines(true) : writes_;
@@ -235,7 +253,7 @@ RecordRasterizer::~RecordRasterizer() {
   releaseImage();
   device_.release(outlineFields_);
   device_.release(outlineIndices_);
-  for (Buffer *buffer : {&quads_, &ops_, &cluts_, &pixels_}) {
+  for (Buffer *buffer : {&shapeBuffer_, &ops_, &cluts_, &pixels_}) {
     device_.release(buffer->buffer);
   }
   device_.release(upload_);
@@ -355,7 +373,7 @@ std::span<const RecordCanvas> RecordRasterizer::canvasShapes(present::Horizontal
 
 void RecordRasterizer::adoptWindows(const gpu::RecordRasterPlan &plan, const present::RecordWindows &windows) {
   for (std::size_t i = 0; i < canvases_.size(); i++) {
-    if (!plan.quads[1 + i].empty()) {
+    if (!plan.shapes[1 + i].empty()) {
       setWindow(canvases_[i].shape, windows.drawn);
       canvases_[i].view = windows.view;
     }
@@ -670,7 +688,7 @@ bool RecordRasterizer::drawInBetween(SDL_GPUCommandBuffer *cmd,
   }
   const Canvas *shown = canvasFor(view);
   const bool drewShown =
-      shown != nullptr && !plan.quads[1 + static_cast<std::size_t>(shown - canvases_.data())].empty();
+      shown != nullptr && !plan.shapes[1 + static_cast<std::size_t>(shown - canvases_.data())].empty();
   present(view, true, drewShown ? &windows : nullptr);
   selectField(cmd, record);
   return true;
@@ -786,41 +804,41 @@ void RecordRasterizer::execute(SDL_GPUCommandBuffer *cmd, const gpu::RecordRaste
     captureBefore(0);
     return;
   }
-  std::array<std::uint32_t, gpu::kRecordPlanes> firstQuad{};
-  std::size_t quadCount = 0;
+  std::array<std::uint32_t, gpu::kRecordPlanes> firstShape{};
+  std::size_t shapeCount = 0;
   for (std::size_t p = 0; p < gpu::kRecordPlanes; p++) {
-    firstQuad[p] = static_cast<std::uint32_t>(quadCount);
-    quadCount += plan.quads[p].size();
+    firstShape[p] = static_cast<std::uint32_t>(shapeCount);
+    shapeCount += plan.shapes[p].size();
   }
-  const std::uint32_t quadBytes = paddedBytes(quadCount * sizeof(gpu::RecordQuad));
+  const std::uint32_t shapeBytes = paddedBytes(shapeCount * sizeof(gpu::RecordShape));
   const std::uint32_t opBytes = paddedBytes(plan.ops.size() * sizeof(gpu::RecordOp));
   const std::uint32_t clutBytes = paddedBytes(plan.clutPool.size() * sizeof(std::uint16_t));
   const std::uint32_t pixelBytes = paddedBytes(plan.uploadPool.size() * sizeof(std::uint16_t));
-  ensureBuffer(quads_, quadBytes);
+  ensureBuffer(shapeBuffer_, shapeBytes);
   ensureBuffer(ops_, opBytes);
   ensureBuffer(cluts_, clutBytes);
   ensureBuffer(pixels_, pixelBytes);
   ensureTransfer(
-      upload_, uploadSize_, SDL_GPU_TRANSFERBUFFERUSAGE_UPLOAD, quadBytes + opBytes + clutBytes + pixelBytes);
+      upload_, uploadSize_, SDL_GPU_TRANSFERBUFFERUSAGE_UPLOAD, shapeBytes + opBytes + clutBytes + pixelBytes);
 
   auto *staging = static_cast<std::uint8_t *>(SDL_MapGPUTransferBuffer(device_.handle(), upload_, true));
   GPUCHK(staging, "record upload map");
   // The padding past each array is never read.
-  std::uint8_t *quads = staging;
+  std::uint8_t *shapes = staging;
   for (std::size_t p = 0; p < gpu::kRecordPlanes; p++) {
-    std::memcpy(quads, plan.quads[p].data(), plan.quads[p].size() * sizeof(gpu::RecordQuad));
-    quads += plan.quads[p].size() * sizeof(gpu::RecordQuad);
+    std::memcpy(shapes, plan.shapes[p].data(), plan.shapes[p].size() * sizeof(gpu::RecordShape));
+    shapes += plan.shapes[p].size() * sizeof(gpu::RecordShape);
   }
-  std::memcpy(staging + quadBytes, plan.ops.data(), plan.ops.size() * sizeof(gpu::RecordOp));
-  std::memcpy(staging + quadBytes + opBytes, plan.clutPool.data(), plan.clutPool.size() * sizeof(std::uint16_t));
-  std::memcpy(staging + quadBytes + opBytes + clutBytes,
+  std::memcpy(staging + shapeBytes, plan.ops.data(), plan.ops.size() * sizeof(gpu::RecordOp));
+  std::memcpy(staging + shapeBytes + opBytes, plan.clutPool.data(), plan.clutPool.size() * sizeof(std::uint16_t));
+  std::memcpy(staging + shapeBytes + opBytes + clutBytes,
               plan.uploadPool.data(),
               plan.uploadPool.size() * sizeof(std::uint16_t));
   SDL_UnmapGPUTransferBuffer(device_.handle(), upload_);
 
   SDL_GPUCopyPass *copy = SDL_BeginGPUCopyPass(cmd);
   std::uint32_t offset = 0;
-  for (auto [buffer, bytes] : {std::pair{quads_.buffer, quadBytes},
+  for (auto [buffer, bytes] : {std::pair{shapeBuffer_.buffer, shapeBytes},
                                std::pair{ops_.buffer, opBytes},
                                std::pair{cluts_.buffer, clutBytes},
                                std::pair{pixels_.buffer, pixelBytes}}) {
@@ -830,16 +848,16 @@ void RecordRasterizer::execute(SDL_GPUCommandBuffer *cmd, const gpu::RecordRaste
     offset += bytes;
   }
   SDL_EndGPUCopyPass(copy);
-  work_.uploadBytes += quadBytes + opBytes + clutBytes + pixelBytes;
+  work_.uploadBytes += shapeBytes + opBytes + clutBytes + pixelBytes;
 
   const int planes = 1 + static_cast<int>(canvases_.size());
-  // A plane any depth-tested quad lands on draws every pass of this record against its depth, cleared first.
+  // A plane any depth-tested shape lands on draws every pass of this record against its depth, cleared first.
   std::array<bool, gpu::kRecordPlanes> depthCleared{};
   std::array<bool, gpu::kRecordPlanes> usesDepth{};
   for (int p = 0; p < planes; p++) {
-    const auto &quads = plan.quads[static_cast<std::size_t>(p)];
-    usesDepth[static_cast<std::size_t>(p)] = std::ranges::any_of(quads, [&](const gpu::RecordQuad &quad) {
-      return depthRun(plan, quad).flags != 0u;
+    const auto &shapes = plan.shapes[static_cast<std::size_t>(p)];
+    usesDepth[static_cast<std::size_t>(p)] = std::ranges::any_of(shapes, [&](const gpu::RecordShape &shape) {
+      return depthRun(plan, shape).flags != 0u;
     });
     Plane &target = plane(p);
     if (usesDepth[static_cast<std::size_t>(p)] && target.depth == nullptr) {
@@ -853,7 +871,7 @@ void RecordRasterizer::execute(SDL_GPUCommandBuffer *cmd, const gpu::RecordRaste
     captureBefore(b);
     for (int p = 0; p < planes; p++) {
       const gpu::RecordPlaneBatch &range = batch.planes[static_cast<std::size_t>(p)];
-      if (range.endQuad == range.firstQuad) {
+      if (range.endShape == range.firstShape) {
         continue;
       }
       const Plane &target = plane(p);
@@ -898,7 +916,7 @@ void RecordRasterizer::execute(SDL_GPUCommandBuffer *cmd, const gpu::RecordRaste
       }
       SDL_GPURenderPass *pass = SDL_BeginGPURenderPass(cmd, &colour, 1, depth ? &depthInfo : nullptr);
       ++work_.renderPasses;
-      SDL_BindGPUVertexStorageBuffers(pass, 0, &quads_.buffer, 1);
+      SDL_BindGPUVertexStorageBuffers(pass, 0, &shapeBuffer_.buffer, 1);
       SDL_GPUSampler *nearest = device_.nearestSampler();
       // With no capture the binding is never sampled: only a held read-back plans read-back ops.
       SDL_GPUTexture *readBack = capture_ != nullptr ? capture_ : vram_.snapshot;
@@ -913,12 +931,12 @@ void RecordRasterizer::execute(SDL_GPUCommandBuffer *cmd, const gpu::RecordRaste
       SDL_BindGPUFragmentSamplers(pass, 0, snapshots, 5);
       SDL_GPUBuffer *fragmentBuffers[3] = {ops_.buffer, cluts_.buffer, pixels_.buffer};
       SDL_BindGPUFragmentStorageBuffers(pass, 0, fragmentBuffers, 3);
-      const auto &quads = plan.quads[static_cast<std::size_t>(p)];
-      drawQuads(pass,
-                plan,
-                std::span(quads).subspan(range.firstQuad, range.endQuad - range.firstQuad),
-                firstQuad[static_cast<std::size_t>(p)] + range.firstQuad,
-                depth);
+      const auto &shapes = plan.shapes[static_cast<std::size_t>(p)];
+      drawShapes(pass,
+                 plan,
+                 std::span(shapes).subspan(range.firstShape, range.endShape - range.firstShape),
+                 firstShape[static_cast<std::size_t>(p)] + range.firstShape,
+                 depth);
       SDL_EndGPURenderPass(pass);
     }
     // Every pass of the batch read the snapshots as they were; refresh them only now.
@@ -937,13 +955,13 @@ void RecordRasterizer::execute(SDL_GPUCommandBuffer *cmd, const gpu::RecordRaste
   captureBefore(plan.batches.size());
 }
 
-void RecordRasterizer::drawQuads(SDL_GPURenderPass *pass,
-                                 const gpu::RecordRasterPlan &plan,
-                                 std::span<const gpu::RecordQuad> quads,
-                                 std::uint32_t firstVertexQuad,
-                                 bool depthTarget) {
-  // Each draw is two triangles a quad, its fragments the quads' covered pixels.
-  std::span<const gpu::RecordQuad> runQuads;
+void RecordRasterizer::drawShapes(SDL_GPURenderPass *pass,
+                                  const gpu::RecordRasterPlan &plan,
+                                  std::span<const gpu::RecordShape> shapes,
+                                  std::uint32_t firstVertexShape,
+                                  bool depthTarget) {
+  // Each draw is six vertices a shape (record.vert), its fragments the shapes' covered pixels.
+  std::span<const gpu::RecordShape> runShapes;
   SDL_GPUGraphicsPipeline *bound = nullptr;
   const auto draw = [&](SDL_GPUGraphicsPipeline *pipeline, Uint32 first, Uint32 count) {
     if (pipeline != bound) {
@@ -953,22 +971,22 @@ void RecordRasterizer::drawQuads(SDL_GPURenderPass *pass,
     }
     SDL_DrawGPUPrimitives(pass, count, 1, first, 0);
     ++work_.draws;
-    work_.triangles += runQuads.size() * 2;
-    work_.pixels += countPixels_ ? coveredPixels(runQuads) : 0;
+    work_.triangles += shapeTriangles(runShapes);
+    work_.pixels += countPixels_ ? coveredPixels(runShapes) : 0;
   };
   // Runs in record order, each through the pipelines its reading of the target picks; with a depth target, also by
   // its depth run.
   std::size_t run = 0;
-  while (run < quads.size()) {
-    const DepthRun key = depthTarget ? depthRun(plan, quads[run]) : DepthRun{.reads = readsTarget(plan, quads[run])};
+  while (run < shapes.size()) {
+    const DepthRun key = depthTarget ? depthRun(plan, shapes[run]) : DepthRun{.reads = readsTarget(plan, shapes[run])};
     std::size_t end = run + 1;
-    while (end < quads.size() &&
-           (depthTarget ? depthRun(plan, quads[end]) : DepthRun{.reads = readsTarget(plan, quads[end])}) == key) {
+    while (end < shapes.size() &&
+           (depthTarget ? depthRun(plan, shapes[end]) : DepthRun{.reads = readsTarget(plan, shapes[end])}) == key) {
       end++;
     }
     const auto count = static_cast<Uint32>(end - run) * 6;
-    runQuads = quads.subspan(run, end - run);
-    const Uint32 first = (firstVertexQuad + static_cast<std::uint32_t>(run)) * 6;
+    runShapes = shapes.subspan(run, end - run);
+    const Uint32 first = (firstVertexShape + static_cast<std::uint32_t>(run)) * 6;
     const Pipelines &set = key.reads ? reads_ : writes_;
     if (!depthTarget) {
       draw(set.plain, first, count);

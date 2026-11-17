@@ -59,6 +59,36 @@ stays in the shader.
 5. **Measure.** gputime on Spyro 1 Stone Hill at 8x on Fedora, against 11 ms. Shots by eye at 1x and
    8x, plus `recordcheck` to see the edge difference is only edges.
 
+### Phase 1 result (2026-11-17, M2, landed)
+
+Done as planned, with three choices the plan left open:
+
+- One shape stream. `RecordQuad` became `RecordShape`: a rect, or a triangle carrying its three corners with u, v
+  and colour interpolants. Every shape is still six vertices in `record.vert`; a triangle's last three collapse onto
+  its third corner. Batches, runs and depth pipelines are untouched.
+- Interpolants are set from `gpu.c`'s own setup (base, dx, dy at S) as planes moved half a pixel, so the hardware's
+  value at a pixel centre is `gpu.c`'s at that pixel, flip offsets and bias included. The op no longer carries bases,
+  deltas or edges (`kRecordOpWords` 40 → 28).
+- Triangles are clipped to the draw area on the CPU (Sutherland-Hodgman, a fan per plane) and drawn shifted by the
+  11-bit wrap of their top-left corner. Texels are clamped to the polygon's UV range, low to one short of high, as
+  DuckStation does: without it the edge pixels the hardware covers past `gpu.c`'s walk sampled neighbouring texels
+  (white dashes along Spyro's chest lid at 8x).
+
+Spyro 1 attract demo at 8x (psx-spyro `tools/demo_gputime.py`, shots from `tools/demo_shots.py`):
+
+| | before | after |
+|---|---|---|
+| GPU ms/present p50 (gputime) | 40.9 | 19.4 |
+| record / record composed, ms/submit | 17.9 / 19.5 | 8.0 / 9.6 |
+| CPU present, cpu-ms/frame p50 | 19.7 | 10.7 |
+| CPU frame, cpu-ms/frame p50 | 24.5 | 13.4 |
+| triangles, ktri/present p50 | 41.0 | 5.1 |
+| pixels shaded, Mpx/present p50 | 116 | 85 |
+| recordcheck at 1x, differing pixels p50 | 57.3k | 60.0k |
+
+CPU spread 1-5% over two runs a side; GPU counts repeat exactly. Shots at 1x and 8x differ only along polygon
+edges; no seams seen in the demo. Stone Hill's slivers (0199, 0206) were not revisited.
+
 ## Phase 2: RGBA8 target and fixed-function blending
 
 1. **Target format.** `kVramFormat` R8G8 → R8G8B8A8_UNORM. Colour in RGB, the mask bit in A.

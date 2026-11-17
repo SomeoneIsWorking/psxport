@@ -89,9 +89,10 @@ def path_is_current(path: Path, dependencies: list[Path]) -> bool:
 
 
 def integer_value(expression: str, known: dict[str, int]) -> int:
-    """An integer expression such as ``1u << 8`` or ``1 + kRecordMaxCanvases``."""
+    """An integer expression such as ``1u << 8``, ``-64`` or ``1 + kRecordMaxCanvases``."""
     tree = ast.parse(re.sub(r"(?<=[0-9a-fA-F])u\b", "", expression), mode="eval")
-    allowed = (ast.Expression, ast.BinOp, ast.Constant, ast.Name, ast.Load, ast.LShift, ast.BitOr, ast.Add, ast.Sub, ast.Mult)
+    allowed = (ast.Expression, ast.BinOp, ast.Constant, ast.Name, ast.Load, ast.LShift, ast.BitOr, ast.Add, ast.Sub, ast.Mult,
+               ast.UnaryOp, ast.USub)
     if not all(isinstance(node, allowed) for node in ast.walk(tree)):
         raise GeneratorError(f"op layout value is not an integer expression: {expression}")
     try:

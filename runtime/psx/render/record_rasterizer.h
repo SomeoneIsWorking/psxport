@@ -193,12 +193,12 @@ private:
   // Replaces the presented picture by the field `record` drew, when it draws one field per frame.
   void selectField(SDL_GPUCommandBuffer *cmd, const present::FrameRecord &record);
   void execute(SDL_GPUCommandBuffer *cmd, const gpu::RecordRasterPlan &plan, bool inBetween);
-  // Quads [first, end) of a pass, each run of depth-tested quads through its depth pipelines.
-  void drawQuads(SDL_GPURenderPass *pass,
-                 const gpu::RecordRasterPlan &plan,
-                 std::span<const gpu::RecordQuad> quads,
-                 std::uint32_t firstVertexQuad,
-                 bool depthTarget);
+  // Shapes [first, end) of a pass, each run of depth-tested shapes through its depth pipelines.
+  void drawShapes(SDL_GPURenderPass *pass,
+                  const gpu::RecordRasterPlan &plan,
+                  std::span<const gpu::RecordShape> shapes,
+                  std::uint32_t firstVertexShape,
+                  bool depthTarget);
   // Copies the capture's canvas pixels into capture_, sized to them.
   void capture(SDL_GPUCommandBuffer *cmd, const gpu::RecordCapture &capture);
   // `source` of `from` to (`toX`, `toY`) of `to`, both in native pixels of textures at `scale`.
@@ -268,7 +268,7 @@ private:
   std::array<present::OutlineAtlasFont, present::kMaxOutlineFonts> outlineFonts_{};
   std::array<std::uint32_t, 4> outlineFaces_{};
 
-  Buffer quads_;
+  Buffer shapeBuffer_;
   Buffer ops_;
   Buffer cluts_;
   Buffer pixels_;

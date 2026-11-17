@@ -1,8 +1,9 @@
 // record_raster_setup.h — a FrameRecord turned into GPU draw work by gpu.c's own coverage rules.
 //
-// Each primitive costs one op and a constant number of quads whatever the scale: the CPU sets up gpu.c's
-// integer edge and interpolant inputs at the target scale, and shaders_gpu/record.frag evaluates coverage,
-// texel, modulation, blend and mask per pixel. Ops whose reads overlap pixels gpu.c wrote at 1x earlier in
+// Each primitive costs one op and a constant number of shapes whatever the scale. A polygon draws as real
+// triangles through the hardware rasterizer, its colour and texel interpolants set up from gpu.c's at the target
+// scale and interpolated by the hardware; sprites, lines and transfers draw as rects. shaders_gpu/record.frag
+// evaluates texel, modulation, blend and mask per pixel. Ops whose reads overlap pixels gpu.c wrote at 1x earlier in
 // the same batch start a new batch, so at 1x every read sees VRAM exactly as the device would and the ops
 // and batches are the same at every scale. This header is the op
 // layout's one source; tools/gen_gpu_shaders.py writes it into the shader as record_op.glsl.
@@ -21,7 +22,7 @@
 
 namespace psx::gpu {
 
-inline constexpr int kRecordOpWords = 40;
+inline constexpr int kRecordOpWords = 28;
 using RecordOp = std::array<std::uint32_t, kRecordOpWords>;
 
 // A DepthPlane op follows each depth-tested triangle and is never drawn itself.
@@ -44,32 +45,17 @@ enum RecordOpField : std::uint8_t {
   kOpWindowYAnd = 4,
   kOpWindowYAdd = 5,
   kOpClut = 6,    // halfword index into the CLUT pool
-  kOpBase = 7,    // r, g, b, u, v interpolant bases (7..11)
-  kOpDx = 12,     // per-pixel x deltas (12..16)
   kOpShiftX = 12, // sprite: its place past its whole pixel, target pixels
   kOpShiftY = 13,
-  kOpDy = 17,      // per-row y deltas (17..21)
   kOpOriginX = 22, // sprite/upload/copy destination origin, native pixels
   kOpOriginY = 23,
   kOpSourceX = 24, // copy source origin, native pixels; sprite u0; upload width
   kOpSourceY = 25, // copy source; sprite v0; upload height
   kOpPool = 26,    // upload pixel pool halfword offset
-  kOpParts = 22,   // triangle: its two RecordPartField blocks, upper then lower
-  // kOpReadBack: the capture pixel a fragment samples minus the fragment, native pixels (the u and v slots).
+  // kOpReadBack: the capture pixel a fragment samples minus the fragment, native pixels.
   kOpReadBackX = 10,
   kOpReadBackY = 11,
   kOpReadBackWeights = 15, // red | green << 8 | blue << 16 | shift << 24
-};
-
-// A triangle part's words from kOpParts + part * kPartWords. Edges are gpu.c's 32.32 x at interpolant row
-// 0, low word first; row r's x is edge + r * step.
-enum RecordPartField : std::uint8_t {
-  kPartRowShift = 0, // plotted row minus interpolant row
-  kPartLeft = 1,
-  kPartRight = 3,
-  kPartLeftStep = 5,
-  kPartRightStep = 7,
-  kPartWords = 9,
 };
 
 // A DepthPlane op's floats: 1/z at its triangle's first vertex, its x and y slopes per native pixel, that
@@ -113,18 +99,45 @@ enum RecordOpFlag : std::uint32_t {
   kOpOutlineFontShift = 30, // two bits: the outline font (present::OutlineAtlas::fonts)
 };
 
-// One rectangle of a plane's pixels belonging to an op, scaled, half open. Op origins are in VRAM space,
-// which record.frag reaches by adding the plane's origin.
-struct RecordQuad {
+// How a RecordShape covers its pixels.
+enum RecordShapeKind : std::uint32_t {
+  kShapeRect = 0,     // every pixel of x0..x1 by y0..y1, half open
+  kShapeTriangle = 1, // the pixel centres inside `corners`, by the hardware's fill rule
+};
+
+// A triangle corner in its plane's target pixels, with its texel interpolants: at a pixel centre the hardware's
+// interpolation gives gpu.c's value at that pixel (bias and flip offsets included).
+struct RecordCorner {
+  float x = 0.0F;
+  float y = 0.0F;
+  float u = 0.0F;
+  float v = 0.0F;
+};
+
+// A colour interpolant as RecordShape stores it: channel units, 1/128 a step, from -64.
+inline constexpr int kColourStep = 128;
+inline constexpr int kColourFloor = -64;
+
+// One rect or triangle of a plane's pixels belonging to an op, scaled. A triangle's x0..y1 bound it. Op origins are
+// in VRAM space, which record.frag reaches by adding the plane's origin. record.vert reads it as std430.
+struct RecordShape {
   std::int32_t x0 = 0;
   std::int32_t y0 = 0;
   std::int32_t x1 = 0;
   std::int32_t y1 = 0;
   std::uint32_t op = 0;
-  std::uint32_t param = 0;   // triangle: its part; line pixel: its colour r | g << 8 | b << 16
+  std::uint32_t param = 0;   // line pixel: its colour r | g << 8 | b << 16
   std::uint32_t mapping = 0; // RecordMapping: how the plane's pixels map to the op's VRAM space
+  std::uint32_t kind = kShapeRect;
+  std::array<RecordCorner, 3> corners{};
+  // Each corner's colour interpolants (kColourStep): r | g << 16, then b.
+  std::array<std::array<std::uint32_t, 2>, 3> colours{};
+  // A textured triangle's texels: u low | u high << 8 | v low << 16 | v high << 24, inclusive. The hardware covers edge
+  // pixels gpu.c's walk does not, whose interpolants lie just past the polygon's texels.
+  std::uint32_t texels = 0;
   std::uint32_t unused = 0;
 };
+static_assert(sizeof(RecordShape) == 112, "record.vert's Shape layout");
 
 // A quad's mapping: the plane's own scale and origin, or a crop canvas's world or UI layer (RecordCanvas).
 enum RecordMapping : std::uint32_t {
@@ -192,8 +205,8 @@ inline constexpr int kRecordPlanes = 1 + kRecordMaxCanvases;
 // Quads [first, end) of one plane, in that plane's pixels; afterwards `dirty` (native pixels of the
 // plane) must be copied to its read snapshot.
 struct RecordPlaneBatch {
-  std::uint32_t firstQuad = 0;
-  std::uint32_t endQuad = 0;
+  std::uint32_t firstShape = 0;
+  std::uint32_t endShape = 0;
   RecordRect dirty;
 };
 
@@ -224,7 +237,7 @@ struct RecordCapture {
 struct RecordRasterPlan {
   int scale = 1;
   std::vector<RecordOp> ops;
-  std::array<std::vector<RecordQuad>, kRecordPlanes> quads;
+  std::array<std::vector<RecordShape>, kRecordPlanes> shapes;
   std::vector<RecordBatch> batches;
   std::span<const std::uint16_t> clutPool;
   std::span<const std::uint16_t> uploadPool;
