@@ -147,28 +147,12 @@ private:
     SDL_GPUBuffer *buffer = nullptr;
     std::uint32_t size = 0;
   };
-  // Native rects of a plane, kept to a few: a growing one swallows those it touches, and past kMaxRects the two whose
-  // union adds least merge.
-  class Region {
-  public:
-    static constexpr std::size_t kMaxRects = 4;
-    void add(gpu::RecordRect rect);
-    void add(const Region &other);
-    void clear() {
-      rects_.clear();
-    }
-    std::span<const gpu::RecordRect> rects() const {
-      return rects_;
-    }
-
-  private:
-    std::vector<gpu::RecordRect> rects_;
-  };
+  using Region = gpu::RectRegion;
   // A render target, the copy of it every pass reads, the target an in-between draws into, and the
   // target as it was before the last applied record.
   struct Plane {
     SDL_GPUTexture *image = nullptr;
-    SDL_GPUTexture *snapshot = nullptr; // equals the target at the start of every execute
+    SDL_GPUTexture *snapshot = nullptr; // equals the target wherever a pass reads it (RecordPlaneBatch::reads)
     SDL_GPUTexture *inBetween = nullptr;
     SDL_GPUTexture *before = nullptr;
     SDL_GPUTexture *depth = nullptr; // made when a record first depth-tests on this plane; cleared per record

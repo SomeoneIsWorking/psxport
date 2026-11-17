@@ -515,6 +515,9 @@ public:
       return canvas.crop();
     });
     batchStart_ = {};
+    for (RectRegion &reads : batchReads_) {
+      reads.clear();
+    }
     lines_ = 0;
     depthGroups_ = 0;
     models_.clear();
@@ -650,8 +653,9 @@ private:
   int scaledOriginY_ = 0;
   std::uint32_t mapping_ = kMappingPlane;
   std::array<WrittenMap, kRecordPlanes> written_;
-  std::array<WrittenMap, kRecordPlanes> grouped_; // pixels the open depth group's polygons cover
-  std::array<WrittenMap, kRecordPlanes> read_;    // pixels the record read so far (RecordRasterPlan::overwritten)
+  std::array<WrittenMap, kRecordPlanes> grouped_;    // pixels the open depth group's polygons cover
+  std::array<WrittenMap, kRecordPlanes> read_;       // pixels the record read so far (RecordRasterPlan::overwritten)
+  std::array<RectRegion, kRecordPlanes> batchReads_; // RecordPlaneBatch::reads of the open batch
   std::uint32_t groupParity_ = 0;
   bool groupOpen_ = false;
   int depthGroups_ = 0;
@@ -1043,11 +1047,15 @@ void RecordPlanner::Builder::commit(const RecordOp &op, bool readsDestination, c
 void RecordPlanner::Builder::noteReads(const RecordOp &op, bool readsDestination) {
   for (const RecordRect &read : opReads_) {
     read_[0].mark(read);
+    batchReads_[0].add(read);
   }
   if (readsDestination) {
     for (const std::vector<PlaneRect> *rects : {&opWrites_, &opReaches_}) {
       for (const PlaneRect &write : *rects) {
         read_[static_cast<std::size_t>(write.plane)].mark(write.rect);
+        if (!destinationInPass) {
+          batchReads_[static_cast<std::size_t>(write.plane)].add(write.rect);
+        }
       }
     }
   }
@@ -1110,11 +1118,12 @@ void RecordPlanner::Builder::closeBatch() {
   bool any = false;
   for (std::size_t plane = 0; plane < kRecordPlanes; plane++) {
     const auto end = static_cast<std::uint32_t>(plan_.shapes[plane].size());
-    batch.planes[plane] =
-        RecordPlaneBatch{batchStart_[plane], end, written_[plane].empty() ? RecordRect{} : written_[plane].bounds()};
+    batch.planes[plane] = RecordPlaneBatch{
+        batchStart_[plane], end, written_[plane].empty() ? RecordRect{} : written_[plane].bounds(), batchReads_[plane]};
     any = any || end > batchStart_[plane];
     batchStart_[plane] = end;
     written_[plane].clear();
+    batchReads_[plane].clear();
   }
   if (any) {
     plan_.batches.push_back(batch);

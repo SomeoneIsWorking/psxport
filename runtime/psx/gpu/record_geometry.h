@@ -4,7 +4,10 @@
 #include "frame_record.h"
 #include "vram_rect.h"
 
+#include <cstddef>
 #include <optional>
+#include <span>
+#include <vector>
 
 namespace psx::gpu {
 
@@ -48,5 +51,31 @@ std::optional<AxisRectangle> axisRectangle(const present::DrawPrimitive &primiti
 // read-back declaration.
 std::optional<RecordRect> entryWrittenRect(const present::RecordEntry &entry);
 bool entryWritesRect(const present::RecordEntry &entry, const RecordRect &rect);
+
+// Native rects of a plane, kept to a few: a growing one swallows those it touches, and past kMaxRects the two whose
+// union adds least merge. Never smaller than what was added.
+class RectRegion {
+public:
+  static constexpr std::size_t kMaxRects = 4;
+  void add(RecordRect rect);
+  void add(const RectRegion &other);
+  void clear() {
+    rects_.clear();
+  }
+  bool empty() const {
+    return rects_.empty();
+  }
+  std::span<const RecordRect> rects() const {
+    return rects_;
+  }
+
+private:
+  std::vector<RecordRect> rects_;
+};
+
+// `rect` without any of `holes`, as disjoint rects.
+std::vector<RecordRect> subtractRects(const RecordRect &rect, std::span<const RecordRect> holes);
+// Whether `holes` cover every one of `rects`.
+bool rectsCover(std::span<const RecordRect> holes, std::span<const RecordRect> rects);
 
 } // namespace psx::gpu

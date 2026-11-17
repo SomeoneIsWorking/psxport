@@ -2,6 +2,8 @@
 #include "record_geometry.h"
 
 #include <algorithm>
+#include <climits>
+#include <cstdint>
 #include <variant>
 
 namespace psx::gpu {
@@ -148,6 +150,99 @@ std::optional<RecordRect> entryWrittenRect(const present::RecordEntry &entry) {
 bool entryWritesRect(const present::RecordEntry &entry, const RecordRect &rect) {
   const std::optional<RecordRect> written = entryWrittenRect(entry);
   return written && rectsOverlap(*written, rect);
+}
+
+namespace {
+
+std::int64_t area(const RecordRect &rect) {
+  return static_cast<std::int64_t>(rect.x1 - rect.x0) * static_cast<std::int64_t>(rect.y1 - rect.y0);
+}
+
+RecordRect bound(const RecordRect &a, const RecordRect &b) {
+  return {std::min(a.x0, b.x0), std::min(a.y0, b.y0), std::max(a.x1, b.x1), std::max(a.y1, b.y1)};
+}
+
+bool touches(const RecordRect &a, const RecordRect &b) {
+  return a.x0 <= b.x1 && b.x0 <= a.x1 && a.y0 <= b.y1 && b.y0 <= a.y1;
+}
+
+} // namespace
+
+std::vector<RecordRect> subtractRects(const RecordRect &rect, std::span<const RecordRect> holes) {
+  std::vector<RecordRect> parts;
+  if (rect.x1 > rect.x0 && rect.y1 > rect.y0) {
+    parts.push_back(rect);
+  }
+  for (const RecordRect &hole : holes) {
+    std::vector<RecordRect> kept;
+    for (const RecordRect &part : parts) {
+      if (hole.x1 <= part.x0 || part.x1 <= hole.x0 || hole.y1 <= part.y0 || part.y1 <= hole.y0) {
+        kept.push_back(part);
+        continue;
+      }
+      const int y0 = std::max(part.y0, hole.y0);
+      const int y1 = std::min(part.y1, hole.y1);
+      for (const RecordRect &piece : {RecordRect{part.x0, part.y0, part.x1, y0},
+                                      RecordRect{part.x0, y1, part.x1, part.y1},
+                                      RecordRect{part.x0, y0, std::max(part.x0, hole.x0), y1},
+                                      RecordRect{std::min(part.x1, hole.x1), y0, part.x1, y1}}) {
+        if (piece.x1 > piece.x0 && piece.y1 > piece.y0) {
+          kept.push_back(piece);
+        }
+      }
+    }
+    parts = std::move(kept);
+  }
+  return parts;
+}
+
+bool rectsCover(std::span<const RecordRect> holes, std::span<const RecordRect> rects) {
+  return std::ranges::all_of(rects, [&](const RecordRect &rect) {
+    return subtractRects(rect, holes).empty();
+  });
+}
+
+void RectRegion::add(RecordRect rect) {
+  if (rect.x1 <= rect.x0 || rect.y1 <= rect.y0) {
+    return;
+  }
+  for (bool grew = true; grew;) {
+    grew = false;
+    for (std::size_t i = 0; i < rects_.size(); i++) {
+      if (touches(rects_[i], rect)) {
+        rect = bound(rects_[i], rect);
+        rects_.erase(rects_.begin() + static_cast<std::ptrdiff_t>(i));
+        grew = true;
+        break;
+      }
+    }
+  }
+  rects_.push_back(rect);
+  while (rects_.size() > kMaxRects) {
+    std::size_t first = 0;
+    std::size_t second = 1;
+    std::int64_t least = INT64_MAX;
+    for (std::size_t i = 0; i < rects_.size(); i++) {
+      for (std::size_t j = i + 1; j < rects_.size(); j++) {
+        const std::int64_t added = area(bound(rects_[i], rects_[j])) - area(rects_[i]) - area(rects_[j]);
+        if (added < least) {
+          least = added;
+          first = i;
+          second = j;
+        }
+      }
+    }
+    const RecordRect merged = bound(rects_[first], rects_[second]);
+    rects_.erase(rects_.begin() + static_cast<std::ptrdiff_t>(second));
+    rects_.erase(rects_.begin() + static_cast<std::ptrdiff_t>(first));
+    add(merged);
+  }
+}
+
+void RectRegion::add(const RectRegion &other) {
+  for (const RecordRect &rect : other.rects_) {
+    add(rect);
+  }
 }
 
 } // namespace psx::gpu

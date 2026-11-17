@@ -80,6 +80,8 @@ constexpr std::uint32_t kDepthRunFlags =
 // Model whose depth a pixel holds (gpu::kModelIds), 0 for any other.
 constexpr std::uint8_t kPassed = 0x80;
 constexpr std::uint8_t kModelBits = 0x7F;
+// The stale rects execute() tracks per plane before merging them into a Region.
+constexpr std::size_t kStaleRects = 32;
 
 struct TargetUniform {
   float width = 0;
@@ -334,101 +336,6 @@ RecordRasterizer::Plane RecordRasterizer::makePlane(const RecordCanvas &shape, i
   return plane;
 }
 
-namespace {
-
-std::int64_t area(const RecordRect &rect) {
-  return static_cast<std::int64_t>(rect.x1 - rect.x0) * static_cast<std::int64_t>(rect.y1 - rect.y0);
-}
-
-RecordRect bound(const RecordRect &a, const RecordRect &b) {
-  return {std::min(a.x0, b.x0), std::min(a.y0, b.y0), std::max(a.x1, b.x1), std::max(a.y1, b.y1)};
-}
-
-bool touches(const RecordRect &a, const RecordRect &b) {
-  return a.x0 <= b.x1 && b.x0 <= a.x1 && a.y0 <= b.y1 && b.y0 <= a.y1;
-}
-
-// `rect` without any of `holes`, as disjoint rects.
-std::vector<RecordRect> subtract(const RecordRect &rect, std::span<const RecordRect> holes) {
-  std::vector<RecordRect> parts;
-  if (rect.x1 > rect.x0 && rect.y1 > rect.y0) {
-    parts.push_back(rect);
-  }
-  for (const RecordRect &hole : holes) {
-    std::vector<RecordRect> kept;
-    for (const RecordRect &part : parts) {
-      if (hole.x1 <= part.x0 || part.x1 <= hole.x0 || hole.y1 <= part.y0 || part.y1 <= hole.y0) {
-        kept.push_back(part);
-        continue;
-      }
-      const int y0 = std::max(part.y0, hole.y0);
-      const int y1 = std::min(part.y1, hole.y1);
-      for (const RecordRect &piece : {RecordRect{part.x0, part.y0, part.x1, y0},
-                                      RecordRect{part.x0, y1, part.x1, part.y1},
-                                      RecordRect{part.x0, y0, std::max(part.x0, hole.x0), y1},
-                                      RecordRect{std::min(part.x1, hole.x1), y0, part.x1, y1}}) {
-        if (piece.x1 > piece.x0 && piece.y1 > piece.y0) {
-          kept.push_back(piece);
-        }
-      }
-    }
-    parts = std::move(kept);
-  }
-  return parts;
-}
-
-// Whether `holes` cover every one of `rects`.
-bool covers(std::span<const RecordRect> holes, std::span<const RecordRect> rects) {
-  return std::ranges::all_of(rects, [&](const RecordRect &rect) {
-    return subtract(rect, holes).empty();
-  });
-}
-
-} // namespace
-
-void RecordRasterizer::Region::add(RecordRect rect) {
-  if (rect.x1 <= rect.x0 || rect.y1 <= rect.y0) {
-    return;
-  }
-  for (bool grew = true; grew;) {
-    grew = false;
-    for (std::size_t i = 0; i < rects_.size(); i++) {
-      if (touches(rects_[i], rect)) {
-        rect = bound(rects_[i], rect);
-        rects_.erase(rects_.begin() + static_cast<std::ptrdiff_t>(i));
-        grew = true;
-        break;
-      }
-    }
-  }
-  rects_.push_back(rect);
-  while (rects_.size() > kMaxRects) {
-    std::size_t first = 0;
-    std::size_t second = 1;
-    std::int64_t least = INT64_MAX;
-    for (std::size_t i = 0; i < rects_.size(); i++) {
-      for (std::size_t j = i + 1; j < rects_.size(); j++) {
-        const std::int64_t added = area(bound(rects_[i], rects_[j])) - area(rects_[i]) - area(rects_[j]);
-        if (added < least) {
-          least = added;
-          first = i;
-          second = j;
-        }
-      }
-    }
-    const RecordRect merged = bound(rects_[first], rects_[second]);
-    rects_.erase(rects_.begin() + static_cast<std::ptrdiff_t>(second));
-    rects_.erase(rects_.begin() + static_cast<std::ptrdiff_t>(first));
-    add(merged);
-  }
-}
-
-void RecordRasterizer::Region::add(const Region &other) {
-  for (const RecordRect &rect : other.rects_) {
-    add(rect);
-  }
-}
-
 void RecordRasterizer::releasePlane(Plane &plane) {
   for (SDL_GPUTexture **texture : {&plane.image, &plane.snapshot, &plane.inBetween, &plane.before, &plane.depth}) {
     device_.release(*texture);
@@ -652,13 +559,6 @@ void RecordRasterizer::seedCanvas(Canvas &canvas, bool fresh) {
     }
     copyTexture({.from = from, .source = canvas.shape.buffer, .to = to, .toX = canvas.shape.reach, .scale = scale_});
   }
-  const RecordRect seeded = fresh ? RecordRect{0, 0, canvas.plane.width, canvas.plane.height}
-                                  : RecordRect{canvas.shape.reach,
-                                               0,
-                                               canvas.shape.reach + canvas.shape.buffer.x1 - canvas.shape.buffer.x0,
-                                               canvas.plane.height};
-  copyTexture(
-      {.from = canvas.plane.image, .source = seeded, .to = canvas.plane.snapshot, .toX = seeded.x0, .scale = scale_});
 }
 
 void RecordRasterizer::seedCrop(Canvas &canvas) {
@@ -853,7 +753,7 @@ bool RecordRasterizer::drawInBetween(const present::FrameRecord &record, int sca
   // Drawn over `before`, the in-between must fill what `before` did not keep before it reads it.
   if (!onImage) {
     for (int index = 0; index <= static_cast<int>(canvases_.size()); index++) {
-      if (!covers(plan.overwritten[static_cast<std::size_t>(index)], plane(index).staleBefore)) {
+      if (!gpu::rectsCover(plan.overwritten[static_cast<std::size_t>(index)], plane(index).staleBefore)) {
         ++work_.inBetweensRefused;
         return false;
       }
@@ -868,32 +768,16 @@ bool RecordRasterizer::drawInBetween(const present::FrameRecord &record, int sca
     vram_.inBetweenDiffers.add(vram_.beforeDiffers);
     copyRegion(vram_.before, vram_.inBetween, vram_.inBetweenDiffers, vram_.scale, plan.overwritten[0]);
     vram_.inBetweenDiffers = vram_.beforeDiffers;
-    vram_.snapshotDiffers.add(vram_.beforeDiffers);
-    copyRegion(vram_.before, vram_.snapshot, vram_.snapshotDiffers, vram_.scale, plan.overwritten[0]);
-    vram_.snapshotDiffers = vram_.beforeDiffers;
   }
   for (int index = 1; index <= static_cast<int>(canvases_.size()); index++) {
     const Plane &target = plane(index);
     const auto &overwritten = plan.overwritten[static_cast<std::size_t>(index)];
     for (const RecordRect &copied : copiedStrips(index, margins)) {
       copySame(onImage ? target.image : target.before, target.inBetween, copied, target.scale, overwritten);
-      if (!onImage) {
-        copySame(target.before, target.snapshot, copied, target.scale, overwritten);
-      }
     }
   }
   stage("record in-between seed");
   execute(plan, true);
-  copyRegion(vram_.image, vram_.snapshot, vram_.snapshotDiffers, vram_.scale);
-  vram_.snapshotDiffers.clear();
-  for (int index = 1; index <= static_cast<int>(canvases_.size()); index++) {
-    const Plane &target = plane(index);
-    for (const RecordRect &copied : copiedStrips(index, margins)) {
-      copyTexture(
-          {.from = target.image, .source = copied, .to = target.snapshot, .toX = copied.x0, .scale = target.scale});
-    }
-  }
-  stage("record snapshot restore");
   const Canvas *shown = canvasFor(view);
   const bool drewShown = shown != nullptr && drewCanvas(plan, static_cast<std::size_t>(shown - canvases_.data()));
   present(view, true, drewShown ? &windows : nullptr);
@@ -948,7 +832,7 @@ void RecordRasterizer::copyRegion(
 
 void RecordRasterizer::copySame(
     SDL_GPUTexture *from, SDL_GPUTexture *to, const RecordRect &rect, int scale, std::span<const RecordRect> skip) {
-  for (const RecordRect &part : subtract(rect, skip)) {
+  for (const RecordRect &part : gpu::subtractRects(rect, skip)) {
     copyTexture({.from = from, .source = part, .to = to, .toX = part.x0, .toY = part.y0, .scale = scale});
   }
 }
@@ -1112,9 +996,59 @@ void RecordRasterizer::execute(const gpu::RecordRasterPlan &plan, bool inBetween
                                          SDL_GPU_TEXTUREUSAGE_DEPTH_STENCIL_TARGET);
     }
   }
+  // Where each plane's snapshot may differ from the target this plan draws: the image's as tracked, a canvas's
+  // anywhere. A batch's passes read a snapshot only where its reads say, so only that is refreshed, just before them.
+  std::array<std::vector<RecordRect>, gpu::kRecordPlanes> stale;
+  for (int p = 0; p < planes; p++) {
+    const Plane &target = plane(p);
+    if (p == 0) {
+      Region differs = target.snapshotDiffers;
+      if (inBetween) {
+        differs.add(target.inBetweenDiffers);
+      }
+      stale[0].assign(differs.rects().begin(), differs.rects().end());
+    } else {
+      stale[static_cast<std::size_t>(p)] = {RecordRect{0, 0, target.width, target.height}};
+    }
+  }
+  const auto refresh = [&](int p, const Region &reads) {
+    const Plane &target = plane(p);
+    std::vector<RecordRect> &left = stale[static_cast<std::size_t>(p)];
+    for (const RecordRect &read : reads.rects()) {
+      std::vector<RecordRect> kept;
+      for (const RecordRect &rect : left) {
+        const RecordRect inside{std::max(rect.x0, read.x0),
+                                std::max(rect.y0, read.y0),
+                                std::min(rect.x1, read.x1),
+                                std::min(rect.y1, read.y1)};
+        copyTexture({.from = inBetween ? target.inBetween : target.image,
+                     .source = inside,
+                     .to = target.snapshot,
+                     .toX = inside.x0,
+                     .toY = inside.y0,
+                     .scale = target.scale});
+        for (const RecordRect &part : gpu::subtractRects(rect, std::span(&read, 1))) {
+          kept.push_back(part);
+        }
+      }
+      left = std::move(kept);
+    }
+    // Kept to a few, never smaller.
+    if (left.size() > kStaleRects) {
+      Region merged;
+      for (const RecordRect &rect : left) {
+        merged.add(rect);
+      }
+      left.assign(merged.rects().begin(), merged.rects().end());
+    }
+  };
   for (std::size_t b = 0; b < plan.batches.size(); b++) {
     const gpu::RecordBatch &batch = plan.batches[b];
     captureBefore(b);
+    for (int p = 0; p < planes; p++) {
+      refresh(p, batch.planes[static_cast<std::size_t>(p)].reads);
+    }
+    stage("record snapshot");
     for (int p = 0; p < planes; p++) {
       const gpu::RecordPlaneBatch &range = batch.planes[static_cast<std::size_t>(p)];
       if (range.endShape == range.firstShape) {
@@ -1188,27 +1122,34 @@ void RecordRasterizer::execute(const gpu::RecordRasterPlan &plan, bool inBetween
       SDL_EndGPURenderPass(pass);
     }
     stage("record draw");
-    // Every pass of the batch read the snapshots as they were; refresh them only now.
+    // Every pass of the batch read the snapshots as they were; what it drew is stale in them now.
     for (int p = 0; p < planes; p++) {
       const gpu::RecordPlaneBatch &range = batch.planes[static_cast<std::size_t>(p)];
       Plane &target = plane(p);
-      // The pass drew no farther than the snapshot refresh reaches.
-      if (p == 0 && range.dirty.x0 < range.dirty.x1 && range.dirty.y0 < range.dirty.y1) {
+      if (range.dirty.x0 >= range.dirty.x1 || range.dirty.y0 >= range.dirty.y1) {
+        continue;
+      }
+      stale[static_cast<std::size_t>(p)].push_back(range.dirty);
+      if (p == 0) {
         written = {std::min(written.x0, range.dirty.x0),
                    std::min(written.y0, range.dirty.y0),
                    std::max(written.x1, range.dirty.x1),
                    std::max(written.y1, range.dirty.y1)};
-        (inBetween ? target.snapshotDiffers : target.beforeDiffers).add(range.dirty);
+        if (!inBetween) {
+          target.beforeDiffers.add(range.dirty);
+        }
         target.inBetweenDiffers.add(range.dirty);
       }
-      copyTexture({.from = inBetween ? target.inBetween : target.image,
-                   .source = range.dirty,
-                   .to = target.snapshot,
-                   .toX = range.dirty.x0,
-                   .toY = range.dirty.y0,
-                   .scale = target.scale});
     }
-    stage("record snapshot");
+  }
+  // The image's snapshot differs from the image where it is stale against this plan's target, and for an in-between
+  // where that differs from the image.
+  vram_.snapshotDiffers.clear();
+  for (const RecordRect &rect : stale[0]) {
+    vram_.snapshotDiffers.add(rect);
+  }
+  if (inBetween) {
+    vram_.snapshotDiffers.add(vram_.inBetweenDiffers);
   }
   captureBefore(plan.batches.size());
   // An in-between canvas is seeded in its margins alone, so it takes the whole of its buffer's columns.

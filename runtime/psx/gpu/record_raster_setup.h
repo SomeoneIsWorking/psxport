@@ -204,12 +204,15 @@ RecordCanvas cropCanvas(const RecordRect &display, int p, int q, int unit);
 inline constexpr int kRecordMaxCanvases = 2;
 inline constexpr int kRecordPlanes = 1 + kRecordMaxCanvases;
 
-// Quads [first, end) of one plane, in that plane's pixels; afterwards `dirty` (native pixels of the
-// plane) must be copied to its read snapshot.
+// Quads [first, end) of one plane, in that plane's pixels. `dirty` (native pixels of the plane) bounds what they
+// write; `reads` holds what the batch's passes read of the plane's snapshot, which must equal the plane there first:
+// on the image, every op's texels and copy source, and on any plane the destinations of ops that read them from the
+// snapshot (not in-pass).
 struct RecordPlaneBatch {
   std::uint32_t firstShape = 0;
   std::uint32_t endShape = 0;
   RecordRect dirty;
+  RectRegion reads;
 };
 
 // One render pass per plane. Every pass of a batch reads the snapshots as they were before it.
