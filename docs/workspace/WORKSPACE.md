@@ -96,6 +96,14 @@ Products: `spyro_port`, `toystory2_port`, `crashbash_port`, `crash_port`, `ctr_p
 
 ## Second machine (`ssh ally`)
 
+Builds and runs go through `tools/heavy.py`, which picks this machine, the Ally or the Mac by queue depth,
+takes that machine's heavy lock and copies results back:
+`uv run --frozen python external/psxport/tools/heavy.py run --target tomba2_port --fetch scratch/<dir> -- build/agent/bin/tomba2_port …`
+(`build` for a build alone, `--host` to pin a machine). On the Ally it mirrors the caller's working trees,
+uncommitted edits included, into `~/agents/mirror`, so the Ally's own clone is never edited by an agent. The
+Mac cannot be reached from here; it pulls jobs from `~/agents/queue` and runs only builds, product binaries and
+checked-in tools, sandboxed (`tools/heavy_mac/`). The manual commands below are what it runs.
+
 The Ally (Bazzite, 16 CPUs, 11 GB) holds its own clone of this workspace at `~/repo/psx` and
 `~/repo/shared/{bug-report,setup-ui,re-harness}`, made by the fresh-machine bootstrap above; each title's `.env`
 there points at `~/ROM/PSX CHD/<disc>.chd`. It builds inside the `my-distrobox` distrobox (Fedora 43: clang, lld,
