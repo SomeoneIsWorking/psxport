@@ -348,6 +348,42 @@ bool touches(const RecordRect &a, const RecordRect &b) {
   return a.x0 <= b.x1 && b.x0 <= a.x1 && a.y0 <= b.y1 && b.y0 <= a.y1;
 }
 
+// `rect` without any of `holes`, as disjoint rects.
+std::vector<RecordRect> subtract(const RecordRect &rect, std::span<const RecordRect> holes) {
+  std::vector<RecordRect> parts;
+  if (rect.x1 > rect.x0 && rect.y1 > rect.y0) {
+    parts.push_back(rect);
+  }
+  for (const RecordRect &hole : holes) {
+    std::vector<RecordRect> kept;
+    for (const RecordRect &part : parts) {
+      if (hole.x1 <= part.x0 || part.x1 <= hole.x0 || hole.y1 <= part.y0 || part.y1 <= hole.y0) {
+        kept.push_back(part);
+        continue;
+      }
+      const int y0 = std::max(part.y0, hole.y0);
+      const int y1 = std::min(part.y1, hole.y1);
+      for (const RecordRect &piece : {RecordRect{part.x0, part.y0, part.x1, y0},
+                                      RecordRect{part.x0, y1, part.x1, part.y1},
+                                      RecordRect{part.x0, y0, std::max(part.x0, hole.x0), y1},
+                                      RecordRect{std::min(part.x1, hole.x1), y0, part.x1, y1}}) {
+        if (piece.x1 > piece.x0 && piece.y1 > piece.y0) {
+          kept.push_back(piece);
+        }
+      }
+    }
+    parts = std::move(kept);
+  }
+  return parts;
+}
+
+// Whether `holes` cover every one of `rects`.
+bool covers(std::span<const RecordRect> holes, std::span<const RecordRect> rects) {
+  return std::ranges::all_of(rects, [&](const RecordRect &rect) {
+    return subtract(rect, holes).empty();
+  });
+}
+
 } // namespace
 
 void RecordRasterizer::Region::add(RecordRect rect) {
@@ -743,18 +779,22 @@ void RecordRasterizer::advance(const present::FrameRecord &record,
 }
 
 void RecordRasterizer::apply(const present::FrameRecord &record) {
-  copyRegion(vram_.image, vram_.before, vram_.beforeDiffers, vram_.scale);
-  vram_.beforeDiffers.clear();
-  for (int index = 1; index <= static_cast<int>(canvases_.size()); index++) {
-    const Plane &target = plane(index);
-    for (const RecordRect &copied : copiedStrips(index, record.windows().drawn)) {
-      copyTexture(
-          {.from = target.image, .source = copied, .to = target.before, .toX = copied.x0, .scale = target.scale});
-    }
-  }
-  stage("record keep before");
   const gpu::RecordRasterPlan &plan =
       planner_.plan(record, scale_, canvasShapes(record.windows().drawn), readBack_, true, depthTest_);
+  // What the record fills before reading it needs no keeping: no in-between drawn over `before` sees it either
+  // (drawInBetween checks).
+  copyRegion(vram_.image, vram_.before, vram_.beforeDiffers, vram_.scale, plan.overwritten[0]);
+  vram_.beforeDiffers.clear();
+  vram_.staleBefore = plan.overwritten[0];
+  for (int index = 1; index <= static_cast<int>(canvases_.size()); index++) {
+    Plane &target = plane(index);
+    const auto &overwritten = plan.overwritten[static_cast<std::size_t>(index)];
+    for (const RecordRect &copied : copiedStrips(index, record.windows().drawn)) {
+      copySame(target.image, target.before, copied, target.scale, overwritten);
+    }
+    target.staleBefore = overwritten;
+  }
+  stage("record keep before");
   execute(plan, false);
   adoptWindows(plan, record.windows());
   readBack_ = plan.readBack;
@@ -808,35 +848,41 @@ bool RecordRasterizer::drawInBetween(const present::FrameRecord &record, int sca
   }
   const present::RecordWindows windows = record.windows();
   const present::HorizontalMargins margins = windows.drawn;
+  const gpu::RecordRasterPlan &plan =
+      planner_.plan(record, scale_, canvasShapes(margins), readBack_, false, depthTest_);
+  // Drawn over `before`, the in-between must fill what `before` did not keep before it reads it.
+  if (!onImage) {
+    for (int index = 0; index <= static_cast<int>(canvases_.size()); index++) {
+      if (!covers(plan.overwritten[static_cast<std::size_t>(index)], plane(index).staleBefore)) {
+        ++work_.inBetweensRefused;
+        return false;
+      }
+    }
+  }
+  // Seeded but for what the in-between fills before it reads it.
   if (onImage) {
-    copyRegion(vram_.image, vram_.inBetween, vram_.inBetweenDiffers, vram_.scale);
+    copyRegion(vram_.image, vram_.inBetween, vram_.inBetweenDiffers, vram_.scale, plan.overwritten[0]);
     vram_.inBetweenDiffers.clear();
   } else {
     // The kept state differs from the image only where the last record drew.
     vram_.inBetweenDiffers.add(vram_.beforeDiffers);
-    copyRegion(vram_.before, vram_.inBetween, vram_.inBetweenDiffers, vram_.scale);
+    copyRegion(vram_.before, vram_.inBetween, vram_.inBetweenDiffers, vram_.scale, plan.overwritten[0]);
     vram_.inBetweenDiffers = vram_.beforeDiffers;
     vram_.snapshotDiffers.add(vram_.beforeDiffers);
-    copyRegion(vram_.before, vram_.snapshot, vram_.snapshotDiffers, vram_.scale);
+    copyRegion(vram_.before, vram_.snapshot, vram_.snapshotDiffers, vram_.scale, plan.overwritten[0]);
     vram_.snapshotDiffers = vram_.beforeDiffers;
   }
   for (int index = 1; index <= static_cast<int>(canvases_.size()); index++) {
     const Plane &target = plane(index);
+    const auto &overwritten = plan.overwritten[static_cast<std::size_t>(index)];
     for (const RecordRect &copied : copiedStrips(index, margins)) {
-      copyTexture({.from = onImage ? target.image : target.before,
-                   .source = copied,
-                   .to = target.inBetween,
-                   .toX = copied.x0,
-                   .scale = target.scale});
+      copySame(onImage ? target.image : target.before, target.inBetween, copied, target.scale, overwritten);
       if (!onImage) {
-        copyTexture(
-            {.from = target.before, .source = copied, .to = target.snapshot, .toX = copied.x0, .scale = target.scale});
+        copySame(target.before, target.snapshot, copied, target.scale, overwritten);
       }
     }
   }
   stage("record in-between seed");
-  const gpu::RecordRasterPlan &plan =
-      planner_.plan(record, scale_, canvasShapes(margins), readBack_, false, depthTest_);
   execute(plan, true);
   copyRegion(vram_.image, vram_.snapshot, vram_.snapshotDiffers, vram_.scale);
   vram_.snapshotDiffers.clear();
@@ -893,9 +939,17 @@ void RecordRasterizer::stage(const char *label) {
   cmd_ = device_.acquire();
 }
 
-void RecordRasterizer::copyRegion(SDL_GPUTexture *from, SDL_GPUTexture *to, const Region &region, int scale) {
+void RecordRasterizer::copyRegion(
+    SDL_GPUTexture *from, SDL_GPUTexture *to, const Region &region, int scale, std::span<const RecordRect> skip) {
   for (const RecordRect &rect : region.rects()) {
-    copyTexture({.from = from, .source = rect, .to = to, .toX = rect.x0, .toY = rect.y0, .scale = scale});
+    copySame(from, to, rect, scale, skip);
+  }
+}
+
+void RecordRasterizer::copySame(
+    SDL_GPUTexture *from, SDL_GPUTexture *to, const RecordRect &rect, int scale, std::span<const RecordRect> skip) {
+  for (const RecordRect &part : subtract(rect, skip)) {
+    copyTexture({.from = from, .source = part, .to = to, .toX = part.x0, .toY = part.y0, .scale = scale});
   }
 }
 

@@ -502,6 +502,12 @@ public:
       shapes.clear();
     }
     plan_.batches.clear();
+    for (std::vector<RecordRect> &rects : plan_.overwritten) {
+      rects.clear();
+    }
+    for (WrittenMap &plane : read_) {
+      plane.clear();
+    }
     plan_.clutPool = clutPool;
     plan_.uploadPool = uploadPool;
     canvases_ = canvases;
@@ -605,6 +611,8 @@ private:
   // Keeps the op when its native footprint reached a plane, whatever its shapes at this scale.
   // `plane`, when given, is pushed right after `op`: its DepthPlane.
   void commit(const RecordOp &op, bool readsDestination, const RecordOp *plane = nullptr);
+  // Marks what the op reads in read_ and, for an opaque fill, adds what it writes unread to plan_.overwritten.
+  void noteReads(const RecordOp &op, bool readsDestination);
   // The depth group parity of a tested polygon writing opWrites_ and reaching opReaches_: a new group when it covers a
   // pixel the open one does.
   std::uint32_t depthGroup();
@@ -643,6 +651,7 @@ private:
   std::uint32_t mapping_ = kMappingPlane;
   std::array<WrittenMap, kRecordPlanes> written_;
   std::array<WrittenMap, kRecordPlanes> grouped_; // pixels the open depth group's polygons cover
+  std::array<WrittenMap, kRecordPlanes> read_;    // pixels the record read so far (RecordRasterPlan::overwritten)
   std::uint32_t groupParity_ = 0;
   bool groupOpen_ = false;
   int depthGroups_ = 0;
@@ -996,6 +1005,7 @@ void RecordPlanner::Builder::commit(const RecordOp &op, bool readsDestination, c
   if (conflict) {
     closeBatch();
   }
+  noteReads(op, readsDestination);
   const auto opIndex = static_cast<std::uint32_t>(plan_.ops.size());
   plan_.ops.push_back(op);
   if ((op[kOpFlags] & (kOpDepthTest | kOpDepthObject | kOpDepthModel)) == kOpDepthTest) {
@@ -1028,6 +1038,28 @@ void RecordPlanner::Builder::commit(const RecordOp &op, bool readsDestination, c
   opWrites_.clear();
   opReaches_.clear();
   opReads_.clear();
+}
+
+void RecordPlanner::Builder::noteReads(const RecordOp &op, bool readsDestination) {
+  for (const RecordRect &read : opReads_) {
+    read_[0].mark(read);
+  }
+  if (readsDestination) {
+    for (const std::vector<PlaneRect> *rects : {&opWrites_, &opReaches_}) {
+      for (const PlaneRect &write : *rects) {
+        read_[static_cast<std::size_t>(write.plane)].mark(write.rect);
+      }
+    }
+  }
+  // A fill that skips rows leaves the others as they were.
+  if (op[kOpFlags] != static_cast<std::uint32_t>(RecordOpKind::Fill)) {
+    return;
+  }
+  for (const PlaneRect &write : opWrites_) {
+    if (!cropPlane(write.plane) && !read_[static_cast<std::size_t>(write.plane)].any(write.rect)) {
+      plan_.overwritten[static_cast<std::size_t>(write.plane)].push_back(write.rect);
+    }
+  }
 }
 
 std::uint32_t RecordPlanner::Builder::depthGroup() {
@@ -1653,6 +1685,10 @@ void RecordPlanner::Builder::addReadBack(const present::ReadBackTexture &texture
     captured.x1 += read.x1 == canvas.buffer.x1 ? canvas.right : 0;
     // The capture sees every op before it and replaces the one the rest of the record would sample.
     closeBatch();
+    target(1 + static_cast<int>(i));
+    const PlaneRect capturedPlane = planeRect(captured);
+    target(0);
+    read_[static_cast<std::size_t>(capturedPlane.plane)].mark(capturedPlane.rect);
     readBack_.reset();
     plan_.capture = RecordCapture{static_cast<std::uint32_t>(plan_.batches.size()), 1 + static_cast<int>(i), captured};
     const int shift = 2 - texture.texMode;

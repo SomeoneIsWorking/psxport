@@ -247,6 +247,9 @@ struct RecordRasterPlan {
   std::optional<RecordCapture> capture;
   // The read-back texture in force after this record.
   std::optional<RecordReadBack> readBack;
+  // Per plane (not a crop canvas), plane pixels an opaque fill of the record writes before the record reads any of
+  // them, by sampling, copying, capturing or reading its destination: what they held before the record never shows.
+  std::array<std::vector<RecordRect>, kRecordPlanes> overwritten;
 };
 
 // Plans records into reused buffers; a plan stays valid until the next call.

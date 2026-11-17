@@ -30,7 +30,7 @@ struct GpuCount {
   double scale;
   const char *unit;
 };
-constexpr std::array<GpuCount, 9> kGpuCountNames{{
+constexpr std::array<GpuCount, 10> kGpuCountNames{{
     {"draws", &GpuWork::draws, 1.0, "draws"},
     {"pipeline binds", &GpuWork::pipelineBinds, 1.0, "binds"},
     {"render passes", &GpuWork::renderPasses, 1.0, "passes"},
@@ -40,6 +40,7 @@ constexpr std::array<GpuCount, 9> kGpuCountNames{{
     {"shaded pixels", &GpuWork::shadedPixels, 1e-6, "Mpx"},
     {"copy pixels", &GpuWork::copyPixels, 1e-6, "Mpx"},
     {"upload", &GpuWork::uploadBytes, 1.0 / 1024.0, "KiB"},
+    {"in-betweens refused", &GpuWork::inBetweensRefused, 1.0, "in-betweens"},
 }};
 
 // Per-frame work is printed in millions of the clock's unit.
@@ -173,7 +174,7 @@ void GpuPerf::presentWork(const psx::render::GpuWork &work) {
   }
   lucent::debug(mFrameChannel,
                 "present gpu: draws={} binds={} passes={} copies={} triangles={} pixels={} shaded-pixels={} "
-                "copy-pixels={} upload-bytes={}",
+                "copy-pixels={} upload-bytes={} in-betweens-refused={}",
                 work.draws,
                 work.pipelineBinds,
                 work.renderPasses,
@@ -182,7 +183,8 @@ void GpuPerf::presentWork(const psx::render::GpuWork &work) {
                 work.pixels,
                 work.shadedPixels,
                 work.copyPixels,
-                work.uploadBytes);
+                work.uploadBytes,
+                work.inBetweensRefused);
 }
 
 void GpuPerf::presentGpuTime(std::span<const psx::render::SubmitTime> labels) {

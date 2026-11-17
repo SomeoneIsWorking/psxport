@@ -17,6 +17,8 @@ struct GpuWork {
   std::uint64_t shadedPixels = 0;
   std::uint64_t copyPixels = 0; // texture copies at the internal resolution
   std::uint64_t uploadBytes = 0;
+  // In-betweens not drawn because they do not fill what the image's kept state left out (RecordRasterPlan::overwritten).
+  std::uint64_t inBetweensRefused = 0;
 };
 
 // Diagnostic `gputime`: the GPU time one submit label was waited for, measured on the host, unlike GpuWork.

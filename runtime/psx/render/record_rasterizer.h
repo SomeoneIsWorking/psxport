@@ -182,6 +182,9 @@ private:
     Region beforeDiffers;
     Region inBetweenDiffers;
     Region snapshotDiffers;
+    // Where `before` was not kept, because the last applied record filled it before reading it
+    // (RecordRasterPlan::overwritten); an in-between drawn over `before` must overwrite it the same way.
+    std::vector<gpu::RecordRect> staleBefore;
   };
   // `shape`'s window is the drawn window of the record that last drew it, `view` that record's view.
   struct Canvas {
@@ -248,8 +251,18 @@ private:
     int scale = 1;
   };
   void copyTexture(const TextureCopy &copy);
-  // `region` of `from` to the same place in `to`.
-  void copyRegion(SDL_GPUTexture *from, SDL_GPUTexture *to, const Region &region, int scale);
+  // `region` of `from` to the same place in `to`, but for `skip`.
+  void copyRegion(SDL_GPUTexture *from,
+                  SDL_GPUTexture *to,
+                  const Region &region,
+                  int scale,
+                  std::span<const gpu::RecordRect> skip = {});
+  // `rect` of `from` to the same place in `to`, but for `skip`.
+  void copySame(SDL_GPUTexture *from,
+                SDL_GPUTexture *to,
+                const gpu::RecordRect &rect,
+                int scale,
+                std::span<const gpu::RecordRect> skip);
   void ensureBuffer(Buffer &buffer, std::uint32_t bytes);
   void ensureTransfer(SDL_GPUTransferBuffer *&transfer,
                       std::uint32_t &size,
