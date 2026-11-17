@@ -5,6 +5,7 @@
 // The target is a plane: the VRAM image or a display canvas, whose pixel p is VRAM-space pixel p + origin * scale.
 // A crop canvas's UI quads (kMappingCropUi) map instead at the UI scale from the UI origin.
 #include "record_op.glsl"
+// RECORD_OPAQUE: only ops that never discard (see its main).
 // RECORD_LEAN: only triangles, sprites, line pixels and fills, texturing from VRAM alone (no read-back or outline
 // text); the smaller shader keeps more pixels in flight, and RecordRasterizer runs every other op through the full one.
 // RECORD_DEPTH_MARK: a depth group's or Model's mark, only the polygon's coverage and its moved-back depth (see main).
@@ -168,6 +169,37 @@ void write(uint value) {
     o_col = vec4(float(value & 0xFFu) / 255.0, float((value >> 8) & 0xFFu) / 255.0, 0.0, 1.0);
 }
 
+#ifdef RECORD_OPAQUE
+// An op that can never discard (RecordRasterizer, needsDiscard): a fill, or an untextured triangle, sprite or line
+// pixel with no mask test and no skipped rows. A shader with no discard keeps Apple GPUs' hidden-surface removal, so
+// the pixels a later opaque draw covers are never shaded. Each path is main's below for the same op.
+void main() {
+    uint flags = v_op.x;
+    uint kind = flags & kOpKindMask;
+    if (kind == kRecordOpKindFill) {
+        write(v_op.y);
+        return;
+    }
+    uint fore;
+    if (kind == kRecordOpKindLinePixel) {
+        fore = pack(int(v_info.y & 0xFFu), int((v_info.y >> 8) & 0xFFu), int((v_info.y >> 16) & 0xFFu));
+    } else if (kind == kRecordOpKindTriangle) {
+        ivec3 rgb = clamp(ivec3(floor(v_colour)), ivec3(0), ivec3(255));
+        fore = pack(rgb.r, rgb.g, rgb.b);
+    } else {
+        fore = pack(int(v_op.y & 0xFFu), int((v_op.y >> 8) & 0xFFu), int((v_op.y >> 16) & 0xFFu));
+    }
+    if ((flags & kOpSemi) != 0u) {
+#ifdef RECORD_FETCH
+        uint dst = halfword(subpassLoad(u_targetNow).rg);
+#else
+        uint dst = halfword(texelFetch(u_target, ivec2(gl_FragCoord.xy), 0).rg);
+#endif
+        fore = blend(fore, dst, (flags >> kOpBlendShift) & 3u);
+    }
+    write((fore & 0x7FFFu) | ((flags & kOpMaskSet) != 0u ? 0x8000u : 0u));
+}
+#else
 void main() {
     op = v_info.x;
     bool ui = v_info.z == kMappingCropUi;
@@ -304,3 +336,4 @@ void main() {
     }
     write(textured ? (fore | maskSet) : ((fore & 0x7FFFu) | maskSet));
 }
+#endif

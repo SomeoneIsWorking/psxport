@@ -20,6 +20,8 @@ constexpr ShaderCode kRecordVertex{spv_g_record_vert, spv_g_record_vert_len, {0,
 constexpr ShaderCode kRecordFragment{spv_g_record_frag, spv_g_record_frag_len, {5, 1, 3}, PSXPORT_MSL(record_frag)};
 constexpr ShaderCode kRecordLeanFragment{
     spv_g_record_lean_frag, spv_g_record_lean_frag_len, {5, 1, 3}, PSXPORT_MSL(record_lean_frag)};
+constexpr ShaderCode kRecordOpaqueFragment{
+    spv_g_record_opaque_frag, spv_g_record_opaque_frag_len, {5, 1, 3}, PSXPORT_MSL(record_opaque_frag)};
 // A mark: coverage and the moved-back depth alone, for a depth group or Model draw that writes no colour where the
 // test draw already passed (stencil), so it never samples a texel or reads the target; both pipeline sets share it.
 constexpr ShaderCode kRecordDepthMarkFragment{
@@ -28,18 +30,23 @@ constexpr ShaderCode kRecordDepthMarkFragment{
 #if defined(PSXPORT_GPU_SHADERS_MSL)
 constexpr ShaderCode kRecordFetchFragment{nullptr, 0, {5, 1, 3}, PSXPORT_MSL(record_fetch_frag)};
 constexpr ShaderCode kRecordFetchLeanFragment{nullptr, 0, {5, 1, 3}, PSXPORT_MSL(record_fetch_lean_frag)};
+constexpr ShaderCode kRecordFetchOpaqueFragment{nullptr, 0, {5, 1, 3}, PSXPORT_MSL(record_fetch_opaque_frag)};
 #endif
 
 // The record fragment shader `device` draws with: the in-pass reading one where it fetches its target. Depth-tested
 // draws use it too: the hardware interpolates their depth (record.vert), so only a mark writes it.
-const ShaderCode &recordFragment(bool fetch, bool lean) {
+const ShaderCode &recordFragment(bool fetch, RecordShader shader) {
 #if defined(PSXPORT_GPU_SHADERS_MSL)
   if (fetch) {
-    return lean ? kRecordFetchLeanFragment : kRecordFetchFragment;
+    return shader == RecordShader::Opaque ? kRecordFetchOpaqueFragment
+           : shader == RecordShader::Lean ? kRecordFetchLeanFragment
+                                          : kRecordFetchFragment;
   }
 #endif
   (void)fetch;
-  return lean ? kRecordLeanFragment : kRecordFragment;
+  return shader == RecordShader::Opaque ? kRecordOpaqueFragment
+         : shader == RecordShader::Lean ? kRecordLeanFragment
+                                        : kRecordFragment;
 }
 constexpr std::uint32_t kDepthRunFlags =
     gpu::kOpDepthTest | gpu::kOpDepthObject | gpu::kOpDepthModel | gpu::kOpDepthGroup;
@@ -149,19 +156,25 @@ bool readsTarget(const gpu::RecordRasterPlan &plan, const gpu::RecordShape &shap
   return (plan.ops[shape.op][gpu::kOpFlags] & (gpu::kOpSemi | gpu::kOpMaskCheck)) != 0u;
 }
 
-// Whether the op needs the full record.frag: a copy, an upload, or texels from the read-back or the outline atlas.
-bool needsFull(const gpu::RecordRasterPlan &plan, const gpu::RecordShape &shape) {
+// The record.frag variant the op needs: the full one for a copy, an upload, or texels from the read-back or the outline
+// atlas; the opaque one for an op that can never discard (no texel that may be transparent, no mask test, no skipped
+// rows); the lean one for the rest.
+RecordShader recordShader(const gpu::RecordRasterPlan &plan, const gpu::RecordShape &shape) {
   const std::uint32_t flags = plan.ops[shape.op][gpu::kOpFlags];
   const auto kind = static_cast<gpu::RecordOpKind>(flags & gpu::kOpKindMask);
-  return kind == gpu::RecordOpKind::Copy || kind == gpu::RecordOpKind::Upload ||
-         (flags & (gpu::kOpReadBack | gpu::kOpOutline)) != 0u;
+  if (kind == gpu::RecordOpKind::Copy || kind == gpu::RecordOpKind::Upload ||
+      (flags & (gpu::kOpReadBack | gpu::kOpOutline)) != 0u) {
+    return RecordShader::Full;
+  }
+  return (flags & (gpu::kOpTextured | gpu::kOpMaskCheck | gpu::kOpSkipRows)) == 0u ? RecordShader::Opaque
+                                                                                    : RecordShader::Lean;
 }
 
 struct DepthRun {
   std::uint32_t flags = 0;
   std::uint32_t model = 0;
   bool reads = false;
-  bool full = false;
+  RecordShader shader = RecordShader::Lean;
   bool operator==(const DepthRun &) const = default;
 };
 
@@ -171,7 +184,7 @@ DepthRun depthRun(const gpu::RecordRasterPlan &plan, const gpu::RecordShape &sha
   return {flags,
           (flags & gpu::kOpDepthModel) != 0u ? plan.ops[shape.op + 1][gpu::kDepthModel] : 0u,
           readsTarget(plan, shape),
-          needsFull(plan, shape)};
+          recordShader(plan, shape)};
 }
 
 // Storage buffers are read as whole words, and never sized zero.
@@ -184,14 +197,14 @@ std::uint32_t paddedBytes(std::size_t bytes) {
 RecordRasterizer::RecordRasterizer(RenderDevice &device) : device_(device), depthFormat_(depthFormat(device.handle())) {
   planner_.setDestinationReadsInPass(device.fetchesTarget());
   fetches_ = device.fetchesTarget();
-  for (int set = 0; set < (fetches_ ? 4 : 2); set++) {
-    sets_.at(static_cast<std::size_t>(set)) = makePipelines(set >= 2, (set & 1) == 0);
+  for (std::size_t set = 0; set < (fetches_ ? sets_.size() : kRecordShaders); set++) {
+    sets_.at(set) = makePipelines(set >= kRecordShaders, static_cast<RecordShader>(set % kRecordShaders));
   }
   canvases_.reserve(gpu::kRecordMaxCanvases);
 }
 
-RecordRasterizer::Pipelines RecordRasterizer::makePipelines(bool fetch, bool lean) {
-  const ShaderCode &fragment = recordFragment(fetch, lean);
+RecordRasterizer::Pipelines RecordRasterizer::makePipelines(bool fetch, RecordShader shader) {
+  const ShaderCode &fragment = recordFragment(fetch, shader);
   Pipelines pipelines;
   pipelines.plain = device_.makePipeline(kRecordVertex, fragment, kVramFormat);
   const RenderDevice::DepthTarget slot = depthTarget(depthFormat_, SDL_GPU_COMPAREOP_ALWAYS, false);
@@ -1153,7 +1166,7 @@ void RecordRasterizer::drawShapes(SDL_GPURenderPass *pass,
     const auto count = static_cast<Uint32>(end - run) * 6;
     runShapes = shapes.subspan(run, end - run);
     const Uint32 first = (firstVertexShape + static_cast<std::uint32_t>(run)) * 6;
-    set = &pipelines(key.reads, key.full);
+    set = &pipelines(key.reads, key.shader);
     if (!depthTarget) {
       draw(set->plain, first, count);
     } else if ((key.flags & gpu::kOpDepthModel) != 0u) {

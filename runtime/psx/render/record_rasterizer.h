@@ -42,6 +42,11 @@ struct RecordView {
   present::CropBand crop;
 };
 
+// The record.frag variant an op draws through: Opaque (RECORD_OPAQUE) for an op that never discards, so Apple GPUs keep
+// hidden-surface removal; Lean (RECORD_LEAN) for the other triangles, sprites, line pixels and fills; Full for the rest.
+enum class RecordShader : std::uint8_t { Opaque, Lean, Full };
+inline constexpr std::size_t kRecordShaders = 3;
+
 // The image is VRAM at an integer scale, RG8 holding 1555 halfwords. Each record applies on top of
 // the one before it; when that chain breaks, the device's VRAM is uploaded instead. With a reach,
 // each displayed buffer also has a wide canvas (RecordCanvas) that the record draws into beside VRAM, inside the
@@ -266,17 +271,17 @@ private:
     SDL_GPUGraphicsPipeline *modelMark = nullptr;
     SDL_GPUGraphicsPipeline *modelClear = nullptr;
   };
-  Pipelines makePipelines(bool fetch, bool lean);
+  Pipelines makePipelines(bool fetch, RecordShader shader);
   void release(Pipelines &pipelines);
   // The set an op draws through: the ops that read the target (a blend or a mask test) through a reading set, the rest
-  // through a writing one; copies, uploads and read-back or outline texturing through a full set, the rest through a
-  // lean one (record.frag RECORD_LEAN). Where the device fetches its target in-pass, only the reading sets fetch;
-  // elsewhere both read the snapshot and the reading sets are the writing ones.
-  const Pipelines &pipelines(bool reads, bool full) const {
-    return sets_[(reads && fetches_ ? 2 : 0) + (full ? 1 : 0)];
+  // through a writing one; each set in the record.frag variant the op needs (RecordShader). Where the device fetches its
+  // target in-pass, only the reading sets fetch; elsewhere both read the snapshot and the reading sets are the writing
+  // ones.
+  const Pipelines &pipelines(bool reads, RecordShader shader) const {
+    return sets_[(reads && fetches_ ? kRecordShaders : 0) + static_cast<std::size_t>(shader)];
   }
   bool fetches_ = false;
-  std::array<Pipelines, 4> sets_;                 // writing lean, writing full, reading lean, reading full
+  std::array<Pipelines, 2 * kRecordShaders> sets_; // writing, then reading, each by RecordShader
   const present::DepthTest *depthTest_ = nullptr; // this present's
   gpu::RecordPlanner planner_;
   Plane vram_;
