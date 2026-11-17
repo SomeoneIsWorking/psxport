@@ -259,12 +259,17 @@ private:
     SDL_GPUGraphicsPipeline *modelMark = nullptr;
     SDL_GPUGraphicsPipeline *modelClear = nullptr;
   };
-  Pipelines makePipelines(bool fetch);
+  Pipelines makePipelines(bool fetch, bool lean);
   void release(Pipelines &pipelines);
-  // The ops that read the target (a blend or a mask test) draw through `reads_`; the rest through `writes_`. Where the
-  // device fetches its target in-pass, only `reads_` fetches; elsewhere both read the snapshot and are one set.
-  Pipelines writes_;
-  Pipelines reads_;
+  // The set an op draws through: the ops that read the target (a blend or a mask test) through a reading set, the rest
+  // through a writing one; copies, uploads and read-back or outline texturing through a full set, the rest through a
+  // lean one (record.frag RECORD_LEAN). Where the device fetches its target in-pass, only the reading sets fetch;
+  // elsewhere both read the snapshot and the reading sets are the writing ones.
+  const Pipelines &pipelines(bool reads, bool full) const {
+    return sets_[(reads && fetches_ ? 2 : 0) + (full ? 1 : 0)];
+  }
+  bool fetches_ = false;
+  std::array<Pipelines, 4> sets_;                 // writing lean, writing full, reading lean, reading full
   const present::DepthTest *depthTest_ = nullptr; // this present's
   gpu::RecordPlanner planner_;
   Plane vram_;

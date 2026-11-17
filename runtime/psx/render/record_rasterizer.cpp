@@ -18,6 +18,8 @@ using gpu::RecordRect;
 constexpr SDL_GPUTextureFormat kVramFormat = SDL_GPU_TEXTUREFORMAT_R8G8_UNORM;
 constexpr ShaderCode kRecordVertex{spv_g_record_vert, spv_g_record_vert_len, {0, 1, 2}, PSXPORT_MSL(record_vert)};
 constexpr ShaderCode kRecordFragment{spv_g_record_frag, spv_g_record_frag_len, {5, 1, 3}, PSXPORT_MSL(record_frag)};
+constexpr ShaderCode kRecordLeanFragment{
+    spv_g_record_lean_frag, spv_g_record_lean_frag_len, {5, 1, 3}, PSXPORT_MSL(record_lean_frag)};
 // A mark: coverage and the moved-back depth alone, for a depth group or Model draw that writes no colour where the
 // test draw already passed (stencil), so it never samples a texel or reads the target; both pipeline sets share it.
 constexpr ShaderCode kRecordDepthMarkFragment{
@@ -25,18 +27,19 @@ constexpr ShaderCode kRecordDepthMarkFragment{
 // The same reading the target in-pass (RECORD_FETCH): Metal only, so it exists only where Metal was built.
 #if defined(PSXPORT_GPU_SHADERS_MSL)
 constexpr ShaderCode kRecordFetchFragment{nullptr, 0, {5, 1, 3}, PSXPORT_MSL(record_fetch_frag)};
+constexpr ShaderCode kRecordFetchLeanFragment{nullptr, 0, {5, 1, 3}, PSXPORT_MSL(record_fetch_lean_frag)};
 #endif
 
 // The record fragment shader `device` draws with: the in-pass reading one where it fetches its target. Depth-tested
 // draws use it too: the hardware interpolates their depth (record.vert), so only a mark writes it.
-const ShaderCode &recordFragment(bool fetch) {
+const ShaderCode &recordFragment(bool fetch, bool lean) {
 #if defined(PSXPORT_GPU_SHADERS_MSL)
   if (fetch) {
-    return kRecordFetchFragment;
+    return lean ? kRecordFetchLeanFragment : kRecordFetchFragment;
   }
 #endif
   (void)fetch;
-  return kRecordFragment;
+  return lean ? kRecordLeanFragment : kRecordFragment;
 }
 constexpr std::uint32_t kDepthRunFlags =
     gpu::kOpDepthTest | gpu::kOpDepthObject | gpu::kOpDepthModel | gpu::kOpDepthGroup;
@@ -146,18 +149,29 @@ bool readsTarget(const gpu::RecordRasterPlan &plan, const gpu::RecordShape &shap
   return (plan.ops[shape.op][gpu::kOpFlags] & (gpu::kOpSemi | gpu::kOpMaskCheck)) != 0u;
 }
 
+// Whether the op needs the full record.frag: a copy, an upload, or texels from the read-back or the outline atlas.
+bool needsFull(const gpu::RecordRasterPlan &plan, const gpu::RecordShape &shape) {
+  const std::uint32_t flags = plan.ops[shape.op][gpu::kOpFlags];
+  const auto kind = static_cast<gpu::RecordOpKind>(flags & gpu::kOpKindMask);
+  return kind == gpu::RecordOpKind::Copy || kind == gpu::RecordOpKind::Upload ||
+         (flags & (gpu::kOpReadBack | gpu::kOpOutline)) != 0u;
+}
+
 struct DepthRun {
   std::uint32_t flags = 0;
   std::uint32_t model = 0;
   bool reads = false;
+  bool full = false;
   bool operator==(const DepthRun &) const = default;
 };
 
-DepthRun depthRun(const gpu::RecordRasterPlan &plan, const gpu::RecordShape &shape) {
-  const std::uint32_t flags = plan.ops[shape.op][gpu::kOpFlags] & kDepthRunFlags;
+// With a depth target, a run also shares its depth flags and Model.
+DepthRun depthRun(const gpu::RecordRasterPlan &plan, const gpu::RecordShape &shape, bool depthTarget) {
+  const std::uint32_t flags = depthTarget ? plan.ops[shape.op][gpu::kOpFlags] & kDepthRunFlags : 0u;
   return {flags,
           (flags & gpu::kOpDepthModel) != 0u ? plan.ops[shape.op + 1][gpu::kDepthModel] : 0u,
-          readsTarget(plan, shape)};
+          readsTarget(plan, shape),
+          needsFull(plan, shape)};
 }
 
 // Storage buffers are read as whole words, and never sized zero.
@@ -169,13 +183,15 @@ std::uint32_t paddedBytes(std::size_t bytes) {
 
 RecordRasterizer::RecordRasterizer(RenderDevice &device) : device_(device), depthFormat_(depthFormat(device.handle())) {
   planner_.setDestinationReadsInPass(device.fetchesTarget());
-  writes_ = makePipelines(false);
-  reads_ = device.fetchesTarget() ? makePipelines(true) : writes_;
+  fetches_ = device.fetchesTarget();
+  for (int set = 0; set < (fetches_ ? 4 : 2); set++) {
+    sets_.at(static_cast<std::size_t>(set)) = makePipelines(set >= 2, (set & 1) == 0);
+  }
   canvases_.reserve(gpu::kRecordMaxCanvases);
 }
 
-RecordRasterizer::Pipelines RecordRasterizer::makePipelines(bool fetch) {
-  const ShaderCode &fragment = recordFragment(fetch);
+RecordRasterizer::Pipelines RecordRasterizer::makePipelines(bool fetch, bool lean) {
+  const ShaderCode &fragment = recordFragment(fetch, lean);
   Pipelines pipelines;
   pipelines.plain = device_.makePipeline(kRecordVertex, fragment, kVramFormat);
   const RenderDevice::DepthTarget slot = depthTarget(depthFormat_, SDL_GPU_COMPAREOP_ALWAYS, false);
@@ -250,10 +266,9 @@ RecordRasterizer::~RecordRasterizer() {
   }
   device_.release(upload_);
   device_.release(readback_);
-  if (reads_.plain != writes_.plain) {
-    release(reads_);
+  for (Pipelines &set : sets_) {
+    release(set);
   }
-  release(writes_);
 }
 
 RecordRasterizer::Plane RecordRasterizer::makePlane(const RecordCanvas &shape, int scale) {
@@ -942,7 +957,7 @@ void RecordRasterizer::execute(const gpu::RecordRasterPlan &plan, bool inBetween
   for (int p = 0; p < planes; p++) {
     const auto &shapes = plan.shapes[static_cast<std::size_t>(p)];
     usesDepth[static_cast<std::size_t>(p)] = std::ranges::any_of(shapes, [&](const gpu::RecordShape &shape) {
-      return depthRun(plan, shape).flags != 0u;
+      return depthRun(plan, shape, true).flags != 0u;
     });
     Plane &target = plane(p);
     if (usesDepth[static_cast<std::size_t>(p)] && target.depth == nullptr) {
@@ -1055,6 +1070,7 @@ void RecordRasterizer::drawShapes(SDL_GPURenderPass *pass,
                                   bool depthTarget) {
   // Each draw is six vertices a shape (record.vert), its fragments the shapes' covered pixels.
   std::span<const gpu::RecordShape> runShapes;
+  const Pipelines *set = nullptr;
   SDL_GPUGraphicsPipeline *bound = nullptr;
   const auto draw = [&](SDL_GPUGraphicsPipeline *pipeline, Uint32 first, Uint32 count) {
     if (pipeline != bound) {
@@ -1067,41 +1083,39 @@ void RecordRasterizer::drawShapes(SDL_GPURenderPass *pass,
     work_.triangles += shapeTriangles(runShapes);
     const std::uint64_t pixels = countPixels_ ? coveredPixels(runShapes) : 0;
     work_.pixels += pixels;
-    const Pipelines &set = readsTarget(plan, runShapes.front()) ? reads_ : writes_;
-    const bool marks = pipeline == set.groupMark || pipeline == set.modelMark || pipeline == set.modelClear;
+    const bool marks = pipeline == set->groupMark || pipeline == set->modelMark || pipeline == set->modelClear;
     work_.shadedPixels += marks ? 0 : pixels;
   };
-  // Runs in record order, each through the pipelines its reading of the target picks; with a depth target, also by
-  // its depth run.
+  // Runs in record order, each through the pipelines its reading of the target and its shader pick; with a depth
+  // target, also by its depth run.
   std::size_t run = 0;
   while (run < shapes.size()) {
-    const DepthRun key = depthTarget ? depthRun(plan, shapes[run]) : DepthRun{.reads = readsTarget(plan, shapes[run])};
+    const DepthRun key = depthRun(plan, shapes[run], depthTarget);
     std::size_t end = run + 1;
-    while (end < shapes.size() &&
-           (depthTarget ? depthRun(plan, shapes[end]) : DepthRun{.reads = readsTarget(plan, shapes[end])}) == key) {
+    while (end < shapes.size() && depthRun(plan, shapes[end], depthTarget) == key) {
       end++;
     }
     const auto count = static_cast<Uint32>(end - run) * 6;
     runShapes = shapes.subspan(run, end - run);
     const Uint32 first = (firstVertexShape + static_cast<std::uint32_t>(run)) * 6;
-    const Pipelines &set = key.reads ? reads_ : writes_;
+    set = &pipelines(key.reads, key.full);
     if (!depthTarget) {
-      draw(set.plain, first, count);
+      draw(set->plain, first, count);
     } else if ((key.flags & gpu::kOpDepthModel) != 0u) {
       // Its parts' colour where they pass or cover their own model, then the depth they leave.
       SDL_SetGPUStencilReference(pass, static_cast<std::uint8_t>(kPassed | key.model));
-      for (SDL_GPUGraphicsPipeline *pipeline : {set.modelTest, set.modelPaint, set.modelMark, set.modelClear}) {
+      for (SDL_GPUGraphicsPipeline *pipeline : {set->modelTest, set->modelPaint, set->modelMark, set->modelClear}) {
         draw(pipeline, first, count);
       }
     } else if ((key.flags & gpu::kOpDepthObject) != 0u) {
-      draw(set.object, first, count);
+      draw(set->object, first, count);
     } else if ((key.flags & gpu::kOpDepthTest) != 0u) {
       // Its polygons cover no pixel twice, so each wrote its colour exactly where it passed; now its depth there.
       SDL_SetGPUStencilReference(pass, kPassed);
-      draw(set.groupTest, first, count);
-      draw(set.groupMark, first, count);
+      draw(set->groupTest, first, count);
+      draw(set->groupMark, first, count);
     } else {
-      draw(set.slot, first, count);
+      draw(set->slot, first, count);
     }
     run = end;
   }

@@ -5,6 +5,8 @@
 // The target is a plane: the VRAM image or a display canvas, whose pixel p is VRAM-space pixel p + origin * scale.
 // A crop canvas's UI quads (kMappingCropUi) map instead at the UI scale from the UI origin.
 #include "record_op.glsl"
+// RECORD_LEAN: only triangles, sprites, line pixels and fills, texturing from VRAM alone (no read-back or outline
+// text); the smaller shader keeps more pixels in flight, and RecordRasterizer runs every other op through the full one.
 // RECORD_DEPTH_MARK: a depth group's or Model's mark, only the polygon's coverage and its moved-back depth (see main).
 // Every other depth-tested draw tests and writes the 1/z record.vert interpolates, so it keeps early depth testing.
 
@@ -205,6 +207,7 @@ void main() {
         write(v_op.y);
         return;
     }
+#ifndef RECORD_LEAN
     if (kind == kRecordOpKindCopy) {
         int rx = wrap(p.x - int(word(kOpOriginX)) * S, vramWidth);
         int ry = wrap(p.y - int(word(kOpOriginY)) * S, vramHeight);
@@ -229,6 +232,7 @@ void main() {
         write(poolPixel(word(kOpPool) + uint(ry) * word(kOpSourceX) + uint(rx)) | maskSet);
         return;
     }
+#endif
     bool textured = (flags & kOpTextured) != 0u;
     uint colour = v_op.y;
     int r = int(colour & 0xFFu);
@@ -271,6 +275,9 @@ void main() {
             fv = uint((inside.y * 256 + 128) / S);
         }
         if (textured) {
+#ifdef RECORD_LEAN
+            fore = texel(u, v, fu, fv, flags);
+#else
             if ((flags & kOpReadBack) != 0u) {
                 fore = readBackTexel(p);
             } else if ((flags & kOpOutline) != 0u && params.outline.x > 0) {
@@ -278,6 +285,7 @@ void main() {
             } else {
                 fore = texel(u, v, fu, fv, flags);
             }
+#endif
             if (fore == 0u) {
                 discard;
             }
