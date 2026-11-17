@@ -53,7 +53,8 @@ C-12 also gets increased draw distance and a right-stick camera (psx-c12 G004). 
 and skippable dialogue and sequences.
 Where a title stops between stages to ask about saving (Toy Story 2 G005, Mega Man X4 G006 so far; check each
 title before planning it), the prompt goes: the game autosaves there through its own save routine with an
-autosave icon, and the title menu leads with a selected "Continue" that loads the newest save.
+autosave icon. Every title that saves, retail autosave included (Spyro, psx-spyro G008), leads its title menu
+with a selected "Continue" that loads the newest save.
 
 Start skips what the player does not control (logos, movies, flybys, transition and load fades) in every title.
 Each skip is title-owned, one screen at a time, taken through that screen's own guest terminal transition and
