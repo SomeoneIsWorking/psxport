@@ -103,11 +103,22 @@ stages it did not touch):
 | 192d36d | the VRAM plane's `before`, `inBetween` and snapshot copied only where they differ from the image | 18.3 / 18.4 | 12.1 / 12.1 |
 | ae8a304 | op flags, colour, CLUT and window as flat varyings from `record.vert` | 17.9 / 17.9 | 11.8 / 11.7 |
 | b97b60d | lean `record.frag` (no copy, upload, read-back or outline paths) for the runs that need none | 17.5 / 17.4 | 10.8 / 10.8 |
+| be373cf | margin canvases shade only their margins; their buffer columns come from the image (shaded 58.7 → 34.1 Mpx) | 16.1 / 16.2 | 8.1 / 8.1 |
+| 3a1959f | a margin canvas's before, in-between and snapshot copies take only its margin strips | 14.4 / 14.4 | 8.0 / 8.0 |
 
-p10 went 16.9 → 13.0. Hardware depth was level on Spyro (it draws back to front, so early depth testing finds
+p10 went 16.9 → 10.3. Hardware depth was level on Spyro (it draws back to front, so early depth testing finds
 little to reject) but leaves the test draws as plain pipelines. Copied pixels went 72 → 46 Mpx a present. The
 draw stage is fragment shading: a trivial shader draws the same coverage in about 2 ms, and the demo shades about
 59 Mpx a present (a 7.9 Mpx display, about 7x over).
+
+At 3a1959f the mean present (ms) is draw 8.33, batch snapshot refresh 1.41, present build 1.40 and show 0.76,
+in-between seed 1.16 and snapshot restore 0.99 (in-between presents only), keep-before 0.57, canvas interior copies
+0.38, upload 0.20. Timing-only builds of the lean shader put the draw stage at 2.5 ms writing a constant (passes,
+depth, marks, coverage), 6.5 without the texture fetch, and 8.5 fetching without the CLUT lookup: texturing costs
+about 1.8 ms, the CLUT nothing, the rest of the shader body about 4. The ranked next steps: slim that body
+(per-op constants from `record.vert`, float gouraud and modulation, triangle and sprite variants), refresh read
+snapshots only where a plan samples them, skip seeding what a record overwrites with an opaque fill before reading
+it, present in one pass, and present a margin canvas from two textures instead of copying its interior.
 
 ### Phase 2 on Metal: deferred
 
