@@ -87,6 +87,32 @@ There are no unit tests or gates. Each repo is checked by building its product w
 Products: `spyro_port`, `toystory2_port`, `crashbash_port`, `crash_port`, `ctr_port`, `tomba2_port`,
 `spiderman_port`, `vagrant_port`, `megamanx4_port`, `tekken3_port`, `c12_port`.
 
+## Second machine (`ssh ally`)
+
+The Ally (Bazzite, 16 CPUs, 11 GB) holds its own clone of this workspace at `~/repo/psx` and
+`~/repo/shared/{bug-report,setup-ui,re-harness}`, made by the fresh-machine bootstrap above; each title's `.env`
+there points at `~/ROM/PSX CHD/<disc>.chd`. It builds inside the `my-distrobox` distrobox (Fedora 43: clang, lld,
+cmake, ninja-build, glslc, SDL3-devel, SDL3_image-devel, freetype-devel, zlib-devel; `uv` lives only in the box)
+and runs on the host, whose glibc is newer than the box's. Heavy steps (builds, runs) take
+`flock ~/agents/.heavy.lock`; other agents run there too. Only pushed commits reach it: push first, then sync.
+
+```sh
+# sync a repo to a pushed branch or commit (psxport too, for a framework change)
+ssh ally 'git -C ~/repo/psx/psx-tomba fetch -q origin && git -C ~/repo/psx/psx-tomba checkout -q --detach <commit>'
+# build in the box
+ssh ally 'flock ~/agents/.heavy.lock distrobox enter my-distrobox -- env --chdir=$HOME/repo/psx/psx-tomba \
+  CC=clang CXX=clang++ uv run --frozen python external/psxport/tools/port/consumer_build.py --build build/agent --target tomba2_port'
+# run on the host, hidden and silent, from the title root (the product reads ./.env and extracts
+# scratch/bin/<slug>/ on a no-argument run)
+ssh ally 'R=~/repo/psx/psx-tomba O=$R/scratch/ally; mkdir -p $O; : > $O/settings.ini; flock ~/agents/.heavy.lock \
+  env --chdir=$R XDG_RUNTIME_DIR=/run/user/1000 WAYLAND_DISPLAY=wayland-1 PSXPORT_SHOW_WINDOW=0 PSXPORT_NOAUDIO=1 \
+  PSXPORT_NOPACE=1 PSXPORT_SETTINGS=$O/settings.ini PSXPORT_ASSET_DIR=$HOME/repo/psx/psxport PSXPORT_NATIVE_FRAMES=400 \
+  build/agent/bin/tomba2_port scratch/bin/tomba2/SCUS_944.54 > $O/run.log 2>&1'
+```
+
+The host has no `uv`, so a host run sets `agent_environment`'s keys by hand as above. The Wayland socket is the
+gamescope session's (`ls /run/user/1000/wayland-*`). A clean build of one title takes about ten minutes.
+
 ## Rules
 
 - Some `scratch/` dirs are provisioned disc inputs: `psx-spyro/scratch/assets/`, `psx-tomba/scratch/bin/`,
