@@ -31,7 +31,7 @@ OtNode readNode(Core &core, std::uint32_t mainRamOffset) {
 
 [[noreturn]] void refuseUnmovable(Core &core, const OtNode &node) {
   lucent::error("host-packets",
-                "node 0x{:08X} at field {} was given a move, but its {} word(s) hold a poly-line or a cut command",
+                "node 0x{:08X} at field {} was given a move, but its {} word(s) end inside a command",
                 node.guestAddress(),
                 core.game->timing.displayField(),
                 node.gp0WordCount());

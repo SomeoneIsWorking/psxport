@@ -19,7 +19,7 @@ present::RecordVertex colourVertex(std::uint32_t colourWord);
 // The word holding the position of the polygon vertex polygonVertex reads at `index`.
 std::size_t polygonPositionWord(std::size_t index, const Gp0PrimitiveFlags &flags, bool isFirst);
 // Every vertex position of the GP0 commands in `words` moved `dx` columns, as the halfword add a guest store makes;
-// false, with `words` untouched, when they hold a poly-line or end inside a command.
+// false, with `words` untouched, when they end inside a command or a poly-line without its terminator.
 bool moveVerticesX(std::span<std::uint32_t> words, int dx);
 // The polygon vertex at `words[index]`, advancing `index`; a flat polygon's later vertices take
 // `first`'s colour. Position is as written, before the draw offset.

@@ -57,6 +57,12 @@ public:
                     std::uint32_t rootGuestAddress,
                     std::uint32_t nodeGuestAddress,
                     std::span<const std::uint32_t> words);
+  // The same with each placed word keeping its place, as `site`'s draw (as insertAfter).
+  void insertBefore(Core &core,
+                    std::uint32_t rootGuestAddress,
+                    std::uint32_t nodeGuestAddress,
+                    PacketView packet,
+                    std::uint32_t site);
   // `packet` is drawn right after the packet of `nodeGuestAddress` in the walk from `rootGuestAddress`, in its slot,
   // after any packet inserted there earlier; each placed word keeps its place, and the packet is `site`'s draw
   // (cpu::NotedPlace::site), so it is depth-tested as that draw site's are.

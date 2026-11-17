@@ -78,6 +78,11 @@ void HostPackets::insertBefore(Core &core,
   insert(core, rootGuestAddress, nodeGuestAddress, PacketView{words, {}}, 0, false);
 }
 
+void HostPackets::insertBefore(
+    Core &core, std::uint32_t rootGuestAddress, std::uint32_t nodeGuestAddress, PacketView packet, std::uint32_t site) {
+  insert(core, rootGuestAddress, nodeGuestAddress, packet, site, false);
+}
+
 void HostPackets::insertAfter(
     Core &core, std::uint32_t rootGuestAddress, std::uint32_t nodeGuestAddress, PacketView packet, std::uint32_t site) {
   insert(core, rootGuestAddress, nodeGuestAddress, packet, site, true);

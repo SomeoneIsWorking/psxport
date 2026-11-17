@@ -70,8 +70,29 @@ bool moveVerticesX(std::span<std::uint32_t> words, int dx) {
   std::size_t count = 0;
   for (std::size_t at = 0; at < words.size();) {
     const Gp0Command command(words[at]);
+    if (command.isPolyLine()) {
+      // Colour, point, then a point per word (flat) or a colour and point per pair (shaded), up to the terminator.
+      const bool gouraud = command.flags().gouraud;
+      std::size_t word = 1;
+      bool terminated = false;
+      for (; at + word < words.size(); ++word) {
+        if (Gp0Command::isPolyLineTerminatorSlot(static_cast<unsigned>(word), gouraud) &&
+            Gp0Command::isPolyLineTerminator(words[at + word])) {
+          terminated = true;
+          break;
+        }
+        if (!gouraud || (word & 1u) != 0u) {
+          positions[count++] = at + word;
+        }
+      }
+      if (!terminated) {
+        return false;
+      }
+      at += word + 1;
+      continue;
+    }
     const std::size_t length = Gp0Command::packetWordCount(words[at]);
-    if (command.isPolyLine() || at + length > words.size()) {
+    if (at + length > words.size()) {
       return false;
     }
     if (command.isRectangleOrSprite()) {
