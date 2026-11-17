@@ -20,7 +20,7 @@ All public under `github.com/SomeoneIsWorking`, side by side, no superproject.
 | `psx-toy-story-2/` | Toy Story 2 (`SLUS_008.93`) | split: `toystory2-decomp` (ours) |
 | `psx-crash-bash/` | Crash Bash | not split (`crash_bash_decomp`, MIT, pinned) |
 | `psx-crash/` | Crash 1/2/3 (one architecture) | split: forks `crash-bandicoot-decomp`, `crash2-decomp`; `crash3-decomp` (ours) |
-| `psx-crash-team-racing/` | Crash Team Racing | not split (`ctr-native`, GPL-3, evidence) |
+| `psx-crash-team-racing/` | Crash Team Racing | split: `ctr-decomp` (ours) |
 | `psx-tomba/` | Tomba! 2 (`SCUS_944.54` → `MAIN.EXE`) and Tomba! 1 | Tomba 2 split: `tomba2-decomp` (ours); Tomba 1 split: `tomba1-decomp` (ours) |
 | `psx-spider-man/` | Spider-Man 1/2 | not split (none exists: ours to create) |
 | `psx-vagrant-story/` | Vagrant Story (`SLUS_010.40`) | split: fork `rood-reverse` (CC0) |
