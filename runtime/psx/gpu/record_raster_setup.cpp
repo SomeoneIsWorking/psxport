@@ -433,12 +433,17 @@ bool containsRect(const RecordRect &outer, const RecordRect &inner) {
   return outer.x0 <= inner.x0 && inner.x1 <= outer.x1 && outer.y0 <= inner.y0 && inner.y1 <= outer.y1;
 }
 
-// How a primitive reads the read-back capture: the captured pixel it shows minus its own pixel, VRAM-space.
+// How a primitive reads the read-back capture, or a canvas plane: the pixel it shows minus its own pixel, VRAM-space.
 struct ReadBackShift {
   int x = 0;
   int y = 0;
-  RecordRect captured;
+  RecordRect captured; // the pixels the source holds
   std::uint32_t weights = 0;
+  int plane = 0;   // the canvas plane sampled, 0 for the capture
+  int originX = 0; // VRAM-space position of the source texture's pixel (0, 0)
+  int originY = 0;
+  RecordRect buffer;  // a canvas's buffer, whose columns are read from the VRAM image
+  RecordRect sampled; // a canvas's pixels the primitive or its margins may read, VRAM space
 };
 
 // The triangle's 1/depth as a plane over native VRAM coordinates, from its first vertex: 1/z is linear on screen. The
@@ -493,7 +498,9 @@ public:
     cropUi_ = false;
     depthTest_ = depthTest;
     plan_.capture.reset();
+    plan_.sampledCanvas = 0;
     readBack_ = readBack;
+    canvasReads_ = !readBack;
     declared_.reset();
     declares_ = declares;
     sampling_.reset();
@@ -579,7 +586,7 @@ private:
   void addLine(const DrawPrimitive &primitive);
   // A flat rectangle spanning the buffer's columns fills the margins; a read-back one continues past either edge.
   void addCanvasMargins(const DrawPrimitive &primitive);
-  // How `primitive` samples readBack_, when it does (RecordReadBack).
+  // How `primitive` samples readBack_, or else a displayed buffer's canvas, when it does (RecordReadBack).
   std::optional<ReadBackShift> readBackShift(const DrawPrimitive &primitive) const;
 
   PlaneClips planeClips(const RecordDrawState &state) const;
@@ -665,6 +672,7 @@ private:
   std::vector<PlaneRect> opWrites_;
   std::vector<PlaneRect> opReaches_; // a sliver's: its depth group counts them, its batch does not
   std::vector<RecordRect> opReads_;
+  std::vector<PlaneRect> opPlaneReads_; // the planned primitive's canvas reads, for each op it commits
   bool reaches_ = false;
   int lines_ = 0; // line primitives planned
 
@@ -677,6 +685,7 @@ private:
   bool declares_ = false;
   const present::DepthTest *depthTest_ = nullptr; // null: every primitive in slot order
   std::optional<ReadBackShift> sampling_;         // the primitive being planned's
+  bool canvasReads_ = false; // no capture was held when the record began, so none of its ops samples one
 };
 
 PlaneClips RecordPlanner::Builder::planeClips(const RecordDrawState &state) const {
@@ -775,21 +784,25 @@ RecordOp RecordPlanner::Builder::primitiveOp(const DrawPrimitive &primitive, Rec
   op[kOpWindowYAdd] = ((twy & twh) << 3) + static_cast<std::uint32_t>(state.texPageY);
   op[kOpClut] = primitive.clutOffset == present::kNoClut ? 0u : primitive.clutOffset;
   if (sampling_) {
-    op[kOpFlags] |= kOpReadBack;
-    op[kOpReadBackX] = static_cast<std::uint32_t>(sampling_->x - sampling_->captured.x0);
-    op[kOpReadBackY] = static_cast<std::uint32_t>(sampling_->y - sampling_->captured.y0);
+    op[kOpFlags] |= kOpReadBack | (sampling_->plane != 0 ? kOpCanvasTexels : 0u);
+    op[kOpReadBackX] = static_cast<std::uint32_t>(sampling_->x - sampling_->originX);
+    op[kOpReadBackY] = static_cast<std::uint32_t>(sampling_->y - sampling_->originY);
     op[kOpReadBackWeights] = sampling_->weights;
+    if (sampling_->plane != 0) {
+      op[kOpCanvasOrigin] = (static_cast<std::uint32_t>(sampling_->originX) & 0xFFFFu) |
+                            (static_cast<std::uint32_t>(sampling_->originY) << 16);
+      op[kOpCanvasColumns] = static_cast<std::uint32_t>(sampling_->buffer.x0 - sampling_->originX) |
+                             (static_cast<std::uint32_t>(sampling_->buffer.x1 - sampling_->originX) << 16);
+    }
   }
   return op;
 }
 
 std::optional<ReadBackShift> RecordPlanner::Builder::readBackShift(const DrawPrimitive &primitive) const {
-  if (!readBack_ || !primitive.textured) {
-    return std::nullopt;
-  }
-  const RecordReadBack &readBack = *readBack_;
   const RecordDrawState &state = primitive.state;
-  if (state.texMode != readBack.texMode || state.windowMaskX != 0 || state.windowMaskY != 0) {
+  // A held capture is the record's one read-back source (RecordRasterizer binds it in the canvas's place).
+  const int texMode = readBack_ ? readBack_->texMode : 2;
+  if (!primitive.textured || state.texMode != texMode || state.windowMaskX != 0 || state.windowMaskY != 0) {
     return std::nullopt;
   }
   // The pixels drawn, and one offset from each to the texel it shows.
@@ -826,13 +839,45 @@ std::optional<ReadBackShift> RecordPlanner::Builder::readBackShift(const DrawPri
     return std::nullopt;
   }
   const int uAdd = state.texPageX << (2 - state.texMode);
-  if (!containsRect(readBack.page, {u0 + uAdd, v0 + state.texPageY, u1 + uAdd, v1 + state.texPageY})) {
+  const RecordRect texels{u0 + uAdd, v0 + state.texPageY, u1 + uAdd, v1 + state.texPageY};
+  if (!readBack_) {
+    if (!canvasReads_) {
+      return std::nullopt;
+    }
+    // 15-bit texels are VRAM pixels: a displayed buffer's, read from its canvas.
+    for (std::size_t i = 0; i < canvases_.size(); i++) {
+      const RecordCanvas &canvas = canvases_[i];
+      const int plane = 1 + static_cast<int>(i);
+      if (canvas.crop() || !containsRect(canvas.buffer, texels) ||
+          (plan_.sampledCanvas != 0 && plan_.sampledCanvas != plane)) {
+        continue;
+      }
+      const RecordRect window = canvas.window();
+      return ReadBackShift{
+          .x = uAdd + du,
+          .y = state.texPageY + dv,
+          .captured = {canvas.originX() + window.x0, canvas.originY(), canvas.originX() + window.x1, canvas.buffer.y1},
+          .plane = plane,
+          .originX = canvas.originX(),
+          .originY = canvas.originY(),
+          .buffer = canvas.buffer,
+          .sampled = {canvas.originX() + window.x0,
+                      pixels.y0 + state.texPageY + dv,
+                      canvas.originX() + window.x1,
+                      std::min(pixels.y1 + state.texPageY + dv + 1, canvas.buffer.y1)}};
+    }
+    return std::nullopt;
+  }
+  const RecordReadBack &readBack = *readBack_;
+  if (!containsRect(readBack.page, texels)) {
     return std::nullopt;
   }
   const ReadBackShift shift{.x = uAdd + du - readBack.page.x0 + readBack.read.x0,
                             .y = state.texPageY + dv - readBack.page.y0 + readBack.read.y0,
                             .captured = readBack.captured,
-                            .weights = readBack.weights};
+                            .weights = readBack.weights,
+                            .originX = readBack.captured.x0,
+                            .originY = readBack.captured.y0};
   if (!containsRect(readBack.captured,
                     {pixels.x0 + shift.x, pixels.y0 + shift.y, pixels.x1 + shift.x, pixels.y1 + shift.y})) {
     return std::nullopt;
@@ -1001,6 +1046,9 @@ void RecordPlanner::Builder::commit(const RecordOp &op, bool readsDestination, c
   for (const RecordRect &read : opReads_) {
     conflict = conflict || written_[0].any(read);
   }
+  for (const PlaneRect &read : opPlaneReads_) {
+    conflict = conflict || written_[static_cast<std::size_t>(read.plane)].any(read.rect);
+  }
   if (readsDestination && !destinationInPass) {
     for (const PlaneRect &write : opWrites_) {
       conflict = conflict || written_[static_cast<std::size_t>(write.plane)].any(write.rect);
@@ -1048,6 +1096,10 @@ void RecordPlanner::Builder::noteReads(const RecordOp &op, bool readsDestination
   for (const RecordRect &read : opReads_) {
     read_[0].mark(read);
     batchReads_[0].add(read);
+  }
+  for (const PlaneRect &read : opPlaneReads_) {
+    read_[static_cast<std::size_t>(read.plane)].mark(read.rect);
+    batchReads_[static_cast<std::size_t>(read.plane)].add(read.rect);
   }
   if (readsDestination) {
     for (const std::vector<PlaneRect> *rects : {&opWrites_, &opReaches_}) {
@@ -1146,8 +1198,16 @@ void RecordPlanner::Builder::addPrimitive(const DrawPrimitive &primitive) {
     scale_ = plan_.scale;
   }
   sampling_ = readBackShift(primitive);
+  if (sampling_ && sampling_->plane != 0) {
+    plan_.sampledCanvas = sampling_->plane;
+    // Every op of the primitive reads them: each batch it commits into keeps and seeds what an earlier fill left.
+    target(sampling_->plane);
+    opPlaneReads_.push_back(planeRect(sampling_->sampled));
+    target(0);
+  }
   addShape(primitive);
   addCanvasMargins(primitive);
+  opPlaneReads_.clear();
   sampling_.reset();
 }
 
@@ -1317,7 +1377,7 @@ void RecordPlanner::Builder::addTriangle(const TriVertex scaled[3],
     }
   }
   target(0);
-  if (primitive.textured && !sampling_) {
+  if (primitive.textured && (!sampling_ || sampling_->plane != 0)) {
     // Every covered pixel lies within a pixel of the vertices' hull, where the interpolant is linear.
     TexelRange ranges[2];
     for (int c = 3; c < 5; c++) {
@@ -1412,7 +1472,8 @@ void RecordPlanner::Builder::addSprite(const DrawPrimitive &primitive) {
   op[kOpSourceY] = v;
   op[kOpShiftX] = static_cast<std::uint32_t>(shiftX);
   op[kOpShiftY] = static_cast<std::uint32_t>(shiftY);
-  if (primitive.textured && !sampling_) {
+  // A canvas read sees the batch's snapshot, as a VRAM read does.
+  if (primitive.textured && (!sampling_ || sampling_->plane != 0)) {
     textureReads(primitive.state, uRange, vRange);
   }
   commit(op, primitive.semiTransparent || primitive.state.maskCheck);

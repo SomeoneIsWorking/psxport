@@ -27,7 +27,7 @@ layout(set = 2, binding = 0) uniform sampler2D u_target; // the target plane bef
 layout(input_attachment_index = 0, set = 2, binding = 8) uniform subpassInput u_targetNow;
 #endif
 layout(set = 2, binding = 1) uniform sampler2D u_vram;   // the VRAM image before this batch
-layout(set = 2, binding = 2) uniform sampler2D u_readBack; // the read-back capture (RecordReadBack)
+layout(set = 2, binding = 2) uniform sampler2D u_readBack; // the read-back capture (RecordReadBack) or canvas
 layout(set = 2, binding = 3) uniform sampler2D u_outlineFields;  // present::OutlineAtlas::fields, filtered
 layout(set = 2, binding = 4) uniform sampler2D u_outlineIndices; // present::OutlineAtlas::indices
 layout(std430, set = 2, binding = 5) readonly buffer Ops { uint ops[]; };
@@ -81,9 +81,18 @@ uint texel(uint u, uint v, uint fu, uint fv, uint flags) {
     return t;
 }
 
-// The captured pixel at fragment p moved by the op's offset, its 5-bit channels weighed into a CLUT index.
-uint readBackTexel(ivec2 p) {
+// The captured pixel at fragment p moved by the op's offset, its 5-bit channels weighed into a CLUT index. A canvas
+// pixel is the 15-bit texel itself, its buffer's columns taken from the VRAM image, which always holds them.
+uint readBackTexel(ivec2 p, uint flags) {
     ivec2 at = p + ivec2(int(word(kOpReadBackX)), int(word(kOpReadBackY))) * S;
+    if ((flags & kOpCanvasTexels) != 0u) {
+        uint columns = word(kOpCanvasColumns);
+        if (at.x >= int(columns & 0xFFFFu) * S && at.x < int(columns >> 16) * S) {
+            uint origin = word(kOpCanvasOrigin);
+            return fetch(at + ivec2(int(origin << 16) >> 16, int(origin >> 16)) * S);
+        }
+        return halfword(texelFetch(u_readBack, at, 0).rg);
+    }
     uint t = halfword(texelFetch(u_readBack, at, 0).rg);
     uint w = word(kOpReadBackWeights);
     uint index = ((t & 0x1Fu) * (w & 0xFFu) + ((t >> 5) & 0x1Fu) * ((w >> 8) & 0xFFu) +
@@ -329,7 +338,7 @@ void main() {
             fore = texel(u, v, fu, fv, flags);
 #else
             if ((flags & kOpReadBack) != 0u) {
-                fore = readBackTexel(p);
+                fore = readBackTexel(p, flags);
             } else if ((flags & kOpOutline) != 0u && params.outline.x > 0) {
                 fore = outlineTexel(u, v, fu, fv, flags);
             } else {

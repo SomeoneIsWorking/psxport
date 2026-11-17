@@ -195,6 +195,10 @@ private:
   bool sorted_ = true;
 };
 
+// `node`'s packet as the walk from the table HostPackets selected draws it: `words`, its own as read, become its
+// replacement if it has one and are moved by its move, which is returned (0 for none).
+int drawnPacket(Core &core, const HostPackets &hostPackets, const OtNode &node, std::span<std::uint32_t> words);
+
 // DMA2 linked-list mode: every node's GP0 words into the device, in link order.
 void submitOrderingTable(Core &core, GpuDevice &device, std::uint32_t rootGuestAddress);
 

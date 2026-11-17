@@ -184,9 +184,10 @@ bool readsTarget(const gpu::RecordRasterPlan &plan, const gpu::RecordShape &shap
   return (plan.ops[shape.op][gpu::kOpFlags] & (gpu::kOpSemi | gpu::kOpMaskCheck)) != 0u;
 }
 
-// The record.frag variant the op needs: the full one for a copy, an upload, or texels from the read-back or the outline
-// atlas; the opaque one for an op that can never discard (no texel that may be transparent, no mask test, no skipped
-// rows); the triangle or sprite one for the other triangles and sprites; the lean one for the rest.
+// The record.frag variant the op needs: the full one for a copy, an upload, or texels from the read-back (a capture or,
+// with kOpCanvasTexels, a canvas) or the outline atlas; the opaque one for an op that can never discard (no texel that
+// may be transparent, no mask test, no skipped rows); the triangle or sprite one for the other triangles and sprites;
+// the lean one for the rest.
 RecordShader recordShader(const gpu::RecordRasterPlan &plan, const gpu::RecordShape &shape) {
   const std::uint32_t flags = plan.ops[shape.op][gpu::kOpFlags];
   const auto kind = static_cast<gpu::RecordOpKind>(flags & gpu::kOpKindMask);
@@ -1100,8 +1101,10 @@ void RecordRasterizer::execute(const gpu::RecordRasterPlan &plan, bool inBetween
       SDL_GPUBuffer *vertexBuffers[2] = {shapeBuffer_.buffer, ops_.buffer};
       SDL_BindGPUVertexStorageBuffers(pass, 0, vertexBuffers, 2);
       SDL_GPUSampler *nearest = device_.nearestSampler();
-      // With no capture the binding is never sampled: only a held read-back plans read-back ops.
-      SDL_GPUTexture *readBack = capture_ != nullptr ? capture_ : vram_.snapshot;
+      // A record samples a canvas or the capture, never both; with neither the binding is never sampled.
+      SDL_GPUTexture *readBack = plan.sampledCanvas != 0 ? plane(plan.sampledCanvas).snapshot
+                                 : capture_ != nullptr   ? capture_
+                                                         : vram_.snapshot;
       // Likewise the atlas: with none, params.outline names no scale and no op samples it.
       SDL_GPUTexture *fields = outlineFields_ != nullptr ? outlineFields_ : vram_.snapshot;
       SDL_GPUTexture *indices = outlineIndices_ != nullptr ? outlineIndices_ : vram_.snapshot;

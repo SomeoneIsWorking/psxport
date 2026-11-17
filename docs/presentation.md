@@ -40,7 +40,7 @@ present plan / sink                           viewport, letterbox, window
 | `present/frame_record.*` | ordered primitives and VRAM ops of one logic frame |
 | `gpu/gp0_record_tap.*` | executed GP0 command to `FrameRecord` entry, with its packet's writer |
 | `present/guest_redraw.*`, `core/write_rollback.h` | `GuestRedraw`: a guest draw routine run again for an in-between, every store put back, registers and GTE restored, devices and guest time held (`SideEffectMode::Discard`) |
-| `gpu/ordering_table.*` | OT node decode and `OrderingTableWalk`, the one walk of a table as the GPU draws it (guest nodes, host packets, moves) that the DrawOTag submit and the debug views (`scene`, `otattr`, `otwhere`) share; `OtTables`, the title-named tables whose bucket heads tag each entry's slot |
+| `gpu/ordering_table.*` | OT node decode and `OrderingTableWalk`, the one walk of a table as the GPU draws it (guest nodes, host packets, moves through `drawnPacket`, which the redraw capture shares) that the DrawOTag submit and the debug views (`scene`, `otattr`, `otwhere`) share; `OtTables`, the title-named tables whose bucket heads tag each entry's slot |
 | `gpu/host_packets.*` | `HostPackets` (`Core::hostPackets`): GP0 packets a title draws inside one DrawOTag walk without guest RAM, each just before a named node of the walk from a named root, and guest packets the walk draws moved; fixed storage, and running out or naming a node the walk never enters is a named fault |
 | `gpu/draw_list_cycle.*` | the refusal of a draw list that revisits a node, which a console's walk never leaves: the walk stops at the revisit and latches the presentation device off (`FaultCause::DrawListCycle`, one error line naming the node, the refusing walk and the writer of the edge into it), so nothing of that frame reaches the GPU and the session ends with the player told; `LinkCycleCheck`, the cycle check of every linked draw-list walk (OT walk, `PacketChainWalker`, title bin walks). A record past `FrameRecord::kMaxEntries` or its pools is port storage, not a console limit: it warns and is marked incomplete |
 | `present/packet_chains.*` | the packets of a chain a replayed section linked, captured with their words' places |
@@ -207,10 +207,11 @@ the `motion` debug channel counts each track's paired records.
   from `root` draws them, in insertion order, right before it enters `node`, in the slot the previous node left
   open, as a guest link there would be. `insertAfter(root, node, packet, site)` draws a placed packet right after
   `node`'s own, in its slot (Spyro's added grass after its bin's last terrain packet): its words keep their
-  vertex places and its draw site, so the record places and depth-tests it as that site's. Inserts made inside a
-  `GuestRedraw` are that redraw's own: lookups see only them, `PacketChainWalker::capture` draws them around the
-  nodes of the captured chain, and they go when the redraw ends (`HostPackets::open`/`close`), so a replayed
-  section's host packets move with its in-between. A title that moves what the guest drew (X4's parallax layer shift and
+  vertex places and its draw site, so the record places and depth-tests it as that site's. Inserts, moves and
+  replacements made inside a `GuestRedraw` are that redraw's own: lookups see only them, `PacketChainWalker::capture`
+  draws the captured chain as the walk would (inserts around its nodes, each node's words through `drawnPacket`), and
+  they go when the redraw ends (`HostPackets::open`/`close`), so a replayed section's host packets move with its
+  in-between. A title that moves what the guest drew (X4's parallax layer shift and
   HUD anchor) names the packet with `moveX(root, node, dx)`: the walk draws its vertices `dx` columns over
   (`moveVerticesX`; a poly-line is refused) and the record keeps no GTE place for them. A title that changes more
   than x (X4's co-op player 2 gauge: its rows, tiles, CLUT and texture page) gives the node's words with
@@ -515,7 +516,13 @@ psx-mega-man-x4 issue 0044). Each record entry is planned once per plane:
 - Copies, uploads and fills land in the image, and so in the buffer's columns 1:1.
 - **Render-to-texture.** Textures, CLUTs and copy sources read the VRAM image, which stays exactly the
   device's. A draw into the display buffer that the guest later samples is read at its 4:3 extent,
-  except through a read-back texture.
+  except through a read-back texture or a displayed-buffer read.
+- **Displayed-buffer read.** A 15-bit textured sprite or polygon that maps a displayed buffer one texel per
+  pixel, in a record that began with no capture held, reads that buffer's canvas at scale
+  (`RecordRasterPlan::sampledCanvas`, `kOpCanvasTexels`): the buffer's columns from the VRAM image, the
+  margins from the canvas's snapshot, the whole drawn window. A sprite reaching a buffer edge continues into
+  that margin as a read-back one does. One canvas per record. User: C-12's visor, whose tint and afterglow
+  are the previous frame read from the other buffer (psx-c12 issue 0013).
 - **Read-back texture.** A guest that reads a displayed picture back (`StoreImage`), converts it on the
   CPU and loads it as a texture page leaves the margins out. Its title declares the page with
   `GpuDevice::declareReadBack` (`present::ReadBackTexture`: read rect, page, texture mode, index weights)

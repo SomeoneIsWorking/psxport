@@ -52,10 +52,14 @@ enum RecordOpField : std::uint8_t {
   kOpSourceX = 24, // copy source origin, native pixels; sprite u0; upload width
   kOpSourceY = 25, // copy source; sprite v0; upload height
   kOpPool = 26,    // upload pixel pool halfword offset
-  // kOpReadBack: the capture pixel a fragment samples minus the fragment, native pixels.
+  // kOpReadBack: the capture (or canvas) pixel a fragment samples minus the fragment, native pixels.
   kOpReadBackX = 10,
   kOpReadBackY = 11,
   kOpReadBackWeights = 15, // red | green << 8 | blue << 16 | shift << 24
+  // kOpCanvasTexels: the canvas's pixel (0, 0) in VRAM space (x as int16 | y << 16), and its buffer's columns in
+  // canvas pixels (x0 | x1 << 16), which it reads from the VRAM image instead.
+  kOpCanvasOrigin = 16,
+  kOpCanvasColumns = 17,
 };
 
 // A DepthPlane op's floats: 1/z at its triangle's first vertex, its x and y slopes per native pixel, that
@@ -79,6 +83,8 @@ enum RecordOpFlag : std::uint32_t {
   kOpTextured = 1u << 8,
   kOpModulate = 1u << 9,
   kOpGouraud = 1u << 10,
+  // With kOpReadBack: 15-bit texels straight from a displayed buffer's canvas (RecordRasterPlan::sampledCanvas).
+  kOpCanvasTexels = 1u << 11,
   kOpSemi = 1u << 12,
   kOpMaskCheck = 1u << 13,
   kOpMaskSet = 1u << 14,
@@ -253,6 +259,9 @@ struct RecordRasterPlan {
   // Per plane (not a crop canvas), plane pixels an opaque fill of the record writes before the record reads any of
   // them, by sampling, copying, capturing or reading its destination: what they held before the record never shows.
   std::array<std::vector<RecordRect>, kRecordPlanes> overwritten;
+  // The canvas plane kOpCanvasTexels ops sample, 0 for none. A draw mapping a displayed buffer one texel per pixel at
+  // 15 bits reads its canvas at scale, margins included; one canvas a record, and none while a capture is held.
+  int sampledCanvas = 0;
 };
 
 // Plans records into reused buffers; a plan stays valid until the next call.

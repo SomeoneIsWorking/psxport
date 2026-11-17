@@ -72,20 +72,30 @@ OrderingTableWalk::OrderingTableWalk(Core &core, std::uint32_t rootGuestAddress)
   readNode();
 }
 
+int drawnPacket(Core &core, const HostPackets &hostPackets, const OtNode &node, std::span<std::uint32_t> words) {
+  if (!node.carriesPrimitive()) {
+    return 0;
+  }
+  const std::span<const std::uint32_t> replaced = hostPackets.replaced(node.guestAddress());
+  if (!replaced.empty()) {
+    if (replaced.size() != words.size()) {
+      refuseReplacement(core, node, replaced.size());
+    }
+    std::ranges::copy(replaced, words.begin());
+  }
+  const int dx = hostPackets.movedX(node.guestAddress());
+  if (dx != 0 && !moveVerticesX(words, dx)) {
+    refuseUnmovable(core, node);
+  }
+  return dx;
+}
+
 void OrderingTableWalk::readNode() {
   const OtNode &node = cursor_.node();
-  const std::span<const std::uint32_t> replaced =
-      node.carriesPrimitive() ? hostPackets_.replaced(node.guestAddress()) : std::span<const std::uint32_t>{};
-  if (!replaced.empty() && replaced.size() != node.gp0WordCount()) {
-    refuseReplacement(core_, node, replaced.size());
-  }
   for (unsigned i = 0; i < node.gp0WordCount(); i++) {
-    words_[i] = replaced.empty() ? core_.mem_r32(node.gp0WordRamOffset(i)) : replaced[i];
+    words_[i] = core_.mem_r32(node.gp0WordRamOffset(i));
   }
-  movedX_ = node.carriesPrimitive() ? hostPackets_.movedX(node.guestAddress()) : 0;
-  if (movedX_ != 0 && !moveVerticesX(std::span(words_.data(), node.gp0WordCount()), movedX_)) {
-    refuseUnmovable(core_, node);
-  }
+  movedX_ = drawnPacket(core_, hostPackets_, node, std::span(words_.data(), node.gp0WordCount()));
 }
 
 bool OrderingTableWalk::advance() {

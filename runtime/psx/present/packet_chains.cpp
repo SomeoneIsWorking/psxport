@@ -13,7 +13,7 @@ namespace psx::present {
 
 template <class Visit> void PacketChainWalker::follow(std::uint32_t link, OtSlot slot, Visit &&visit) {
   gpu::LinkCycleCheck cycle;
-  // The chain as the walk from `link` draws it: with the host packets inserted around its nodes.
+  // The chain as the walk from `link` draws it: with the host packets inserted around its nodes, replaced and moved.
   gpu::HostPackets &hostPackets = memory_.core().hostPackets;
   hostPackets.select(link);
   for (gpu::OtNode tag(0, gpu::OtHeaderWord{link}); !tag.endsChain();) {
@@ -53,7 +53,15 @@ template <class Visit> void PacketChainWalker::follow(std::uint32_t link, OtSlot
       const std::span<gte::WordPlace> commandPlaces(places_.data(), count);
       memory_.readWords(packet + 4u, command);
       memory_.readPlaces(packet + 4u, commandPlaces);
-      visit(packet, gpu::PacketView{command, commandPlaces}, memory_.placingSite(packet + 4u, command));
+      const std::uint32_t site = memory_.placingSite(packet + 4u, command);
+      gpu::drawnPacket(memory_.core(), hostPackets, tag, command);
+      // A word the walk draws otherwise is no longer where its draw site stored it, so it keeps no place.
+      for (std::uint32_t i = 0; i < count; i++) {
+        if (command[i] != memory_.mem_r32(packet + 4u + i * 4u)) {
+          commandPlaces[i] = std::nullopt;
+        }
+      }
+      visit(packet, gpu::PacketView{command, commandPlaces}, site);
     }
     hostPackets.forEach(packet, true, [&](gpu::PacketView view, std::uint32_t site) {
       visit(packet, view, site);
