@@ -26,6 +26,8 @@ uint8_t psx_gpu_upscale_shift = 0;
 uint8_t psx_gpu_upscale_shift_hw = 0;
 enum dither_mode psx_gpu_dither_mode = DITHER_NATIVE;
 bool psx_gpu_rasterize_both_fields = false;
+// The scanline walk's output surface is never read (Scanout below): keep its timing, skip its pixels.
+bool psx_gpu_scanout_pixels = false;
 int line_render_mode = 0;
 int filter_mode = 0;
 int crop_overscan = 0;
