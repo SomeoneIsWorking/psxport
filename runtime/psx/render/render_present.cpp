@@ -1,7 +1,8 @@
-// render_present.cpp — one Game's present in two steps: build the display picture (the record image on
-// RenderPath::Record, the device's VRAM on Device and for a 24bpp display, or a host picture) letterboxed
-// into the present image, then show that image in the window. The leg decides only whether the built
-// image reaches a window (present_plan.h).
+// render_present.cpp — one Game's present: build the display picture (the record image on RenderPath::Record, the
+// device's VRAM on Device and for a 24bpp display, or a host picture), then show it in the window. A display present
+// to the window is drawn from its source straight into the swapchain image at show, in one pass; a pane, a host
+// picture, or a picture something reads back is built into the present image first. The leg decides only whether
+// the built picture reaches a window (present_plan.h).
 #include "config_vars.h"
 #include "core.h"
 #include "fs_util.h"
@@ -46,6 +47,17 @@ template <typename T> std::span<const std::byte> bytesOf(const T &value) {
   return std::as_bytes(std::span<const T, 1>(&value, 1));
 }
 
+PresentUniform presentUniform(const present::PresentPlan &plan) {
+  PresentUniform uniform{};
+  for (int i = 0; i < 4; i++) {
+    uniform.disp[i] = plan.disp[i];
+    uniform.fade[i] = plan.fade[i];
+    uniform.fmt[i] = plan.fmt[i];
+    uniform.cols[i] = plan.cols[i];
+  }
+  return uniform;
+}
+
 } // namespace
 
 RenderState::RenderState(Game &game, RenderDevice &device)
@@ -66,6 +78,8 @@ RenderState::~RenderState() {
 }
 
 void RenderState::releaseRebuildable() {
+  // The kept picture is the present image, and its source may be a canvas freed below.
+  buildDirectImage();
   if (record_) {
     std::vector<present::FrameRecord> records;
     for (const present::FrameRecord *record : game_.presentation.heldRecords()) {
@@ -200,7 +214,20 @@ void RenderState::buildDisplay(gpu::VramRect display, present::ScanoutWindow win
                 plan.viewport.w,
                 plan.viewport.h);
   if (plan.build) {
-    buildPresentImage(cmd, plan);
+    ensureVramTexture();
+    SDL_GPUTexture *source = presentsRecord_ ? record_->presented().texture : vramTexture_;
+    if (target_ == PresentTarget::Swapchain) {
+      direct_ = DirectPicture{plan, source};
+      const PresentUniform uniform = presentUniform(plan);
+      clip_.recordDrawn(cmd,
+                        device_.presentBoxPipeline(),
+                        {source, device_.nearestSampler()},
+                        bytesOf(uniform),
+                        plan.viewport,
+                        {plan.sink_w, plan.sink_h});
+    } else {
+      buildPresentImage(cmd, plan, source);
+    }
   }
   device_.release(lastPresentFence_);
   lastPresentFence_ = device_.submitFenced(cmd, "present build");
@@ -247,17 +274,19 @@ void RenderState::show() {
   showPresentImage(device_.acquire());
 }
 
-void RenderState::buildPresentImage(SDL_GPUCommandBuffer *cmd, const present::PresentPlan &plan) {
-  ensureVramTexture();
+void RenderState::buildPresentImage(SDL_GPUCommandBuffer *cmd,
+                                    const present::PresentPlan &plan,
+                                    SDL_GPUTexture *source) {
+  direct_.reset();
+  drawPresentImage(cmd, plan, source);
+  clipPresent(cmd);
+}
+
+void RenderState::drawPresentImage(SDL_GPUCommandBuffer *cmd,
+                                   const present::PresentPlan &plan,
+                                   SDL_GPUTexture *source) {
   ensurePresentImage({plan.sink_w, plan.sink_h});
-  PresentUniform uniform{};
-  for (int i = 0; i < 4; i++) {
-    uniform.disp[i] = plan.disp[i];
-    uniform.fade[i] = plan.fade[i];
-    uniform.fmt[i] = plan.fmt[i];
-    uniform.cols[i] = plan.cols[i];
-  }
-  SDL_GPUTexture *source = presentsRecord_ ? record_->presented().texture : vramTexture_;
+  const PresentUniform uniform = presentUniform(plan);
   SDL_GPURenderPass *pass = beginClearedPass(cmd, presentImage_);
   drawFullscreen(cmd,
                  pass,
@@ -267,7 +296,20 @@ void RenderState::buildPresentImage(SDL_GPUCommandBuffer *cmd, const present::Pr
                  plan.viewport,
                  presentImageSize_);
   SDL_EndGPURenderPass(pass);
-  clipPresent(cmd);
+}
+
+void RenderState::buildDirectImage() {
+  if (!direct_) {
+    return;
+  }
+  const DirectPicture picture = *direct_;
+  direct_.reset();
+  if (!device_.enabled() || !device_.up()) {
+    return;
+  }
+  SDL_GPUCommandBuffer *cmd = device_.acquire();
+  drawPresentImage(cmd, picture.plan, picture.source);
+  device_.submit(cmd, "present image");
 }
 
 void RenderState::clipPresent(SDL_GPUCommandBuffer *cmd) {
@@ -284,7 +326,9 @@ void RenderState::showPresentImage(SDL_GPUCommandBuffer *cmd) {
   if (swapchain != nullptr) {
     recordScreen(cmd, swapchain, {static_cast<int>(width), static_cast<int>(height)});
   }
-  device_.submit(cmd, "show");
+  // The present's GPU work ends here now that its picture is drawn at show (dropsInBetween()).
+  device_.release(lastPresentFence_);
+  lastPresentFence_ = device_.submitFenced(cmd, "show");
   // GPU time is charged whether or not the window gave an image: an unmapped window on macOS never does, and
   // agent meter runs are hidden, so returning early here left `gputime` silently empty there.
   if (device_.timingSubmits()) {
@@ -304,8 +348,22 @@ void RenderState::takeHostEvents() {
 }
 
 void RenderState::recordScreen(SDL_GPUCommandBuffer *cmd, SDL_GPUTexture *target, PixelSize size) {
+  // A window resized since the build letterboxes the built image, never stretching the picture.
+  if (direct_ && (direct_->plan.sink_w != size.width || direct_->plan.sink_h != size.height)) {
+    buildDirectImage();
+  }
   SDL_GPURenderPass *pass = beginClearedPass(cmd, target);
-  if (presentImage_ != nullptr) {
+  if (direct_) {
+    // One pass: the picture from its source into the window, as the present image would hold it.
+    const PresentUniform uniform = presentUniform(direct_->plan);
+    drawFullscreen(cmd,
+                   pass,
+                   device_.sinkPresentPipeline(),
+                   {direct_->source, device_.nearestSampler()},
+                   bytesOf(uniform),
+                   direct_->plan.viewport,
+                   size);
+  } else if (presentImage_ != nullptr) {
     // Letterbox, never stretch: a resize can leave the built image a different shape from the window.
     drawFullscreen(cmd,
                    pass,
@@ -335,6 +393,7 @@ void RenderState::repaint() {
 }
 
 void RenderState::buildHostImage(SDL_GPUCommandBuffer *cmd, float fade) {
+  direct_.reset();
   ensurePresentImage(presentImageSize());
   // A pane fills its panel as the guest picture does.
   const present::PictureFit fit = present::fitPicture(4,

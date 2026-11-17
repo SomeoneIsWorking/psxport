@@ -51,7 +51,7 @@ present plan / sink                           viewport, letterbox, window
 | `gpu/record_raster_regions.h` | written-pixel map and VRAM-wrapped rects the batch split reads |
 | `render/record_rasterizer.*` | rasterizes a record in order into the VRAM image and display canvases; `presented()` |
 | `render/record_present.cpp` | `RenderPath::Record`: current record to the present source, `shot`, `recordcheck` |
-| `render/render_state.h`, `render_present.cpp`, `render_screen.cpp` | `RenderState`, one Game's present: the display picture (record image or device VRAM) or a host picture through the present plan into the present image, then to the sink or a pane |
+| `render/render_state.h`, `render_present.cpp`, `render_screen.cpp` | `RenderState`, one Game's present: the display picture (record image or device VRAM) through the present plan straight into the window at show, or a host picture or a pane's picture into the present image, then to the sink or a pane |
 | `render/render_readback.cpp` | what was presented, read back: `shot`, present shot, VRAM regions |
 | `render/render_device.*`, `render_submit.cpp`, `render_window.*` | `RenderDevice`: the SDL3 GPU device, its samplers and pipelines, uploads, downloads, submits and fault latch, the one window and swapchain, the RmlUi library |
 | `present/guest_widescreen_projection.*` | the one widescreen API: title aspect and guest projection widening |
@@ -637,11 +637,18 @@ building after the wait makes a present late by its build (issue 0161). The line
 - **Build** (`DisplayPresenter::build`, `buildInBetween`, `buildHostPicture` → `RenderState::buildDisplay`
   or `buildImage`): the overlay's CPU frame, the record raster (`presentRecord` →
   `RecordRasterizer::show`, whose plan grows with the internal scale), the device VRAM upload or the host
-  picture upload, the letterboxed pass into the present image, and the submit of that command buffer.
-  The composed frame (`FramePresenter::composedRecord`) lives only through the build.
+  picture upload, and the submit of that command buffer. A display present to the window builds no image: it keeps
+  its plan and source (`RenderState::direct_`) for show, and draws only the bug report's 640x360 clip frame from
+  the source (`present.frag`'s `PRESENT_BOX` variant, an average of up to 4x4 samples over the texels each clip pixel covers). A pane, a host
+  picture, or a session presenting to a pane does the letterboxed pass into the present image here. The composed
+  frame (`FramePresenter::composedRecord`) lives only through the build.
 - **Show** (`DisplayPresenter::show` → `RenderState::show`): a command buffer that acquires the swapchain
-  image without waiting (`acquireSink`), draws the screen into it (`recordScreen`: the present image
-  letterboxed, the overlay over it), and submits, which presents. `pshot` draws the same screen into an
+  image without waiting (`acquireSink`), draws the screen into it (`recordScreen`: a display present in one pass
+  from its source, as DuckStation does, else the present image letterboxed; the overlay over it), and submits,
+  which presents; its fence is the present's end (`dropsInBetween`). The present image is built from a pending
+  one-pass picture only when something reads it (`buildDirectImage`): `lastPresented` (a pane host, a held
+  title), `releaseRebuildable` and a state load before they free its source, and a window resized since the
+  build, which then letterboxes it as before. `pshot` draws the same screen into an
   off-screen image at the sink size and reads that back. `GpuPerf::presented` is stamped here. The swapchain is MAILBOX, so
   neither the acquire nor the submit waits for a vblank; a build left in flight on the GPU only delays
   when the shown image is scanned out, not the call.

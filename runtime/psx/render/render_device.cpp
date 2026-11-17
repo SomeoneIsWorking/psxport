@@ -21,6 +21,8 @@ namespace {
 
 constexpr ShaderCode kFullscreenVertex{spv_g_fullscreen_vert, spv_g_fullscreen_vert_len, {0, 0, 0}, PSXPORT_MSL(fullscreen_vert)};
 constexpr ShaderCode kPresentFragment{spv_g_present_frag, spv_g_present_frag_len, {1, 1, 0}, PSXPORT_MSL(present_frag)};
+constexpr ShaderCode kPresentBoxFragment{
+    spv_g_present_box_frag, spv_g_present_box_frag_len, {1, 1, 0}, PSXPORT_MSL(present_box_frag)};
 constexpr ShaderCode kImageFragment{spv_g_image_frag, spv_g_image_frag_len, {1, 1, 0}, PSXPORT_MSL(image_frag)};
 constexpr ShaderCode kPaneVertex{spv_g_pane_vert, spv_g_pane_vert_len, {0, 1, 0}, PSXPORT_MSL(pane_vert)};
 constexpr ShaderCode kPaneFragment{spv_g_pane_frag, spv_g_pane_frag_len, {1, 1, 0}, PSXPORT_MSL(pane_frag)};
@@ -52,6 +54,8 @@ RenderDevice::~RenderDevice() {
     release(presentPipeline_);
     release(imagePipeline_);
     release(sinkPipeline_);
+    release(sinkPresentPipeline_);
+    release(presentBoxPipeline_);
     release(panePipeline_);
     release(whiteTexture_);
     SDL_ReleaseGPUSampler(device_, nearest_);
@@ -163,6 +167,8 @@ void RenderDevice::bringUp() {
   presentPipeline_ = makePipeline(kFullscreenVertex, kPresentFragment, kPresentImageFormat);
   imagePipeline_ = makePipeline(kFullscreenVertex, kImageFragment, kPresentImageFormat);
   sinkPipeline_ = makePipeline(kFullscreenVertex, kImageFragment, sinkFormat());
+  sinkPresentPipeline_ = makePipeline(kFullscreenVertex, kPresentFragment, sinkFormat());
+  presentBoxPipeline_ = makePipeline(kFullscreenVertex, kPresentBoxFragment, kPresentImageFormat);
   SDL_GPUColorTargetBlendState over = {};
   over.enable_blend = true;
   over.src_color_blendfactor = SDL_GPU_BLENDFACTOR_SRC_ALPHA;

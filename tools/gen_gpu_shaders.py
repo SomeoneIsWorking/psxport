@@ -38,6 +38,7 @@ class Shader(NamedTuple):
 SHADERS = (
     Shader("fullscreen.vert", "spv_g_fullscreen_vert"),
     Shader("present.frag", "spv_g_present_frag"),
+    Shader("present.frag", "spv_g_present_box_frag", ("PRESENT_BOX",)),
     Shader("image.frag", "spv_g_image_frag"),
     Shader("rml.vert", "spv_g_rml_vert"),
     Shader("rml.frag", "spv_g_rml_frag"),

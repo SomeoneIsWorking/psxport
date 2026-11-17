@@ -23,10 +23,7 @@ PresentClip::~PresentClip() {
   }
 }
 
-void PresentClip::record(SDL_GPUCommandBuffer *cmd, SDL_GPUTexture *image, PixelSize size) {
-  if (!enabled_ || image == nullptr || size.width <= 0 || size.height <= 0) {
-    return;
-  }
+bool PresentClip::ensureFrames() {
   if (frames_ == nullptr) {
     SDL_GPUTextureCreateInfo info = {};
     info.type = SDL_GPU_TEXTURETYPE_2D_ARRAY;
@@ -39,8 +36,21 @@ void PresentClip::record(SDL_GPUCommandBuffer *cmd, SDL_GPUTexture *image, Pixel
     frames_ = SDL_CreateGPUTexture(device_.handle(), &info);
     if (frames_ == nullptr) {
       lucent::error("present_clip", "no {}-frame clip texture: {}", kFrames, SDL_GetError());
-      return;
+      return false;
     }
+  }
+  return true;
+}
+
+void PresentClip::advance() {
+  times_[next_] = std::chrono::steady_clock::now();
+  next_ = (next_ + 1) % kFrames;
+  held_ = std::min(held_ + 1, kFrames);
+}
+
+void PresentClip::record(SDL_GPUCommandBuffer *cmd, SDL_GPUTexture *image, PixelSize size) {
+  if (!enabled_ || image == nullptr || size.width <= 0 || size.height <= 0 || !ensureFrames()) {
+    return;
   }
   const present::PaneRect fit = present::letterbox(size.width, size.height, kSize.width, kSize.height);
   SDL_GPUBlitInfo blit = {};
@@ -56,9 +66,43 @@ void PresentClip::record(SDL_GPUCommandBuffer *cmd, SDL_GPUTexture *image, Pixel
   blit.load_op = SDL_GPU_LOADOP_CLEAR;
   blit.filter = SDL_GPU_FILTER_LINEAR;
   SDL_BlitGPUTexture(cmd, &blit);
-  times_[next_] = std::chrono::steady_clock::now();
-  next_ = (next_ + 1) % kFrames;
-  held_ = std::min(held_ + 1, kFrames);
+  advance();
+}
+
+void PresentClip::recordDrawn(SDL_GPUCommandBuffer *cmd,
+                              SDL_GPUGraphicsPipeline *pipeline,
+                              SDL_GPUTextureSamplerBinding source,
+                              std::span<const std::byte> uniform,
+                              present::PaneRect viewport,
+                              PixelSize size) {
+  if (!enabled_ || source.texture == nullptr || size.width <= 0 || size.height <= 0 || !ensureFrames()) {
+    return;
+  }
+  const present::PaneRect fit = present::letterbox(size.width, size.height, kSize.width, kSize.height);
+  const float sx = static_cast<float>(fit.w) / static_cast<float>(size.width);
+  const float sy = static_cast<float>(fit.h) / static_cast<float>(size.height);
+  SDL_GPUColorTargetInfo colour = {};
+  colour.texture = frames_;
+  colour.layer_or_depth_plane = static_cast<Uint32>(next_);
+  colour.clear_color = SDL_FColor{0, 0, 0, 1};
+  colour.load_op = SDL_GPU_LOADOP_CLEAR;
+  colour.store_op = SDL_GPU_STOREOP_STORE;
+  SDL_GPURenderPass *pass = SDL_BeginGPURenderPass(cmd, &colour, 1, nullptr);
+  const SDL_GPUViewport area = {static_cast<float>(fit.x) + static_cast<float>(viewport.x) * sx,
+                                static_cast<float>(fit.y) + static_cast<float>(viewport.y) * sy,
+                                static_cast<float>(viewport.w) * sx,
+                                static_cast<float>(viewport.h) * sy,
+                                0.0f,
+                                1.0f};
+  const SDL_Rect scissor = {0, 0, kSize.width, kSize.height};
+  SDL_PushGPUFragmentUniformData(cmd, 0, uniform.data(), static_cast<Uint32>(uniform.size()));
+  SDL_BindGPUGraphicsPipeline(pass, pipeline);
+  SDL_SetGPUViewport(pass, &area);
+  SDL_SetGPUScissor(pass, &scissor);
+  SDL_BindGPUFragmentSamplers(pass, 0, &source, 1);
+  SDL_DrawGPUPrimitives(pass, 3, 1, 0, 0);
+  SDL_EndGPURenderPass(pass);
+  advance();
 }
 
 bool PresentClip::write(const char *path) {

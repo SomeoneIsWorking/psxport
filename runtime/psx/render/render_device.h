@@ -122,6 +122,14 @@ public:
   SDL_GPUGraphicsPipeline *sinkPipeline() const {
     return sinkPipeline_;
   }
+  // presentPipeline() into the window's format: the picture drawn straight to the window in one pass.
+  SDL_GPUGraphicsPipeline *sinkPresentPipeline() const {
+    return sinkPresentPipeline_;
+  }
+  // presentPipeline() averaging samples over the texels each pixel covers: a picture drawn downscaled (the clip).
+  SDL_GPUGraphicsPipeline *presentBoxPipeline() const {
+    return presentBoxPipeline_;
+  }
   // A seam-cut, tinted rectangle into the present image (render_pane.h), blended over what is there.
   SDL_GPUGraphicsPipeline *panePipeline() const {
     return panePipeline_;
@@ -228,6 +236,8 @@ private:
   SDL_GPUGraphicsPipeline *presentPipeline_ = nullptr;
   SDL_GPUGraphicsPipeline *imagePipeline_ = nullptr;
   SDL_GPUGraphicsPipeline *sinkPipeline_ = nullptr;
+  SDL_GPUGraphicsPipeline *sinkPresentPipeline_ = nullptr;
+  SDL_GPUGraphicsPipeline *presentBoxPipeline_ = nullptr;
   SDL_GPUGraphicsPipeline *panePipeline_ = nullptr;
   SDL_GPUTexture *whiteTexture_ = nullptr;
   std::unique_ptr<ui::RmlUiLibrary> rmlUi_;

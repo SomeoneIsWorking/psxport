@@ -3,12 +3,15 @@
 // blit. Off (PSXPORT_BUG_REPORT_CLIP=0) it holds nothing and costs nothing.
 #pragma once
 #include "pixel_size.h"
+#include "viewport_layout.h"
 
 #include <SDL3/SDL_gpu.h>
 
 #include <array>
 #include <chrono>
+#include <cstddef>
 #include <cstdint>
+#include <span>
 
 namespace psx::render {
 
@@ -28,10 +31,22 @@ public:
 
   // `image` (`size`) as the newest frame, letterboxed into the clip; recorded into `cmd`.
   void record(SDL_GPUCommandBuffer *cmd, SDL_GPUTexture *image, PixelSize size);
+  // A picture never built into an image as the newest frame: `pipeline` draws `source` with `uniform` where it sits
+  // (`viewport`) in a `size` picture, letterboxed into the clip on opaque black.
+  void recordDrawn(SDL_GPUCommandBuffer *cmd,
+                   SDL_GPUGraphicsPipeline *pipeline,
+                   SDL_GPUTextureSamplerBinding source,
+                   std::span<const std::byte> uniform,
+                   present::PaneRect viewport,
+                   PixelSize size);
   // The held frames oldest first as an animated PNG at `path`; false when none are held or the write failed.
   bool write(const char *path);
 
 private:
+  // The frame array, made at the first frame; false when it could not be.
+  bool ensureFrames();
+  void advance();
+
   RenderDevice &device_;
   bool enabled_ = false;
   SDL_GPUTexture *frames_ = nullptr; // a 2D array, one layer per frame

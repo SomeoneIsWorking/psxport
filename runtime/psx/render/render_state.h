@@ -50,8 +50,10 @@ public:
   // The device and this Game's overlay, brought up on first use.
   void bringUp();
 
-  // A present is built, then shown. Building rasterizes the picture into the present image and submits
-  // it; showing only acquires the swapchain image, blits the present image and presents it.
+  // A present is built, then shown. A display present to the window is drawn straight into the swapchain image at
+  // show, in one pass from its source (the record image or device VRAM); the present image is built from it only
+  // when something reads that image (lastPresented, releaseRebuildable, a window resized since the build). Panes and
+  // host pictures are built into the present image, which show() letterboxes into the window.
   // `display` is the guest display rect in VRAM at its native width.
   void buildDisplay(gpu::VramRect display, present::ScanoutWindow window);
   // A host RGBA8 picture (movie frame, splash) letterboxed 4:3 and faded by `fade`.
@@ -100,7 +102,9 @@ public:
     paneHost_ = std::move(host);
   }
 
-  PresentedImage lastPresented() const {
+  // The last picture as an image, built now when it went straight to the window.
+  PresentedImage lastPresented() {
+    buildDirectImage();
     return {presentImage_, presentImageSize_.width, presentImageSize_.height, viewport_};
   }
   // Counts presents built; a pane host compares it across a step.
@@ -121,7 +125,10 @@ private:
   void presentRecord(present::PresentInputs &inputs);
   void checkRecord(const present::FrameRecord &record, bool drewComposed, bool deviceAhead, int scale);
   bool recordShot(const char *path);
-  void buildPresentImage(SDL_GPUCommandBuffer *cmd, const present::PresentPlan &plan);
+  void buildPresentImage(SDL_GPUCommandBuffer *cmd, const present::PresentPlan &plan, SDL_GPUTexture *source);
+  void drawPresentImage(SDL_GPUCommandBuffer *cmd, const present::PresentPlan &plan, SDL_GPUTexture *source);
+  // The pending direct picture into the present image, in its own submit; nothing when none is pending.
+  void buildDirectImage();
   // Counts the present and hands it to the pane host, or marks it for show().
   void finishBuild(bool built);
   void buildHostImage(SDL_GPUCommandBuffer *cmd, float fade);
@@ -148,6 +155,12 @@ private:
   SDL_GPUTexture *presentImage_ = nullptr;
   PixelSize presentImageSize_;
   present::PaneRect viewport_{0, 0, 0, 0}; // where the picture sits in that image
+  // The last display present to the window, not built into the present image: show() draws it from its source.
+  struct DirectPicture {
+    present::PresentPlan plan;
+    SDL_GPUTexture *source = nullptr;
+  };
+  std::optional<DirectPicture> direct_;
   SinkIdleState sink_;
   // The window's contents off-screen, for a present shot.
   SDL_GPUTexture *screenImage_ = nullptr;

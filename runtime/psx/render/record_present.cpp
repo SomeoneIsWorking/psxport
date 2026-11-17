@@ -45,6 +45,8 @@ void RenderState::latchRestoredDisplay() {
 
 void RenderState::restoreRecords(std::vector<CanvasWindows> canvases, std::vector<present::FrameRecord> records) {
   if (record_) {
+    // A picture still drawn from a canvas is kept as an image before the canvas is replaced.
+    buildDirectImage();
     record_->restore(std::move(canvases), std::move(records));
     return;
   }

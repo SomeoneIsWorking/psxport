@@ -40,7 +40,7 @@ void writePresentShot(
 }
 
 void RenderState::presentShot(const char *path) {
-  if (!device_.enabled() || !device_.up() || presentImage_ == nullptr) {
+  if (!device_.enabled() || !device_.up() || (presentImage_ == nullptr && !direct_)) {
     lucent::warn("present_shot", "no present image yet, nothing captured for {}", path);
     return;
   }
