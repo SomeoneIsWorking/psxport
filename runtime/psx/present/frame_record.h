@@ -337,4 +337,19 @@ private:
   bool validate(std::string &error);
 };
 
+// Vertices one site placed on one word draw at one place, as the GPU's whole pixels draw them (presentation.md).
+class PlaceWeld {
+public:
+  // Each polygon vertex of a primitive one site placed takes the mean place of every such vertex with its site, model
+  // and word in `record`.
+  void weld(FrameRecord &record);
+
+private:
+  struct Member {
+    std::uint32_t site = 0;
+    RecordVertex *vertex = nullptr;
+  };
+  std::vector<Member> members_;
+};
+
 } // namespace psx::present

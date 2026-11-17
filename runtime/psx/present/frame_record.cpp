@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <bit>
+#include <tuple>
 #include <utility>
 
 namespace psx::present {
@@ -650,6 +651,42 @@ bool FrameRecord::validate(std::string &error) {
     return false;
   }
   return true;
+}
+
+void PlaceWeld::weld(FrameRecord &record) {
+  members_.clear();
+  for (RecordEntry &entry : record.entries()) {
+    auto *primitive = std::get_if<DrawPrimitive>(&entry);
+    if (primitive == nullptr || primitive->kind != PrimitiveKind::Polygon || primitive->site == 0) {
+      continue;
+    }
+    for (int v = 0; v < primitive->vertexCount; v++) {
+      members_.push_back({.site = primitive->site, .vertex = &primitive->vertices[static_cast<std::size_t>(v)]});
+    }
+  }
+  const auto key = [](const Member &member) {
+    return std::tuple(member.site, member.vertex->model, member.vertex->x, member.vertex->y);
+  };
+  std::ranges::sort(members_, {}, key);
+  for (auto first = members_.begin(); first != members_.end();) {
+    const auto last = std::find_if(first, members_.end(), [&](const Member &member) {
+      return key(member) != key(*first);
+    });
+    if (last - first > 1) {
+      double subX = 0.0;
+      double subY = 0.0;
+      for (auto at = first; at != last; ++at) {
+        subX += at->vertex->subX;
+        subY += at->vertex->subY;
+      }
+      const auto count = static_cast<double>(last - first);
+      for (auto at = first; at != last; ++at) {
+        at->vertex->subX = static_cast<float>(subX / count);
+        at->vertex->subY = static_cast<float>(subY / count);
+      }
+    }
+    first = last;
+  }
 }
 
 } // namespace psx::present

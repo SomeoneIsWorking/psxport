@@ -138,6 +138,7 @@ private:
 
   std::uint64_t nextSequence_ = 1; // 0 is the presenter's empty record
   present::FrameRecord record_;
+  present::PlaceWeld weld_;
   bool synced_ = true;
 
   Mode mode_ = Mode::Command;

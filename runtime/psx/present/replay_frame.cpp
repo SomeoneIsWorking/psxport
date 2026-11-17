@@ -251,6 +251,7 @@ const FrameRecord *ReplayFrame::assemble(const FrameRecord &shown,
   });
   FrameRecord &assembled = assembled_[static_cast<std::size_t>(k - 1)];
   assembled.splice(shown, splices_);
+  weld_.weld(assembled);
   assembled.setWindows(capture.windows);
   cluts_.index(shown, between);
   for (const ChainSplice &splice : splices_) {

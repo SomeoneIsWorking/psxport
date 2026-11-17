@@ -267,8 +267,13 @@ the `motion` debug channel counts each track's paired records.
   record tap (`Gp0RecordTap`) gives a real present's polygons, lines, poly-line points and sprites their places
   from the same words through the same decode, so a replay at `t = 1` draws the real present exactly.
   No place is matched by value. Every replay stores places the same way, so a real present and its
-  in-betweens agree and a still object does not shift; a vertex shared by two primitives is one stored word, so
-  no seam opens. Above native scale the rasterizer draws a vertex at `whole * scale + floor(offset * scale)`; a
+  in-betweens agree and a still object does not shift. A mesh can hold distinct vertices that close a gap only by
+  rounding to one pixel (Crash 1's SVTX models, Spyro's part joins: two vertices half a pixel apart, both on one
+  word); their own places open that gap above native scale. So once a record is sealed (`Gp0RecordTap::seal`) or
+  assembled (`ReplayFrame`), `PlaceWeld` (`frame_record.*`) gives every polygon vertex of a primitive one site
+  placed the mean place of all such vertices with its site, model and word, as the GPU's whole pixels draw them
+  together. Vertices that round apart keep their own places, so a crack the console shows for a frame still shows,
+  narrower. Above native scale the rasterizer draws a vertex at `whole * scale + floor(offset * scale)`; a
   line's pixels take the offset interpolated along it. At native scale every vertex keeps the guest's pixel. A
   sprite (GP0 0x60-0x7F) takes its origin's place the same way: above native scale its quad and the texel lookup
   move by `floor(offset * scale)` together, so the image slides without resampling (`addSprite`, `record.frag`).

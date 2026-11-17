@@ -207,6 +207,7 @@ void Gp0RecordTap::resume(TapResume &&resume) {
 
 void Gp0RecordTap::seal(present::FrameRecord &into) {
   std::swap(into, record_);
+  weld_.weld(into);
   if (mode_ == Mode::Upload && !uploadPixels_.empty()) {
     into.markIncomplete();
   }

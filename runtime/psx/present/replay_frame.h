@@ -154,6 +154,7 @@ private:
   RecordCluts cluts_;
   std::vector<RecordEntry> decoded_;
   std::vector<ChainSplice> splices_;
+  PlaceWeld weld_;
   // Where each of splices_' chains starts in decoded_.
   std::vector<std::size_t> decodedFirst_;
   // Intervals.
