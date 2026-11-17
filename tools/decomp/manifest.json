@@ -52,11 +52,11 @@
       "kind": "module",
       "title": "c12",
       "serial": "SCUS_946.66",
-      "sha1": "4f1387058ccd3d36b1893059eba8feceab97c28f",
+      "sha1": "911ee25ead13e95440709a4a812fbb460327c9d6",
       "load_base": "0x8011F9BC",
       "code_first": "0x74",
       "code_last": "0x3FFF",
-      "note": "RELOCS/GT.LVB, 16,384 B as the guest actually runs it: the title's FUN_80059108 opens RELOCS_GT_LVB, allocates in the guest's own arena (InitHeap base 0x80105E40, stack base 0x801FFFF0) and relocates it with FUN_800615F4, so these are POST-relocation bytes taken from a `dumpram` of the authenticated image at the stall, not the file as it sits on disc. 16 KiB covers 0x8011F9BC..0x801239BC, measured as 8 sectors DMA3 plus the module's own data; the entry is blob+0xA8 = 0x8011FA64 (word 0x27BDFFC8, `addiu $sp,$sp,-0x38`, a non-leaf entry). code_first 0x74 is this blob's first entry prologue and code_last prologue 0x2320 is where the code stops; code_last is the blob's LAST BYTE. The relocation is deterministic, so the sha1 identifies these bytes."
+      "note": "RELOCS/GT.LVB, 16,384 B as the guest actually runs it: the title's FUN_80059108 opens RELOCS_GT_LVB, allocates in the guest's own arena (InitHeap base 0x80105E40, stack base 0x801FFFF0) and relocates it with FUN_800615F4, so these are POST-relocation bytes taken from a `dumpram` of the authenticated image on the boot's publisher card (step 350), not the file as it sits on disc; only data from 0x35CC on changes between screens. 16 KiB covers 0x8011F9BC..0x801239BC, measured as 8 sectors DMA3 plus the module's own data; the entry is blob+0xA8 = 0x8011FA64 (word 0x27BDFFC8, `addiu $sp,$sp,-0x38`, a non-leaf entry). code_first 0x74 is this blob's first entry prologue and code_last prologue 0x2320 is where the code stops; code_last is the blob's LAST BYTE. The relocation is deterministic, so the sha1 identifies these bytes."
     },
     "crash1": {
       "kind": "resident",
