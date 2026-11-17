@@ -9,7 +9,7 @@
 #ifdef RECORD_DEPTH_MARK
 #define RECORD_DEPTH_BACK
 #endif
-// A draw that leaves its depth moved back by the plane's kDepthBin (RecordRasterizer::drawQuads).
+// A draw that leaves its depth moved back by the plane's kDepthBin (RecordRasterizer::drawShapes).
 #ifdef RECORD_DEPTH_BACK
 #define RECORD_DEPTH
 #endif

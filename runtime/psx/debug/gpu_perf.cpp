@@ -30,13 +30,14 @@ struct GpuCount {
   double scale;
   const char *unit;
 };
-constexpr std::array<GpuCount, 8> kGpuCountNames{{
+constexpr std::array<GpuCount, 9> kGpuCountNames{{
     {"draws", &GpuWork::draws, 1.0, "draws"},
     {"pipeline binds", &GpuWork::pipelineBinds, 1.0, "binds"},
     {"render passes", &GpuWork::renderPasses, 1.0, "passes"},
     {"texture copies", &GpuWork::textureCopies, 1.0, "copies"},
     {"triangles", &GpuWork::triangles, 1e-3, "ktri"},
     {"pixels", &GpuWork::pixels, 1e-6, "Mpx"},
+    {"shaded pixels", &GpuWork::shadedPixels, 1e-6, "Mpx"},
     {"copy pixels", &GpuWork::copyPixels, 1e-6, "Mpx"},
     {"upload", &GpuWork::uploadBytes, 1.0 / 1024.0, "KiB"},
 }};
@@ -171,14 +172,15 @@ void GpuPerf::presentWork(const psx::render::GpuWork &work) {
     mGpuWork[count].add(work.*kGpuCountNames[count].field);
   }
   lucent::debug(mFrameChannel,
-                "present gpu: draws={} binds={} passes={} copies={} triangles={} pixels={} copy-pixels={} "
-                "upload-bytes={}",
+                "present gpu: draws={} binds={} passes={} copies={} triangles={} pixels={} shaded-pixels={} "
+                "copy-pixels={} upload-bytes={}",
                 work.draws,
                 work.pipelineBinds,
                 work.renderPasses,
                 work.textureCopies,
                 work.triangles,
                 work.pixels,
+                work.shadedPixels,
                 work.copyPixels,
                 work.uploadBytes);
 }

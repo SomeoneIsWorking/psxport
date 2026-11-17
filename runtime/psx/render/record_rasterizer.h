@@ -58,25 +58,11 @@ public:
   RecordRasterizer(const RecordRasterizer &) = delete;
   RecordRasterizer &operator=(const RecordRasterizer &) = delete;
 
-  // Brings the image to the end of `record` and shows `view`. `vram` is the device's VRAM, used when
-  // `record` does not continue the image; `deviceAhead` says it already holds work after `record`.
-  void update(SDL_GPUCommandBuffer *cmd,
-              const present::FrameRecord &record,
-              bool deviceAhead,
-              std::span<const std::uint16_t> vram,
-              int scale,
-              const RecordView &view);
-
-  // Rasterizes `record` onto copies of the VRAM state before it and shows `view` of them, leaving the
-  // chain untouched. That state is the image when `record` follows the last applied record, or the
-  // kept state before the last applied record with entries when `record` is that one. False, with
-  // nothing drawn, when neither holds or `view` has no canvas yet.
-  bool drawInBetween(SDL_GPUCommandBuffer *cmd, const present::FrameRecord &record, int scale, const RecordView &view);
-
-  // One present: `composed` when given and drawable, then with `advanceToRecord` the image is brought to
+  // One present into `cmd`: `composed` when given and drawable, then with `advanceToRecord` the image is brought to
   // `record` without showing it; else `record` through update(). True when `composed` was drawn. The polygons
-  // `depthTest` tests order by depth among themselves; with none, everything draws in slot order.
-  bool show(SDL_GPUCommandBuffer *cmd,
+  // `depthTest` tests order by depth among themselves; with none, everything draws in slot order. Under `gputime` the
+  // work is submitted stage by stage (stage()), and `cmd` comes back as the buffer the caller submits last.
+  bool show(SDL_GPUCommandBuffer *&cmd,
             const present::FrameRecord &record,
             const present::FrameRecord *composed,
             bool advanceToRecord,
@@ -132,6 +118,24 @@ public:
   }
 
 private:
+  // Brings the image to the end of `record` and shows `view`. `vram` is the device's VRAM, used when
+  // `record` does not continue the image; `deviceAhead` says it already holds work after `record`.
+  void update(const present::FrameRecord &record,
+              bool deviceAhead,
+              std::span<const std::uint16_t> vram,
+              int scale,
+              const RecordView &view);
+
+  // Rasterizes `record` onto copies of the VRAM state before it and shows `view` of them, leaving the
+  // chain untouched. That state is the image when `record` follows the last applied record, or the
+  // kept state before the last applied record with entries when `record` is that one. False, with
+  // nothing drawn, when neither holds or `view` has no canvas yet.
+  bool drawInBetween(const present::FrameRecord &record, int scale, const RecordView &view);
+
+  // Under `gputime`, the work recorded since the last stage is submitted and timed as `label`, and a new buffer
+  // continues; otherwise nothing. Labels are static strings (RenderDevice::kSubmitLabels).
+  void stage(const char *label);
+
   struct Buffer {
     SDL_GPUBuffer *buffer = nullptr;
     std::uint32_t size = 0;
@@ -160,24 +164,21 @@ private:
 
   void ensureImage(int scale);
   // Applies `record` on top of the image, or uploads the device VRAM when it does not follow.
-  void advance(SDL_GPUCommandBuffer *cmd,
-               const present::FrameRecord &record,
-               bool deviceAhead,
-               std::span<const std::uint16_t> vram);
+  void advance(const present::FrameRecord &record, bool deviceAhead, std::span<const std::uint16_t> vram);
   Plane makePlane(const gpu::RecordCanvas &shape, int scale);
   void releasePlane(Plane &plane);
   // Keeps a canvas for `view`'s display, created from the image with empty margins and `windows`.
-  void showCanvas(SDL_GPUCommandBuffer *cmd, const RecordView &view, const present::RecordWindows &windows);
+  void showCanvas(const RecordView &view, const present::RecordWindows &windows);
   // The buffer's columns from the image; a new canvas is cleared first, a kept one keeps its margins.
-  void seedCanvas(SDL_GPUCommandBuffer *cmd, Canvas &canvas, bool fresh);
+  void seedCanvas(Canvas &canvas, bool fresh);
   // A new canvas of `shape` and `windows`, seeded from the image; the least recently shown goes when all are taken.
-  Canvas &addCanvas(SDL_GPUCommandBuffer *cmd, const gpu::RecordCanvas &shape, const present::RecordWindows &windows);
+  Canvas &addCanvas(const gpu::RecordCanvas &shape, const present::RecordWindows &windows);
   // `record` rasterized on top of the image and canvases, the state before it kept.
-  void apply(SDL_GPUCommandBuffer *cmd, const present::FrameRecord &record);
+  void apply(const present::FrameRecord &record);
   // The restore(): the device's VRAM, the carried canvases and the carried records drawn again.
-  void redrawRestored(SDL_GPUCommandBuffer *cmd, std::span<const std::uint16_t> vram, const RecordView &view);
+  void redrawRestored(std::span<const std::uint16_t> vram, const RecordView &view);
   // A new crop canvas: its band copied from the image at the canvas's scale.
-  void seedCrop(SDL_GPUCommandBuffer *cmd, Canvas &canvas);
+  void seedCrop(Canvas &canvas);
   // The canvas `view` shows at this image scale.
   gpu::RecordCanvas viewShape(const RecordView &view) const;
   Canvas *canvasFor(const RecordView &view);
@@ -191,8 +192,8 @@ private:
   // Shows the canvas's windows, or `windows` for an in-between that drew the canvas.
   void present(const RecordView &view, bool inBetween, const present::RecordWindows *windows);
   // Replaces the presented picture by the field `record` drew, when it draws one field per frame.
-  void selectField(SDL_GPUCommandBuffer *cmd, const present::FrameRecord &record);
-  void execute(SDL_GPUCommandBuffer *cmd, const gpu::RecordRasterPlan &plan, bool inBetween);
+  void selectField(const present::FrameRecord &record);
+  void execute(const gpu::RecordRasterPlan &plan, bool inBetween);
   // Shapes [first, end) of a pass, each run of depth-tested shapes through its depth pipelines.
   void drawShapes(SDL_GPURenderPass *pass,
                   const gpu::RecordRasterPlan &plan,
@@ -200,7 +201,7 @@ private:
                   std::uint32_t firstVertexShape,
                   bool depthTarget);
   // Copies the capture's canvas pixels into capture_, sized to them.
-  void capture(SDL_GPUCommandBuffer *cmd, const gpu::RecordCapture &capture);
+  void capture(const gpu::RecordCapture &capture);
   // `source` of `from` to (`toX`, `toY`) of `to`, both in native pixels of textures at `scale`.
   struct TextureCopy {
     SDL_GPUTexture *from = nullptr;
@@ -210,7 +211,7 @@ private:
     int toY = 0;
     int scale = 1;
   };
-  void copyTexture(SDL_GPUCommandBuffer *cmd, const TextureCopy &copy);
+  void copyTexture(const TextureCopy &copy);
   void ensureBuffer(Buffer &buffer, std::uint32_t bytes);
   void ensureTransfer(SDL_GPUTransferBuffer *&transfer,
                       std::uint32_t &size,
@@ -219,6 +220,7 @@ private:
   void releaseImage();
 
   RenderDevice &device_;
+  SDL_GPUCommandBuffer *cmd_ = nullptr; // the buffer show() records into
   // One draw path's pipelines: without a depth target, everything in record order; with one, slot order (no test,
   // no write), a depth group's test (colour where it passes, marked in stencil) and the group's depth written where
   // marked, moved back by its bin, an object over the scene writing its depth, and a Model's four.

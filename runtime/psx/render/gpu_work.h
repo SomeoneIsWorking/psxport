@@ -12,7 +12,9 @@ struct GpuWork {
   std::uint64_t renderPasses = 0;
   std::uint64_t textureCopies = 0;
   std::uint64_t triangles = 0;
-  std::uint64_t pixels = 0;     // covered by the draws' quads at the internal resolution, once per draw
+  std::uint64_t pixels = 0; // covered by the draws' shapes at the internal resolution, once per draw
+  // The same through the full texel, blend and mask shader: every draw but a depth or Model mark.
+  std::uint64_t shadedPixels = 0;
   std::uint64_t copyPixels = 0; // texture copies at the internal resolution
   std::uint64_t uploadBytes = 0;
 };
