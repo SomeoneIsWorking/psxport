@@ -4,6 +4,7 @@
 //   * the SDL event queue drain — every pump site goes through the same function;
 //   * the delivered host key state, one bit per SDL scancode;
 //   * the SDL gamepads: open, hotswap, close, and their contribution to the button mask;
+//   * the on-screen touch pad (TouchPad): it sees every event first, and its held buttons go to port 1;
 //   * the button glyphs of the device last pressed (GlyphSet);
 //   * which overlay takes the events: the one of the Game holding the player's input;
 //   * whether the GAME or the overlay currently owns the keyboard;
@@ -21,6 +22,7 @@
 #include "pad_delivery.h"
 
 #include <cstdint>
+#include <memory>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -55,6 +57,7 @@ inline constexpr std::uint16_t kButtonDirections = kButtonUp | kButtonRight | kB
 std::uint16_t buttonNamed(std::string_view name);
 
 class QuitScope;
+class TouchPad;
 
 // A host controller's right stick, raw SDL axis values (-32768..32767, +x right, +y down); zero is centred.
 // The PSX digital pad has no such stick: it is host input for title features, never delivered to the guest.
@@ -116,6 +119,12 @@ public:
   InputInjection &injection() {
     return mInjection;
   }
+#ifdef PSXPORT_SDL
+  // The on-screen pad, which the present draws over the window.
+  TouchPad &touchPad() {
+    return *mTouchPad;
+  }
+#endif
   // The prompts' glyphs, of the keyboard or gamepad the player last pressed.
   const GlyphSet &glyphs() const {
     return mGlyphs;
@@ -173,6 +182,8 @@ private:
   // types; every scancode that arrives is bounds-checked against it.
   static constexpr int kHostKeyStates = 512;
   bool mKeyDown[kHostKeyStates] = {};
+
+  std::unique_ptr<TouchPad> mTouchPad;
 
   // Up to kMaxGamepads simultaneously open controllers, hotswap-aware.
   static constexpr int kMaxGamepads = 4;

@@ -12,7 +12,7 @@ GITHUB_ROOT = "https://github.com/SomeoneIsWorking"
 REMOTE_BACKED = ("psx-spyro", "psx-spider-man", "psx-tomba", "psx-vagrant-story", "psx-mega-man-x4", "psx-crash", "psx-crash-team-racing", "psx-crash-bash", "psx-tekken-3", "psx-toy-story-2", "psx-c12")
 LOCAL_ONLY: tuple[str, ...] = ()
 # Libraries cmake/shared_dependency.cmake builds from a `shared/<repo>` sibling, ahead of the vendored copy.
-SHARED_LIVE = ("bug-report", "setup-ui")
+SHARED_LIVE = ("bug-report", "setup-ui", "touch-ui", "port-assets")
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "tools"))
 from psxport_fetch import init_submodules, submodules  # noqa: E402

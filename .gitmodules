@@ -19,3 +19,9 @@
 [submodule "vendor/msdfgen"]
 	path = vendor/msdfgen
 	url = https://github.com/Chlumsky/msdfgen.git
+[submodule "vendor/touch-ui"]
+	path = vendor/touch-ui
+	url = https://github.com/SomeoneIsWorking/touch-ui.git
+[submodule "vendor/port-assets"]
+	path = vendor/port-assets
+	url = https://github.com/SomeoneIsWorking/port-assets.git

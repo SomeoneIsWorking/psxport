@@ -63,6 +63,7 @@ Var<std::string> cv_owners_dir("PSXPORT_OWNERS_DIR", "scratch/owners", kRunOnly)
 Var<std::string> cv_card("PSXPORT_CARD", "", kRunOnly);
 Var<bool> cv_bug_report_clip("PSXPORT_BUG_REPORT_CLIP", true, kSaved);
 Var<bool> cv_fullscreen("fullscreen", false, {lucent::cvar::Persistence::Saved, "PSXPORT_FULLSCREEN"});
+Var<bool> cv_touch_controls("touch_controls", true, {lucent::cvar::Persistence::Saved, "PSXPORT_TOUCH_CONTROLS"});
 Var<std::string> cv_picker_titles("PSXPORT_PICKER_TITLES", "", kRunOnly);
 Var<bool> cv_nopace("PSXPORT_NOPACE", false, kRunOnly);
 Var<bool> cv_repl("PSXPORT_REPL", false, kRunOnly);
@@ -99,6 +100,7 @@ const Registration kRegistration{
     cv_card,
     cv_bug_report_clip,
     cv_fullscreen,
+    cv_touch_controls,
     cv_picker_titles,
     cv_nopace,
     cv_repl,
@@ -290,6 +292,16 @@ void setFullscreen(bool on) {
   // The player's choice outranks this run's PSXPORT_FULLSCREEN from here on.
   cv_fullscreen.clear(Layer::Override);
   cv_fullscreen.set(on, Layer::Value);
+  save_settings();
+}
+
+bool touch_controls() {
+  return cv_touch_controls.get();
+}
+
+void setTouchControls(bool on) {
+  cv_touch_controls.clear(Layer::Override);
+  cv_touch_controls.set(on, Layer::Value);
   save_settings();
 }
 

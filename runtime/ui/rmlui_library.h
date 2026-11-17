@@ -19,6 +19,8 @@ class RenderDevice;
 
 namespace psx::ui {
 
+class TouchPainter;
+
 class RmlUiLibrary {
 public:
   explicit RmlUiLibrary(render::RenderDevice &device);
@@ -31,6 +33,10 @@ public:
   }
   RmlRenderInterfaceGpu &renderer() const {
     return *renderer_;
+  }
+  // The on-screen pad's painter over this renderer; its glyphs live as long as the renderer.
+  TouchPainter &touchPainter() const {
+    return *touchPainter_;
   }
   SDL_Window *window() const {
     return window_;
@@ -47,6 +53,7 @@ public:
 private:
   SDL_Window *window_ = nullptr;
   std::unique_ptr<RmlRenderInterfaceGpu> renderer_;
+  std::unique_ptr<TouchPainter> touchPainter_;
   std::unique_ptr<Rml::SystemInterface> system_;
   unsigned long long contextSerial_ = 0;
   int fontsLoaded_ = 0;

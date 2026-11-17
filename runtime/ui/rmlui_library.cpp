@@ -2,6 +2,7 @@
 
 #include "render_device.h"
 #include "rmlui_render_gpu.h"
+#include "touch_painter.h"
 #include "ui_assets.h"
 
 #include <RmlUi/Core.h>
@@ -13,7 +14,8 @@
 namespace psx::ui {
 
 RmlUiLibrary::RmlUiLibrary(render::RenderDevice &device)
-    : window_(device.window().window()), renderer_(std::make_unique<RmlRenderInterfaceGpu>(device)) {
+    : window_(device.window().window()), renderer_(std::make_unique<RmlRenderInterfaceGpu>(device)),
+      touchPainter_(std::make_unique<TouchPainter>(*renderer_)) {
   system_ = std::make_unique<SystemInterface_SDL>(window_);
   Rml::SetSystemInterface(system_.get());
   Rml::SetRenderInterface(renderer_.get());

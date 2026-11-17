@@ -123,6 +123,21 @@ from SDL's gamepad type, the face buttons labelled by SDL for that type). The gl
 family does. Check it headless with
 `gamepad make xbox` (or `playstation`), `gamepad guide tap` and `pshot`.
 
+## Touch controls
+
+`psx::input::TouchPad` (`input/touch_pad.*`) is the on-screen pad, the shared touch-ui `Controls` with a
+PSX layout: d-pad, the four face buttons, L1/L2/R1/R2, Select and Start. `HostInput` owns it and hands it
+every event first; a finger it claims reaches neither the overlay nor the game, and SDL makes no mouse
+click of a touch (`SDL_HINT_TOUCH_MOUSE_EVENTS=0`). Its held buttons are ANDed into port 1 while the game
+holds input. A gamepad button or a deliberate stick push hides it until the next touch.
+
+It shows while the saved `touch_controls` setting (Display tab, `PSXPORT_TOUCH_CONTROLS`) is on and the
+process has seen a touchscreen: from the start on Android, after the first finger on a desktop.
+`RenderState::recordScreen` lays it out for the window's safe area and draws it after the RmlUi overlay
+through `psx::ui::TouchPainter` (`ui/touch_painter.*`), touch-ui's painter over the RmlUi GPU renderer;
+`pshot` includes it. Check it headless: `touch 1 tap <x> <y>` off the controls to show it, `touch 0 down`
+on a button, `pshot`, and `PSXPORT_DEBUG=touch` logs each press with the port-1 mask.
+
 ## The bug report form
 
 B opens the

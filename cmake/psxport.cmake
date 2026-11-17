@@ -113,6 +113,7 @@ set(PSXPORT_FRAMEWORK_SRC
   ${PSXPORT_ROOT}/runtime/psx/input/glyph_set.cpp
   ${PSXPORT_ROOT}/runtime/psx/input/host_input.cpp
   ${PSXPORT_ROOT}/runtime/psx/input/input_injection.cpp
+  ${PSXPORT_ROOT}/runtime/psx/input/touch_pad.cpp # the on-screen pad of a touchscreen
   ${PSXPORT_ROOT}/runtime/psx/input/pad_input.cpp
   ${PSXPORT_ROOT}/runtime/psx/input/stock_pad_buffers.cpp
   ${PSXPORT_ROOT}/runtime/psx/input/pad_recording.cpp
@@ -256,6 +257,7 @@ set(PSXPORT_FRAMEWORK_SRC
   ${PSXPORT_ROOT}/runtime/ui/rmlui_library.cpp  # RmlUi process state on the render device
   ${PSXPORT_ROOT}/runtime/ui/rmlui_overlay.cpp  # a Game's RmlUi context and menu document
   ${PSXPORT_ROOT}/runtime/ui/rmlui_render_gpu.cpp
+  ${PSXPORT_ROOT}/runtime/ui/touch_painter.cpp # touch-ui's painter over that renderer
   ${PSXPORT_ROOT}/runtime/ui/rml_text.cpp       # DATA -> RML markup boundary (see rml_text.h)
   # ---- runtime/ui: the overlay's component tree. One file pair per responsibility.
   ${PSXPORT_ROOT}/runtime/ui/ui_event.cpp           # ScopedEventListener — registration IS lifetime
@@ -379,6 +381,8 @@ if(ANDROID)
 endif()
 psxport_dependency_prefix(lucent SOURCE "${PSXPORT_ROOT}/vendor/lucent" PACKAGE lucent RECIPE
   OPTIONS ${_psxport_lucent_options})
+# touch-ui (the on-screen pad) composes Lucent's touch router, so it is added once lucent::lucent exists.
+psxport_add_shared_dependency(touch-ui include/touch_ui/touch_ui.h)
 
 target_link_libraries(psxport PUBLIC
   lucent::lucent
@@ -386,7 +390,7 @@ target_link_libraries(psxport PUBLIC
   psxport_presentation_dependencies
   Threads::Threads m)
 # The first-run screen is the host's own; titles never include it.
-target_link_libraries(psxport PRIVATE setup_ui::setup_ui)
+target_link_libraries(psxport PRIVATE setup_ui::setup_ui touch_ui::touch_ui)
 target_link_libraries(psxport PRIVATE msdfgen::msdfgen-core msdfgen::msdfgen-ext)
 # The bug report's motion clip is an animated PNG.
 find_package(ZLIB REQUIRED)

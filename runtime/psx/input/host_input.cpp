@@ -5,6 +5,7 @@
 #include "diagnostic_config.h" // PSXPORT_PAD_NOPAD
 #ifdef PSXPORT_SDL
 #include "input_binding.h"
+#include "touch_pad.h"
 #endif
 #include "rmlui_overlay.h"
 #include <lucent/log.h>
@@ -46,7 +47,9 @@ std::uint16_t psx::input::buttonNamed(std::string_view name) {
 }
 
 #ifdef PSXPORT_SDL
-psx::input::HostInput::HostInput() {
+psx::input::HostInput::HostInput() : mTouchPad(std::make_unique<TouchPad>()) {
+  // A finger is the touch pad's; SDL would otherwise also click the overlay with it.
+  SDL_SetHint(SDL_HINT_TOUCH_MOUSE_EVENTS, "0");
   mGamepadSubsystem = SDL_InitSubSystem(SDL_INIT_GAMEPAD);
   if (!mGamepadSubsystem) {
     lucent::error("pad", "SDL_InitSubSystem(GAMEPAD) failed: {}; controllers disabled", SDL_GetError());
@@ -117,6 +120,9 @@ void psx::input::HostInput::drainEvents() {
   SDL_PumpEvents();
   SDL_Event event;
   while (SDL_PollEvent(&event)) {
+    if (mTouchPad->event(event)) {
+      continue;
+    }
     // The chord is the player's, not the game's: Enter would also press Start.
     if (event.type == SDL_EVENT_KEY_DOWN && fullscreenChord(event.key)) {
       psx::config::setFullscreen(!psx::config::fullscreen());
@@ -130,10 +136,12 @@ void psx::input::HostInput::drainEvents() {
     }
     if (event.type == SDL_EVENT_GAMEPAD_BUTTON_DOWN) {
       mGlyphs.noteGamepad(SDL_GetGamepadTypeForID(event.gbutton.which));
+      mTouchPad->noteController();
     }
     if (event.type == SDL_EVENT_GAMEPAD_AXIS_MOTION &&
         std::abs(static_cast<int>(event.gaxis.value)) > kDeliberateAxis) {
       mGlyphs.noteGamepad(SDL_GetGamepadTypeForID(event.gaxis.which));
+      mTouchPad->noteController();
     }
     if (event.type == SDL_EVENT_GAMEPAD_ADDED || event.type == SDL_EVENT_GAMEPAD_REMOVED) {
       mPadsChanged = true;
@@ -316,6 +324,9 @@ psx::input::HostPads psx::input::HostInput::poll(bool shown, std::uint32_t ports
   // A pad opened this poll has stale state until SDL_UpdateGamepads, and a stale axis reads as a held direction.
   rescanControllers(shown);
   SDL_UpdateGamepads();
+  if (gameOwnsInput) {
+    mask &= mTouchPad->mask();
+  }
   const std::uint16_t keyboardMask = mask;
   HostPads pads;
   pads.masks[0] = mask;

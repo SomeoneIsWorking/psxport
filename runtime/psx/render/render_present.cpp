@@ -11,6 +11,10 @@
 #include "present_plan.h"
 #include "render_device.h"
 #include "render_state.h"
+#include "rmlui_library.h"
+#include "rmlui_render_gpu.h"
+#include "touch_pad.h"
+#include "touch_painter.h"
 
 #include <lucent/log.h>
 
@@ -291,6 +295,14 @@ void RenderState::recordScreen(SDL_GPUCommandBuffer *cmd, SDL_GPUTexture *target
                    size);
   }
   game_.rml_overlay.recordGpu(cmd, pass, size.width, size.height);
+  input::TouchPad &touchPad = game_.hostInput.touchPad();
+  touchPad.layOut(device_.window().window(), size.width, size.height);
+  if (touchPad.visible()) {
+    RmlRenderInterfaceGpu &renderer = device_.rmlUi().renderer();
+    renderer.BeginFrame(cmd, pass, size.width, size.height);
+    touchPad.draw(device_.rmlUi().touchPainter());
+    renderer.EndFrame();
+  }
   SDL_EndGPURenderPass(pass);
 }
 

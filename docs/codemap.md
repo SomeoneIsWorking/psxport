@@ -39,7 +39,7 @@ Dependency direction: title repo → `runtime/psx/game/` (the title interface) �
 - `runtime/cpu/store_observe.*` — store-instruction PC observer
 - `runtime/cpu/guest_writer_latch.h` — guest writer latch / shadow call stack: innermost guest function (called by `jal`/`jalr` or entered by the host, `HostCall`), block-entry PC, dispatched entry of a store
 - `runtime/cpu/host_turn.*` — host turn clock: one display field owed per field period of guest time, PW_HOST
-- `cmake/dependency_prefix.cmake`, `cmake/deps/` — RmlUi, libchdr and Lucent built once per source content and toolchain into `~/.cache/psxport/deps/<dep>/<compiler>-<config>-<key>` (`PSXPORT_DEPENDENCY_ROOT`), found with find_package; libpsxport, bug-report and setup-ui stay per build tree
+- `cmake/dependency_prefix.cmake`, `cmake/deps/` — RmlUi, libchdr and Lucent built once per source content and toolchain into `~/.cache/psxport/deps/<dep>/<compiler>-<config>-<key>` (`PSXPORT_DEPENDENCY_ROOT`), found with find_package; libpsxport, bug-report, setup-ui and touch-ui stay per build tree
 - `cmake/build_policy.cmake` — per-build-type flags (line tables + zstd debug sections for RelWithDebInfo, no debug info in Release, full `-g` only in Debug) and lld for Clang
 - `cmake/toolchains/llvm-mingw-x86_64.cmake` — the Windows x86-64 cross toolchain (`docs/windows.md`)
 - `runtime/psx/hle/hle.*`, `hle_heap.cpp`, `hle_interrupt.cpp`, `kernel_syscall.cpp`, `syscall_exception.*` — BIOS / kernel HLE: A0/B0/C0 tables, events, heap, interrupt chain, syscall exception entry and return
@@ -89,6 +89,7 @@ Dependency direction: title repo → `runtime/psx/game/` (the title interface) �
 - `runtime/psx/present/pane_host.h`, `rgb24_picture.h` — a session presenting into a host screen's pane, host pictures
 - `runtime/psx/input/host_input.*`, `input_binding.h` — the process's one SDL event drain, keyboard state, gamepads (buttons, and the right stick for title features), PSX button names and the one PSX button binding of the keyboard and SDL gamepads (pad verbs `tap`/`press`/`release`/`hold`), quit scope, event routing to the live overlay, which holds the keyboard and pads while open
 - `runtime/psx/input/glyph_set.*` — button prompts / controller glyphs: the active pad family (keyboard, Xbox, PlayStation, Nintendo) from the device last pressed and its SDL gamepad type, each PSX button's PromptFont glyph
+- `runtime/psx/input/touch_pad.*` — the on-screen PSX pad of a touchscreen (shared touch-ui), owned by `HostInput`, held into port 1 (`docs/ui-architecture.md` Touch controls)
 - `runtime/psx/input/input_injection.*` — control-channel input pushed as SDL events: keys, text, mouse, touch, virtual gamepad and its make (`gamepad make xbox|playstation|nintendo|generic`, the USB ids SDL types it by)
 - `runtime/psx/input/pad_input.*`, `sio_pad.*`, `pad_delivery.h`, `stock_pad_buffers.*` — controller / pad as the guest sees it: SIO0, digital packet, fixed pad buffers; `Pad::rightStick()` for a title's host feature, centred in a replay
 - `runtime/psx/input/pad_recording.*`, `pad_record_replay.*`, `pad_phase_replay.*`, `input_phase.h` — `.pad` record and replay keyed on input phase
@@ -107,7 +108,7 @@ Dependency direction: title repo → `runtime/psx/game/` (the title interface) �
 - `runtime/psx/debug/ot_attr.*` — OT / GTE submission attribution
 - `runtime/psx/debug/gpu_debug.*`, `gpu_perf.*`, `memcensus.*`, `field_digest.*`, `image_writer.*`, `snapshot.*`, `store_watch.*`, `pad_frame_probes.*`, `frame_schedule.*`, `host_backtrace.*`, `text_capture.*` — diagnostics: scene dump (captured as text), cost and cadence meter (CPU work per phase, GPU work per present, planned 60 Hz cadence, play-check presents; `presentation.md` Cost and cadence; counters and percentiles from `lucent::perf`), memmove census, per-field digest, PNG / APNG / PPM capture, RAM snapshot, store watch, pad-frame probes, host backtrace
 - `runtime/psx/debug/bug_report_session.*` — in-app bug report: reference frame at the next sealed frame, motion clip, reproduction command
-- `runtime/ui/` — RmlUi overlay menu: library (one Rml::Initialise per device), document, tabs, rows, readouts, `<glyph>` button prompts (`menu_prompts`), pad navigation, toggles, wrapped stepping, Debug and About tabs generated from the title debug menu (`title_debug_rows`), SDL_GPU render interface, assets
+- `runtime/ui/` — RmlUi overlay menu: library (one Rml::Initialise per device), document, tabs, rows, readouts, `<glyph>` button prompts (`menu_prompts`), pad navigation, toggles, wrapped stepping, Debug and About tabs generated from the title debug menu (`title_debug_rows`), SDL_GPU render interface and touch-ui's painter over it (`touch_painter`), assets
 - `assets/rml/` — overlay menu markup, styles, fonts
 - `bios/`, `scripts/build_openbios.py`, `patches/openbios/` — fast-boot OpenBIOS image
 - `testprog/`, `tools/testprog/`, `cmake/testprog.cmake` — framework test program: freestanding mipsel guest EXE built with clang, its host title `psxtest_port`, planted owner-journal rows
@@ -118,4 +119,4 @@ Dependency direction: title repo → `runtime/psx/game/` (the title interface) �
 - `tools/dbgclient.py`, `tools/psx_pad.py`, `tools/prof_hot.py` — control-channel client, pad bit table, host profile symbols
 - `tools/psxport_fetch.py`, `scripts/bootstrap_workspace.py`, `scripts/*submodule*.py` — a title's `external/psxport` link, workspace clone and submodules
 - `CMakeLists.txt`, `cmake/`, `tools/CMakeLists.txt`, `tools/build.py`, `tools/project.py`, `tools/automation/`, `pyproject.toml`, `uv.lock`, `.github/` — build composition, Clang / Ninja build, the locked Python environment, build-only CI
-- `vendor/` (beetle-psx, lucent, rmlui, bug-report, setup-ui), `external/psycross`, `patches/beetle-psx/` — pinned forks: Beetle devices, Lucent logging and CVars and text, RmlUi, bug report, setup UI
+- `vendor/` (beetle-psx, lucent, rmlui, bug-report, setup-ui, touch-ui, port-assets), `external/psycross`, `patches/beetle-psx/` — pinned forks: Beetle devices, Lucent logging and CVars and text, RmlUi, bug report, setup UI, touch controls and their art (the shared-sibling fallback, `cmake/shared_dependency.cmake`)

@@ -1,12 +1,13 @@
 # First-party shared libraries consumed LIVE, like psxport itself: the workspace's sibling
 # `shared/<repo>` checkout wins, so an edit there is in every port's next build with no bump. A machine
 # without the workspace (a fresh clone, CI) builds the `vendor/<repo>` submodule instead, which
-# tools/psxport_fetch.py and scripts/bootstrap_workspace.py initialise. Both are added after RmlUi,
-# whose targets they link.
+# tools/psxport_fetch.py and scripts/bootstrap_workspace.py initialise. Each is added after the targets
+# it links: RmlUi for bug-report and setup-ui, lucent::lucent for touch-ui.
 include_guard(GLOBAL)
 
 set(PSXPORT_BUG_REPORT_DIR "" CACHE PATH "Path to a shared/bug-report checkout (default: workspace sibling)")
 set(PSXPORT_SETUP_UI_DIR "" CACHE PATH "Path to a shared/setup-ui checkout (default: workspace sibling)")
+set(PSXPORT_TOUCH_UI_DIR "" CACHE PATH "Path to a shared/touch-ui checkout (default: workspace sibling)")
 
 # Adds shared/<repo> (or vendor/<repo>); `marker` is a file that proves a checkout is that library.
 function(psxport_add_shared_dependency repo marker)

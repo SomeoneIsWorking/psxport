@@ -59,6 +59,9 @@ present::RenderPath render_path(present::RenderPath fallback = present::RenderPa
 bool fullscreen();
 // The player's choice from the menu or a hotkey, saved; the shown window follows it.
 void setFullscreen(bool on);
+// The player's saved choice to show the on-screen pad on a touchscreen; PSXPORT_TOUCH_CONTROLS overrides it.
+bool touch_controls();
+void setTouchControls(bool on);
 std::string picker_titles(); // PSXPORT_PICKER_TITLES: panel slugs, empty for every provisioned title
 
 } // namespace psx::config
