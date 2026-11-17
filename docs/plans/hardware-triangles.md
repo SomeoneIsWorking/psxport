@@ -106,6 +106,11 @@ stages it did not touch):
 | be373cf | margin canvases shade only their margins; their buffer columns come from the image (shaded 58.7 → 34.1 Mpx) | 16.1 / 16.2 | 8.1 / 8.1 |
 | 3a1959f | a margin canvas's before, in-between and snapshot copies take only its margin strips | 14.4 / 14.4 | 8.0 / 8.0 |
 | 11cd44f | ops that never discard (fills, untextured, no mask test or skipped rows) through a `record.frag` with no `discard`, so the GPU keeps hidden-surface removal | 13.0 / 13.0 | 6.3 / 6.1 |
+| f67fd79 | triangle- and sprite-only lean shaders, a sprite's texel base from `record.vert`, float colour and modulation (exact) | 12.6 | 5.1 |
+| 8bbae08 | keep-before and the in-between seed skip what a record fills before it reads it (seed 2.45 → 1.26) | 12.7 (mean 13.62 → 13.25) | 4.8 |
+| 33c6cc1 | snapshots refreshed only where a batch reads them; no per-batch copy, before-to-snapshot seed or restore | 10.2 (mean 10.69) | 4.8 |
+
+From f67fd79 on, one run each (the host is shared; a second only when untouched stages drift). p10 went 9.0 → 7.3.
 
 p10 went 16.9 → 10.3. Hardware depth was level on Spyro (it draws back to front, so early depth testing finds
 little to reject) but leaves the test draws as plain pipelines. Copied pixels went 72 → 46 Mpx a present. The
@@ -118,10 +123,9 @@ in-between seed 1.16 and snapshot restore 0.99 (in-between presents only), keep-
 depth, marks, coverage), 6.5 without the texture fetch, and 8.5 fetching without the CLUT lookup: texturing costs
 about 1.8 ms, the CLUT nothing, the rest of the shader body about 4. A reachable `discard` alone costs about 1.35 ms (it
 turns off hidden-surface removal), which the opaque variant takes back for every op that cannot discard. The ranked
-next steps: slim that body
-(per-op constants from `record.vert`, float gouraud and modulation, triangle and sprite variants), refresh read
-snapshots only where a plan samples them, skip seeding what a record overwrites with an opaque fill before reading
-it, present in one pass, and present a margin canvas from two textures instead of copying its interior.
+next steps were: slim that body, refresh read snapshots only where a plan samples them, skip seeding what a record
+overwrites with an opaque fill before reading it (all three landed above), present in one pass, and present a margin
+canvas from two textures instead of copying its interior (after the one-pass present, built on it).
 
 ### Phase 2 on Metal: deferred
 
