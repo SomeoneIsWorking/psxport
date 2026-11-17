@@ -27,11 +27,13 @@ public:
     std::unique_ptr<TitleSession> session; // the chosen title's session, set when Chosen
   };
 
-  // `content` names the panels; it and `catalog` outlive this session. Each selector frame is one
-  // step of the run budget; a window close or a client `quit` ends the selector.
+  // `content` names the panels and `stage` holds their sessions; both, and `catalog`, outlive this
+  // session. Each selector frame is one step of the run budget; a window close or a client `quit` ends
+  // the selector.
   PickerSession(PickerRuntime &runtime,
                 const TitleCatalog &catalog,
                 const PickerContent &content,
+                PanelSessions &stage,
                 SessionServices &services);
   // Out of line: the result owns a session, complete only in the .cpp.
   ~PickerSession();
@@ -55,7 +57,7 @@ private:
   // The Game that holds the control endpoint, reads the pad, draws the menu and presents the screen.
   std::unique_ptr<Game> host_;
   PickerPanes panes_;
-  std::unique_ptr<PanelSessions> panels_;
+  PanelSessions *panels_;
   std::vector<PanelSource> sources_;
   // A panel presented during this loop iteration, so the loop must not build or pace a second time.
   bool built_ = false;

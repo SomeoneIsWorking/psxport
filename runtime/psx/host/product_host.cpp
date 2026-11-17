@@ -9,6 +9,7 @@
 #include "game.h"
 #include "memcensus.h"
 #include "number_text.h"
+#include "panel_sessions.h"
 #include "picker_content.h"
 #include "picker_runtime.h"
 #include "picker_session.h"
@@ -115,7 +116,8 @@ int ProductHost::runSelector() {
     const std::string panelList = psx::config::picker_titles();
     const std::vector<std::string_view> panelSlugs = psx::config::splitList(panelList, psx::config::kListSeparators);
     const PickerContent content(titles, panelSlugs);
-    PickerSession picker(pickerRuntime, catalog_, content, state.services);
+    PanelSessions stage(catalog_, content, state.services);
+    PickerSession picker(pickerRuntime, catalog_, content, stage, state.services);
     const PickerSession::Result choice = picker.run();
     if (choice.outcome == PickerSession::Outcome::DrawFault) {
       return endOnDrawFault();

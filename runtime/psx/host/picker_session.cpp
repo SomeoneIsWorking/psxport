@@ -28,8 +28,9 @@ constexpr std::uint16_t kConfirm = psx::input::kButtonCross | psx::input::kButto
 PickerSession::PickerSession(PickerRuntime &runtime,
                              const TitleCatalog &catalog,
                              const PickerContent &content,
+                             PanelSessions &stage,
                              SessionServices &services)
-    : runtime_(runtime), catalog_(catalog), content_(content), services_(services) {
+    : runtime_(runtime), catalog_(catalog), content_(content), services_(services), panels_(&stage) {
   if (content.panelCount() > PickerLayout::maxPanels()) {
     lucent::error("picker",
                   "{} titles are available and the picker lays out at most {} panels",
@@ -37,7 +38,6 @@ PickerSession::PickerSession(PickerRuntime &runtime,
                   PickerLayout::maxPanels());
     std::abort();
   }
-  panels_ = std::make_unique<PanelSessions>(catalog_, content_, services_);
   runtime_.bind(&content_);
 }
 
