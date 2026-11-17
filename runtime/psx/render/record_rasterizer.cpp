@@ -18,32 +18,25 @@ using gpu::RecordRect;
 constexpr SDL_GPUTextureFormat kVramFormat = SDL_GPU_TEXTUREFORMAT_R8G8_UNORM;
 constexpr ShaderCode kRecordVertex{spv_g_record_vert, spv_g_record_vert_len, {0, 1, 1}, PSXPORT_MSL(record_vert)};
 constexpr ShaderCode kRecordFragment{spv_g_record_frag, spv_g_record_frag_len, {5, 1, 3}, PSXPORT_MSL(record_frag)};
-constexpr ShaderCode kRecordDepthFragment{
-    spv_g_record_depth_frag, spv_g_record_depth_frag_len, {5, 1, 3}, PSXPORT_MSL(record_depth_frag)};
 // A mark: coverage and the moved-back depth alone, for a depth group or Model draw that writes no colour where the
 // test draw already passed (stencil), so it never samples a texel or reads the target; both pipeline sets share it.
 constexpr ShaderCode kRecordDepthMarkFragment{
     spv_g_record_depth_mark_frag, spv_g_record_depth_mark_frag_len, {5, 1, 3}, PSXPORT_MSL(record_depth_mark_frag)};
-// The same two reading the target in-pass (RECORD_FETCH): Metal only, so they exist only where Metal was built.
+// The same reading the target in-pass (RECORD_FETCH): Metal only, so it exists only where Metal was built.
 #if defined(PSXPORT_GPU_SHADERS_MSL)
 constexpr ShaderCode kRecordFetchFragment{nullptr, 0, {5, 1, 3}, PSXPORT_MSL(record_fetch_frag)};
-constexpr ShaderCode kRecordFetchDepthFragment{nullptr, 0, {5, 1, 3}, PSXPORT_MSL(record_fetch_depth_frag)};
 #endif
 
-// The record fragment shaders `device` draws with: the in-pass reading ones where it fetches its target.
-struct RecordFragments {
-  const ShaderCode *plain = &kRecordFragment;
-  const ShaderCode *depth = &kRecordDepthFragment;
-};
-
-RecordFragments recordFragments(bool fetch) {
+// The record fragment shader `device` draws with: the in-pass reading one where it fetches its target. Depth-tested
+// draws use it too: the hardware interpolates their depth (record.vert), so only a mark writes it.
+const ShaderCode &recordFragment(bool fetch) {
 #if defined(PSXPORT_GPU_SHADERS_MSL)
   if (fetch) {
-    return {&kRecordFetchFragment, &kRecordFetchDepthFragment};
+    return kRecordFetchFragment;
   }
 #endif
   (void)fetch;
-  return {};
+  return kRecordFragment;
 }
 constexpr std::uint32_t kDepthRunFlags =
     gpu::kOpDepthTest | gpu::kOpDepthObject | gpu::kOpDepthModel | gpu::kOpDepthGroup;
@@ -102,14 +95,15 @@ std::uint64_t shapeTriangles(std::span<const gpu::RecordShape> shapes) {
   return triangles;
 }
 
-// record.frag writes log2(z) / 16; 24 bits resolve z far below a bin.
+// Depth is 1/z (record.vert), down to 1/65536: a float keeps its relative precision there, where 24 fixed bits resolve
+// z only to about 0.4% at SZ's far end.
 SDL_GPUTextureFormat depthFormat(SDL_GPUDevice *device) {
   return SDL_GPUTextureSupportsFormat(device,
-                                      SDL_GPU_TEXTUREFORMAT_D24_UNORM_S8_UINT,
+                                      SDL_GPU_TEXTUREFORMAT_D32_FLOAT_S8_UINT,
                                       SDL_GPU_TEXTURETYPE_2D,
                                       SDL_GPU_TEXTUREUSAGE_DEPTH_STENCIL_TARGET)
-             ? SDL_GPU_TEXTUREFORMAT_D24_UNORM_S8_UINT
-             : SDL_GPU_TEXTUREFORMAT_D32_FLOAT_S8_UINT;
+             ? SDL_GPU_TEXTUREFORMAT_D32_FLOAT_S8_UINT
+             : SDL_GPU_TEXTUREFORMAT_D24_UNORM_S8_UINT;
 }
 
 RenderDevice::DepthTarget depthTarget(SDL_GPUTextureFormat format, SDL_GPUCompareOp compare, bool writes) {
@@ -181,13 +175,15 @@ RecordRasterizer::RecordRasterizer(RenderDevice &device) : device_(device), dept
 }
 
 RecordRasterizer::Pipelines RecordRasterizer::makePipelines(bool fetch) {
-  const RecordFragments fragments = recordFragments(fetch);
+  const ShaderCode &fragment = recordFragment(fetch);
   Pipelines pipelines;
-  pipelines.plain = device_.makePipeline(kRecordVertex, *fragments.plain, kVramFormat);
+  pipelines.plain = device_.makePipeline(kRecordVertex, fragment, kVramFormat);
   const RenderDevice::DepthTarget slot = depthTarget(depthFormat_, SDL_GPU_COMPAREOP_ALWAYS, false);
-  const RenderDevice::DepthTarget tests = withStencil(depthTarget(depthFormat_, SDL_GPU_COMPAREOP_LESS_OR_EQUAL, false),
-                                                      SDL_GPU_COMPAREOP_ALWAYS,
-                                                      SDL_GPU_STENCILOP_REPLACE);
+  // Depth is 1/z, nearer larger (record.vert).
+  const RenderDevice::DepthTarget tests =
+      withStencil(depthTarget(depthFormat_, SDL_GPU_COMPAREOP_GREATER_OR_EQUAL, false),
+                  SDL_GPU_COMPAREOP_ALWAYS,
+                  SDL_GPU_STENCILOP_REPLACE);
   const RenderDevice::DepthTarget marks = withStencil(
       depthTarget(depthFormat_, SDL_GPU_COMPAREOP_ALWAYS, true), SDL_GPU_COMPAREOP_EQUAL, SDL_GPU_STENCILOP_ZERO);
   // An Object's depth is no Model's.
@@ -195,7 +191,7 @@ RecordRasterizer::Pipelines RecordRasterizer::makePipelines(bool fetch) {
       depthTarget(depthFormat_, SDL_GPU_COMPAREOP_ALWAYS, true), SDL_GPU_COMPAREOP_ALWAYS, SDL_GPU_STENCILOP_ZERO);
   // A Model part tests where another's depth lies and paints over its own model's, marking where it drew.
   const RenderDevice::DepthTarget modelTests =
-      withStencil(depthTarget(depthFormat_, SDL_GPU_COMPAREOP_LESS_OR_EQUAL, false),
+      withStencil(depthTarget(depthFormat_, SDL_GPU_COMPAREOP_GREATER_OR_EQUAL, false),
                   SDL_GPU_COMPAREOP_NOT_EQUAL,
                   SDL_GPU_STENCILOP_REPLACE,
                   {.compare = kModelBits, .write = kPassed});
@@ -205,10 +201,11 @@ RecordRasterizer::Pipelines RecordRasterizer::makePipelines(bool fetch) {
                                                             {.compare = kModelBits, .write = kPassed});
   // Where it drew it leaves the nearer of its moved-back depth and the depth there, and names its model where its own
   // is kept.
-  const RenderDevice::DepthTarget leaves = withStencil(depthTarget(depthFormat_, SDL_GPU_COMPAREOP_LESS_OR_EQUAL, true),
-                                                       SDL_GPU_COMPAREOP_EQUAL,
-                                                       SDL_GPU_STENCILOP_REPLACE,
-                                                       {.compare = kPassed, .write = kModelBits});
+  const RenderDevice::DepthTarget leaves =
+      withStencil(depthTarget(depthFormat_, SDL_GPU_COMPAREOP_GREATER_OR_EQUAL, true),
+                  SDL_GPU_COMPAREOP_EQUAL,
+                  SDL_GPU_STENCILOP_REPLACE,
+                  {.compare = kPassed, .write = kModelBits});
   const RenderDevice::DepthTarget clears = withStencil(depthTarget(depthFormat_, SDL_GPU_COMPAREOP_ALWAYS, false),
                                                        SDL_GPU_COMPAREOP_EQUAL,
                                                        SDL_GPU_STENCILOP_ZERO,
@@ -216,15 +213,13 @@ RecordRasterizer::Pipelines RecordRasterizer::makePipelines(bool fetch) {
   SDL_GPUColorTargetBlendState noColour = {};
   noColour.enable_color_write_mask = true;
   noColour.color_write_mask = 0;
-  pipelines.slot = device_.makePipeline(kRecordVertex, *fragments.plain, kVramFormat, nullptr, nullptr, &slot);
-  pipelines.groupTest = device_.makePipeline(kRecordVertex, *fragments.depth, kVramFormat, nullptr, nullptr, &tests);
+  pipelines.slot = device_.makePipeline(kRecordVertex, fragment, kVramFormat, nullptr, nullptr, &slot);
+  pipelines.groupTest = device_.makePipeline(kRecordVertex, fragment, kVramFormat, nullptr, nullptr, &tests);
   pipelines.groupMark =
       device_.makePipeline(kRecordVertex, kRecordDepthMarkFragment, kVramFormat, &noColour, nullptr, &marks);
-  pipelines.object = device_.makePipeline(kRecordVertex, *fragments.depth, kVramFormat, nullptr, nullptr, &covers);
-  pipelines.modelTest =
-      device_.makePipeline(kRecordVertex, *fragments.depth, kVramFormat, nullptr, nullptr, &modelTests);
-  pipelines.modelPaint =
-      device_.makePipeline(kRecordVertex, *fragments.depth, kVramFormat, nullptr, nullptr, &modelPaints);
+  pipelines.object = device_.makePipeline(kRecordVertex, fragment, kVramFormat, nullptr, nullptr, &covers);
+  pipelines.modelTest = device_.makePipeline(kRecordVertex, fragment, kVramFormat, nullptr, nullptr, &modelTests);
+  pipelines.modelPaint = device_.makePipeline(kRecordVertex, fragment, kVramFormat, nullptr, nullptr, &modelPaints);
   pipelines.modelMark =
       device_.makePipeline(kRecordVertex, kRecordDepthMarkFragment, kVramFormat, &noColour, nullptr, &leaves);
   pipelines.modelClear =
@@ -911,7 +906,7 @@ void RecordRasterizer::execute(const gpu::RecordRasterPlan &plan, bool inBetween
       if (depth) {
         bool &cleared = depthCleared[static_cast<std::size_t>(p)];
         depthInfo.texture = target.depth;
-        depthInfo.clear_depth = 1.0f;
+        depthInfo.clear_depth = 0.0f; // 1/z: nothing drawn lies infinitely far
         depthInfo.clear_stencil = 0;
         depthInfo.load_op = cleared ? SDL_GPU_LOADOP_LOAD : SDL_GPU_LOADOP_CLEAR;
         depthInfo.store_op =

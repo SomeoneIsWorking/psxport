@@ -45,10 +45,8 @@ SHADERS = (
     Shader("pane.frag", "spv_g_pane_frag"),
     Shader("record.vert", "spv_g_record_vert"),
     Shader("record.frag", "spv_g_record_frag"),
-    Shader("record.frag", "spv_g_record_depth_frag", ("RECORD_DEPTH",)),
     Shader("record.frag", "spv_g_record_depth_mark_frag", ("RECORD_DEPTH_MARK",)),
     Shader("record.frag", "spv_g_record_fetch_frag", ("RECORD_FETCH",), msl_only=True),
-    Shader("record.frag", "spv_g_record_fetch_depth_frag", ("RECORD_FETCH", "RECORD_DEPTH"), msl_only=True),
 )
 
 # The Metal Shading Language version the translated shaders target: framebuffer fetch on macOS needs 2.3.

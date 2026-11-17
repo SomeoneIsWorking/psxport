@@ -136,8 +136,10 @@ struct RecordShape {
   // pixels gpu.c's walk does not, whose interpolants lie just past the polygon's texels.
   std::uint32_t texels = 0;
   std::uint32_t unused = 0;
+  // A depth-tested triangle's 1/z at each corner (its DepthPlane there), which the hardware interpolates and tests.
+  std::array<float, 4> depths{};
 };
-static_assert(sizeof(RecordShape) == 112, "record.vert's Shape layout");
+static_assert(sizeof(RecordShape) == 128, "record.vert's Shape layout");
 
 // A quad's mapping: the plane's own scale and origin, or a crop canvas's world or UI layer (RecordCanvas).
 enum RecordMapping : std::uint32_t {

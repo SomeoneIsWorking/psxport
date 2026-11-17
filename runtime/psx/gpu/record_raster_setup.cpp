@@ -580,8 +580,13 @@ private:
   void place(RecordShape quad);
   // A triangle through `corners` (VRAM-space scaled pixels, moved by `shiftX`/`shiftY` from where its interpolants
   // lie) placed on the current target plane; returns its bounds there.
-  RecordRect placeTriangle(
-      const ClipPoint *corners, const Interpolant *planes, double shiftX, double shiftY, std::uint32_t texels);
+  // A depth-tested one carries its DepthPlane `depth`'s 1/z at each corner.
+  RecordRect placeTriangle(const ClipPoint *corners,
+                           const Interpolant *planes,
+                           double shiftX,
+                           double shiftY,
+                           std::uint32_t texels,
+                           const RecordOp *depth);
   // `rect`, VRAM-space native pixels, in the current target plane's written-map pixels.
   PlaneRect planeRect(const RecordRect &rect) const;
   // VRAM-space native pixels the op writes on the current target plane.
@@ -851,9 +856,18 @@ void RecordPlanner::Builder::place(RecordShape quad) {
   opShapes_.push_back(PlaneShape{plane_, quad});
 }
 
-RecordRect RecordPlanner::Builder::placeTriangle(
-    const ClipPoint *corners, const Interpolant *planes, double shiftX, double shiftY, std::uint32_t texels) {
+RecordRect RecordPlanner::Builder::placeTriangle(const ClipPoint *corners,
+                                                 const Interpolant *planes,
+                                                 double shiftX,
+                                                 double shiftY,
+                                                 std::uint32_t texels,
+                                                 const RecordOp *depth) {
   RecordShape shape{.mapping = mapping_, .kind = kShapeTriangle, .texels = texels};
+  float field[kDepthModel] = {};
+  if (depth != nullptr) {
+    std::memcpy(&field[kDepthInverse], &(*depth)[kDepthInverse], sizeof(float) * (kDepthModel - kDepthInverse));
+  }
+  const double s = scale_;
   double x0 = corners[0].x;
   double y0 = corners[0].y;
   double x1 = x0;
@@ -874,6 +888,10 @@ RecordRect RecordPlanner::Builder::placeTriangle(
                            static_cast<float>(planes[4](ix, iy))};
     shape.colours.at(k) = {colourBits(planes[0](ix, iy)) | (colourBits(planes[1](ix, iy)) << 16),
                            colourBits(planes[2](ix, iy))};
+    // The plane lies over the plotted native pixels, as the depth the guest's draw left there.
+    shape.depths.at(k) =
+        static_cast<float>(field[kDepthInverse] + field[kDepthSlopeX] * (x / s - field[kDepthOriginX]) +
+                           field[kDepthSlopeY] * (y / s - field[kDepthOriginY]));
   }
   const RecordRect bounds{static_cast<int>(std::floor(x0)),
                           static_cast<int>(std::floor(y0)),
@@ -1240,6 +1258,20 @@ void RecordPlanner::Builder::addTriangle(const TriVertex scaled[3],
     return static_cast<std::uint32_t>(low & 0xFF) | (static_cast<std::uint32_t>(high & 0xFF) << 8);
   };
   const std::uint32_t texels = texelLimits(&TriVertex::u) | (texelLimits(&TriVertex::v) << 16);
+  RecordOp op = primitiveOp(primitive, RecordOpKind::Triangle);
+  std::optional<RecordOp> plane;
+  // The UI layer has its own scale, so it never meets the world's depth.
+  if (depthTest_ != nullptr && !(pass_ == Pass::Crop && cropUi_)) {
+    if (const std::optional<present::DepthMark> mark = depthTest_->tests(primitive)) {
+      op[kOpFlags] |= kOpDepthTest | (mark->order == present::DepthOrder::Object  ? kOpDepthObject
+                                      : mark->order == present::DepthOrder::Model ? kOpDepthModel
+                                                                                  : 0u);
+      plane = depthPlane(primitive, firstVertex, *mark);
+      if (mark->order == present::DepthOrder::Model) {
+        (*plane)[kDepthModel] = modelId(mark->model);
+      }
+    }
+  }
   for (const PlaneClip &planeClip : planeClips(primitive.state)) {
     target(planeClip.plane);
     const Clip &clip = planeClip.clip;
@@ -1257,7 +1289,7 @@ void RecordPlanner::Builder::addTriangle(const TriVertex scaled[3],
     for (int k = 1; k + 1 < corners; k++) {
       const ClipPoint fan[3] = {
           polygon[0], polygon.at(static_cast<std::size_t>(k)), polygon.at(static_cast<std::size_t>(k) + 1)};
-      const RecordRect bounds = placeTriangle(fan, planes, shiftX, shiftY, texels);
+      const RecordRect bounds = placeTriangle(fan, planes, shiftX, shiftY, texels, plane ? &*plane : nullptr);
       if (!nativeWalk) {
         reaches_ = true;
         markReached(nativeReach(bounds, s));
@@ -1281,21 +1313,6 @@ void RecordPlanner::Builder::addTriangle(const TriVertex scaled[3],
     }
   }
   target(0);
-
-  RecordOp op = primitiveOp(primitive, RecordOpKind::Triangle);
-  std::optional<RecordOp> plane;
-  // The UI layer has its own scale, so it never meets the world's depth.
-  if (depthTest_ != nullptr && !(pass_ == Pass::Crop && cropUi_)) {
-    if (const std::optional<present::DepthMark> mark = depthTest_->tests(primitive)) {
-      op[kOpFlags] |= kOpDepthTest | (mark->order == present::DepthOrder::Object  ? kOpDepthObject
-                                      : mark->order == present::DepthOrder::Model ? kOpDepthModel
-                                                                                  : 0u);
-      plane = depthPlane(primitive, firstVertex, *mark);
-      if (mark->order == present::DepthOrder::Model) {
-        (*plane)[kDepthModel] = modelId(mark->model);
-      }
-    }
-  }
   if (primitive.textured && !sampling_) {
     // Every covered pixel lies within a pixel of the vertices' hull, where the interpolant is linear.
     TexelRange ranges[2];

@@ -419,13 +419,16 @@ trim over Spyro's feet, a wall seam over the floor), and leaves everything else 
   grass hill, psx-spyro issue 0233).
 - **How it draws.** A tested triangle is followed in the op buffer by a `DepthPlane` op (never drawn)
   holding its 1/z plane over native coordinates; the op carries `kOpDepthTest`, and an `Object`
-  polygon also `kOpDepthObject`; the plane's `kDepthBin` holds the polygon's bin plus its `back`. Only the
-  `RECORD_DEPTH` variants of `record.frag` read the plane and write `log2(z) / 16` (`RECORD_DEPTH_BACK`, the draw
-  that marks, moves z back by `kDepthBin`) to a D24S8 target (D32S8 where the GPU lacks it). A
-  plane's depth and stencil clear on its first pass of each record. The test and the depth it leaves
+  polygon also `kOpDepthObject`; the plane's `kDepthBin` holds the polygon's bin plus its `back`. The planner
+  evaluates the plane at each drawn triangle's corners (`RecordShape::depths`) and `record.vert` passes that 1/z as
+  clip-space depth, so the hardware interpolates and tests it: nearer is larger, the tests are GREATER_OR_EQUAL,
+  depth clamps rather than clips (z under 1 tests as 1), and the target is D32S8 (D24S8 where the GPU lacks it).
+  Only the mark variant of `record.frag` (`RECORD_DEPTH_MARK`) writes depth: `1/(z + kDepthBin)` from its
+  interpolated 1/z. Every other depth-tested draw runs the plain shader and keeps early depth testing. A plane's
+  depth (cleared to 0) and stencil clear on its first pass of each record. The test and the depth it leaves
   differ, which one fixed-function test cannot do, so the planner splits tested `Polygon` ops into depth
   groups (`RecordPlanner::Builder::depthGroup`): a group's ops cover no native pixel twice, and the next op
-  that would starts a new group (parity bit `kOpDepthGroup`). A group draws twice in its pass: LESS_OR_EQUAL
+  that would starts a new group (parity bit `kOpDepthGroup`). A group draws twice in its pass: GREATER_OR_EQUAL
   with no depth write, its colour where it passes and stencil 1 there; then ALWAYS with depth write and no
   colour where stencil is 1, writing the moved-back depth and clearing the stencil. The stencil's high bit is
   that pass mark; its low seven bits name the `Model` whose depth a pixel holds, 0 for any other. A `Model` op
@@ -452,7 +455,7 @@ trim over Spyro's feet, a wall seam over the floor), and leaves everything else 
   check per guest store, one extra op per tested triangle, and per tested `Polygon` op a check and a mark of its
   native rows in the open group's map (`grouped_`); per depth group two draws and two pipeline binds. Off: an
   inline range test per store and an early return per stored vertex. A title or op that marks nothing pays no op
-  words, no groups and no `gl_FragDepth`. Nothing per pixel on the CPU. Slivers (Raster, below) add groups above 1x. Spyro 1
+  words, no groups and no shape depths. Nothing per pixel on the CPU. Slivers (Raster, below) add groups above 1x. Spyro 1
   Stone Hill terrace (`warp 0/1/3`, `spyro-at 196200 148000 27000 1536`), 600 fields, ires 8x, 4K sink, unpaced,
   main thread (`perf stat` instructions): 236.7 G on, 213.5 G off (+10.9%; the slot-order pass before depth
   groups measured +2.7%). About 120 depth groups per record there. `perf record` on against off: the group map

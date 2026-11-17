@@ -5,14 +5,8 @@
 // The target is a plane: the VRAM image or a display canvas, whose pixel p is VRAM-space pixel p + origin * scale.
 // A crop canvas's UI quads (kMappingCropUi) map instead at the UI scale from the UI origin.
 #include "record_op.glsl"
-// A depth group's mark: only the polygon's coverage and its moved-back depth (see main).
-#ifdef RECORD_DEPTH_MARK
-#define RECORD_DEPTH_BACK
-#endif
-// A draw that leaves its depth moved back by the plane's kDepthBin (RecordRasterizer::drawShapes).
-#ifdef RECORD_DEPTH_BACK
-#define RECORD_DEPTH
-#endif
+// RECORD_DEPTH_MARK: a depth group's or Model's mark, only the polygon's coverage and its moved-back depth (see main).
+// Every other depth-tested draw tests and writes the 1/z record.vert interpolates, so it keeps early depth testing.
 
 layout(location = 0) flat in uvec4 v_info;
 layout(location = 1) noperspective in vec3 v_colour; // a triangle's colour interpolants, channel units
@@ -157,21 +151,9 @@ uint blend(uint f, uint bg, uint mode) {
     return ((sum - carry) | (carry - (carry >> 5))) & 0xFFFFu;
 }
 
-#ifdef RECORD_DEPTH
+#ifdef RECORD_DEPTH_MARK
 // The op's DepthPlane, the op after it.
 float depthWord(uint field) { return uintBitsToFloat(ops[(op + 1u) * kRecordOpWords + field]); }
-
-// A depth-tested triangle's view depth at native VRAM point `at`, as log2(z) / 16 over SZ's 16-bit range. The
-// draw that writes a tested polygon's depth moves it back by the polygon's bin; the draw that tests it does not.
-float fragmentDepth(vec2 at) {
-    float inverse = depthWord(kDepthInverse) + depthWord(kDepthSlopeX) * (at.x - depthWord(kDepthOriginX)) +
-                    depthWord(kDepthSlopeY) * (at.y - depthWord(kDepthOriginY));
-    float z = 1.0 / max(inverse, 1.0e-6);
-#ifdef RECORD_DEPTH_BACK
-    z += depthWord(kDepthBin);
-#endif
-    return clamp(log2(max(z, 1.0)) / 16.0, 0.0, 1.0);
-}
 #endif
 
 void write(uint value) {
@@ -189,11 +171,9 @@ void main() {
     ivec2 n = (p + kVramWidth * S) / S - kVramWidth;
     uint flags = word(kOpFlags);
     uint kind = flags & kOpKindMask;
-#ifdef RECORD_DEPTH
-    // Only depth-tested ops reach this variant.
-    gl_FragDepth = fragmentDepth((vec2(p) + 0.5) / float(S));
-#endif
 #ifdef RECORD_DEPTH_MARK
+    // The polygon's 1/z here, left moved back by its bin, within SZ's 16-bit range as the test clamps it.
+    gl_FragDepth = 1.0 / clamp(1.0 / max(gl_FragCoord.z, 1.0e-6) + depthWord(kDepthBin), 1.0, 65536.0);
     // The group's test draw marked in stencil exactly the pixels it drew, and a group's polygons cover no pixel twice,
     // so a marked pixel this shape covers is its own: the texel, blend and mask work that decided it is not repeated.
     return;

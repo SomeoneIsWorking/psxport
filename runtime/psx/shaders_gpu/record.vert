@@ -9,6 +9,7 @@ struct Shape {
     vec4 corners[3];   // a triangle's corners: x, y in target pixels, u, v texel interpolants
     uvec2 colours[3];  // their colour interpolants, kColourStep a step from kColourFloor: r | g << 16, b
     uvec2 texels;      // the texels a textured triangle samples (RecordShape::texels), unused
+    vec4 depths;       // a depth-tested triangle's 1/z at its corners
 };
 layout(std430, set = 0, binding = 0) readonly buffer Shapes { Shape shapes[]; };
 layout(set = 1, binding = 0) uniform Target { vec4 size; } target;
@@ -20,11 +21,13 @@ void main() {
     Shape q = shapes[gl_VertexIndex / 6];
     int corner = gl_VertexIndex % 6;
     vec2 p;
+    float depth = 0.0;
     v_colour = vec3(0.0);
     v_uv = vec2(0.0);
     if (q.info.w == kShapeTriangle) {
         int c = min(corner, 2);
         p = q.corners[c].xy;
+        depth = q.depths[c];
         v_uv = q.corners[c].zw;
         uvec2 bits = q.colours[c];
         v_colour = vec3(float(bits.x & 0xFFFFu), float(bits.x >> 16), float(bits.y & 0xFFFFu)) / float(kColourStep) +
@@ -34,8 +37,9 @@ void main() {
         bool bottom = corner == 2 || corner == 4 || corner == 5;
         p = vec2(right ? q.rect.z : q.rect.x, bottom ? q.rect.w : q.rect.y);
     }
-    // Offscreen targets are Y-up: row 0 is NDC +1.
-    gl_Position = vec4(p.x / target.size.x * 2.0 - 1.0, -(p.y / target.size.y * 2.0 - 1.0), 0.0, 1.0);
+    // Offscreen targets are Y-up: row 0 is NDC +1. Depth is 1/z, nearer larger, linear on screen as the hardware
+    // interpolates it; the pipelines clamp it rather than clip, so z under 1 tests as 1.
+    gl_Position = vec4(p.x / target.size.x * 2.0 - 1.0, -(p.y / target.size.y * 2.0 - 1.0), depth, 1.0);
     v_info = q.info;
     v_texels = q.texels.x;
 }
