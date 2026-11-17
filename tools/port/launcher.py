@@ -33,7 +33,7 @@ CI_BUILD = Path("build/ci")
 # Built inside the release container (appimage_container.py), never by the host toolchain.
 APPIMAGE_BUILD = Path("build/appimage")
 # The release platforms' build trees (tools/port/target_platform.py).
-PLATFORM_BUILDS = {"windows": Path("build/windows"), "macos": Path("build/macos")}
+PLATFORM_BUILDS = {"windows": Path("build/windows"), "macos": Path("build/macos"), "android": Path("build/android")}
 # The trees a maintainer build may name; one tree per purpose, never one per task.
 MAINTAINER_BUILDS = (AGENT_BUILD, CI_BUILD, APPIMAGE_BUILD, *PLATFORM_BUILDS.values())
 FRAMEWORK_TOOLS_BUILD = Path("build/player-tools")

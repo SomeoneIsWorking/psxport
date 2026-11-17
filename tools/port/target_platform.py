@@ -1,7 +1,8 @@
 """The release platforms a title builds for beside the Linux host: their toolchain and target libraries.
 
-Windows x86-64 cross-compiles with llvm-mingw; macOS builds natively for the Mac's own architecture. Each
-platform's libraries (target-libraries.json) land under the shared dependency root
+Windows x86-64 cross-compiles with llvm-mingw; macOS builds natively for the Mac's own architecture; Android
+arm64-v8a cross-compiles with the pinned NDK against the shared android-port native prefix (SDL3, SDL3_image,
+FreeType, fmt). Each platform's libraries (target-libraries.json) land under the shared dependency root
 (``PSXPORT_DEPENDENCY_ROOT``, else the user cache), keyed by the pins that shape them, and are reused by every
 title's build tree. MoltenVK, which a macOS package carries, is pinned here too.
 """
@@ -11,6 +12,7 @@ from __future__ import annotations
 import hashlib
 import platform as host_platform
 import shutil
+import subprocess
 import tarfile
 import urllib.request
 import zipfile
@@ -33,7 +35,12 @@ MACOS_DEPLOYMENT_TARGET = "13.3"
 MOLTENVK_RELEASE = "v1.4.2"
 MOLTENVK_URL = f"https://github.com/KhronosGroup/MoltenVK/releases/download/{MOLTENVK_RELEASE}/MoltenVK-macos.tar"
 MOLTENVK_SHA256 = "f95765a6229cb7b915990a2890ce12ebe36a730b021545d3d52ae69ce4c4024e"
-PLATFORMS = ("windows", "macos")
+ANDROID_NDK_VERSION = "28.2.13676358"
+ANDROID_ABI = "arm64-v8a"
+# SDL_GPU draws through Vulkan, which Android has from 7.0 (API 24).
+ANDROID_API = 24
+ANDROID_PORT_REPOSITORY = "https://github.com/SomeoneIsWorking/android-port.git"
+PLATFORMS = ("windows", "macos", "android")
 
 
 def dependency_root(environment: Mapping[str, str]) -> Path:
@@ -90,10 +97,46 @@ def moltenvk(root: Path) -> Path:
 
 
 def architecture(platform: str) -> str:
-    """The CPU a platform build targets: x86-64 for Windows, the building Mac's own for macOS."""
+    """The CPU a platform build targets: x86-64 for Windows, the building Mac's own for macOS, arm64 for Android."""
     if platform == "macos":
         return "arm64" if host_platform.machine() == "arm64" else "x86_64"
+    if platform == "android":
+        return "arm64"
     return "x86_64"
+
+
+def android_ndk(environment: Mapping[str, str]) -> Path:
+    """The pinned NDK inside the SDK ANDROID_HOME (or ANDROID_SDK_ROOT) names."""
+    for variable in ("ANDROID_HOME", "ANDROID_SDK_ROOT"):
+        if environment.get(variable):
+            ndk = Path(environment[variable]) / "ndk" / ANDROID_NDK_VERSION
+            if (ndk / "build" / "cmake" / "android.toolchain.cmake").is_file():
+                return ndk
+    raise ToolError(f"Android NDK {ANDROID_NDK_VERSION} is missing: set ANDROID_HOME to an SDK and run "
+                    f"`sdkmanager \"ndk;{ANDROID_NDK_VERSION}\"`")
+
+
+def android_port_checkout(root: Path, environment: Mapping[str, str]) -> Path:
+    """The workspace's shared/android-port checkout, else a clone of its main under the dependency root."""
+    candidates = [Path(environment["SHARED_DIR"]) / "android-port"] if environment.get("SHARED_DIR") else []
+    candidates += [FRAMEWORK.parents[1] / "shared" / "android-port", FRAMEWORK.parents[2] / "shared" / "android-port"]
+    for candidate in candidates:
+        if (candidate / "tools" / "android_port.py").is_file():
+            return candidate
+    clone = root / "android-port"
+    if not (clone / ".git").is_dir():
+        subprocess.run(["git", "clone", "--quiet", ANDROID_PORT_REPOSITORY, str(clone)], check=True)
+    return clone
+
+
+def android_prefix(root: Path, environment: Mapping[str, str], ndk: Path) -> Path:
+    """The android-port native prefix for the pinned NDK, API and ABI, built by android-port when missing."""
+    prefix = root / "android" / f"ndk-{ANDROID_NDK_VERSION}" / f"android-{ANDROID_API}" / ANDROID_ABI
+    checkout = android_port_checkout(root, environment)
+    subprocess.run(["uv", "run", "--directory", str(checkout), "--frozen", "python", "tools/android_port.py",
+                    "build-native-deps", "--ndk", str(ndk), "--abi", ANDROID_ABI, "--api", str(ANDROID_API),
+                    "--prefix", str(prefix)], check=True)
+    return prefix
 
 
 def _keyed(root: Path, platform: str, kind: str, *parts: bytes) -> Path:
@@ -108,6 +151,8 @@ def provision(platform: str, environment: Mapping[str, str]) -> list[str]:
     if platform not in PLATFORMS:
         raise ToolError(f"no target platform {platform!r}; known: {', '.join(PLATFORMS)}")
     root = dependency_root(environment)
+    if platform == "android":
+        return _provision_android(root, environment)
     if platform == "windows":
         toolchain = llvm_mingw(root)
         library_arguments = [f"-DCMAKE_TOOLCHAIN_FILE={WINDOWS_TOOLCHAIN_FILE}", f"-DLLVM_MINGW_ROOT={toolchain}"]
@@ -133,3 +178,14 @@ def provision(platform: str, environment: Mapping[str, str]) -> list[str]:
                         # zlib's static MinGW name, which FindZLIB does not search.
                         f"-DZLIB_LIBRARY={prefix / 'lib' / 'libzs.a'}"]
     return definitions
+
+
+def _provision_android(root: Path, environment: Mapping[str, str]) -> list[str]:
+    ndk = android_ndk(environment)
+    prefix = android_prefix(root, environment, ndk)
+    return [f"-DCMAKE_TOOLCHAIN_FILE={ndk / 'build' / 'cmake' / 'android.toolchain.cmake'}",
+            f"-DANDROID_ABI={ANDROID_ABI}", f"-DANDROID_PLATFORM=android-{ANDROID_API}", "-DANDROID_STL=c++_shared",
+            f"-DCMAKE_PREFIX_PATH={prefix}", f"-DCMAKE_FIND_ROOT_PATH={prefix}",
+            f"-DPSXPORT_TARGET_DEPENDENCY_PREFIX={prefix}",
+            # SDL_image's installed Findwebp leaves libwebp's sharpyuv to this hook.
+            f"-Dwebp_LINK_LIBRARIES={prefix / 'lib' / 'libsharpyuv.a'}"]

@@ -7,6 +7,10 @@
 
 #include <memory>
 
+#if defined(__ANDROID__)
+#include <SDL3/SDL_main.h>
+#endif
+
 int main(int argc, char **argv) {
   const std::unique_ptr<psx::host::TitleCatalog> catalog = PSXPORT_PRODUCT_CATALOG();
   psx::host::ProductHost host(*catalog);

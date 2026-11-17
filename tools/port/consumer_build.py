@@ -2,7 +2,7 @@
 """Configure and build a title repository against this psxport checkout with Ninja.
 
     CC=clang CXX=clang++ uv run --frozen python external/psxport/tools/port/consumer_build.py \\
-        [--build build/agent|build/ci] [--platform host|windows|macos] [--target NAME]... [-DNAME=VALUE]...
+        [--build build/agent|build/ci] [--platform host|windows|macos|android] [--target NAME]... [-DNAME=VALUE]...
 
 Run from the title root. The configure is the launcher's (`launcher.configure_consumer`), so the
 compiler choice is the player's, at RelWithDebInfo. `--platform windows`

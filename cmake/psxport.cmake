@@ -420,7 +420,13 @@ function(psxport_add_product target)
       "psxport_add_product(${target} CATALOG <factory> HEADER <header> [SOURCES ...] [LIBRARIES ...])")
   endif()
   set(product_main "${CMAKE_CURRENT_FUNCTION_LIST_DIR}/../runtime/psx/host/product_main.cpp")
-  add_executable(${target} "${product_main}" ${PRODUCT_SOURCES})
+  if(ANDROID)
+    # SDL's Activity loads libmain.so and calls its SDL_main.
+    add_library(${target} SHARED "${product_main}" ${PRODUCT_SOURCES})
+    set_target_properties(${target} PROPERTIES OUTPUT_NAME main LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin")
+  else()
+    add_executable(${target} "${product_main}" ${PRODUCT_SOURCES})
+  endif()
   # The framework's own main sees the host internals; the title's sources do not.
   set_source_files_properties("${product_main}" TARGET_DIRECTORY ${target} PROPERTIES
     INCLUDE_DIRECTORIES "$<TARGET_PROPERTY:psxport_internal,INTERFACE_INCLUDE_DIRECTORIES>")
