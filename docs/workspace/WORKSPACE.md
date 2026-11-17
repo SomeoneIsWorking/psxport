@@ -51,6 +51,9 @@ title gets none. Tekken 3, Tomba! 1 and Mega Man X4 are 60 fps; measure any othe
 projection word is gameplay state (battle code branches on it), so widen its canvas, never `H`.
 C-12 also gets increased draw distance and a right-stick camera (psx-c12 G004). Spyro 1/2/3 also get more vegetation (psx-spyro G006) and a right-stick camera (psx-spyro G007). Tomba! 2 also gets better water and fire (psx-tomba G006, G007). Mega Man X4 also gets drop-in/drop-out co-op
 and skippable dialogue and sequences.
+Where a title stops between stages to ask about saving (Toy Story 2 G005, Mega Man X4 G006 so far; check each
+title before planning it), the prompt goes: the game autosaves there through its own save routine with an
+autosave icon, and the title menu leads with a selected "Continue" that loads the newest save.
 
 Start skips what the player does not control (logos, movies, flybys, transition and load fades) in every title.
 Each skip is title-owned, one screen at a time, taken through that screen's own guest terminal transition and
