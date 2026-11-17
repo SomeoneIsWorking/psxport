@@ -62,7 +62,7 @@ public:
   // the frame itself only when the panel did not.
   unsigned long long advance();
   // The focused session, running, handed over as the product (TitleSession::handOver); the others stay
-  // loaded and paused, holding their pictures.
+  // loaded and paused, holding only their pictures and guest state (TitleSession::releaseRebuildable).
   std::unique_ptr<TitleSession> handOver();
   // The product back onto its panel, paused where it stopped. A title that ended its own run cannot go on and
   // is replaced by an unbooted one.

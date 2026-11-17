@@ -65,6 +65,25 @@ RenderState::~RenderState() {
   }
 }
 
+void RenderState::releaseRebuildable() {
+  if (record_) {
+    std::vector<present::FrameRecord> records;
+    for (const present::FrameRecord *record : game_.presentation.heldRecords()) {
+      records.push_back(*record);
+    }
+    restored_ = RestoredPicture{record_->canvasWindows(), std::move(records)};
+    record_.reset();
+  }
+  for (SDL_GPUTexture **texture : {&vramTexture_, &hostImage_, &screenImage_}) {
+    device_.release(*texture);
+  }
+  for (SDL_GPUTransferBuffer **buffer : {&vramUpload_, &hostUpload_, &screenReadback_}) {
+    device_.release(*buffer);
+  }
+  hostImageSize_ = {};
+  screenImageSize_ = {};
+}
+
 void RenderState::bringUp() {
   device_.bringUp();
   if (overlayBound_) {

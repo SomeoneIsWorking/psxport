@@ -172,8 +172,10 @@ The selector is the Slant Stage (the `slant-stage` skill): the titles themselves
   `picker: picked <title>` and makes the session the product (`TitleSession::handOver`): its presents go to the
   window, the player's pad goes live, it is heard, it holds the control channel and it is no longer a preview.
   A press still held from the selector stays hidden from the guest until released
-  (`Pad::setPlayerInputSuppressed`). The other titles stay loaded and paused through play, holding their
-  pictures, so the stage is whole again the moment the player returns.
+  (`Pad::setPlayerInputSuppressed`). The other titles stay loaded and paused through play, holding only
+  their last picture and guest state: their scaled canvases and other rebuildable GPU targets are freed at the
+  pick (`RenderState::releaseRebuildable`) and come back from guest state on their next present, as after a
+  state load. The stage is whole again the moment the player returns.
 - **Return is a hand-back.** `session return` or the menu row ends the product's loop; `runSelector` gives
   the session back to the stage (`PanelSessions::takeBack`, `TitleSession::takeBack`): paused where it
   stopped, a silent preview again, its return request answered and the control channel released for the new

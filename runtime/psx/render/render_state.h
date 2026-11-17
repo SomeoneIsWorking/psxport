@@ -90,6 +90,9 @@ public:
   // Present into this Game's own image of `image` (0 = the sink's size) for a pane host.
   void presentToPane(PixelSize image);
   void presentToWindow();
+  // Free every GPU target the next present can rebuild, keeping only the last presented picture: the scaled
+  // canvases come back from guest state as after a state load (restoreRecords).
+  void releaseRebuildable();
   // The size this Game's present image is built at: a pane's requested size, else the sink's.
   PixelSize presentImageSize();
   // The host compositing this pane, told after each pane build and at each show.

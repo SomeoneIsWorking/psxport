@@ -115,6 +115,9 @@ public:
   bool holdsStagePicture() const {
     return holdsStagePicture_;
   }
+  // Free the GPU targets a held session can rebuild, keeping its picture and guest state
+  // (RenderState::releaseRebuildable).
+  void releaseRebuildable();
   // Run unseen to that picture: unpaced and unheard (SessionControl::setPreRolling).
   void setPreRolling(bool preRolling);
   // The newest presented frame, at the size this session built it.

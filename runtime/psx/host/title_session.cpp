@@ -291,6 +291,12 @@ void TitleSession::setPlayerInput(bool live) {
   }
 }
 
+void TitleSession::releaseRebuildable() {
+  if (parts_->booted) {
+    parts_->game->render().releaseRebuildable();
+  }
+}
+
 void TitleSession::setPreRolling(bool preRolling) {
   if (parts_->booted) {
     parts_->game->session.setPreRolling(preRolling);

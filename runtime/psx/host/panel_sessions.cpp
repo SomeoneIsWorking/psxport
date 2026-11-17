@@ -201,6 +201,11 @@ std::unique_ptr<TitleSession> PanelSessions::handOver() {
   if (session(focused_) == nullptr) {
     return nullptr;
   }
+  for (int panel = 0; panel < count(); ++panel) {
+    if (TitleSession *held = session(panel); panel != focused_ && held != nullptr) {
+      held->releaseRebuildable();
+    }
+  }
   std::unique_ptr<TitleSession> picked = std::move(sessions_[static_cast<std::size_t>(focused_)]);
   lucent::info("picker", "picked {}", content_.panelTitle(focused_).identity->displayName);
   picked->handOver();
