@@ -12,11 +12,15 @@ struct Shape {
     vec4 depths;       // a depth-tested triangle's 1/z at its corners
 };
 layout(std430, set = 0, binding = 0) readonly buffer Shapes { Shape shapes[]; };
+layout(std430, set = 0, binding = 1) readonly buffer Ops { uint ops[]; };
 layout(set = 1, binding = 0) uniform Target { vec4 size; } target;
 layout(location = 0) flat out uvec4 v_info;
 layout(location = 1) noperspective out vec3 v_colour;
 layout(location = 2) noperspective out vec2 v_uv;
 layout(location = 3) flat out uint v_texels;
+// The op words every fragment reads, read here once a vertex rather than from the buffer every fragment.
+layout(location = 4) flat out uvec4 v_op;     // kOpFlags, kOpColour, kOpClut
+layout(location = 5) flat out uvec4 v_window; // kOpWindowXAnd, XAdd, YAnd, YAdd
 void main() {
     Shape q = shapes[gl_VertexIndex / 6];
     int corner = gl_VertexIndex % 6;
@@ -41,5 +45,8 @@ void main() {
     // interpolates it; the pipelines clamp it rather than clip, so z under 1 tests as 1.
     gl_Position = vec4(p.x / target.size.x * 2.0 - 1.0, -(p.y / target.size.y * 2.0 - 1.0), depth, 1.0);
     v_info = q.info;
+    uint at = q.info.x * kRecordOpWords;
+    v_op = uvec4(ops[at + kOpFlags], ops[at + kOpColour], ops[at + kOpClut], 0u);
+    v_window = uvec4(ops[at + kOpWindowXAnd], ops[at + kOpWindowXAdd], ops[at + kOpWindowYAnd], ops[at + kOpWindowYAdd]);
     v_texels = q.texels.x;
 }

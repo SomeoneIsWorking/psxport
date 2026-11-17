@@ -16,7 +16,7 @@ using gpu::RecordCanvas;
 using gpu::RecordRect;
 
 constexpr SDL_GPUTextureFormat kVramFormat = SDL_GPU_TEXTUREFORMAT_R8G8_UNORM;
-constexpr ShaderCode kRecordVertex{spv_g_record_vert, spv_g_record_vert_len, {0, 1, 1}, PSXPORT_MSL(record_vert)};
+constexpr ShaderCode kRecordVertex{spv_g_record_vert, spv_g_record_vert_len, {0, 1, 2}, PSXPORT_MSL(record_vert)};
 constexpr ShaderCode kRecordFragment{spv_g_record_frag, spv_g_record_frag_len, {5, 1, 3}, PSXPORT_MSL(record_frag)};
 // A mark: coverage and the moved-back depth alone, for a depth group or Model draw that writes no colour where the
 // test draw already passed (stencil), so it never samples a texel or reads the target; both pipeline sets share it.
@@ -1002,7 +1002,8 @@ void RecordRasterizer::execute(const gpu::RecordRasterPlan &plan, bool inBetween
       }
       SDL_GPURenderPass *pass = SDL_BeginGPURenderPass(cmd_, &colour, 1, depth ? &depthInfo : nullptr);
       ++work_.renderPasses;
-      SDL_BindGPUVertexStorageBuffers(pass, 0, &shapeBuffer_.buffer, 1);
+      SDL_GPUBuffer *vertexBuffers[2] = {shapeBuffer_.buffer, ops_.buffer};
+      SDL_BindGPUVertexStorageBuffers(pass, 0, vertexBuffers, 2);
       SDL_GPUSampler *nearest = device_.nearestSampler();
       // With no capture the binding is never sampled: only a held read-back plans read-back ops.
       SDL_GPUTexture *readBack = capture_ != nullptr ? capture_ : vram_.snapshot;

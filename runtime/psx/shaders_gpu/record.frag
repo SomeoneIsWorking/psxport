@@ -12,6 +12,8 @@ layout(location = 0) flat in uvec4 v_info;
 layout(location = 1) noperspective in vec3 v_colour; // a triangle's colour interpolants, channel units
 layout(location = 2) noperspective in vec2 v_uv;     // its texel interpolants
 layout(location = 3) flat in uint v_texels;          // the texels it samples (RecordShape::texels)
+layout(location = 4) flat in uvec4 v_op;     // its op's kOpFlags, kOpColour and kOpClut (record.vert)
+layout(location = 5) flat in uvec4 v_window; // its op's texture window: kOpWindowXAnd, XAdd, YAnd, YAdd
 layout(location = 0) out vec4 o_col;
 layout(set = 2, binding = 0) uniform sampler2D u_target; // the target plane before this batch
 #ifdef RECORD_FETCH
@@ -52,8 +54,8 @@ int wrap(int value, int range) {
 }
 
 // The texel column across VRAM at the op's mode and the VRAM row, after the texture window (gpu.c TWX/TWY).
-uint windowedU(uint u) { return (u & word(kOpWindowXAnd)) + word(kOpWindowXAdd); }
-uint windowedV(uint v) { return (v & word(kOpWindowYAnd)) + word(kOpWindowYAdd); }
+uint windowedU(uint u) { return (u & v_window.x) + v_window.y; }
+uint windowedV(uint v) { return (v & v_window.z) + v_window.w; }
 
 // gpu_common.h GetTexel. `fu`/`fv` (1/256 texel) pick the target pixel inside the texel's scaled block, so a
 // block drawn or copied at scale shows its detail; an uploaded block is uniform and reads as at 1x.
@@ -67,9 +69,9 @@ uint texel(uint u, uint v, uint fu, uint fv, uint flags) {
     int sy = int((fv * uint(Sv)) >> 8);
     uint t = fetch(ivec2(fx * Sv + sx, fy * Sv + sy));
     if (tm == 0u) {
-        t = clutEntry(word(kOpClut) + ((t >> ((uext & 3u) * 4u)) & 0xFu));
+        t = clutEntry(v_op.z + ((t >> ((uext & 3u) * 4u)) & 0xFu));
     } else if (tm == 1u) {
-        t = clutEntry(word(kOpClut) + ((t >> ((uext & 1u) * 8u)) & 0xFFu));
+        t = clutEntry(v_op.z + ((t >> ((uext & 1u) * 8u)) & 0xFFu));
     }
     return t;
 }
@@ -81,7 +83,7 @@ uint readBackTexel(ivec2 p) {
     uint w = word(kOpReadBackWeights);
     uint index = ((t & 0x1Fu) * (w & 0xFFu) + ((t >> 5) & 0x1Fu) * ((w >> 8) & 0xFFu) +
                   ((t >> 10) & 0x1Fu) * ((w >> 16) & 0xFFu)) >> (w >> 24);
-    return clutEntry(word(kOpClut) + (index & 0xFFu));
+    return clutEntry(v_op.z + (index & 0xFFu));
 }
 
 float median(vec3 d) { return max(min(d.r, d.g), min(max(d.r, d.g), d.b)); }
@@ -110,14 +112,14 @@ uint outlineTexel(uint u, uint v, uint fu, uint fv, uint flags) {
         index = uint(indices.r * 255.0 + 0.5);
         uint slot = uint(indices.b * 255.0 + 0.5);
         if (slot > 0u && params.faces[slot - 1u] != 0) {
-            return (clutEntry(word(kOpClut) + index) & 0x8000u) | uint(params.faces[slot - 1u]);
+            return (clutEntry(v_op.z + index) & 0x8000u) | uint(params.faces[slot - 1u]);
         }
     } else if (distance.a >= 0.5) {
         index = uint(indices.g * 255.0 + 0.5);
     } else {
         return 0u;
     }
-    return clutEntry(word(kOpClut) + index);
+    return clutEntry(v_op.z + index);
 }
 
 uint pack(int r, int g, int b) { return 0x8000u | uint(r >> 3) | (uint(g >> 3) << 5) | (uint(b >> 3) << 10); }
@@ -156,6 +158,10 @@ uint blend(uint f, uint bg, uint mode) {
 float depthWord(uint field) { return uintBitsToFloat(ops[(op + 1u) * kRecordOpWords + field]); }
 #endif
 
+// The native pixel of VRAM-space target pixel `p`: integer floor division (a float divide is inexact at S = 3),
+// biased because a canvas reaches left of VRAM.
+ivec2 native(ivec2 p) { return (p + kVramWidth * S) / S - kVramWidth; }
+
 void write(uint value) {
     o_col = vec4(float(value & 0xFFu) / 255.0, float((value >> 8) & 0xFFu) / 255.0, 0.0, 1.0);
 }
@@ -167,9 +173,7 @@ void main() {
     Sv = params.plane.w;
     ivec2 target = ivec2(gl_FragCoord.xy);
     ivec2 p = target + (ui ? params.ui.yz : params.plane.yz * S);
-    // Integer floor division (a float divide is inexact at S = 3); biased because a canvas reaches left of VRAM.
-    ivec2 n = (p + kVramWidth * S) / S - kVramWidth;
-    uint flags = word(kOpFlags);
+    uint flags = v_op.x;
     uint kind = flags & kOpKindMask;
 #ifdef RECORD_DEPTH_MARK
     // The polygon's 1/z here, left moved back by its bin, within SZ's 16-bit range as the test clamps it.
@@ -180,7 +184,7 @@ void main() {
 #endif
     // A crop canvas shows every row; a transfer's op carries the image's field weave.
     if ((flags & kOpSkipRows) != 0u && v_info.z == kMappingPlane &&
-        uint(n.y & 1) == ((flags & kOpSkipParity) != 0u ? 1u : 0u)) {
+        uint(native(p).y & 1) == ((flags & kOpSkipParity) != 0u ? 1u : 0u)) {
         discard;
     }
     bool maskCheck = (flags & kOpMaskCheck) != 0u;
@@ -198,7 +202,7 @@ void main() {
     int vramWidth = kVramWidth * S;
     int vramHeight = kVramHeight * S;
     if (kind == kRecordOpKindFill) {
-        write(word(kOpColour));
+        write(v_op.y);
         return;
     }
     if (kind == kRecordOpKindCopy) {
@@ -216,6 +220,7 @@ void main() {
         return;
     }
     if (kind == kRecordOpKindUpload) {
+        ivec2 n = native(p);
         int rx = wrap(n.x - int(word(kOpOriginX)), kVramWidth);
         int ry = wrap(n.y - int(word(kOpOriginY)), kVramHeight);
         if (maskCheck && (dst & 0x8000u) != 0u) {
@@ -225,7 +230,7 @@ void main() {
         return;
     }
     bool textured = (flags & kOpTextured) != 0u;
-    uint colour = word(kOpColour);
+    uint colour = v_op.y;
     int r = int(colour & 0xFFu);
     int g = int((colour >> 8) & 0xFFu);
     int b = int((colour >> 16) & 0xFFu);
