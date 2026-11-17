@@ -16,6 +16,10 @@ void RenderWindow::create(bool shown, const char *title, present::PixelSize size
   SDL_WindowFlags flags = exactPixels ? 0 : SDL_WINDOW_HIGH_PIXEL_DENSITY;
   const SDL_PropertiesID props = SDL_CreateProperties();
   if (shown) {
+#if defined(__ANDROID__)
+    // SDL turns a resizable window's unset orientation into FULL_USER, overriding the manifest's landscape.
+    SDL_SetHint(SDL_HINT_ORIENTATIONS, "LandscapeLeft LandscapeRight");
+#endif
     fullscreen_ = psx::config::fullscreen();
     flags |= SDL_WINDOW_RESIZABLE | (fullscreen_ ? SDL_WINDOW_FULLSCREEN : 0);
   } else {

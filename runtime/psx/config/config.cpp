@@ -8,6 +8,10 @@
 #include <lucent/platform.h>
 #include <lucent/text.h>
 
+#if defined(__ANDROID__)
+#include <SDL3/SDL_system.h>
+#endif
+
 #include <algorithm>
 #include <cstdlib>
 #include <filesystem>
@@ -342,6 +346,13 @@ Config Config::fromEnvironment() {
     if (std::filesystem::is_directory(contents / "Resources" / "assets", missing)) {
       config.package = Package{contents.parent_path(), contents / "Resources"};
     }
+  }
+#elif defined(__ANDROID__)
+  // An APK keeps its data and the assets/ its Activity unpacks in the app-private files directory.
+  if (const char *internal = SDL_GetAndroidInternalStoragePath()) {
+    const std::filesystem::path root(internal);
+    lucent::platform::set_user_data_directory(root);
+    config.package = Package{root, root};
   }
 #else
   std::filesystem::path root(lucent::config::text("APPDIR"));

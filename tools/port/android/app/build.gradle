@@ -1,0 +1,63 @@
+plugins {
+    id "com.android.application"
+}
+
+import java.util.Properties
+
+// tools/port/android_package.py writes this beside the staged project: the title's identity and the staged inputs.
+def titleFile = rootProject.file("title.properties")
+if (!titleFile.isFile()) {
+    throw new GradleException("title.properties is missing; build the APK with tools/port/android_package.py")
+}
+def title = new Properties()
+titleFile.withInputStream { title.load(it) }
+def required = { String name ->
+    def value = title.getProperty(name)
+    if (!value) throw new GradleException("title.properties names no ${name}")
+    value
+}
+
+def keystore = System.getenv("PSXPORT_ANDROID_KEYSTORE")
+def releaseSigned = keystore && System.getenv("PSXPORT_ANDROID_KEY_ALIAS") &&
+        System.getenv("PSXPORT_ANDROID_STORE_PASSWORD") && System.getenv("PSXPORT_ANDROID_KEY_PASSWORD")
+
+android {
+    namespace = required("applicationId")
+    compileSdk = 36
+    ndkVersion = required("ndkVersion")
+    if (releaseSigned) {
+        signingConfigs {
+            release {
+                storeFile = file(keystore)
+                storePassword = System.getenv("PSXPORT_ANDROID_STORE_PASSWORD")
+                keyAlias = System.getenv("PSXPORT_ANDROID_KEY_ALIAS")
+                keyPassword = System.getenv("PSXPORT_ANDROID_KEY_PASSWORD")
+            }
+        }
+    }
+    defaultConfig {
+        applicationId = required("applicationId")
+        minSdk = required("minSdk").toInteger()
+        targetSdk = 36
+        versionCode = required("versionCode").toInteger()
+        versionName = required("versionName")
+        manifestPlaceholders = [label: required("label")]
+    }
+    buildTypes {
+        debug { minifyEnabled = false }
+        release {
+            minifyEnabled = false
+            if (releaseSigned) signingConfig = signingConfigs.release
+        }
+    }
+    sourceSets {
+        main {
+            jniLibs.srcDirs = [required("jniLibs")]
+            assets.srcDirs = [required("assets")]
+            res.srcDirs += [required("res")]
+        }
+    }
+    packaging {
+        jniLibs { useLegacyPackaging = true }
+    }
+}

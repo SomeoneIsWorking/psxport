@@ -4,6 +4,11 @@
 #include <filesystem>
 #include <string>
 
+namespace setup_ui {
+class Session;
+class View;
+} // namespace setup_ui
+
 namespace psx::host {
 
 struct TitleIdentity;
@@ -27,6 +32,9 @@ public:
   Outcome run(bool shown) const;
 
 private:
+  // The open screen until the player accepts or declines; `accepted` is the image the session judged good.
+  Outcome choose(setup_ui::Session &session, setup_ui::View &view, const std::filesystem::path &accepted) const;
+
   const TitleIdentity &title_;
 };
 

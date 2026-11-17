@@ -1,7 +1,7 @@
 """A title's application icon in each platform's container, drawn from its committed SVG.
 
-The pinned resvg renders every size; ICO (Windows) and ICNS (macOS) hold those PNGs unchanged, so neither
-needs a platform tool. resvg lands under the shared dependency root like the other pinned tools.
+The pinned resvg renders every size; ICO (Windows), ICNS (macOS) and Android's mipmap densities hold those PNGs
+unchanged, so none needs a platform tool. resvg lands under the shared dependency root like the other pinned tools.
 """
 
 from __future__ import annotations
@@ -23,6 +23,8 @@ RESVG_ASSETS = {
     "darwin": ("resvg-macos-x86_64.zip", "7c92cba55348f0254707c8d2c61e71651296981f8ccfadf8477782e91db5e171"),
 }
 ICO_SIZES = (16, 24, 32, 48, 64, 128, 256)
+# Android's launcher icon at each screen density, 48 dp.
+MIPMAP_SIZES = {"mdpi": 48, "hdpi": 72, "xhdpi": 96, "xxhdpi": 144, "xxxhdpi": 192}
 # ICNS element types and the pixel size each holds.
 ICNS_TYPES = ((b"icp4", 16), (b"ic11", 32), (b"icp5", 32), (b"ic12", 64), (b"ic07", 128), (b"ic13", 256),
               (b"ic08", 256), (b"ic14", 512), (b"ic09", 512), (b"ic10", 1024))
@@ -73,3 +75,13 @@ def icns(svg: Path, destination: Path, work: Path) -> Path:
     destination.parent.mkdir(parents=True, exist_ok=True)
     destination.write_bytes(b"icns" + struct.pack(">I", 8 + len(elements)) + elements)
     return destination
+
+
+def mipmaps(svg: Path, res: Path, work: Path) -> Path:
+    """`res/mipmap-<density>/ic_launcher.png` for every density."""
+    pngs = _rendered(svg, MIPMAP_SIZES.values(), work)
+    for density, size in MIPMAP_SIZES.items():
+        directory = res / f"mipmap-{density}"
+        directory.mkdir(parents=True, exist_ok=True)
+        (directory / "ic_launcher.png").write_bytes(pngs[size])
+    return res

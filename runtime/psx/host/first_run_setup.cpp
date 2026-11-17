@@ -4,10 +4,12 @@
 #include "title_catalog.h"
 #include "title_disc.h"
 #include "title_selection.h"
+#include "watchdog.h"
 
 #include <SDL3/SDL.h>
 #include <SDL3/SDL_dialog.h>
 #include <lucent/log.h>
+#include <lucent/platform.h>
 #include <setup_ui/setup_ui.h>
 
 #include <array>
@@ -62,6 +64,51 @@ private:
   std::optional<std::filesystem::path> selection_;
   std::string error_;
 };
+
+#if defined(__ANDROID__)
+// Android's picker answers with a content:// document, and libchdr reads a path, so the image is copied
+// into the title's own storage first.
+std::optional<std::filesystem::path> localCopy(const std::filesystem::path &document, const TitleIdentity &title) {
+  const std::optional<std::filesystem::path> directory = lucent::platform::user_data_directory(title.slug);
+  std::string error = "no user-data directory";
+  if (!directory || !lucent::platform::ensure_user_data_directory(*directory, error)) {
+    lucent::error("setup", "nowhere to keep the disc image: {}", error);
+    return std::nullopt;
+  }
+  const std::filesystem::path target = *directory / "disc.chd";
+  const std::filesystem::path pending = std::filesystem::path(target) += ".pending";
+  SDL_IOStream *source = SDL_IOFromFile(document.c_str(), "rb");
+  SDL_IOStream *sink = source != nullptr ? SDL_IOFromFile(pending.c_str(), "wb") : nullptr;
+  bool copied = source != nullptr && sink != nullptr;
+  std::vector<std::byte> block(std::size_t{4} << 20);
+  while (copied) {
+    const std::size_t read = SDL_ReadIO(source, block.data(), block.size());
+    if (read == 0) {
+      copied = SDL_GetIOStatus(source) == SDL_IO_STATUS_EOF;
+      break;
+    }
+    copied = SDL_WriteIO(sink, block.data(), read) == read;
+  }
+  const std::string why = copied ? std::string() : std::string(SDL_GetError());
+  if (source != nullptr) {
+    SDL_CloseIO(source);
+  }
+  copied = sink != nullptr && SDL_CloseIO(sink) && copied;
+  std::error_code renamed;
+  if (copied) {
+    std::filesystem::rename(pending, target, renamed);
+  }
+  if (!copied || renamed) {
+    lucent::error("setup",
+                  "the disc image could not be copied from {}: {}",
+                  document.string(),
+                  renamed ? renamed.message() : why);
+    std::filesystem::remove(pending, renamed);
+    return std::nullopt;
+  }
+  return target;
+}
+#endif
 
 } // namespace
 
@@ -122,11 +169,25 @@ FirstRunSetup::Outcome FirstRunSetup::run(bool shown) const {
                   title_.discEnvVar != nullptr ? title_.discEnvVar : "PSXPORT_DISC");
     return Outcome::Unavailable;
   }
+  // The player may take as long as they like to find the disc.
+  psx::platform::Watchdog::suspend();
+  const Outcome outcome = choose(session, view, accepted);
+  psx::platform::Watchdog::resume();
+  return outcome;
+}
+
+FirstRunSetup::Outcome
+FirstRunSetup::choose(setup_ui::Session &session, setup_ui::View &view, const std::filesystem::path &accepted) const {
   DiscPicker picker;
   while (view.running()) {
     for (const setup_ui::Request &request : view.poll()) {
       if (request.kind == setup_ui::RequestKind::Browse) {
-        const std::optional<std::filesystem::path> chosen = picker.choose();
+        std::optional<std::filesystem::path> chosen = picker.choose();
+#if defined(__ANDROID__)
+        if (chosen) {
+          chosen = localCopy(*chosen, title_);
+        }
+#endif
         if (chosen) {
           // A refusal is shown on the screen by the session.
           std::string refusal;
@@ -146,7 +207,7 @@ FirstRunSetup::Outcome FirstRunSetup::run(bool shown) const {
     view.frame();
   }
   view.close();
-  lucent::info("setup", "{} setup was closed without a disc", name);
+  lucent::info("setup", "{} setup was closed without a disc", title_.displayName);
   return Outcome::Declined;
 }
 

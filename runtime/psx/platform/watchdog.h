@@ -22,7 +22,7 @@ public:
   // Resume after an intentional idle without claiming frame progress.
   static void resume();
   // Cancel the timeout during an intentional idle; no present re-arms it until resume() (pause, REPL
-  // input wait, a bug-report form held open).
+  // input wait, a bug-report form or the first-run disc screen held open).
   static void suspend();
   // Permanently disarm (the divergence debugger pauses indefinitely).
   static void disable();
