@@ -269,7 +269,70 @@ RecordRasterizer::Plane RecordRasterizer::makePlane(const RecordCanvas &shape, i
   plane.scale = scale;
   plane.originX = shape.originX();
   plane.originY = shape.originY();
+  const RecordRect whole{0, 0, plane.width, plane.height};
+  for (Region *region : {&plane.beforeDiffers, &plane.inBetweenDiffers, &plane.snapshotDiffers}) {
+    region->add(whole);
+  }
   return plane;
+}
+
+namespace {
+
+std::int64_t area(const RecordRect &rect) {
+  return static_cast<std::int64_t>(rect.x1 - rect.x0) * static_cast<std::int64_t>(rect.y1 - rect.y0);
+}
+
+RecordRect bound(const RecordRect &a, const RecordRect &b) {
+  return {std::min(a.x0, b.x0), std::min(a.y0, b.y0), std::max(a.x1, b.x1), std::max(a.y1, b.y1)};
+}
+
+bool touches(const RecordRect &a, const RecordRect &b) {
+  return a.x0 <= b.x1 && b.x0 <= a.x1 && a.y0 <= b.y1 && b.y0 <= a.y1;
+}
+
+} // namespace
+
+void RecordRasterizer::Region::add(RecordRect rect) {
+  if (rect.x1 <= rect.x0 || rect.y1 <= rect.y0) {
+    return;
+  }
+  for (bool grew = true; grew;) {
+    grew = false;
+    for (std::size_t i = 0; i < rects_.size(); i++) {
+      if (touches(rects_[i], rect)) {
+        rect = bound(rects_[i], rect);
+        rects_.erase(rects_.begin() + static_cast<std::ptrdiff_t>(i));
+        grew = true;
+        break;
+      }
+    }
+  }
+  rects_.push_back(rect);
+  while (rects_.size() > kMaxRects) {
+    std::size_t first = 0;
+    std::size_t second = 1;
+    std::int64_t least = INT64_MAX;
+    for (std::size_t i = 0; i < rects_.size(); i++) {
+      for (std::size_t j = i + 1; j < rects_.size(); j++) {
+        const std::int64_t added = area(bound(rects_[i], rects_[j])) - area(rects_[i]) - area(rects_[j]);
+        if (added < least) {
+          least = added;
+          first = i;
+          second = j;
+        }
+      }
+    }
+    const RecordRect merged = bound(rects_[first], rects_[second]);
+    rects_.erase(rects_.begin() + static_cast<std::ptrdiff_t>(second));
+    rects_.erase(rects_.begin() + static_cast<std::ptrdiff_t>(first));
+    add(merged);
+  }
+}
+
+void RecordRasterizer::Region::add(const Region &other) {
+  for (const RecordRect &rect : other.rects_) {
+    add(rect);
+  }
 }
 
 void RecordRasterizer::releasePlane(Plane &plane) {
@@ -579,7 +642,9 @@ void RecordRasterizer::advance(const present::FrameRecord &record,
 }
 
 void RecordRasterizer::apply(const present::FrameRecord &record) {
-  for (int index = 0; index <= static_cast<int>(canvases_.size()); index++) {
+  copyRegion(vram_.image, vram_.before, vram_.beforeDiffers, vram_.scale);
+  vram_.beforeDiffers.clear();
+  for (int index = 1; index <= static_cast<int>(canvases_.size()); index++) {
     const Plane &target = plane(index);
     const RecordRect copied = copiedRect(index, record.windows().drawn);
     copyTexture({.from = target.image, .source = copied, .to = target.before, .toX = copied.x0, .scale = target.scale});
@@ -640,7 +705,19 @@ bool RecordRasterizer::drawInBetween(const present::FrameRecord &record, int sca
   }
   const present::RecordWindows windows = record.windows();
   const present::HorizontalMargins margins = windows.drawn;
-  for (int index = 0; index <= static_cast<int>(canvases_.size()); index++) {
+  if (onImage) {
+    copyRegion(vram_.image, vram_.inBetween, vram_.inBetweenDiffers, vram_.scale);
+    vram_.inBetweenDiffers.clear();
+  } else {
+    // The kept state differs from the image only where the last record drew.
+    vram_.inBetweenDiffers.add(vram_.beforeDiffers);
+    copyRegion(vram_.before, vram_.inBetween, vram_.inBetweenDiffers, vram_.scale);
+    vram_.inBetweenDiffers = vram_.beforeDiffers;
+    vram_.snapshotDiffers.add(vram_.beforeDiffers);
+    copyRegion(vram_.before, vram_.snapshot, vram_.snapshotDiffers, vram_.scale);
+    vram_.snapshotDiffers = vram_.beforeDiffers;
+  }
+  for (int index = 1; index <= static_cast<int>(canvases_.size()); index++) {
     const Plane &target = plane(index);
     const RecordRect copied = copiedRect(index, margins);
     copyTexture({.from = onImage ? target.image : target.before,
@@ -657,7 +734,9 @@ bool RecordRasterizer::drawInBetween(const present::FrameRecord &record, int sca
   const gpu::RecordRasterPlan &plan =
       planner_.plan(record, scale_, canvasShapes(margins), readBack_, false, depthTest_);
   execute(plan, true);
-  for (int index = 0; index <= static_cast<int>(canvases_.size()); index++) {
+  copyRegion(vram_.image, vram_.snapshot, vram_.snapshotDiffers, vram_.scale);
+  vram_.snapshotDiffers.clear();
+  for (int index = 1; index <= static_cast<int>(canvases_.size()); index++) {
     const Plane &target = plane(index);
     const RecordRect copied = copiedRect(index, margins);
     copyTexture(
@@ -708,6 +787,12 @@ void RecordRasterizer::stage(const char *label) {
   }
   device_.submit(cmd_, label);
   cmd_ = device_.acquire();
+}
+
+void RecordRasterizer::copyRegion(SDL_GPUTexture *from, SDL_GPUTexture *to, const Region &region, int scale) {
+  for (const RecordRect &rect : region.rects()) {
+    copyTexture({.from = from, .source = rect, .to = to, .toX = rect.x0, .toY = rect.y0, .scale = scale});
+  }
 }
 
 void RecordRasterizer::copyTexture(const TextureCopy &copy) {
@@ -944,7 +1029,12 @@ void RecordRasterizer::execute(const gpu::RecordRasterPlan &plan, bool inBetween
     // Every pass of the batch read the snapshots as they were; refresh them only now.
     for (int p = 0; p < planes; p++) {
       const gpu::RecordPlaneBatch &range = batch.planes[static_cast<std::size_t>(p)];
-      const Plane &target = plane(p);
+      Plane &target = plane(p);
+      // The pass drew no farther than the snapshot refresh reaches.
+      if (p == 0) {
+        (inBetween ? target.snapshotDiffers : target.beforeDiffers).add(range.dirty);
+        target.inBetweenDiffers.add(range.dirty);
+      }
       copyTexture({.from = inBetween ? target.inBetween : target.image,
                    .source = range.dirty,
                    .to = target.snapshot,

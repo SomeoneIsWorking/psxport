@@ -140,6 +140,23 @@ private:
     SDL_GPUBuffer *buffer = nullptr;
     std::uint32_t size = 0;
   };
+  // Native rects of a plane, kept to a few: a growing one swallows those it touches, and past kMaxRects the two whose
+  // union adds least merge.
+  class Region {
+  public:
+    static constexpr std::size_t kMaxRects = 4;
+    void add(gpu::RecordRect rect);
+    void add(const Region &other);
+    void clear() {
+      rects_.clear();
+    }
+    std::span<const gpu::RecordRect> rects() const {
+      return rects_;
+    }
+
+  private:
+    std::vector<gpu::RecordRect> rects_;
+  };
   // A render target, the copy of it every pass reads, the target an in-between draws into, and the
   // target as it was before the last applied record.
   struct Plane {
@@ -153,6 +170,11 @@ private:
     int scale = 0;   // texels per native pixel
     int originX = 0; // VRAM-space position of pixel (0, 0)
     int originY = 0;
+    // The VRAM plane's copies refresh only where they may differ from the image (from the target, for the
+    // snapshot): a record writes a draw buffer, not the whole of VRAM. Canvases copy their windows whole.
+    Region beforeDiffers;
+    Region inBetweenDiffers;
+    Region snapshotDiffers;
   };
   // `shape`'s window is the drawn window of the record that last drew it, `view` that record's view.
   struct Canvas {
@@ -212,6 +234,8 @@ private:
     int scale = 1;
   };
   void copyTexture(const TextureCopy &copy);
+  // `region` of `from` to the same place in `to`.
+  void copyRegion(SDL_GPUTexture *from, SDL_GPUTexture *to, const Region &region, int scale);
   void ensureBuffer(Buffer &buffer, std::uint32_t bytes);
   void ensureTransfer(SDL_GPUTransferBuffer *&transfer,
                       std::uint32_t &size,
