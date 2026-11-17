@@ -89,6 +89,38 @@ Spyro 1 attract demo at 8x (psx-spyro `tools/demo_gputime.py`, shots from `tools
 CPU spread 1-5% over two runs a side; GPU counts repeat exactly. Shots at 1x and 8x differ only along polygon
 edges; no seams seen in the demo. Stone Hill's slivers (0199, 0206) were not revisited.
 
+### After phase 1 (M2)
+
+With `gputime` split into stages (`record keep before`, `upload`, `draw`, `snapshot`, `in-between seed`,
+`snapshot restore`), the draw passes were about half the GPU time and whole-plane copies a third. Landed, each
+against the one before (two runs each, ms/present p50; the host is shared, so each step is also read against the
+stages it did not touch):
+
+| commit | change | total p50 | draw stage |
+|---|---|---|---|
+| b0b6375 | stage timing, shaded-pixel count, Model marks without texel work | 22.6 | 13.6 |
+| 57c22db | depth interpolated and tested by the hardware (1/z, reversed); only marks write it | 22.1 / 22.7 | 13.8 / 14.3 |
+| 192d36d | the VRAM plane's `before`, `inBetween` and snapshot copied only where they differ from the image | 18.3 / 18.4 | 12.1 / 12.1 |
+| ae8a304 | op flags, colour, CLUT and window as flat varyings from `record.vert` | 17.9 / 17.9 | 11.8 / 11.7 |
+| b97b60d | lean `record.frag` (no copy, upload, read-back or outline paths) for the runs that need none | 17.5 / 17.4 | 10.8 / 10.8 |
+
+p10 went 16.9 → 13.0. Hardware depth was level on Spyro (it draws back to front, so early depth testing finds
+little to reject) but leaves the test draws as plain pipelines. Copied pixels went 72 → 46 Mpx a present. The
+draw stage is fragment shading: a trivial shader draws the same coverage in about 2 ms, and the demo shades about
+59 Mpx a present (a 7.9 Mpx display, about 7x over).
+
+### Phase 2 on Metal: deferred
+
+Measured on the M2, phase 2 has little to win and real costs:
+
+- Semi-transparent pixels are about 1% of the shaded ones (3.9k of 316k Mpx over the demo), and on Metal the
+  shader reads the target in-pass (framebuffer fetch, tile memory), so no batch break or copy pays for a blend.
+- A 4-byte target doubles every copy's bytes, and copies are still about a quarter of the GPU time; every texel
+  read also packs RGBA8 back to 1555.
+
+It still pays where the target read is a snapshot copy and a batch break (Vulkan, D3D12), so it stays the plan
+there, done and measured on that machine. On the Mac the draw stage's shading and the remaining copies come first.
+
 ## Phase 2: RGBA8 target and fixed-function blending
 
 1. **Target format.** `kVramFormat` R8G8 → R8G8B8A8_UNORM. Colour in RGB, the mask bit in A.
