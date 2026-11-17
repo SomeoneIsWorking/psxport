@@ -53,7 +53,9 @@ C-12 also gets increased draw distance and a right-stick camera (psx-c12 G004). 
 and skippable dialogue and sequences.
 Where a title stops between stages to ask about saving (Toy Story 2 G005, Mega Man X4 G006 so far; check each
 title before planning it), the prompt goes: the game autosaves there through its own save routine with an
-autosave icon. Every title that saves, retail autosave included (Spyro, psx-spyro G008), leads its title menu
+autosave icon. A title that saves only by hand (save points, a save menu) also autosaves on its screen and area
+transitions, to an autosave slot of its own so a manual save is never overwritten (Tomba! 2, psx-tomba G008).
+Every title that saves, retail autosave included (Spyro, psx-spyro G008), leads its title menu
 with a selected "Continue" that loads the newest save.
 
 Start skips what the player does not control (logos, movies, flybys, transition and load fades) in every title.
