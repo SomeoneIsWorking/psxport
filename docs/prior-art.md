@@ -19,7 +19,7 @@ measurement disagree, the measurement wins.
 | Crash 1/2/3 | `crash/docs/prior-art.md` | `khasinski/crash-bandicoot-decomp` (Crash 1, no license: names only) |
 | Crash Team Racing | `ctr/docs/prior-art.md` | CTR-ModSDK `gcc-syms926.txt`, GPL-3.0, matches `SCUS_944.26` |
 | Crash Bash | `crashbash/docs/prior-art.md` | |
-| Tomba! 1/2 | `Tomba2Engine/docs/prior-art.md` | `psx_tomba` (no LICENSE), tomba2-decomp, Tombi-Decomp, mstan recompilations: names and boundaries only |
+| Tomba! 1/2 | `psx-tomba/external/tomba1-decomp/docs/prior-art.md`, `psx-tomba/external/tomba2-decomp/docs/prior-art.md` | `psx_tomba` (no LICENSE), Tombi-Decomp (MIT), mstan recompilations: names and boundaries only |
 | Spider-Man 1/2 | `spider1/docs/prior-art.md` | |
 | Toy Story 2 | `toystory2/docs/prior-art.md` | PeriBluGaming/ToyStory2Recomp seeds match our entry `0x80082D60` |
 | Tekken 3 | `tekken3/docs/prior-art.md` | Tek3Ex (MIT) patterns locate the `TEKKEN3.BNS` table on our USA build |
