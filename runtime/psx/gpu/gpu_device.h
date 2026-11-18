@@ -4,6 +4,7 @@
 #include "emulated_time.h"
 #include "gp0_record_tap.h"
 #include "rgb24_picture.h"
+#include "device_vram.h"
 #include "vram_rect.h"
 
 #include <cstdint>
@@ -69,8 +70,8 @@ public:
   // `owner` is the OwnerLedger handle of the code uploading (a LoadImage port writer).
   void loadImage(VramRect rect, std::span<const uint16_t> pixels, std::uint32_t owner);
 
-  // 1024x512 1555 halfwords, row-major.
-  std::span<const uint16_t> vram();
+  // 1024x512 1555 halfwords, row-major, settled as read.
+  DeviceVram vram();
   DisplayArea displayArea();
   // Top-left of the GP0(E3) drawing area: where the frame being drawn lands.
   VramPoint drawAreaOrigin();

@@ -635,7 +635,7 @@ void RecordRasterizer::selectField(const present::FrameRecord &record) {
 
 void RecordRasterizer::update(const present::FrameRecord &record,
                               bool deviceAhead,
-                              std::span<const std::uint16_t> vram,
+                              const gpu::DeviceVram &vram,
                               int scale,
                               const RecordView &view) {
   ensureImage(std::max(scale, 1));
@@ -647,7 +647,7 @@ void RecordRasterizer::update(const present::FrameRecord &record,
 
 void RecordRasterizer::advance(const present::FrameRecord &record,
                                bool deviceAhead,
-                               std::span<const std::uint16_t> vram) {
+                               const gpu::DeviceVram &vram) {
   if (chained_ && record.sequence() == applied_) {
     return;
   }
@@ -661,7 +661,7 @@ void RecordRasterizer::advance(const present::FrameRecord &record,
   }
   // Every canvas is a crop canvas or none is: a crop canvas takes the upload, a margin canvas the image's columns.
   const bool crops = !canvases_.empty() && canvases_.front().shape.crop();
-  execute(planner_.planVramUpload(vram, scale_, crops ? canvasShapes({}) : std::span<const RecordCanvas>{}), false);
+  execute(planner_.planVramUpload(vram.all(), scale_, crops ? canvasShapes({}) : std::span<const RecordCanvas>{}), false);
   readBack_.reset();
   for (Canvas &canvas : canvases_) {
     if (crops) {
@@ -703,14 +703,14 @@ void RecordRasterizer::apply(const present::FrameRecord &record) {
   beforeHeld_ = true;
 }
 
-void RecordRasterizer::redrawRestored(std::span<const std::uint16_t> vram, const RecordView &view) {
+void RecordRasterizer::redrawRestored(const gpu::DeviceVram &vram, const RecordView &view) {
   restorePending_ = false;
   const std::vector<present::FrameRecord> records = std::move(restoredRecords_);
   const std::vector<CanvasWindows> canvases = std::move(restoredCanvases_);
   restoredRecords_.clear();
   restoredCanvases_.clear();
   // The records drawn again over the VRAM they left, at scale: what each covers shows as the saving run drew it.
-  execute(planner_.planVramUpload(vram, scale_, {}), false);
+  execute(planner_.planVramUpload(vram.all(), scale_, {}), false);
   readBack_.reset();
   resynced_++;
   if (view.reach > 0 && !view.crop.active()) {
@@ -791,7 +791,7 @@ bool RecordRasterizer::show(SDL_GPUCommandBuffer *&cmd,
                             const present::FrameRecord *composed,
                             bool advanceToRecord,
                             bool deviceAhead,
-                            std::span<const std::uint16_t> vram,
+                            const gpu::DeviceVram &vram,
                             int scale,
                             const RecordView &view,
                             const present::DepthTest *depthTest) {

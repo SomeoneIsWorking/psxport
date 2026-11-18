@@ -46,6 +46,7 @@ Var<long> cv_exec_trace_from("PSXPORT_EXEC_TRACE_FROM", 0, kRunOnly);
 Var<long> cv_exec_trace_to("PSXPORT_EXEC_TRACE_TO", 0, kRunOnly);
 Var<bool> cv_exec_interpret("PSXPORT_EXEC_INTERPRET", false, kRunOnly);
 Var<bool> cv_exec_nolink("PSXPORT_EXEC_NOLINK", false, kRunOnly);
+Var<bool> cv_gpu_eager("PSXPORT_GPU_EAGER", false, kRunOnly);
 
 const Registration kRegistration{
     cv_exec_trace,
@@ -55,6 +56,7 @@ const Registration kRegistration{
     cv_exec_trace_to,
     cv_exec_interpret,
     cv_exec_nolink,
+    cv_gpu_eager,
     cv_store_watch,
     cv_store_watch_limit,
     cv_store_watch_registers,
@@ -178,6 +180,9 @@ bool exec_interpret() {
 }
 bool exec_nolink() {
   return cv_exec_nolink.get();
+}
+bool gpu_eager() {
+  return cv_gpu_eager.get();
 }
 
 std::string gpu_dump_dir() {

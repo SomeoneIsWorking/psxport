@@ -10,6 +10,7 @@
 // replay.
 #pragma once
 
+#include "device_vram.h"
 #include "frame_record.h"
 #include "vram_pixel.h"
 
@@ -146,7 +147,7 @@ public:
   // without its field draws its bitmap. Never waits on the worker.
   void drew(std::span<const OutlineFont> fonts,
             const DrawnGlyphs &drawn,
-            std::span<const std::uint16_t> vram,
+            const gpu::DeviceVram &vram,
             const psx::input::GlyphSet &pads);
   // Null until a font's atlas is built.
   [[nodiscard]] const OutlineAtlas *atlas() const;
@@ -166,7 +167,7 @@ void markGlyphs(std::span<const OutlineFont> fonts,
                 const OutlineGlyphs *glyphs,
                 std::span<RecordEntry> entries,
                 OutlineText &text,
-                std::span<const std::uint16_t> vram,
+                const gpu::DeviceVram &vram,
                 const psx::input::GlyphSet &pads);
 
 } // namespace psx::present

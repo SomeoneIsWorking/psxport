@@ -19,12 +19,13 @@ bool samplesClut(const DrawPrimitive &primitive) {
   return primitive.textured && primitive.state.texMode < 2;
 }
 
-std::uint32_t appendFromVram(FrameRecord &record, const DrawPrimitive &primitive, std::span<const std::uint16_t> vram) {
+std::uint32_t appendFromVram(FrameRecord &record, const DrawPrimitive &primitive, const gpu::DeviceVram &vram) {
   const gpu::VramPoint at = gpu::decodeClut(primitive.clutWord);
   std::array<std::uint16_t, 256> entries{};
   const std::size_t count = gpu::clutEntryCount(static_cast<gpu::TexDepth>(primitive.state.texMode));
+  const std::span<const std::uint16_t> words = vram.settled({at.x, at.y, static_cast<int>(count), 1});
   for (std::size_t i = 0; i < count; i++) {
-    entries[i] = gpu::vramHalfWord(vram, {at.x + static_cast<int>(i), at.y});
+    entries[i] = gpu::vramHalfWord(words, {at.x + static_cast<int>(i), at.y});
   }
   return record.appendClut(std::span<const std::uint16_t>(entries.data(), count));
 }
@@ -92,7 +93,7 @@ void RecordCluts::index(const FrameRecord &shown, Between between) {
   t_ = between.t;
 }
 
-bool RecordCluts::resolve(FrameRecord &into, DrawPrimitive &primitive, std::span<const std::uint16_t> vram) {
+bool RecordCluts::resolve(FrameRecord &into, DrawPrimitive &primitive, const gpu::DeviceVram &vram) {
   if (!samplesClut(primitive)) {
     return true;
   }

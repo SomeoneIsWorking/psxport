@@ -1,6 +1,7 @@
 // A title's logo as its own title screen drew it, rebuilt from the frame record and VRAM.
 #pragma once
 
+#include "device_vram.h"
 #include "logo_image.h"
 #include "vram_rect.h"
 
@@ -23,6 +24,6 @@ struct LogoTexture {
 // device, into one image over their screen bounds; a pixel they did not write is transparent. nullopt when
 // none was drawn or none wrote a pixel.
 std::optional<psx::host::LogoImage>
-drawnLogo(const FrameRecord &record, std::span<const std::uint16_t> vram, std::span<const LogoTexture> textures);
+drawnLogo(const FrameRecord &record, const gpu::DeviceVram &vram, std::span<const LogoTexture> textures);
 
 } // namespace psx::present

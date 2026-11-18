@@ -1,6 +1,7 @@
 // gpu_device.cpp — GpuDevice over the vendored Beetle gpu.c.
 #include "gpu_device.h"
 
+#include "diagnostic_config.h"
 #include "gpu_display_mode.h"
 #include "vram_pixel.h"
 
@@ -98,6 +99,15 @@ constexpr int kScanoutHeight = 512;
 // Less than one scanline of CPU clock, so a field end is always seen before the next line 0.
 constexpr uint64_t kClockStepTicks = 2048;
 
+// gpu.c draws a command's pixels when something reads them (GPU_SetDeferPixels); a reader settles what it reads.
+void settleVram(VramRect rect) {
+  GPU_SettlePixels(rect.x, rect.y, rect.width, rect.height);
+}
+
+DeviceVram deviceVram() {
+  return {{GPU_get_vram(), static_cast<size_t>(kVramWidth) * kVramHeight}, settleVram};
+}
+
 std::vector<uint8_t> captureBeetleState() {
   StateMem stream{};
   if (GPU_StateAction(&stream, 0, 0) == 0 || stream.len == 0) {
@@ -147,6 +157,9 @@ GpuDevice::GpuDevice() : mScanout(std::make_unique<Scanout>()) {
     lucent::error("gpu-device", "Beetle GPU_Init failed");
     std::abort();
   }
+  if (sLive == 0) {
+    GPU_SetDeferPixels(!config::gpu_eager());
+  }
   ++sLive;
 }
 
@@ -155,6 +168,7 @@ GpuDevice::~GpuDevice() {
     sBound = nullptr;
   }
   if (--sLive == 0) {
+    GPU_SetDeferPixels(false);
     GPU_Destroy();
   }
 }
@@ -244,7 +258,7 @@ DeviceProbe GpuDevice::probe(CensusMark before) const {
   }
   probe.clutTag = GPU.CLUT_Cache_VB;
   probe.clut = std::span<const uint16_t>(GPU.CLUT_Cache, 256);
-  probe.vram = std::span<const uint16_t>(GPU_get_vram(), static_cast<size_t>(kVramWidth) * kVramHeight);
+  probe.vram = deviceVram();
   return probe;
 }
 
@@ -362,9 +376,9 @@ void GpuDevice::loadImage(VramRect rect, std::span<const uint16_t> pixels, std::
   }
 }
 
-std::span<const uint16_t> GpuDevice::vram() {
+DeviceVram GpuDevice::vram() {
   bind();
-  return {GPU_get_vram(), static_cast<size_t>(kVramWidth) * kVramHeight};
+  return deviceVram();
 }
 
 DisplayArea GpuDevice::displayArea() {
@@ -397,7 +411,7 @@ Rgb24Picture GpuDevice::picture(VramRect rect, bool depth24) {
   const int width = rect.width;
   const int height = rect.height;
   bind();
-  const uint16_t *vram = GPU_get_vram();
+  const uint16_t *vram = deviceVram().settled(depth24 ? VramRect{x, y, (width * 3 + 1) / 2, height} : rect).data();
   const auto at = [vram](int column, int row) {
     return vram[static_cast<size_t>(row & (kVramHeight - 1)) * kVramWidth +
                 static_cast<size_t>(column & (kVramWidth - 1))];

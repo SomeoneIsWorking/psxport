@@ -162,7 +162,7 @@ private:
 } // namespace
 
 std::optional<psx::host::LogoImage>
-drawnLogo(const FrameRecord &record, std::span<const std::uint16_t> vram, std::span<const LogoTexture> textures) {
+drawnLogo(const FrameRecord &record, const gpu::DeviceVram &vram, std::span<const LogoTexture> textures) {
   std::vector<const DrawPrimitive *> drawn;
   Bounds bounds;
   for (const RecordEntry &entry : record.entries()) {
@@ -180,7 +180,8 @@ drawnLogo(const FrameRecord &record, std::span<const std::uint16_t> vram, std::s
   const int height = bounds.bottom - bounds.top;
 
   // Binding the scratch device parks the live one, whose VRAM `vram` views.
-  const std::vector<std::uint16_t> textureSource(vram.begin(), vram.end());
+  const std::span<const std::uint16_t> liveVram = vram.all();
+  const std::vector<std::uint16_t> textureSource(liveVram.begin(), liveVram.end());
   psx::gpu::GpuDevice device;
   device.loadImage({0, 0, psx::gpu::kVramWidth, psx::gpu::kVramHeight}, textureSource, 0);
   const std::vector<std::uint16_t> cleared(static_cast<std::size_t>(width) * height, 0);
@@ -192,7 +193,7 @@ drawnLogo(const FrameRecord &record, std::span<const std::uint16_t> vram, std::s
     PrimitiveWords(*primitive, origin).sendTo(device);
   }
 
-  const std::span<const std::uint16_t> drawnVram = device.vram();
+  const std::span<const std::uint16_t> drawnVram = device.vram().all();
   std::vector<std::uint8_t> rgba(static_cast<std::size_t>(width) * height * 4, 0);
   bool written = false;
   for (int row = 0; row < height; ++row) {

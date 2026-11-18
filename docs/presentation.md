@@ -68,8 +68,13 @@ Draw order is OT slot order (below). There are no bands, layers or painter range
 - **`device`**: presents the device's own VRAM display rect, 4:3, with no in-betweens. It is the reference
   picture for comparing a record present against.
 
-The device executes every command on both paths and holds the only guest-visible VRAM; its software raster
-is the largest CPU cost the port keeps, since the guest reads that VRAM. Any other
+The device executes every command on both paths and holds the only guest-visible VRAM. It draws a command's
+pixels only when something reads them (beetle-psx `gpu_defer.c`): the GPU the guest talks to keeps every
+register and logs each command, and a second instance sharing its VRAM replays the log in order when a reader
+settles a rect (`DeviceVram::settled`/`all`, `GPU_SettlePixels`) or a fill makes the log two frames long. A draw
+that a later fill covers before anything reads it replays for its state alone, so a double-buffered title's
+frames are never rasterized on the CPU. VRAM, GPUREAD and save states are as the eager device leaves them;
+`PSXPORT_GPU_EAGER=1` draws every command as it runs, for comparison. Any other
 name is refused with a warning and the Core stays on `record`.
 
 ## Record path

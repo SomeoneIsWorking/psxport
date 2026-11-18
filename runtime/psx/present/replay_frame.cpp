@@ -164,7 +164,7 @@ bool ReplayFrame::covers(const Interval &interval) const {
 }
 
 const FrameRecord *
-ReplayFrame::at(const FrameRecord &shown, const FrameRecord &from, int k, std::span<const std::uint16_t> vram) {
+ReplayFrame::at(const FrameRecord &shown, const FrameRecord &from, int k, const gpu::DeviceVram &vram) {
   const Set *set = setFor(shown.sequence());
   if (set == nullptr || k < 1 || k >= set->fields) {
     return nullptr;
@@ -190,7 +190,7 @@ const FrameRecord *ReplayFrame::assemble(const FrameRecord &shown,
                                          const RecordCluts::Between &between,
                                          const Capture &capture,
                                          int k,
-                                         std::span<const std::uint16_t> vram) {
+                                         const gpu::DeviceVram &vram) {
   const std::span<const ChainRun> runs = shown.chainRuns();
   const auto drawn_by_section = [this](const ChainRun &run) {
     return section_.linked(run.head);

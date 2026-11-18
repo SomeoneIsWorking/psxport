@@ -194,7 +194,7 @@ void RenderState::buildDisplay(gpu::VramRect display, present::ScanoutWindow win
   present::PresentInputs inputs = presentInputs(lastDisplay_, display.width, window);
   presentRecord(inputs);
   if (!presentsRecord_) {
-    uploadDeviceVram(cmd, game_.core.gpuDevice().vram());
+    uploadDeviceVram(cmd, game_.core.gpuDevice().vram().all());
   }
   const present::PresentPlan plan = present::planPresent(inputs);
   viewport_ = plan.viewport;

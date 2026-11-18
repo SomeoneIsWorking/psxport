@@ -1,6 +1,7 @@
 // record_cluts.h — the CLUTs a record sampled, so a primitive drawn into a copy of it samples the same entries.
 #pragma once
 
+#include "device_vram.h"
 #include "frame_record.h"
 #include "palette_cycle.h"
 
@@ -26,7 +27,7 @@ public:
   // Sets `primitive`'s CLUT offset in `into`, which holds the indexed record's pools: the entries the record
   // sampled (blended with the earlier record's at a cycle step), else the ones `vram` holds now,
   // appended. False when the pool is full.
-  [[nodiscard]] bool resolve(FrameRecord &into, DrawPrimitive &primitive, std::span<const std::uint16_t> vram);
+  [[nodiscard]] bool resolve(FrameRecord &into, DrawPrimitive &primitive, const gpu::DeviceVram &vram);
 
 private:
   struct Indexed {

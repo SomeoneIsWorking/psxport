@@ -96,7 +96,7 @@ void vramRegion(Core &core, const char *path, gpu::VramRect rect) {
 }
 
 void vramWords(Core &core, gpu::VramPoint at, std::span<std::uint16_t> out) {
-  const std::span<const std::uint16_t> vram = core.gpuDevice().vram();
+  const std::span<const std::uint16_t> vram = core.gpuDevice().vram().all();
   const std::size_t row = static_cast<std::size_t>(at.y % gpu::kVramHeight) * gpu::kVramWidth;
   for (std::size_t i = 0; i < out.size(); i++) {
     out[i] = vram[row + ((static_cast<std::size_t>(at.x) + i) & (gpu::kVramWidth - 1))];
@@ -109,7 +109,7 @@ void vramRaw(Core &core, const char *path) {
     lucent::error("gpu_vram", "could not open {}, nothing written", path);
     return;
   }
-  const std::span<const std::uint16_t> vram = core.gpuDevice().vram();
+  const std::span<const std::uint16_t> vram = core.gpuDevice().vram().all();
   std::fwrite(vram.data(), 2, vram.size(), file);
   std::fclose(file);
   lucent::info("gpu_vram", "wrote raw {} ({}x{} u16)", path, gpu::kVramWidth, gpu::kVramHeight);

@@ -551,8 +551,9 @@ void Gp0RecordTap::settleLast(const DeviceProbe &probe) {
   upload.height = rect.y1 - rect.y0;
   upload.sourceAddress = primitive->sourceAddress;
   settledPixels_.clear();
+  const std::span<const std::uint16_t> vram = probe.vram.settled({rect.x0, rect.y0, upload.width, upload.height});
   for (int y = rect.y0; y < rect.y1; y++) {
-    const auto row = probe.vram.subspan(static_cast<std::size_t>(y) * kVramWidth + static_cast<std::size_t>(rect.x0),
+    const auto row = vram.subspan(static_cast<std::size_t>(y) * kVramWidth + static_cast<std::size_t>(rect.x0),
                                         static_cast<std::size_t>(upload.width));
     settledPixels_.insert(settledPixels_.end(), row.begin(), row.end());
   }

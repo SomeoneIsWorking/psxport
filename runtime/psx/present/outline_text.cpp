@@ -87,13 +87,13 @@ bool glyphInk(const OutlineFont &font, const BitmapGlyph &bitmap, int index) {
   return bitmap.shadowed ? glyphTexel(font, index) : index != 0;
 }
 
-BitmapGlyph readGlyph(const OutlineFont &font, std::span<const std::uint16_t> vram, const OutlineGlyph &glyph) {
+BitmapGlyph readGlyph(const OutlineFont &font, std::span<const std::uint16_t> words, const OutlineGlyph &glyph) {
   BitmapGlyph bitmap;
   bitmap.width = glyph.width;
   bitmap.height = glyph.height;
   bitmap.indices.resize(offsetOf(0, bitmap.height, bitmap.width));
-  const auto halfWordAt = [vram](psx::gpu::VramPoint at) {
-    return psx::gpu::vramHalfWord(vram, at);
+  const auto halfWordAt = [words](psx::gpu::VramPoint at) {
+    return psx::gpu::vramHalfWord(words, at);
   };
   bool ink = false;
   bool shadow = false;
@@ -461,7 +461,7 @@ class OutlineText::Builder {
 public:
   void drew(std::span<const OutlineFont> fonts,
             const DrawnGlyphs &drawn,
-            std::span<const std::uint16_t> vram,
+            const gpu::DeviceVram &vram,
             const psx::input::GlyphSet &pads) {
     if (fonts.size() > kMaxOutlineFonts) {
       lucent::error("outline", "a title names {} fonts, more than {}", fonts.size(), kMaxOutlineFonts);
@@ -495,7 +495,7 @@ public:
           continue;
         }
         const OutlineGlyph &glyph = font.glyphs[i];
-        bitmaps[i] = readGlyph(font, vram, glyph);
+        bitmaps[i] = readGlyph(font, vram.all(), glyph);
         codepoints[i] =
             (glyph.button == 0                                                     ? glyph.codepoint
              : glyph.padArt && pads.family() == psx::input::PadFamily::PlayStation ? psx::input::kNoGlyph
@@ -829,7 +829,7 @@ OutlineText::~OutlineText() = default;
 
 void OutlineText::drew(std::span<const OutlineFont> fonts,
                        const DrawnGlyphs &drawn,
-                       std::span<const std::uint16_t> vram,
+                       const gpu::DeviceVram &vram,
                        const psx::input::GlyphSet &pads) {
   builder_->drew(fonts, drawn, vram, pads);
 }
@@ -852,7 +852,7 @@ void markGlyphs(std::span<const OutlineFont> fonts,
                 const OutlineGlyphs *glyphs,
                 std::span<RecordEntry> entries,
                 OutlineText &text,
-                std::span<const std::uint16_t> vram,
+                const gpu::DeviceVram &vram,
                 const psx::input::GlyphSet &pads) {
   if (fonts.empty() || glyphs == nullptr) {
     return;

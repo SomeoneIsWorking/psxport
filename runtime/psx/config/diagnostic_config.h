@@ -54,6 +54,7 @@ long exec_trace_from();
 long exec_trace_to();
 bool exec_interpret();
 bool exec_nolink(); // PSXPORT_EXEC_NOLINK: translated blocks never link
+bool gpu_eager();   // PSXPORT_GPU_EAGER: the GPU device draws every command as it runs, not when read
 
 std::string wav_capture_path();                     // PSXPORT_WAV
 std::optional<std::uint32_t> spu_write_backtrace(); // PSXPORT_SPUBT: hex SPU register offset

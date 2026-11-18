@@ -1,6 +1,7 @@
 // gp0_record_tap.h — appends each GP0 command the GPU device executes to the FrameRecord.
 #pragma once
 
+#include "device_vram.h"
 #include "frame_record.h"
 #include "gp0_draw_state.h"
 #include "gp0_primitive_decode.h"
@@ -29,7 +30,7 @@ struct DeviceProbe {
   Gp0DrawRegisters draw;               // checked against the tap's own decode
   std::uint32_t clutTag = 0;           // gpu.c CLUT_Cache_VB
   std::span<const std::uint16_t> clut; // gpu.c CLUT_Cache, 256 entries
-  std::span<const std::uint16_t> vram; // the device's VRAM, 1024x512
+  DeviceVram vram;                     // the device's VRAM, 1024x512, settled as read
 };
 
 // Where a GP0 word came from: its guest address (0 when it came from no packet) and the writer of the packet it

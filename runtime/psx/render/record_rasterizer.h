@@ -1,6 +1,7 @@
 // record_rasterizer.h — FrameRecords rasterized in record order into one VRAM image.
 #pragma once
 
+#include "device_vram.h"
 #include "frame_record.h"
 #include "gpu_work.h"
 #include "guest_widescreen_projection.h"
@@ -74,7 +75,7 @@ public:
             const present::FrameRecord *composed,
             bool advanceToRecord,
             bool deviceAhead,
-            std::span<const std::uint16_t> vram,
+            const gpu::DeviceVram &vram,
             int scale,
             const RecordView &view,
             const present::DepthTest *depthTest);
@@ -129,7 +130,7 @@ private:
   // `record` does not continue the image; `deviceAhead` says it already holds work after `record`.
   void update(const present::FrameRecord &record,
               bool deviceAhead,
-              std::span<const std::uint16_t> vram,
+              const gpu::DeviceVram &vram,
               int scale,
               const RecordView &view);
 
@@ -180,7 +181,7 @@ private:
 
   void ensureImage(int scale);
   // Applies `record` on top of the image, or uploads the device VRAM when it does not follow.
-  void advance(const present::FrameRecord &record, bool deviceAhead, std::span<const std::uint16_t> vram);
+  void advance(const present::FrameRecord &record, bool deviceAhead, const gpu::DeviceVram &vram);
   Plane makePlane(const gpu::RecordCanvas &shape, int scale);
   void releasePlane(Plane &plane);
   // Keeps a canvas for `view`'s display, created from the image with empty margins and `windows`.
@@ -192,7 +193,7 @@ private:
   // `record` rasterized on top of the image and canvases, the state before it kept.
   void apply(const present::FrameRecord &record);
   // The restore(): the device's VRAM, the carried canvases and the carried records drawn again.
-  void redrawRestored(std::span<const std::uint16_t> vram, const RecordView &view);
+  void redrawRestored(const gpu::DeviceVram &vram, const RecordView &view);
   // A new crop canvas: its band copied from the image at the canvas's scale.
   void seedCrop(Canvas &canvas);
   // The canvas `view` shows at this image scale.

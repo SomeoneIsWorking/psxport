@@ -143,7 +143,7 @@ void RenderState::checkRecord(const present::FrameRecord &record, bool drewCompo
     return;
   }
   const auto *ours = reinterpret_cast<const std::uint16_t *>(image.bytes());
-  const std::span<const std::uint16_t> vram = game_.core.gpuDevice().vram();
+  const std::span<const std::uint16_t> vram = game_.core.gpuDevice().vram().all();
   const int width = rect.x1 - rect.x0;
   long mismatched = 0;
   int firstX = -1;

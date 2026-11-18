@@ -7,6 +7,7 @@
 // and each chain the section relinked (a draw environment's packet) in place of S's run from the same head.
 #pragma once
 
+#include "device_vram.h"
 #include "frame_record.h"
 #include "gp0_draw_state.h"
 #include "motion_set.h"
@@ -70,7 +71,7 @@ public:
   [[nodiscard]] bool covers(const Interval &interval) const;
   // In-between `k` of S' = `from` → S = `shown`, assembled; null when S's chain run cannot take it.
   [[nodiscard]] const FrameRecord *
-  at(const FrameRecord &shown, const FrameRecord &from, int k, std::span<const std::uint16_t> vram);
+  at(const FrameRecord &shown, const FrameRecord &from, int k, const gpu::DeviceVram &vram);
   // The fraction the section is being replayed at, while it runs: a title override inside the replay draws that
   // in-between of what it emits there.
   [[nodiscard]] std::optional<float> replaying() const {
@@ -122,7 +123,7 @@ private:
                                             const RecordCluts::Between &between,
                                             const Capture &capture,
                                             int k,
-                                            std::span<const std::uint16_t> vram);
+                                            const gpu::DeviceVram &vram);
   // The set that S = `shown` took, or null.
   [[nodiscard]] const Set *setFor(std::uint64_t shown) const;
 

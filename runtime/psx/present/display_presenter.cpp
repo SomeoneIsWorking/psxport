@@ -192,7 +192,7 @@ void DisplayPresenter::logVramScan() {
   if (!lucent::channel_on("vramscan")) {
     return;
   }
-  const std::span<const std::uint16_t> vram = core_.gpuDevice().vram();
+  const std::span<const std::uint16_t> vram = core_.gpuDevice().vram().all();
   int minX = gpu::kVramWidth;
   int minY = gpu::kVramHeight;
   int maxX = -1;
