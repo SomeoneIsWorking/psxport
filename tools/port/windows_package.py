@@ -15,9 +15,7 @@ from __future__ import annotations
 
 import argparse
 import os
-import re
 import shutil
-import subprocess
 import sys
 import time
 import zipfile
@@ -29,6 +27,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from automation.process import ToolError
 from port import release_platform
 from target_platform import provision as target_platform
+from target_platform import windows_imports
 from port.release_package import (
     Mismatch,
     Refused,
@@ -42,15 +41,6 @@ from port.release_package import (
 
 FRAMEWORK = Path(__file__).resolve().parents[2]
 ASSETS = FRAMEWORK / "assets"
-# Windows 10 and later ship these, the Universal CRT among them.
-SYSTEM_DLLS = frozenset({"advapi32.dll", "gdi32.dll", "imm32.dll", "kernel32.dll", "ole32.dll", "oleaut32.dll",
-                         "setupapi.dll", "shell32.dll", "user32.dll", "version.dll", "winmm.dll", "ws2_32.dll",
-                         "bcrypt.dll", "comdlg32.dll", "dwmapi.dll", "hid.dll", "ntdll.dll", "shlwapi.dll",
-                         "uxtheme.dll", "dbghelp.dll", "cfgmgr32.dll", "dinput8.dll", "xinput1_4.dll"})
-UNIVERSAL_CRT = re.compile(r"^api-ms-win-crt-[a-z]+-l1-1-0\.dll$")
-DLL_NAME = re.compile(r"^\s*DLL Name: (\S+)\s*$", re.MULTILINE)
-
-
 def stage(title: Title, binary: Path, tree: Path, strip: Path) -> Path:
     if tree.exists():
         shutil.rmtree(tree)
@@ -62,19 +52,6 @@ def stage(title: Title, binary: Path, tree: Path, strip: Path) -> Path:
     shutil.copytree(ASSETS, tree / "assets")
     shutil.copy2(title.licence, tree / f"{title.licence.name}.txt")
     return executable
-
-
-def audit_imports(executable: Path, objdump: Path) -> list[str]:
-    completed = subprocess.run([str(objdump), "-p", str(executable)], text=True, capture_output=True, check=False)
-    if completed.returncode != 0:
-        raise Refused(f"llvm-objdump cannot read {executable}: {completed.stderr.strip()}")
-    imports = sorted({name.lower() for name in DLL_NAME.findall(completed.stdout)})
-    if not imports:
-        raise Refused(f"llvm-objdump listed no imports in {executable}")
-    foreign = [name for name in imports if name not in SYSTEM_DLLS and not UNIVERSAL_CRT.match(name)]
-    if foreign:
-        raise Mismatch(f"{executable.name} imports DLLs Windows does not ship: {', '.join(foreign)}")
-    return imports
 
 
 def archive(tree: Path, destination: Path, epoch: int) -> None:
@@ -108,9 +85,12 @@ def main(argv: Sequence[str] | None = None) -> int:
         if not binary.is_file():
             raise Refused(f"the port is missing at {binary}")
         version, epoch = release_version(root, args.version, args.allow_dirty)
-        toolchain = target_platform.llvm_mingw(release_platform.dependency_root(os.environ)) / "bin"
-        executable = stage(title, binary, work / title.name, toolchain / "llvm-strip")
-        imports = audit_imports(executable, toolchain / "llvm-objdump")
+        toolchain = target_platform.llvm_mingw(release_platform.dependency_root(os.environ))
+        executable = stage(title, binary, work / title.name, toolchain / "bin" / "llvm-strip")
+        try:
+            imports = windows_imports.audit(executable, toolchain)
+        except windows_imports.ForeignImport as error:
+            raise Mismatch(str(error)) from error
         print(f"[windows] import audit: {len(imports)} DLLs, all shipped with Windows")
         files = audit_content(title, work / title.name, "archive")
         print(f"[windows] content audit: {files} packaged files, 0 game files")
