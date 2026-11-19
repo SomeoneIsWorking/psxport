@@ -25,3 +25,6 @@
 [submodule "vendor/port-assets"]
 	path = vendor/port-assets
 	url = https://github.com/SomeoneIsWorking/port-assets.git
+[submodule "vendor/target-platform"]
+	path = vendor/target-platform
+	url = https://github.com/SomeoneIsWorking/target-platform.git

@@ -11,6 +11,7 @@ import argparse
 import json
 import os
 import platform
+import re
 import shutil
 import subprocess
 import sys
@@ -32,7 +33,7 @@ AGENT_BUILD = Path("build/agent")
 CI_BUILD = Path("build/ci")
 # Built inside the release container (appimage_container.py), never by the host toolchain.
 APPIMAGE_BUILD = Path("build/appimage")
-# The release platforms' build trees (tools/port/target_platform.py).
+# The release platforms' build trees (tools/port/release_platform.py).
 PLATFORM_BUILDS = {"windows": Path("build/windows"), "macos": Path("build/macos"), "android": Path("build/android")}
 # The purpose trees; a build may also name its own tree under build/ (a kept before/after pair).
 MAINTAINER_BUILDS = (AGENT_BUILD, CI_BUILD, APPIMAGE_BUILD, *PLATFORM_BUILDS.values())
@@ -182,6 +183,17 @@ def _same_compiler(left: str, right: str) -> bool:
     return left_path.name == right_path.name
 
 
+def _toolchain_mismatch(build: Path, definitions: Sequence[str]) -> str:
+    """CMake reads a toolchain file on the first configure only, so a moved or different one needs a fresh tree."""
+    requested = next((d.partition("=")[2] for d in definitions if d.startswith("-DCMAKE_TOOLCHAIN_FILE=")), "")
+    for system in build.glob("CMakeFiles/*/CMakeSystem.cmake"):
+        included = re.search(r'^include\("([^"]*)"\)', system.read_text(errors="replace"), re.MULTILINE)
+        recorded = included.group(1) if included else ""
+        if recorded != requested:
+            return f"the toolchain file {recorded or '(none)'}, requested {requested or '(none)'}"
+    return ""
+
+
 def _compiler_mismatch(build: Path, definitions: Sequence[str]) -> str:
     for key in ("CMAKE_C_COMPILER", "CMAKE_CXX_COMPILER"):
         requested = next((d.partition("=")[2] for d in definitions if d.startswith(f"-D{key}=")), "")
@@ -207,7 +219,7 @@ def configure(source: Path, build: Path, build_type: str, definitions: Sequence[
     """One Ninja configure of ``source`` into ``build`` with the chosen compiler.
 
     ``build`` must be a real path under ``owner/build`` (``owner`` defaults to ``source``). A tree
-    whose cached source, generator or compiler disagrees is reset first: CMake's own re-run after a
+    whose cached source, generator, toolchain file or compiler disagrees is reset first: CMake's own re-run after a
     compiler change does not keep the requested compiler.
     """
     source = source.resolve()
@@ -223,6 +235,7 @@ def configure(source: Path, build: Path, build_type: str, definitions: Sequence[
     generator = _cache_value(build, "CMAKE_GENERATOR")
     stale = ((cached_source and Path(cached_source).resolve() != source and "the source directory")
              or (generator and generator != "Ninja" and "the generator")
+             or _toolchain_mismatch(build, options)
              or _compiler_mismatch(build, options))
     if stale:
         say(f"resetting CMake state in {build} for {stale}")

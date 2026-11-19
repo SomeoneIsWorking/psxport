@@ -6,8 +6,8 @@ owner, and `docs/appimage.md` the title identity, version and content audit (`to
 
 | piece | role |
 |---|---|
-| `tools/port/target_platform.py` | macOS deployment target 13.3 (std::format of floating point), the target libraries built once per pin, MoltenVK v1.4.2 (checksummed) |
-| `tools/port/target_libraries.py`, `target-libraries.json` | SDL3 (fork), SDL3_image (stb backend) and FreeType, static |
+| `vendor/target-platform` (shared `target-platform` repo) | macOS deployment target 13.3 (std::format of floating point), SDL3 (fork), SDL3_image (stb backend) and FreeType, static, built once per pin; MoltenVK v1.4.2 (checksummed) |
+| `tools/port/release_platform.py` | that provisioning under psxport's dependency root |
 | `tools/port/consumer_build.py --platform macos` | the title's build in `build/macos`, natively for the Mac's own architecture (arm64 on Apple silicon) |
 | `tools/port/macos_package.py` | `<Name>-<version>-macos-<arch>.zip` (`arm64` or `x86_64`) holding `<Name>.app`, signed ad hoc |
 | `.github/workflows/title-release.yml` `macos` | the same build and package on `macos-15-intel` (so `x86_64`), uploaded to the title's release |

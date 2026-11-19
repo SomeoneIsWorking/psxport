@@ -7,7 +7,7 @@ skills'; `docs/macos.md` is the sibling platform and shares the title identity a
 
 | piece | role |
 |---|---|
-| `tools/port/target_platform.py` | NDK 28.2.13676358, API 24 (Vulkan), arm64-v8a, and android-port's native prefix (SDL3, SDL3_image, FreeType, fmt) built once per pin |
+| `vendor/target-platform` (`tools/port/release_platform.py`) | NDK 28.2.13676358, API 24 (Vulkan), arm64-v8a, and android-port's native prefix (SDL3, SDL3_image, FreeType, fmt) built once per pin |
 | `tools/port/consumer_build.py --platform android` | the title's build in `build/android`; the product is `bin/libmain.so`, whose `SDL_main` SDL's Activity calls (`cmake/psxport.cmake`, `product_main.cpp`) |
 | `tools/port/android/` | the one Gradle project every title uses: AGP 9.2.1, Gradle 9.4.1, `PsxportActivity` over android-port's `AndroidActivity` |
 | `tools/port/android_apk.py` | stages that project with the title's identity, android-port's runtime, the assets and the icons, and assembles the APK |

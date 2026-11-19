@@ -29,8 +29,9 @@ from port.launcher import APPIMAGE_BUILD
 FRAMEWORK = Path(__file__).resolve().parents[2]
 CONTAINERFILE = Path(__file__).resolve().with_name("appimage-build.Containerfile")
 # Files the image COPYs in; their bytes are part of the image tag.
-IMAGE_INPUTS = (CONTAINERFILE, CONTAINERFILE.with_name("target_libraries.py"),
-                CONTAINERFILE.with_name("target-libraries.json"))
+# The image builds the shared pinned libraries; its context is their directory.
+LIBRARIES = FRAMEWORK / "vendor" / "target-platform" / "target_platform"
+IMAGE_INPUTS = (CONTAINERFILE, LIBRARIES / "libraries.py", LIBRARIES / "libraries.json")
 IMAGE = "localhost/psxport-appimage-build"
 GLIBC_FLOOR = "2.35"
 GITHUB_REMOTE = re.compile(r"github\.com[:/]([^/]+/[^/]+?)(?:\.git)?/?$")
@@ -56,7 +57,7 @@ def image_tag() -> str:
 def build_image(engine: str, tag: str) -> None:
     if subprocess.run([engine, "image", "inspect", tag], capture_output=True, check=False).returncode == 0:
         return
-    run([engine, "build", "-t", tag, "-f", str(CONTAINERFILE), str(CONTAINERFILE.parent)])
+    run([engine, "build", "-t", tag, "-f", str(CONTAINERFILE), str(LIBRARIES)])
 
 
 def engine_options(engine: str) -> list[str]:

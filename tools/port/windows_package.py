@@ -26,7 +26,9 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from port import target_platform
+from automation.process import ToolError
+from port import release_platform
+from target_platform import provision as target_platform
 from port.release_package import (
     Mismatch,
     Refused,
@@ -106,7 +108,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         if not binary.is_file():
             raise Refused(f"the port is missing at {binary}")
         version, epoch = release_version(root, args.version, args.allow_dirty)
-        toolchain = target_platform.llvm_mingw(target_platform.dependency_root(os.environ)) / "bin"
+        toolchain = target_platform.llvm_mingw(release_platform.dependency_root(os.environ)) / "bin"
         executable = stage(title, binary, work / title.name, toolchain / "llvm-strip")
         imports = audit_imports(executable, toolchain / "llvm-objdump")
         print(f"[windows] import audit: {len(imports)} DLLs, all shipped with Windows")
@@ -119,7 +121,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     except Mismatch as error:
         print(f"MISMATCH: {error}", file=sys.stderr)
         return 1
-    except (Refused, target_platform.ToolError) as error:
+    except (Refused, ToolError, target_platform.ToolError) as error:
         print(f"REFUSED: {error}", file=sys.stderr)
         return 2
 

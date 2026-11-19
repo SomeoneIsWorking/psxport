@@ -82,7 +82,7 @@ guest code runs on its own executor: a run-time recompiler like DuckStation's (d
 interpreter (`runtime/cpu/guest_executor.*`) as reference and fallback.
 
 The record rasterizer follows re-harness's in-pass destination rule: Metal framebuffer fetch on macOS today, the
-other backends as our SDL fork (`SomeoneIsWorking/SDL`, pinned in `tools/port/target-libraries.json`) gains them.
+other backends as our SDL fork (`SomeoneIsWorking/SDL`, pinned in `vendor/target-platform/target_platform/libraries.json`) gains them.
 
 ## Build
 

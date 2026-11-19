@@ -15,7 +15,8 @@ from collections.abc import Iterable
 from pathlib import Path
 
 from automation.process import ToolError
-from port import target_platform
+from port import release_platform
+from target_platform import provision as target_platform
 
 RESVG_RELEASE = "v0.49.0"
 RESVG_ASSETS = {
@@ -35,8 +36,11 @@ def resvg() -> Path:
         raise ToolError(f"no pinned resvg for {sys.platform}")
     asset, digest = RESVG_ASSETS[sys.platform]
     url = f"https://github.com/linebender/resvg/releases/download/{RESVG_RELEASE}/{asset}"
-    root = target_platform.dependency_root(os.environ) / f"resvg-{RESVG_RELEASE}"
-    binary = target_platform.extracted(url, digest, root, "", Path("resvg")) / "resvg"
+    root = release_platform.dependency_root(os.environ) / f"resvg-{RESVG_RELEASE}"
+    try:
+        binary = target_platform.extracted(url, digest, root, "", Path("resvg")) / "resvg"
+    except target_platform.ToolError as error:
+        raise ToolError(f"resvg {RESVG_RELEASE}: {error}") from error
     binary.chmod(binary.stat().st_mode | stat.S_IXUSR)
     return binary
 

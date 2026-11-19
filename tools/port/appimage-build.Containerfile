@@ -44,11 +44,11 @@ RUN curl -fsSL -o /tmp/vulkansdk.tar.xz \
     && tar -xJf /tmp/vulkansdk.tar.xz -C /usr/local/bin --strip-components=3 "${VULKAN_SDK_VERSION}/x86_64/bin/glslc" \
     && rm /tmp/vulkansdk.tar.xz && glslc --version
 
-# Ubuntu 22.04 has no SDL3: SDL3, SDL3_image and FreeType come from target-libraries.json, the pins the
+# Ubuntu 22.04 has no SDL3: SDL3, SDL3_image and FreeType come from target-platform's libraries.json, the pins the
 # Windows prefix also builds. SDL3 is the SomeoneIsWorking fork, whose ICCCM WM_NAME the AppImage
 # catalog's window check can read; FreeType is static, as linuxdeploy never bundles it.
-COPY target_libraries.py target-libraries.json /opt/psxport-deps/
-RUN uv run --no-project --python 3.12 python /opt/psxport-deps/target_libraries.py libraries --platform linux \
+COPY libraries.py libraries.json /opt/psxport-deps/
+RUN uv run --no-project --python 3.12 python /opt/psxport-deps/libraries.py libraries --platform linux \
         --prefix /usr/local --work /tmp/deps \
     && rm -rf /tmp/deps && ldconfig
 

@@ -31,7 +31,9 @@ from types import ModuleType
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from port import app_icon, desktop_shortcut, target_platform
+from automation.process import ToolError
+from port import app_icon, desktop_shortcut, release_platform
+from target_platform import provision as target_platform
 from port.release_package import Mismatch, Refused, Title, audit_content, release_version, resolve_title, sha256
 
 FRAMEWORK = Path(__file__).resolve().parents[2]
@@ -133,7 +135,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         if not binary.is_file():
             raise Refused(f"the port is missing at {binary}; run consumer_build.py --platform android first")
         version, epoch = release_version(root, args.version, allow_dirty=not args.release)
-        dependencies = target_platform.dependency_root(os.environ)
+        dependencies = release_platform.dependency_root(os.environ)
         ndk = target_platform.android_ndk(os.environ)
         prefix = target_platform.android_prefix(dependencies, os.environ, ndk)
         checkout = target_platform.android_port_checkout(dependencies, os.environ)
@@ -157,7 +159,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     except Mismatch as error:
         print(f"MISMATCH: {error}", file=sys.stderr)
         return 1
-    except (Refused, target_platform.ToolError) as error:
+    except (Refused, ToolError, target_platform.ToolError) as error:
         print(f"REFUSED: {error}", file=sys.stderr)
         return 2
 

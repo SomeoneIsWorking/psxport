@@ -26,7 +26,9 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from port import app_icon, target_platform
+from automation.process import ToolError
+from port import app_icon, release_platform
+from target_platform import provision as target_platform
 from port.release_package import Mismatch, Refused, Title, audit_content, release_version, resolve_title, run_checked, sha256
 
 FRAMEWORK = Path(__file__).resolve().parents[2]
@@ -70,7 +72,7 @@ def stage(title: Title, binary: Path, work: Path, version: str) -> Path:
     shutil.copytree(ASSETS, contents / "Resources" / "assets")
     shutil.copy2(title.licence, contents / "Resources" / title.licence.name)
     app_icon.icns(title.entry.icon, contents / "Resources" / "icon.icns", work / "icon")
-    moltenvk = target_platform.moltenvk(target_platform.dependency_root(os.environ))
+    moltenvk = target_platform.moltenvk(release_platform.dependency_root(os.environ))
     shutil.copy2(moltenvk, contents / "Frameworks" / moltenvk.name)
     # MoltenVK is Apache-2.0; its licence travels with it.
     shutil.copy2(moltenvk.parents[4] / "LICENSE", contents / "Resources" / "MoltenVK-LICENSE")
@@ -125,7 +127,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     except Mismatch as error:
         print(f"MISMATCH: {error}", file=sys.stderr)
         return 1
-    except (Refused, target_platform.ToolError) as error:
+    except (Refused, ToolError, target_platform.ToolError) as error:
         print(f"REFUSED: {error}", file=sys.stderr)
         return 2
 

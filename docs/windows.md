@@ -6,9 +6,8 @@ shares its title identity, version and content audit (`tools/port/release_packag
 
 | piece | role |
 |---|---|
-| `cmake/toolchains/llvm-mingw-x86_64.cmake` | llvm-mingw (UCRT) toolchain; `-static`, so the C++ runtime and winpthreads are linked in |
-| `tools/port/target_platform.py` | llvm-mingw 20260922 (checksummed) and the target libraries, each built once per pin under the dependency root (shared with `docs/macos.md`) |
-| `tools/port/target_libraries.py`, `target-libraries.json` | zlib, SDL3 (fork), SDL3_image and FreeType from pinned, checksummed sources; the AppImage image builds the same pins |
+| `vendor/target-platform` (shared `target-platform` repo) | the llvm-mingw 20260922 (UCRT) toolchain file, `-static`, so the C++ runtime and winpthreads are linked in; zlib, SDL3 (fork), SDL3_image and FreeType from pinned, checksummed sources (`libraries.json`), each built once per pin; the AppImage image builds the same pins |
+| `tools/port/release_platform.py` | its provisioning under psxport's dependency root (shared with `docs/macos.md`), plus `PSXPORT_TARGET_DEPENDENCY_PREFIX` |
 | `tools/port/consumer_build.py --platform windows` | the title's build in `build/windows`, with the title's icon compiled in as a resource (`app_icon.py`, `psxport_add_product`) |
 | `tools/port/windows_package.py` | `<Name>-<version>-windows-x86_64.zip`: `<Name>/<Name>.exe` (stripped), `assets/`, the licence |
 | `.github/workflows/title-release.yml` `windows` | the same build and package on the Ubuntu runner, uploaded to the title's release |
