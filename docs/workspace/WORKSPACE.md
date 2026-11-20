@@ -98,11 +98,14 @@ Products: `spyro_port`, `toystory2_port`, `crashbash_port`, `crash_port`, `ctr_p
 
 ## Second machine (`ssh ally`)
 
-Builds and runs go through `tools/heavy.py`, which picks this machine, the Ally or the Mac by queue depth,
-takes that machine's heavy lock and copies results back:
+Builds and runs go through `tools/heavy.py`, which picks this machine, the Ally or the Mac by spare cores,
+starts each step through that machine's shared `heavy.py run --cores N --memory GIB` (re-harness, `~/.local/bin`;
+it waits until that much is spare) and copies results back. A build compiles with `--cores` jobs; the defaults
+are 8 cores and 8 GiB for a build, 2 and 3 for a run:
 `uv run --frozen python external/psxport/tools/heavy.py run --target tomba2_port --fetch scratch/<dir> -- build/agent/bin/tomba2_port …`
 (`build` for a build alone, `--host` to pin a machine). On the Ally it mirrors the caller's working trees,
-uncommitted edits included, into `~/agents/mirror`, so the Ally's own clone is never edited by an agent. The
+uncommitted edits included, into `~/agents/mirror` under that mirror's lock, so the Ally's own clone is never
+edited by an agent. The
 Mac cannot be reached from here; it pulls jobs from `~/agents/queue` and runs only builds, product binaries and
 checked-in tools, sandboxed (`tools/heavy_mac/`). The manual commands below are what it runs.
 
@@ -110,18 +113,18 @@ The Ally (Bazzite, 16 CPUs, 11 GB) holds its own clone of this workspace at `~/r
 `~/repo/shared/{bug-report,setup-ui,re-harness}`, made by the fresh-machine bootstrap above; each title's `.env`
 there points at `~/ROM/PSX CHD/<disc>.chd`. It builds inside the `my-distrobox` distrobox (Fedora 43: clang, lld,
 cmake, ninja-build, glslc, SDL3-devel, SDL3_image-devel, freetype-devel, zlib-devel; `uv` lives only in the box)
-and runs on the host, whose glibc is newer than the box's. Heavy steps (builds, runs) take
-`flock ~/agents/.heavy.lock`; other agents run there too. Only pushed commits reach it: push first, then sync.
+and runs on the host, whose glibc is newer than the box's. Heavy steps (builds, runs) start through its
+`~/.local/bin/heavy.py run`; other agents run there too. Only pushed commits reach it: push first, then sync.
 
 ```sh
 # sync a repo to a pushed branch or commit (psxport too, for a framework change)
 ssh ally 'git -C ~/repo/psx/psx-tomba fetch -q origin && git -C ~/repo/psx/psx-tomba checkout -q --detach <commit>'
 # build in the box
-ssh ally 'flock ~/agents/.heavy.lock distrobox enter my-distrobox -- env --chdir=$HOME/repo/psx/psx-tomba \
-  CC=clang CXX=clang++ uv run --frozen python external/psxport/tools/port/consumer_build.py --build build/agent --target tomba2_port'
+ssh ally '~/.local/bin/heavy.py run --cores 8 --memory 8 -- distrobox enter my-distrobox -- env --chdir=$HOME/repo/psx/psx-tomba \
+  CC=clang CXX=clang++ uv run --frozen python external/psxport/tools/port/consumer_build.py --build build/agent --target tomba2_port --jobs 8'
 # run on the host, hidden and silent, from the title root (the product reads ./.env and extracts
 # scratch/bin/<slug>/ on a no-argument run)
-ssh ally 'R=~/repo/psx/psx-tomba O=$R/scratch/ally; mkdir -p $O; : > $O/settings.ini; flock ~/agents/.heavy.lock \
+ssh ally 'R=~/repo/psx/psx-tomba O=$R/scratch/ally; mkdir -p $O; : > $O/settings.ini; ~/.local/bin/heavy.py run --cores 2 --memory 3 -- \
   env --chdir=$R XDG_RUNTIME_DIR=/run/user/1000 WAYLAND_DISPLAY=wayland-1 PSXPORT_SHOW_WINDOW=0 PSXPORT_NOAUDIO=1 \
   PSXPORT_NOPACE=1 PSXPORT_SETTINGS=$O/settings.ini PSXPORT_ASSET_DIR=$HOME/repo/psx/psxport PSXPORT_NATIVE_FRAMES=400 \
   build/agent/bin/tomba2_port scratch/bin/tomba2/SCUS_944.54 > $O/run.log 2>&1'

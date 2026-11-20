@@ -257,8 +257,10 @@ def maintainer_build(root: Path, requested: Path) -> Path:
     return build
 
 
-def build_targets(build: Path, targets: Sequence[str], environment: Mapping[str, str]) -> None:
-    command = ["cmake", "--build", build, "--parallel", str(cpu_jobs())]
+def build_targets(build: Path, targets: Sequence[str], environment: Mapping[str, str],
+                  jobs: int | None = None) -> None:
+    """Build ``targets`` (all when empty) with ``jobs`` compile jobs, else one per usable core."""
+    command = ["cmake", "--build", build, "--parallel", str(jobs or cpu_jobs())]
     for target in targets:
         command += ["--target", target]
     run(command, environment)

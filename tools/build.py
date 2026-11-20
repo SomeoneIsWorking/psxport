@@ -23,6 +23,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--build", type=Path)
     parser.add_argument("--platform", choices=("host", *release_platform.PLATFORMS), default="host")
+    parser.add_argument("--jobs", type=int, help="compile jobs (default: one per usable core)")
     args = parser.parse_args()
     environment = dict(os.environ)
     platform_name = "macos" if args.platform == "host" and sys.platform == "darwin" else args.platform
@@ -34,7 +35,7 @@ def main() -> int:
             platform = [*release_platform.definitions(platform_name, environment), "-DPSXPORT_TESTPROG=OFF"]
         build = maintainer_build(ROOT, args.build or PLATFORM_BUILDS.get(args.platform, DEFAULT_BUILD))
         configure(ROOT, build, "RelWithDebInfo", ["-DCMAKE_EXPORT_COMPILE_COMMANDS=ON", *platform], environment)
-        build_targets(build, [], environment)
+        build_targets(build, [], environment, args.jobs)
     except ToolError as error:
         print(f"[build] FAILED: {error}", file=sys.stderr)
         return 1

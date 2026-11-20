@@ -38,6 +38,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--build", type=Path, help=f"default {AGENT_BUILD}, or the platform's own build tree")
     parser.add_argument("--platform", choices=("host", *release_platform.PLATFORMS), default="host")
     parser.add_argument("--target", action="append", default=[])
+    parser.add_argument("--jobs", type=int, help="compile jobs (default: one per usable core)")
     parser.add_argument("-D", dest="definitions", action="append", default=[], metavar="NAME=VALUE")
     args = parser.parse_args(argv)
     root = Path.cwd().resolve()
@@ -52,7 +53,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             icon = app_icon.ico(desktop_shortcut.resolve(root).icon, build / "icon" / "app.ico", build / "icon")
             definitions.append(f"-DPSXPORT_PRODUCT_ICON={icon}")
         configure_consumer(root, build, "RelWithDebInfo", definitions, environment)
-        build_targets(build, args.target, environment)
+        build_targets(build, args.target, environment, args.jobs)
     except ToolError as error:
         print(f"[build] FAILED: {error}", file=sys.stderr)
         return 1

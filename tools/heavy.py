@@ -1,12 +1,15 @@
-"""Run a heavy step (title build, product run) on whichever workspace machine has the shorter queue.
+"""Run a heavy step (title build, product run) on whichever workspace machine has room for it.
 
     uv run --frozen python external/psxport/tools/heavy.py build --target spyro_port
     uv run --frozen python external/psxport/tools/heavy.py run --target spyro_port --fetch scratch/x -- \
         build/agent/bin/spyro_port scratch/assets/spyro1/SCUS_942.28
 
-The machines are this one and the Ally (docs/workspace/WORKSPACE.md, Second machine). The step takes
-that machine's heavy lock. On the Ally the caller's working tree (uncommitted edits included) is
-mirrored to ~/agents/mirror first, builds run in the my-distrobox box and runs on the host. The Mac
+The machines are this one and the Ally (docs/workspace/WORKSPACE.md, Second machine). Each build and
+run starts through that machine's shared `heavy.py run` (re-harness tools/heavy.py, ~/.local/bin), which
+waits until `--cores` and `--memory` are spare; a build compiles with `--cores` jobs. Without
+`--host`, the step goes where those cores are spare now, this machine first. On the Ally the caller's
+working tree (uncommitted edits included) is mirrored to ~/agents/mirror first, under that mirror's
+lock for the whole step; builds run in the my-distrobox box and runs on the host. The Mac
 cannot be reached from here: a step for it is queued in ~/agents/queue/<job>/job.json and the Mac's
 worker (which can ssh here and to the Ally) mirrors the tree, runs it, copies `fetch` back, streams
 `log` and writes the exit code to `done` (97 refused, 98 worker error); it touches
@@ -19,9 +22,9 @@ A step's binary lives on the machine that built it, so a run builds with --targe
 from __future__ import annotations
 
 import argparse
-import fcntl
 import json
 import os
+import re
 import shlex
 import subprocess
 import sys
@@ -30,8 +33,15 @@ import uuid
 from pathlib import Path
 
 ALLY = "ally"
-LOCAL_LOCK = Path.home() / "repo/psx/.heavy.lock"
-ALLY_LOCK = "$HOME/agents/.heavy.lock"
+# The shared runner on each machine; the Ally's is a copy at the same path.
+ROOM_RUNNER = Path.home() / ".local/bin/heavy.py"
+ALLY_ROOM_RUNNER = "$HOME/.local/bin/heavy.py"
+# One step at a time writes and builds in the Ally's mirror.
+ALLY_MIRROR_LOCK = "$HOME/agents/mirror/.lock"
+# What a step reserves unless told otherwise: a title build, or a hidden product run.
+BUILD_ROOM = (8, 8.0)
+RUN_ROOM = (2, 3.0)
+SPARE_CORES = re.compile(r"^([0-9.]+) of \d+ cores spare", re.MULTILINE)
 ALLY_MIRROR = "agents/mirror/repo"
 ALLY_BOX = "my-distrobox"
 SHARED_DEPENDENCIES = ("bug-report", "setup-ui", "touch-ui", "port-assets")
@@ -50,27 +60,20 @@ def repo_root(start: Path) -> Path:
     return Path(out.stdout.strip())
 
 
-def lock_waiters(process_args: str, lock_name: str) -> int:
-    return sum(1 for line in process_args.splitlines() if "flock" in line and lock_name in line)
+def spare_cores(output: str) -> float | None:
+    found = SPARE_CORES.search(output)
+    return float(found.group(1)) if found else None
 
 
-def local_queue() -> int:
-    args = []
-    for proc in Path("/proc").iterdir():
-        if proc.name.isdigit():
-            try:
-                args.append((proc / "cmdline").read_bytes().replace(b"\0", b" ").decode(errors="replace"))
-            except OSError:
-                continue
-    return lock_waiters("\n".join(args), str(LOCAL_LOCK))
+def local_spare() -> float | None:
+    probe = subprocess.run([str(ROOM_RUNNER), "free"], capture_output=True, text=True)
+    return spare_cores(probe.stdout) if probe.returncode == 0 else None
 
 
-def ally_queue() -> int | None:
-    probe = subprocess.run(["ssh", "-o", "ConnectTimeout=5", ALLY, "ps -eo args"], capture_output=True,
-                           text=True)
-    if probe.returncode != 0:
-        return None
-    return lock_waiters(probe.stdout, ".heavy.lock")
+def ally_spare() -> float | None:
+    probe = subprocess.run(["ssh", "-o", "ConnectTimeout=5", ALLY, f"{ALLY_ROOM_RUNNER} free"],
+                           capture_output=True, text=True)
+    return spare_cores(probe.stdout) if probe.returncode == 0 else None
 
 
 def mac_queue() -> int | None:
@@ -99,34 +102,38 @@ def mac_accepts(args: argparse.Namespace) -> bool:
 
 
 def choose_host(requested: str, args: argparse.Namespace) -> str:
+    """This machine when it has the cores spare, else the Ally, else an idle Mac, else the roomiest machine."""
     if requested != "auto":
         return requested
-    queues = {"local": local_queue(), ALLY: ally_queue(), MAC: mac_queue() if mac_accepts(args) else None}
-    host = min((name for name, depth in queues.items() if depth is not None), key=lambda name: queues[name])
-    shown = " ".join(f"{name}={'off' if depth is None else depth}" for name, depth in queues.items())
-    print(f"[heavy] queues {shown} -> {host}", flush=True)
+    spare = {"local": local_spare(), ALLY: ally_spare()}
+    mac = mac_queue() if mac_accepts(args) else None
+    shown = " ".join(f"{name}={'off' if cores is None else cores}" for name, cores in spare.items())
+    choices = [name for name in ("local", ALLY) if (spare[name] or 0.0) >= args.cores]
+    if choices:
+        host = choices[0]
+    elif mac == 0:
+        host = MAC
+    else:
+        host = max((name for name in spare if spare[name] is not None), key=lambda name: spare[name] or 0.0)
+    print(f"[heavy] spare cores {shown} mac={'off' if mac is None else f'{mac} queued'} -> {host}", flush=True)
     return host
 
 
-class LocalLock:
-    def __enter__(self) -> LocalLock:
-        self._file = LOCAL_LOCK.open("a")
-        fcntl.flock(self._file, fcntl.LOCK_EX)
-        return self
-
-    def __exit__(self, *exc: object) -> None:
-        self._file.close()
+def room_arguments(args: argparse.Namespace, label: str, command: list[str]) -> list[str]:
+    """The shared runner's arguments that start ``command`` once ``args.cores`` and ``args.memory`` are spare."""
+    return ["run", "--cores", str(args.cores), "--memory", str(args.memory), "--label", label, "--",
+            *command]
 
 
-class AllyLock:
-    """Holds the Ally's heavy lock for as long as this process keeps the ssh session's stdin open."""
+class AllyMirrorLock:
+    """Holds the Ally mirror's lock for as long as this process keeps the ssh session's stdin open."""
 
-    def __enter__(self) -> AllyLock:
+    def __enter__(self) -> AllyMirrorLock:
         self._holder = subprocess.Popen(
-            ["ssh", ALLY, f"flock {ALLY_LOCK} sh -c 'echo locked; cat >/dev/null'"],
+            ["ssh", ALLY, f"mkdir -p $HOME/agents/mirror && flock {ALLY_MIRROR_LOCK} sh -c 'echo locked; cat >/dev/null'"],
             stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True)
         if self._holder.stdout is None or self._holder.stdout.readline().strip() != "locked":
-            raise SystemExit("[heavy] could not take the Ally's heavy lock")
+            raise SystemExit("[heavy] could not take the Ally mirror's lock")
         return self
 
     def __exit__(self, *exc: object) -> None:
@@ -162,22 +169,26 @@ def mirror(repo: Path, pushes: list[str]) -> str:
     return remote_repo
 
 
-def build_command(repo: Path, target: str | None, build_dir: str) -> list[str]:
+def build_command(repo: Path, target: str | None, build_dir: str, jobs: int | None) -> list[str]:
+    """The build; ``jobs`` sets its compile jobs (the Mac's worker takes the command without them)."""
     framework, _, _ = workspace_paths(repo)
+    parallel = [] if jobs is None else ["--jobs", str(jobs)]
     if repo == framework:
-        return ["uv", "run", "--frozen", "python", "tools/build.py", "--build", build_dir]
+        return ["uv", "run", "--frozen", "python", "tools/build.py", "--build", build_dir, *parallel]
     if target is None:
         raise SystemExit("[heavy] a title build needs --target")
     return ["uv", "run", "--frozen", "python", "external/psxport/tools/port/consumer_build.py", "--build",
-            build_dir, "--target", target]
+            build_dir, "--target", target, *parallel]
 
 
-def ally_shell(remote_repo: str, command: list[str], env: dict[str, str], box: bool) -> int:
+def ally_shell(remote_repo: str, command: list[str], env: dict[str, str], box: bool,
+               args: argparse.Namespace, label: str) -> int:
     assignments = " ".join(f"{key}={shlex.quote(value)}" for key, value in env.items())
     inner = f"env --chdir=$HOME/{remote_repo} {assignments} {shlex.join(command)}"
     if box:
         inner = f"distrobox enter {ALLY_BOX} -- sh -c {shlex.quote(inner)}"
-    return subprocess.run(["ssh", ALLY, inner]).returncode
+    room = f"{ALLY_ROOM_RUNNER} {shlex.join(room_arguments(args, label, ['sh', '-c', inner]))}"
+    return subprocess.run(["ssh", ALLY, room]).returncode
 
 
 def ally_display_env() -> dict[str, str]:
@@ -219,9 +230,14 @@ def mac_step(repo: Path, args: argparse.Namespace, build: list[str] | None, run_
 
 def run_step(args: argparse.Namespace) -> int:
     repo = repo_root(Path(args.repo))
+    building = args.step == "build" or args.target is not None
+    default_cores, default_memory = BUILD_ROOM if building else RUN_ROOM
+    args.cores = args.cores or default_cores
+    args.memory = args.memory or default_memory
     host = choose_host(args.host, args)
     compile_env = {"CC": "clang", "CXX": "clang++"}
-    build = build_command(repo, args.target, args.build) if args.step == "build" or args.target else None
+    jobs = None if host == MAC else args.cores
+    build = build_command(repo, args.target, args.build, jobs) if building else None
     command = args.command
     if args.step == "run" and not command:
         raise SystemExit("[heavy] run needs a command after --")
@@ -233,26 +249,31 @@ def run_step(args: argparse.Namespace) -> int:
     if host == MAC:
         return mac_step(repo, args, build, run_env)
 
+    label = f"{repo.name}:{args.target or args.step}"
     if host == "local":
-        with LocalLock():
-            if build is not None:
-                code = subprocess.run(build, cwd=repo, env={**os.environ, **compile_env}).returncode
-                if code != 0:
-                    return code
-            if args.step == "run":
-                return subprocess.run(command, cwd=repo, env={**os.environ, **run_env}).returncode
-            return 0
+        if not ROOM_RUNNER.is_file():
+            raise SystemExit(f"[heavy] {ROOM_RUNNER} is missing: run re-harness `uv run --frozen python "
+                             "tools/install_skills.py`")
+        if build is not None:
+            code = subprocess.run([str(ROOM_RUNNER), *room_arguments(args, label, build)], cwd=repo,
+                                  env={**os.environ, **compile_env}).returncode
+            if code != 0:
+                return code
+        if args.step == "run":
+            return subprocess.run([str(ROOM_RUNNER), *room_arguments(args, label, command)], cwd=repo,
+                                  env={**os.environ, **run_env}).returncode
+        return 0
 
-    with AllyLock():
+    with AllyMirrorLock():
         remote_repo = mirror(repo, args.push)
         if build is not None:
-            code = ally_shell(remote_repo, build, compile_env, box=True)
+            code = ally_shell(remote_repo, build, compile_env, True, args, label)
             if code != 0:
                 return code
         code = 0
         if args.step == "run":
             env = {**run_env, **({} if args.box else ally_display_env())}
-            code = ally_shell(remote_repo, command, env, box=args.box)
+            code = ally_shell(remote_repo, command, env, args.box, args, label)
         for path in args.fetch:
             (repo / path).mkdir(parents=True, exist_ok=True)
             subprocess.run(["rsync", "-a", f"{ALLY}:{remote_repo}/{path}/", f"{repo / path}/"], check=False)
@@ -271,6 +292,10 @@ def main() -> int:
     parser.add_argument("--push", action="append", default=[], help="gitignored input to copy to a remote")
     parser.add_argument("--fetch", action="append", default=[], help="run output dir to copy back")
     parser.add_argument("--box", action="store_true", help="run inside the Ally's box (for uv tools)")
+    parser.add_argument("--cores", type=int, help=f"cores the step keeps busy; a build's compile jobs "
+                                                  f"(default: build {BUILD_ROOM[0]}, run {RUN_ROOM[0]})")
+    parser.add_argument("--memory", type=float, help=f"GiB the step grows to "
+                                                     f"(default: build {BUILD_ROOM[1]:g}, run {RUN_ROOM[1]:g})")
     argv = sys.argv[1:]
     split = argv.index("--") if "--" in argv else len(argv)
     args = parser.parse_args(argv[:split])
