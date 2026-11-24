@@ -121,7 +121,7 @@ class GhidraInvocation:
         internal rather than the relative path the caller passed. Resolving once, at construction,
         is what stops any caller from reaching that.
         """
-        self.interpreter = Path(self.interpreter).resolve()
+        self.interpreter = Path(self.interpreter).absolute()  # a venv python is a symlink; resolving it leaves the venv
         self.ghidra_home = Path(self.ghidra_home).resolve()
         self.project_dir = Path(self.project_dir).resolve()
         self.import_path = Path(self.import_path).resolve()
