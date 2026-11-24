@@ -203,6 +203,28 @@ def _compiler_mismatch(build: Path, definitions: Sequence[str]) -> str:
     return ""
 
 
+def _prefix_mismatch(build: Path, definitions: Sequence[str]) -> str:
+    """Package locations (``SDL3_DIR``, pkg-config results) are cached once, so a changed dependency prefix
+    needs a fresh tree; a sibling prefix of the requested one still named in the cache is a leftover of the
+    last configure even when this cache already records the new ``CMAKE_PREFIX_PATH``."""
+    requested = next((d.partition("=")[2] for d in definitions if d.startswith("-DCMAKE_PREFIX_PATH=")), "")
+    cache = build / "CMakeCache.txt"
+    if not requested or not cache.is_file():
+        return ""
+    recorded = _cache_value(build, "CMAKE_PREFIX_PATH")
+    if recorded and recorded != requested:
+        return f"the dependency prefix {recorded}, requested {requested}"
+    prefixes = [Path(entry) for entry in requested.split(";") if entry]
+    text = cache.read_text(errors="replace")
+    for prefix in prefixes:
+        sibling = str(prefix.parent.parent) + "/"
+        for line in text.splitlines():
+            value = line.partition("=")[2]
+            if sibling in value and str(prefix) not in value:
+                return f"{line.partition(':')[0]} at {value}, outside the requested prefix {prefix}"
+    return ""
+
+
 def _reset_cmake_state(build: Path) -> None:
     targets = [build / name for name in CMAKE_STATE]
     if any(target.is_symlink() for target in targets):
@@ -219,7 +241,7 @@ def configure(source: Path, build: Path, build_type: str, definitions: Sequence[
     """One Ninja configure of ``source`` into ``build`` with the chosen compiler.
 
     ``build`` must be a real path under ``owner/build`` (``owner`` defaults to ``source``). A tree
-    whose cached source, generator, toolchain file or compiler disagrees is reset first: CMake's own re-run after a
+    whose cached source, generator, toolchain file, compiler or dependency prefix disagrees is reset first: CMake's own re-run after a
     compiler change does not keep the requested compiler.
     """
     source = source.resolve()
@@ -236,7 +258,8 @@ def configure(source: Path, build: Path, build_type: str, definitions: Sequence[
     stale = ((cached_source and Path(cached_source).resolve() != source and "the source directory")
              or (generator and generator != "Ninja" and "the generator")
              or _toolchain_mismatch(build, options)
-             or _compiler_mismatch(build, options))
+             or _compiler_mismatch(build, options)
+             or _prefix_mismatch(build, options))
     if stale:
         say(f"resetting CMake state in {build} for {stale}")
         _reset_cmake_state(build)
