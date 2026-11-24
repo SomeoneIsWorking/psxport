@@ -25,8 +25,6 @@ struct PresentInputs {
   int disp_rgb24; // 1 when the display register says 24bpp
   // Appended: callers initialise this struct positionally. Width of guest-authored content inside disp_w; 0 = all.
   int content_w = 0;
-  // 1 = fill the sink, centre-cropped to its aspect, instead of letterboxing (a pane).
-  int fill = 0;
   // Rows of the scanout window the 4:3 picture spans, and where the display's disp_h rows start in it; the window's
   // other rows are black. 0 = the display is the window.
   int window_h = 0;
@@ -103,7 +101,6 @@ inline PresentPlan planPresent(const PresentInputs &in) {
   const int aspect_w = content_w > 0 ? content_w : 1;
   // An unknown native width degrades to 4:3.
   const int aspect_h = in.native_w > 0 ? in.native_w : aspect_w;
-  // A fill crop is taken from the rendered source, so the compositor does not resample it again.
   const int window_h = in.window_h > 0 ? in.window_h : in.disp_h;
   const int window_top = in.window_h > 0 ? in.window_top : 0;
   const bool shaped = in.picture_w > 0 && in.picture_h > 0;
@@ -112,8 +109,7 @@ inline PresentPlan planPresent(const PresentInputs &in) {
                                     content_w,
                                     window_h,
                                     in.sink_w,
-                                    in.sink_h,
-                                    in.fill != 0);
+                                    in.sink_h);
   p.viewport = fit.viewport;
   // The window keeps one line pitch whatever the range; its rows the display does not scan out are black.
   const int windowRow = in.sy - window_top;

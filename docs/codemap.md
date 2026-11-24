@@ -4,12 +4,12 @@ Dependency direction: title repo → `runtime/psx/game/` (the title interface) �
 
 - `runtime/psx/host/product_host.*`, `product_main.cpp` — the one `main`, process top level, command line, window and GPU device lifetime across sessions, quit request, title selector then title then selector loop
 - `runtime/psx/host/title_session.*` — one title's session: shared boot steps for every product, one field step, session services, load-state at first boot
-- `runtime/psx/host/picker_*`, `panel_sessions.*`, `stage_sides.*`, `panel_logo.*` — the Slant Stage title selector, a host screen built through the host Game's present: panel-to-title mapping, the stage (every title loaded at once, only the focused one runs, hand-over to play and back), the two sides and the ring, side layout, seams and the pick's slide, panes from each side's own picture or a tile, panel logo texture and its saved copy in user data, `picker` / `pick` / `select` commands
+- `runtime/psx/host/picker_*`, `panel_art.*` — the title selector, a host screen built through the host Game's present: panel-to-title mapping, panel layout, seams and the pick's slide, panes of each title's disc art at one shared scale or a tile, `picker` / `pick` / `select` commands
 - `runtime/psx/host/run_budget.*` — run length cap in presentation-fence steps, frame limit
 - `runtime/psx/host/first_run_setup.*`, `saved_disc.*`, `title_disc.*`, `title_user_file.*` — first-run disc picker (setup-ui), remembered disc image choice, a title's disc opened for one read, a title user-data file replaced whole
 - `runtime/psx/host/executable_provisioner.*` — extract and authenticate a missing boot executable (SCUS/SLUS) from the title's own disc
 - `runtime/psx/boot/run_end_report.*` — run-end report: executor ledger, guest-call census, RAM dump, title lines
-- `runtime/psx/catalog/` — title catalog, title identity (serial, hashes, disc key, executable path), single-title product, availability probe, executable selection and authentication, logo image
+- `runtime/psx/catalog/` — title catalog, title identity (serial, hashes, disc key, executable path), single-title product, availability probe, executable selection and authentication
 - `runtime/psx/game/game_runtime.*` — the title interface: GameRuntime virtuals, FrameDriver, title audio and sound-test track names, host identity, the title's debug menu
 - `runtime/psx/game/game.*` — one machine instance: Core, devices, presenters, session wiring
 - `runtime/psx/game/session_run.*` — a title asking to end its run
@@ -75,7 +75,7 @@ Dependency direction: title repo → `runtime/psx/game/` (the title interface) �
 - `runtime/psx/shaders_gpu/`, `cmake/gpu_shaders.cmake`, `tools/gen_gpu_shaders.py` — shaders and SPIR-V, generated record op layout
 - `runtime/psx/present/display_presenter.*`, `present_plan.h`, `video_plan.h`, `pixel_size.h` — present: guest display to screen, letterbox, fade, 24bpp, internal resolution scale
 - `runtime/psx/present/render_mode.h`, `render_substrate.*` — render path (Record, Device), per-Core host render state
-- `runtime/psx/present/drawn_logo.*` — a title's logo rebuilt from its title screen's draws: the frame record's primitives on the wordmark's texture page, rasterized from VRAM
+- `runtime/psx/present/art_scene.*` — a title's still art as its own screen draws it (VRAM uploads, raw sprites), drawn by gpu.c on a scratch device
 - `runtime/psx/present/frame_record.*`, `emit_memory.*`, `packet_chains.*`, `blend.h` — frame record, the writer of each primitive's packet, guest or host emit memory, a replayed chain's capture, lerp blends, sub-pixel vertex places stored with their words (`storeVertex`/`loadVertex`)
 - `runtime/psx/present/replay_frame.*`, `motion_set.*`, `record_cluts.*`, `palette_cycle.*` — replay in-betweens: a title's draw section re-run in a `GuestRedraw` with motion tracks (keys, title record identity, `TransformRule`) and title motion sources blended into guest RAM, its captured chain spliced over S's chain run, and each chain it relinked (a draw environment) over S's run from that head; CLUT pool of the splice; a title-declared palette cycle row cross-fades between the two ticks' frames
 - `runtime/psx/present/depth_test.h` — native depth policy: the draw functions a title marks as opaque world 3D, which record polygons test and write depth
@@ -89,7 +89,7 @@ Dependency direction: title repo → `runtime/psx/game/` (the title interface) �
 - `runtime/psx/present/gte_control.*` — GTE control registers saved, blended (rotation through `lucent::rotation::between`) and restored around a render
 - `runtime/psx/present/guest_widescreen_projection.*`, `crop_band.h`, `crop_ui_layers.h`, `viewport_layout.h`, `proj_params.*`, `picture_announce.*`, `hud_anchor_packets.h` — widescreen / 16:9: aspect policy, canvas margins, crop band and layer classification, projection constants, picture geometry announce, a guest HUD element's packets moved to the drawn picture's edge
 - `runtime/psx/present/screen_cull.h` — the retail screen-edge cull (some corner unsigned-inside each axis) over the record canvas's columns
-- `runtime/psx/present/pane_host.h`, `rgb24_picture.h` — a session presenting into a host screen's pane, host pictures
+- `runtime/psx/present/rgb24_picture.h` — host pictures
 - `runtime/psx/input/host_input.*`, `input_binding.h` — the process's one SDL event drain, keyboard state, gamepads (buttons, and the right stick for title features), PSX button names and the one PSX button binding of the keyboard and SDL gamepads (pad verbs `tap`/`press`/`release`/`hold`), quit scope, event routing to the live overlay, which holds the keyboard and pads while open
 - `runtime/psx/input/glyph_set.*` — button prompts / controller glyphs: the active pad family (keyboard, Xbox, PlayStation, Nintendo) from the device last pressed and its SDL gamepad type, each PSX button's PromptFont glyph
 - `runtime/psx/input/touch_pad.*` — the on-screen PSX pad of a touchscreen (shared touch-ui), owned by `HostInput`, held into port 1 (`docs/ui-architecture.md` Touch controls)

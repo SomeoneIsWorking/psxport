@@ -3,7 +3,7 @@
 
 namespace psx::frame {
 
-// The Game only records the request; the host's per-frame check ends the session and hands it back to the stage.
+// The Game only records the request; the host's per-frame check ends the session and shows the selector.
 // The menu row "Return to Title Selection" and `session return` both land in requestReturn().
 class SessionControl {
 public:
@@ -25,30 +25,8 @@ public:
   bool returnRequested() const {
     return mReturnRequested;
   }
-  // The selector took the Game back onto its stage; the request is answered.
-  void clearReturn() {
-    mReturnRequested = false;
-  }
-  // A selector panel's preview, which the player watches but does not control: set while the Game stands on
-  // the stage, cleared when it is picked. A title may end its uncontrolled screens (cards, movies) at their own
-  // terminal transitions.
-  void setPreview(bool preview) {
-    mPreview = preview;
-  }
-  bool preview() const {
-    return mPreview;
-  }
-  // A preview running unseen to the picture the stage holds: unpaced and unheard.
-  void setPreRolling(bool preRolling) {
-    mPreRolling = preRolling;
-  }
-  bool preRolling() const {
-    return mPreRolling;
-  }
 
 private:
-  bool mPreview = false;
-  bool mPreRolling = false;
   bool mReturnAvailable = false;
   bool mReturnRequested = false;
 };

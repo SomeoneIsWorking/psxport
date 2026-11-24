@@ -9,7 +9,7 @@
 #include "game.h"
 #include "memcensus.h"
 #include "number_text.h"
-#include "panel_sessions.h"
+#include "panel_art.h"
 #include "picker_content.h"
 #include "picker_runtime.h"
 #include "picker_session.h"
@@ -21,6 +21,7 @@
 #include <lucent/platform.h>
 
 #include <algorithm>
+#include <memory>
 #include <optional>
 #include <span>
 #include <string>
@@ -109,27 +110,34 @@ int ProductHost::runSelector() {
   if (std::ranges::none_of(probe.probe(), &TitleAvailability::available) && !firstRun()) {
     return 0;
   }
-  // Probed once: the stage's sessions hold their titles' entries for the whole process.
+  // Probed once: a session holds its title's entry for its whole run.
   const std::vector<TitleAvailability> titles = probe.probe();
   // Empty (the default) is every provisioned title.
   const std::string panelList = psx::config::picker_titles();
   const std::vector<std::string_view> panelSlugs = psx::config::splitList(panelList, psx::config::kListSeparators);
   const PickerContent content(titles, panelSlugs);
-  PanelSessions stage(catalog_, content, state.services);
+  std::vector<std::unique_ptr<PanelArt>> art;
+  std::vector<const PanelArt *> panelArt;
+  for (int panel = 0; panel < content.panelCount(); ++panel) {
+    const TitleAvailability &title = content.panelTitle(panel);
+    art.push_back(PanelArt::read(catalog_.runtime(title.index), *title.identity));
+    panelArt.push_back(art.back().get());
+  }
+  int selected = 0;
   for (;;) {
-    PickerSession picker(pickerRuntime, catalog_, content, stage, state.services);
-    PickerSession::Result choice = picker.run();
+    PickerSession picker(pickerRuntime, catalog_, content, panelArt, selected, state.services);
+    const PickerSession::Result choice = picker.run();
     if (choice.outcome == PickerSession::Outcome::DrawFault) {
       return endOnDrawFault();
     }
-    if (choice.outcome != PickerSession::Outcome::Chosen || choice.session == nullptr) {
+    if (choice.outcome != PickerSession::Outcome::Chosen) {
       return 0;
     }
-    lucent::info("host",
-                 "playing {} ({}) on from its stage frame",
-                 choice.session->title().identity->displayName,
-                 choice.session->title().identity->serial);
-    const TitleSession::End end = runToEnd(*choice.session);
+    selected = choice.panel;
+    const TitleAvailability &title = content.panelTitle(selected);
+    lucent::info("host", "playing {} ({})", title.identity->displayName, title.identity->serial);
+    TitleSession session(catalog_, title, true, state.services);
+    const TitleSession::End end = runToEnd(session);
     if (end == TitleSession::End::DrawFault) {
       return endOnDrawFault();
     }
@@ -139,8 +147,6 @@ int ProductHost::runSelector() {
     if (end != TitleSession::End::ReturnedToSelector && end != TitleSession::End::TitleEnded) {
       return 0; // a quit or the spent run budget ends the process
     }
-    // Back onto the stage where it stopped.
-    stage.takeBack(std::move(choice.session));
   }
 }
 
@@ -201,7 +207,6 @@ TitleSession::End ProductHost::runToEnd(TitleSession &session) {
     lucent::error("boot", "{} could not be started", session.title().identity->displayName);
     return TitleSession::End::Refused;
   }
-  // A session handed over from the stage claimed the channel already; a direct one claims it here.
   session.claimDebugEndpoint();
   while (session.end() == TitleSession::End::Running) {
     session.step();
@@ -222,7 +227,7 @@ int ProductHost::runExecutable(const std::filesystem::path &executable) {
   title.executable = executable;
   title.bytes = std::move(selection.bytes);
   title.status = AvailabilityStatus::Available;
-  TitleSession session(catalog_, title, TitleSession::Role::Product, false, process().services);
+  TitleSession session(catalog_, title, false, process().services);
   switch (runToEnd(session)) {
   case TitleSession::End::Refused:
     return 2;

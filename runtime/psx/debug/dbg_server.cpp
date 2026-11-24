@@ -166,15 +166,6 @@ inline constexpr std::array<psx::debug::VerbUsage, 5> kServerVerbs{{
     {"quit | q | exit", "end the run"},
 }};
 
-bool namesOwnVerb(const Core &core, std::string_view name) {
-  for (const psx::game::DebugVerb &verb : core.runtime.debugMenu().verbs()) {
-    if (verb.name == name) {
-      return true;
-    }
-  }
-  return false;
-}
-
 } // namespace
 
 DbgServer::~DbgServer() {
@@ -232,13 +223,7 @@ void DbgServer::runCommand(Core &core, const char *line, std::string &reply) {
                         area.x,
                         area.y));
   } else {
-    const bool machineVerb = !namesOwnVerb(core, cmd) && psx::debug::DebugCommands::reachesMachine(cmd);
-    if (machineVerb && mRoutesToPanel && mMachine == nullptr) {
-      sink(lucent::format("focused panel not booted; '{}' has no machine to read yet", cmd));
-      return;
-    }
-    Core &target = machineVerb && mRoutesToPanel ? *mMachine : core;
-    if (!target.game->debugCommands.run(target, args, sink)) {
+    if (!core.game->debugCommands.run(core, args, sink)) {
       sink(lucent::format("? {}  (try 'help')", line));
     }
   }

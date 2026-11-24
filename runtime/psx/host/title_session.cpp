@@ -8,7 +8,6 @@
 #include "frame_loop_shell.h"
 #include "game.h"
 #include "game_runtime.h"
-#include "gpu_device.h"
 #include "host_input.h"
 #include "host_turn.h"
 #include "psx_exe_image.h"
@@ -50,10 +49,9 @@ struct TitleSession::Parts {
 
 TitleSession::TitleSession(const TitleCatalog &catalog,
                            const TitleAvailability &title,
-                           Role role,
                            bool selectorAvailable,
                            SessionServices &services)
-    : catalog_(catalog), title_(title), role_(role), selectorAvailable_(selectorAvailable), services_(services),
+    : catalog_(catalog), title_(title), selectorAvailable_(selectorAvailable), services_(services),
       parts_(std::make_unique<Parts>()) {}
 
 TitleSession::~TitleSession() {
@@ -62,9 +60,7 @@ TitleSession::~TitleSession() {
   }
   Game &game = *parts_->game;
   game.core.hostTurn.reset();
-  if (role_ == Role::Product) {
-    psx::RunEndReport{game}.emit(steps_);
-  }
+  psx::RunEndReport{game}.emit(steps_);
   services_.frameLoop.forgetCore(game.core);
 }
 
@@ -81,24 +77,9 @@ bool TitleSession::boot() {
   Game &game = *parts_->game;
   Core &core = game.core;
   game.session.setReturnAvailable(selectorAvailable_);
-  game.session.setPreview(role_ == Role::Panel);
   game.productName = catalog_.productName();
   game.title = title_.identity;
   game.executable = title_.executable;
-  // Panel defaults are applied only to a selector session. A product session must stay windowed
-  // with the player's pad live and its audio on: a title whose boot waits on its own audio device
-  // never gets there, and the run stalls in the first guest step with no frame ever presented.
-  if (selectorAvailable_) {
-    applyPresentRoute();
-    // A pane host the picker attached while this panel was still cold.
-    game.render().setPaneHost(std::move(pendingPaneHost_));
-    pendingPaneHost_ = {};
-    // The picker owns the player's input; a panel's guest must not see it (see setPlayerInput).
-    game.pad.setPlayerInputSuppressed(!playerInput_);
-    // Only the session the player is looking at is heard (see setAudible).
-    game.spu_audio.output().setClaimed(audible_);
-  }
-
   SavedDisc(*title_.identity).bind(game.disc);
   // Open now, so the first guest read does not pay for the image's hunk map inside a field.
   game.disc.open();
@@ -126,23 +107,18 @@ bool TitleSession::boot() {
   game.mods.offerNativeDepth(core.depthTest.marksAny());
   game.mods.offerCrop(runtime.cropUiLayers(core) != nullptr);
   services_.frameLoop.prepareProduct(game);
-  // Several sessions each start the channel; only the first owns the host port, which is how the
-  // picker and a running title share one.
+  // The selector's Game started the channel first; this session claims it after boot (claimDebugEndpoint).
   game.dbg_server.start();
   psx::cpu::configureStoreObserver(core);
-  if (role_ == Role::Product) {
-    psx::cpu::configureExecutorDiagnostics(core);
-  }
+  psx::cpu::configureExecutorDiagnostics(core);
   lucent::info("boot",
                "live control channel {}, store observer armed",
                psx::debug::debugServerLive() ? "attached" : "not requested");
-  if (role_ == Role::Product) {
-    // Black before the title builds, so its first frames never composite over a stale splash.
-    game.display.build(psx::present::PresentCompletion::Transition);
-    game.display.show();
-  }
+  // Black before the title builds, so its first frames never composite over a stale splash.
+  game.display.build(psx::present::PresentCompletion::Transition);
+  game.display.show();
   runtime.startProgram(core);
-  if (role_ == Role::Product && services_.configuredStatePending) {
+  if (services_.configuredStatePending) {
     services_.configuredStatePending = false;
     if (std::string error; !psx::state::applyConfiguredState(core, error)) {
       lucent::error("boot", "{}", error);
@@ -152,11 +128,7 @@ bool TitleSession::boot() {
   // The play check measures the run, not the gap between the boot's clear and the first step.
   game.perf.restartPresentSeries();
   parts_->booted = true;
-  lucent::info("session",
-               "{} ({}) booted{}",
-               title_.identity->displayName,
-               title_.identity->serial,
-               paused_ ? " — paused, waiting in its picker panel" : "");
+  lucent::info("session", "{} ({}) booted", title_.identity->displayName, title_.identity->serial);
   return true;
 }
 
@@ -174,9 +146,6 @@ bool TitleSession::endRequested(Game &game) {
     end_ = End::TitleEnded;
     return true;
   }
-  if (role_ != Role::Product) {
-    return false;
-  }
   if (services_.quit.take() || game.dbg_server.takeQuitRequest()) {
     lucent::info("session", "{} was asked to quit after {} step(s)", title_.identity->displayName, steps_);
     end_ = End::Quit;
@@ -191,15 +160,14 @@ bool TitleSession::endRequested(Game &game) {
 }
 
 void TitleSession::step() {
-  if (!parts_->booted || paused_ || end_ != End::Running) {
+  if (!parts_->booted || end_ != End::Running) {
     return;
   }
   Game &game = *parts_->game;
   if (endRequested(game)) {
     return;
   }
-  const bool product = role_ == Role::Product;
-  if (product && game.config.repl && !game.repl.beforeStep(&game.core, static_cast<std::uint32_t>(steps_))) {
+  if (game.config.repl && !game.repl.beforeStep(&game.core, static_cast<std::uint32_t>(steps_))) {
     end_ = End::Quit;
     return;
   }
@@ -208,147 +176,11 @@ void TitleSession::step() {
   const psx::frame::FieldTurn fieldTurn;
   fieldTurn.beginField(game.core);
   ++steps_;
-  const unsigned long long pacedBefore = game.framePacer.pacedFields();
-  const bool pastPrefix = game.requireFrameDriver().pastBootPrefix();
-  const std::uint64_t presentsBefore = game.render().presentSerial();
   services_.frameLoop.step(game.core, static_cast<std::uint32_t>(steps_));
-  showsTitlePicture_ = showsTitlePicture_ || (pastPrefix && game.core.gpuDevice().displayArea().enabled &&
-                                              game.render().presentSerial() != presentsBefore);
-  if (!holdsStagePicture_ && showsTitlePicture_) {
-    const psx::game::GameRuntime &runtime = game.core.runtime;
-    holdsStagePicture_ = runtime.logoTextures().empty() || runtime.showsOwnLogo(game.core);
-  }
-  if (product) {
-    services_.budget.step();
-    game.repl.afterStep();
-  }
+  services_.budget.step();
+  game.repl.afterStep();
   fieldTurn.endField(game.core, static_cast<std::uint32_t>(steps_));
-  lastStepPacedFields_ = game.framePacer.pacedFields() - pacedBefore;
   endRequested(game);
-}
-
-bool TitleSession::booted() const {
-  return parts_->booted;
-}
-
-bool TitleSession::returnRequested() const {
-  return parts_->booted && parts_->game->session.returnRequested();
-}
-
-Core &TitleSession::core() {
-  if (!parts_->game) {
-    lucent::error("session",
-                  "{} asked for its Core before boot() — a session has no machine until it has booted",
-                  title_.identity->slug);
-    std::abort();
-  }
-  return parts_->game->core;
-}
-
-psx::render::PresentedImage TitleSession::presentedPicture() const {
-  if (!parts_->booted) {
-    return {};
-  }
-  return parts_->game->render().lastPresented();
-}
-
-void TitleSession::applyPresentRoute() {
-  if (!parts_->game) {
-    return; // no machine yet; boot() applies it
-  }
-  if (paneDestination_) {
-    parts_->game->render().presentToPane(paneImage_);
-  } else {
-    parts_->game->render().presentToWindow();
-  }
-}
-
-void TitleSession::presentToPane(psx::present::PixelSize image) {
-  paneDestination_ = true;
-  paneImage_ = image;
-  applyPresentRoute();
-}
-
-void TitleSession::setPaneHost(psx::present::PaneHost host) {
-  if (parts_->game == nullptr) {
-    // Kept until boot(): a panel is created before it boots, and the picker attaches its host then.
-    pendingPaneHost_ = std::move(host);
-    return;
-  }
-  parts_->game->render().setPaneHost(std::move(host));
-}
-
-void TitleSession::presentToWindow() {
-  paneDestination_ = false;
-  paneImage_ = {};
-  applyPresentRoute();
-}
-
-void TitleSession::setPlayerInput(bool live) {
-  playerInput_ = live;
-  if (parts_->booted) {
-    parts_->game->pad.setPlayerInputSuppressed(!live);
-  }
-}
-
-void TitleSession::releaseRebuildable() {
-  if (parts_->booted) {
-    parts_->game->render().releaseRebuildable();
-  }
-}
-
-void TitleSession::setPreRolling(bool preRolling) {
-  if (parts_->booted) {
-    parts_->game->session.setPreRolling(preRolling);
-  }
-}
-
-void TitleSession::pause() {
-  paused_ = true;
-}
-
-void TitleSession::resume() {
-  paused_ = false;
-}
-
-void TitleSession::setAudible(bool audible) {
-  audible_ = audible;
-  if (parts_->booted) {
-    parts_->game->spu_audio.output().setClaimed(audible);
-  }
-}
-
-void TitleSession::handOver() {
-  role_ = Role::Product;
-  resume();
-  presentToWindow();
-  setPaneHost({});
-  setPlayerInput(true);
-  setAudible(true);
-  if (!parts_->booted) {
-    return;
-  }
-  Game &game = *parts_->game;
-  game.session.setPreview(false);
-  claimDebugEndpoint();
-  // The stage's frames were the selector's; the play check measures the run from here.
-  game.perf.restartPresentSeries();
-}
-
-void TitleSession::takeBack() {
-  role_ = Role::Panel;
-  end_ = End::Running;
-  setPlayerInput(false);
-  setAudible(false);
-  pause();
-  if (!parts_->booted) {
-    return;
-  }
-  Game &game = *parts_->game;
-  game.session.clearReturn();
-  game.session.setPreview(true);
-  game.rml_overlay.setVisible(false);
-  game.dbg_server.releaseEndpoint();
 }
 
 void TitleSession::claimDebugEndpoint() {

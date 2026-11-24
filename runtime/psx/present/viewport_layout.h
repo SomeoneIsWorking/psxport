@@ -29,25 +29,15 @@ struct PictureFit {
   PaneRect source;   // in the source's pixels
 };
 
-// Letterboxed whole, or (fill) covering the output with the source centre-cropped to the output's aspect.
+// The whole source letterboxed into the output at an aspect.
 inline PictureFit fitPicture(long long aspectWidth,
                              long long aspectHeight,
                              int sourceWidth,
                              int sourceHeight,
                              int outputWidth,
-                             int outputHeight,
-                             bool fill) {
-  const PaneRect whole{0, 0, sourceWidth, sourceHeight};
-  if (!fill) {
-    return {letterbox(static_cast<int>(aspectWidth), static_cast<int>(aspectHeight), outputWidth, outputHeight), whole};
-  }
-  const PaneRect output{0, 0, outputWidth, outputHeight};
-  if (aspectWidth * outputHeight > aspectHeight * outputWidth) {
-    const int keepWidth = static_cast<int>(sourceWidth * aspectHeight * outputWidth / (aspectWidth * outputHeight));
-    return {output, {(sourceWidth - keepWidth) / 2, 0, keepWidth, sourceHeight}};
-  }
-  const int keepHeight = static_cast<int>(sourceHeight * aspectWidth * outputHeight / (aspectHeight * outputWidth));
-  return {output, {0, (sourceHeight - keepHeight) / 2, sourceWidth, keepHeight}};
+                             int outputHeight) {
+  return {letterbox(static_cast<int>(aspectWidth), static_cast<int>(aspectHeight), outputWidth, outputHeight),
+          PaneRect{0, 0, sourceWidth, sourceHeight}};
 }
 
 } // namespace psx::present

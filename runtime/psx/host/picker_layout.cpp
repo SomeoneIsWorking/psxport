@@ -12,57 +12,9 @@ constexpr float kSettled = 0.0005f;
 
 } // namespace
 
-psx::present::PaneRect PanelLayout::logoRect(LogoSize logo, LogoSize largest) const {
-  if (logo.width <= 0 || logo.height <= 0 || largest.width <= 0 || largest.height <= 0 || cover.h <= 0) {
-    return psx::present::PaneRect{cover.x, cover.y, 0, 0};
-  }
-  const double surfaceHeight = static_cast<double>(cover.h);
-  const double centreY = surfaceHeight * logoCentrePerHeight;
-  const auto seamAt = [&](int topX, int bottomX, double y) {
-    return static_cast<double>(topX) + static_cast<double>(bottomX - topX) * y / surfaceHeight;
-  };
-  // `size` at `scale`, or an empty rectangle when it crosses a seam or the top edge.
-  const auto placed = [&](LogoSize size, double scale) {
-    const double width = static_cast<double>(size.width) * scale;
-    const double height = static_cast<double>(size.height) * scale;
-    const double top = centreY - height / 2.0;
-    const double bottom = top + height;
-    const double left =
-        std::max(seamAt(seams.leftTopX, seams.leftBottomX, top), seamAt(seams.leftTopX, seams.leftBottomX, bottom));
-    const double right =
-        std::min(seamAt(seams.rightTopX, seams.rightBottomX, top), seamAt(seams.rightTopX, seams.rightBottomX, bottom));
-    if (top < 0.0 || width > right - left) {
-      return psx::present::PaneRect{cover.x, cover.y, 0, 0};
-    }
-    return psx::present::PaneRect{static_cast<int>(std::ceil(left + (right - left - width) / 2.0)),
-                                  static_cast<int>(std::lround(top)),
-                                  static_cast<int>(std::lround(width)),
-                                  static_cast<int>(std::lround(height))};
-  };
-  const int widest = std::max(cover.w / largest.width, 0);
-  for (int scale = widest; scale >= 1; --scale) {
-    if (placed(largest, static_cast<double>(scale)).w > 0) {
-      return placed(logo, static_cast<double>(scale));
-    }
-  }
-  // Smaller than its texels: the largest fraction that fits.
-  double low = 0.0;
-  double high = 1.0;
-  for (int step = 0; step < 24; ++step) {
-    const double middle = (low + high) / 2.0;
-    if (placed(largest, middle).w > 0) {
-      low = middle;
-    } else {
-      high = middle;
-    }
-  }
-  return placed(logo, low);
-}
-
 PickerLayout::PickerLayout(int panelCount, Motion motion)
-    : mPanelCount(std::max(panelCount, 0)),
-      mSelectedShare(std::clamp(motion.selectedShare, 0.0f, 1.0f)), mSlantPerWidth(motion.slantPerWidth),
-      mResponse(std::clamp(motion.responsePerFrame, 0.01f, 1.0f)) {
+    : mPanelCount(std::max(panelCount, 0)), mSelectedShare(std::clamp(motion.selectedShare, 0.0f, 1.0f)),
+      mSlantPerWidth(motion.slantPerWidth), mResponse(std::clamp(motion.responsePerFrame, 0.01f, 1.0f)) {
   retarget(0);
   mShare = mTargetShare; // a layout starts settled; the first advance() has nothing to animate
 }
@@ -134,9 +86,12 @@ PanelLayout PickerLayout::panel(int index) const {
   return layoutAt(index, mShare, mSlantScale);
 }
 
-psx::present::PixelSize PickerLayout::imageSize(int index) const {
-  const psx::present::PaneRect cover = layoutAt(index, mTargetShare, mTargetSlantScale).cover;
-  return {cover.w, cover.h};
+int PickerLayout::selectedClearWidth() const {
+  if (mPanelCount <= 1) {
+    return mSurfaceW;
+  }
+  const int slant = static_cast<int>(std::lround(mSlantPerWidth * static_cast<float>(mSurfaceW)));
+  return std::max(static_cast<int>(std::lround(mSelectedShare * static_cast<float>(mSurfaceW))) - slant, 0);
 }
 
 PanelLayout PickerLayout::layoutAt(int index, const std::vector<float> &shares, float slantScale) const {

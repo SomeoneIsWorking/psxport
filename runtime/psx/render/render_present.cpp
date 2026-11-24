@@ -77,25 +77,8 @@ RenderState::~RenderState() {
   }
 }
 
-void RenderState::releaseRebuildable() {
-  // The kept picture is the present image, and its source may be a canvas freed below.
-  buildDirectImage();
-  if (record_) {
-    std::vector<present::FrameRecord> records;
-    for (const present::FrameRecord *record : game_.presentation.heldRecords()) {
-      records.push_back(*record);
-    }
-    restored_ = RestoredPicture{record_->canvasWindows(), std::move(records)};
-    record_.reset();
-  }
-  for (SDL_GPUTexture **texture : {&vramTexture_, &hostImage_, &screenImage_}) {
-    device_.release(*texture);
-  }
-  for (SDL_GPUTransferBuffer **buffer : {&vramUpload_, &hostUpload_, &screenReadback_}) {
-    device_.release(*buffer);
-  }
-  hostImageSize_ = {};
-  screenImageSize_ = {};
+PixelSize RenderState::presentImageSize() const {
+  return device_.sinkSize();
 }
 
 void RenderState::bringUp() {
@@ -168,8 +151,6 @@ RenderState::presentInputs(gpu::VramRect display, int nativeWidth, present::Scan
     in.content_w = in.native_w;
   }
   in.disp_rgb24 = game_.core.gpuDevice().displayArea().depth24 ? 1 : 0;
-  // A pane fills its panel, cropped at the rendered resolution, rather than letterboxing into a band.
-  in.fill = target_ == PresentTarget::Pane ? 1 : 0;
   in.window_h = window.lines;
   in.window_top = window.top;
   return in;
@@ -197,12 +178,10 @@ void RenderState::buildDisplay(gpu::VramRect display, present::ScanoutWindow win
     uploadDeviceVram(cmd, game_.core.gpuDevice().vram().all());
   }
   const present::PresentPlan plan = present::planPresent(inputs);
-  viewport_ = plan.viewport;
   lucent::debug("present",
-                "sink {}x{} pane={} src_ires={} rgb24={} disp={},{},{},{} viewport={},{},{},{}",
+                "sink {}x{} src_ires={} rgb24={} disp={},{},{},{} viewport={},{},{},{}",
                 plan.sink_w,
                 plan.sink_h,
-                target_ == PresentTarget::Pane ? "yes" : "no",
                 plan.src_ires,
                 plan.fmt[0],
                 plan.disp[0],
@@ -216,18 +195,14 @@ void RenderState::buildDisplay(gpu::VramRect display, present::ScanoutWindow win
   if (plan.build) {
     ensureVramTexture();
     SDL_GPUTexture *source = presentsRecord_ ? record_->presented().texture : vramTexture_;
-    if (target_ == PresentTarget::Swapchain) {
-      direct_ = DirectPicture{plan, source};
-      const PresentUniform uniform = presentUniform(plan);
-      clip_.recordDrawn(cmd,
-                        device_.presentBoxPipeline(),
-                        {source, device_.nearestSampler()},
-                        bytesOf(uniform),
-                        plan.viewport,
-                        {plan.sink_w, plan.sink_h});
-    } else {
-      buildPresentImage(cmd, plan, source);
-    }
+    direct_ = DirectPicture{plan, source};
+    const PresentUniform uniform = presentUniform(plan);
+    clip_.recordDrawn(cmd,
+                      device_.presentBoxPipeline(),
+                      {source, device_.nearestSampler()},
+                      bytesOf(uniform),
+                      plan.viewport,
+                      {plan.sink_w, plan.sink_h});
   }
   device_.release(lastPresentFence_);
   lastPresentFence_ = device_.submitFenced(cmd, "present build");
@@ -252,12 +227,7 @@ bool RenderState::dropsInBetween() {
 
 void RenderState::finishBuild(bool built) {
   ++presentSerial_;
-  // A pane's window belongs to the host compositing it, so the host composites here and shows at show().
-  const bool toPaneHost = target_ == PresentTarget::Pane && paneHost_.attached();
-  showPending_ = toPaneHost || (built && target_ == PresentTarget::Swapchain);
-  if (toPaneHost) {
-    paneHost_.built();
-  }
+  showPending_ = built;
 }
 
 void RenderState::show() {
@@ -265,21 +235,7 @@ void RenderState::show() {
     return;
   }
   showPending_ = false;
-  if (target_ == PresentTarget::Pane) {
-    if (paneHost_.attached()) {
-      paneHost_.show();
-    }
-    return;
-  }
   showPresentImage(device_.acquire());
-}
-
-void RenderState::buildPresentImage(SDL_GPUCommandBuffer *cmd,
-                                    const present::PresentPlan &plan,
-                                    SDL_GPUTexture *source) {
-  direct_.reset();
-  drawPresentImage(cmd, plan, source);
-  clipPresent(cmd);
 }
 
 void RenderState::drawPresentImage(SDL_GPUCommandBuffer *cmd,
@@ -313,9 +269,7 @@ void RenderState::buildDirectImage() {
 }
 
 void RenderState::clipPresent(SDL_GPUCommandBuffer *cmd) {
-  if (target_ == PresentTarget::Swapchain) {
-    clip_.record(cmd, presentImage_, presentImageSize_);
-  }
+  clip_.record(cmd, presentImage_, presentImageSize_);
 }
 
 // The sink: the finished picture into the window, letterboxed, with the overlay on top.
@@ -395,14 +349,8 @@ void RenderState::repaint() {
 void RenderState::buildHostImage(SDL_GPUCommandBuffer *cmd, float fade) {
   direct_.reset();
   ensurePresentImage(presentImageSize());
-  // A pane fills its panel as the guest picture does.
-  const present::PictureFit fit = present::fitPicture(4,
-                                                      3,
-                                                      hostImageSize_.width,
-                                                      hostImageSize_.height,
-                                                      presentImageSize_.width,
-                                                      presentImageSize_.height,
-                                                      target_ == PresentTarget::Pane);
+  const present::PictureFit fit = present::fitPicture(
+      4, 3, hostImageSize_.width, hostImageSize_.height, presentImageSize_.width, presentImageSize_.height);
   const auto width = static_cast<float>(hostImageSize_.width);
   const auto height = static_cast<float>(hostImageSize_.height);
   SDL_GPURenderPass *pass = beginClearedPass(cmd, presentImage_);
@@ -419,7 +367,6 @@ void RenderState::buildHostImage(SDL_GPUCommandBuffer *cmd, float fade) {
                  presentImageSize_);
   SDL_EndGPURenderPass(pass);
   clipPresent(cmd);
-  viewport_ = fit.viewport;
 }
 
 void RenderState::buildImage(const std::uint8_t *rgba, PixelSize size, float fade) {

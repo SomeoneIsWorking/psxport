@@ -5,9 +5,7 @@
 #include "title_catalog.h"
 
 #include "frame_loop_shell.h"
-#include "pane_host.h"
 #include "render_device.h"
-#include "render_state.h"
 #include "typed_config.h"
 
 #include <cstdint>
@@ -41,10 +39,6 @@ struct SessionServices {
 // step() advances one step, and destruction is the whole teardown. The window and presentation
 // device are the product's and survive every session.
 //
-// Steppable rather than a self-running loop because the selector needs its titles alive at the same
-// time: one advancing and the others paused, each showing its own picture, and the picked one handed
-// to the play loop and back without a reboot. A loop that owns itself cannot be paused or handed over.
-//
 // `services` must outlive this session.
 class TitleSession {
 public:
@@ -58,130 +52,43 @@ public:
     DrawFault,          // the presentation device latched a fault; nothing can be drawn again
   };
 
-  // A panel is a picker preview: it never counts against the run budget, takes no quit, pumps no
-  // REPL, loads no configured state and owes no run-end report. The product is the confirmed or
-  // directly started session, and does all of those.
-  enum class Role : std::uint8_t { Panel, Product };
-
   TitleSession(const TitleCatalog &catalog,
                const TitleAvailability &title,
-               Role role,
                bool selectorAvailable,
                SessionServices &services);
   ~TitleSession();
   TitleSession(const TitleSession &) = delete;
   TitleSession &operator=(const TitleSession &) = delete;
 
-  // boot() succeeded.
-  bool booted() const;
   // Construct the Game, boot the authenticated executable and run the init prefix. False when the
-  // executable could not be loaded; a session that failed to boot has no picture and never will.
+  // executable could not be loaded.
   bool boot();
-  // One product step. A no-op before boot(), and the caller's business to make at most one per
-  // frame.
+  // One step. A no-op before boot().
   void step();
   // Why the session stopped; `Running` until it has.
   End end() const {
     return end_;
   }
-  bool returnRequested() const;
 
-  Core &core();
-  // The title this session is running. What the host logs when the picker hands one over.
   const TitleAvailability &title() const {
     return title_;
   }
-  std::uint64_t steps() const {
-    return steps_;
-  }
-  // Display fields the last step() waited for through the field pacer. A step that paced nothing
-  // (an unpaced fast-forward step, or a stub that delivers no fields) leaves the picker's frame
-  // owing its wall time, because the panel did not pay it.
-  unsigned long long lastStepPacedFields() const {
-    return lastStepPacedFields_;
-  }
-  // The host compositing this session's pane, told at each pane present's build and show, so it
-  // composites once per presented picture rather than once per logic frame. An empty host detaches it:
-  // a session handed on as the product owns the window, and a host left attached would composite a
-  // selector that is no longer on screen.
-  void setPaneHost(psx::present::PaneHost host);
-  // Presented a frame that began past the title's boot prefix with the guest display enabled (GP1(03)).
-  // Guest state answers it: the frame driver knows its prefix, the GPU knows the display is on.
-  bool showsTitlePicture() const {
-    return showsTitlePicture_;
-  }
-  // The picture the selector's stage holds for this title has been presented: its title screen when the title
-  // names its logo (GameRuntime::logoTextures, showsOwnLogo), else its first title picture. Latched.
-  bool holdsStagePicture() const {
-    return holdsStagePicture_;
-  }
-  // Free the GPU targets a held session can rebuild, keeping its picture and guest state
-  // (RenderState::releaseRebuildable).
-  void releaseRebuildable();
-  // Run unseen to that picture: unpaced and unheard (SessionControl::setPreRolling).
-  void setPreRolling(bool preRolling);
-  // The newest presented frame, at the size this session built it.
-  psx::render::PresentedImage presentedPicture() const;
-
-  // ---- what a panel session is allowed to do
-  // ------------------------------------------------------ Route this session's present into the
-  // host's composite instead of the window, at `image`. See RenderState::presentToPane.
-  void presentToPane(psx::present::PixelSize image);
-  // Back to the ordinary product route: this session's present IS the window.
-  void presentToWindow();
-  // The player's controller reaches the confirmed session's guest, and the confirm press itself is
-  // delivered there.
-  void setPlayerInput(bool live);
-  // Stop advancing / start advancing. A paused session keeps its picture and its guest state
-  // exactly where they were and does not present.
-  void pause();
-  void resume();
-  bool paused() const {
-    return paused_;
-  }
-  // This session alone may be heard. Exactly one session in a process holds it at a time.
-  void setAudible(bool audible);
-  // The picked panel becomes the product and plays on in the same machine: the window, the player's
-  // controller (a press still held from the selector stays hidden until released), the sound and the
-  // control channel are its; it is no longer a preview.
-  void handOver();
-  // The product goes back onto the selector's stage, paused where it stopped: a silent preview again, with
-  // no controller and no control channel, its return request answered.
-  void takeBack();
-  Role role() const {
-    return role_;
-  }
-  // A claim does not outlive a Game, and confirming destroys the picker Game, so the session that
-  // becomes the product must claim it or later commands time out on a healthy run. See
-  // psxport::DbgServer::claimEndpoint.
+  // A claim does not outlive a Game, and the selector's Game held the channel before this one, so the session
+  // claims it or later commands time out on a healthy run. See psxport::DbgServer::claimEndpoint.
   void claimDebugEndpoint();
 
 private:
   struct Parts;
-  // The route is held as state and applied at boot: a panel is routed before its session has
-  // booted, because the host knows where every panel is long before that panel has a guest.
-  void applyPresentRoute();
   // Ask the end owners once per step; true when the run ends here.
   bool endRequested(Game &game);
 
   const TitleCatalog &catalog_;
   const TitleAvailability &title_;
-  Role role_;
   bool selectorAvailable_;
   SessionServices &services_;
   std::unique_ptr<Parts> parts_;
   End end_ = End::Running;
-  bool paused_ = false;
-  bool playerInput_ = false;
-  bool audible_ = false;
-  bool paneDestination_ = false;
-  psx::present::PixelSize paneImage_;
-  bool showsTitlePicture_ = false;
-  bool holdsStagePicture_ = false;
   std::uint64_t steps_ = 0;
-  unsigned long long lastStepPacedFields_ = 0;
-  // A pane host attached before boot(), waiting for a machine to attach it to.
-  psx::present::PaneHost pendingPaneHost_;
 };
 
 } // namespace psx::host

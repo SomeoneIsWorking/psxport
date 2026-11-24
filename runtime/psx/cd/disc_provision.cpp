@@ -10,25 +10,44 @@
 
 namespace psx::cd {
 
+namespace {
+
+bool readSpan(Disc &disc, const DiscFile &file, uint32_t offset, uint32_t length, std::vector<std::uint8_t> &out) {
+  out.resize(length);
+  uint8_t sector[kDataSectorBytes];
+  for (uint32_t done = 0; done < length;) {
+    const uint32_t at = offset + done;
+    if (!disc.readSector(file.lba + (at / kDataSectorBytes), sector)) {
+      out.clear();
+      return false;
+    }
+    const uint32_t within = at % kDataSectorBytes;
+    const uint32_t chunk = std::min<uint32_t>(length - done, kDataSectorBytes - within);
+    memcpy(out.data() + done, sector + within, chunk);
+    done += chunk;
+  }
+  return true;
+}
+
+} // namespace
+
 bool readDiscFile(Disc &disc, const char *isoPath, std::vector<std::uint8_t> &out) {
   out.clear();
   const std::optional<DiscFile> file = isoPath == nullptr ? std::nullopt : disc.findFile(isoPath);
   if (!file || file->size == 0u || file->size > kDiscFileMaxBytes) {
     return false;
   }
-  const uint32_t size = file->size;
-  uint32_t lba = file->lba;
-  out.resize(size);
-  uint8_t sector[kDataSectorBytes];
-  for (uint32_t done = 0; done < size; done += kDataSectorBytes, ++lba) {
-    if (!disc.readSector(lba, sector)) {
-      out.clear();
-      return false;
-    }
-    const uint32_t chunk = std::min<uint32_t>(size - done, kDataSectorBytes);
-    memcpy(out.data() + done, sector, chunk);
+  return readSpan(disc, *file, 0, file->size, out);
+}
+
+bool readDiscFileRange(
+    Disc &disc, const char *isoPath, std::uint32_t offset, std::uint32_t length, std::vector<std::uint8_t> &out) {
+  out.clear();
+  const std::optional<DiscFile> file = isoPath == nullptr ? std::nullopt : disc.findFile(isoPath);
+  if (!file || length == 0u || length > kDiscFileMaxBytes || offset > file->size || length > file->size - offset) {
+    return false;
   }
-  return true;
+  return readSpan(disc, *file, offset, length, out);
 }
 
 bool findDropinImage(char *out, unsigned out_cap) {

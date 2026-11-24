@@ -1,9 +1,7 @@
 // disc_file.h — the ONE ISO9660 file reader: a disc file's bytes, in sector order.
 //
 // `Disc::findFile` answers WHERE a file is and `Disc::readSector` answers what a sector holds; the
-// walk that turns those two into a file's bytes belongs to one place, and both of its callers live
-// here — the host's executable provisioner (`psx::host::provisionExecutable`) and the BIOS LoadExec
-// service (bios_load_exec.h), which loads the executable a guest named.
+// walk that turns those two into a file's bytes belongs here.
 #pragma once
 
 #include "disc.h"
@@ -23,5 +21,9 @@ inline constexpr std::uint32_t kDiscFileMaxBytes = 0x200000u;
 // `isoPath` is an absolute ISO9660 path ("\S0\CRASH.EXE;1"); case, ";version", leading separators and
 // "/" separators are all accepted, exactly as `Disc::findFile` accepts them.
 bool readDiscFile(Disc &disc, const char *isoPath, std::vector<std::uint8_t> &out);
+// `length` bytes from `offset` into one file, for a part of an archive larger than `kDiscFileMaxBytes`. False, `out`
+// empty, when the range is not inside the file, is longer than `kDiscFileMaxBytes` or a sector read fails.
+bool readDiscFileRange(
+    Disc &disc, const char *isoPath, std::uint32_t offset, std::uint32_t length, std::vector<std::uint8_t> &out);
 
 } // namespace psx::cd

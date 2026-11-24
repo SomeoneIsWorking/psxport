@@ -8,13 +8,12 @@
 #include <string>
 #include <string_view>
 
-#include "drawn_logo.h"
+#include "art_scene.h"
 #include "execution_exit.h"
 #include "field_cadence.h"
 #include "guest_address_range.h"
 #include "guest_packet_pool_windows.h"
 #include "input_phase.h"
-#include "logo_image.h"
 #include "pad_delivery.h"
 #include "psx_exe_image.h"
 #include "title_settings.h"
@@ -22,8 +21,9 @@
 class Core;
 class Game;
 namespace psx::cd {
+class Disc;
 struct StockReadLanding;
-}
+} // namespace psx::cd
 namespace psx::present {
 class CropUiLayers;
 class GuestWidescreenProjection;
@@ -190,18 +190,11 @@ public:
     (void)core;
     return nullptr;
   }
-  // The title's picture shows its own logo right now, so the picker draws none over it.
-  virtual bool showsOwnLogo(Core &core) const {
-    (void)core;
-    return false;
+  // The selector panel's picture, read from the title's own disc (psx::present::drawArt); none by default.
+  virtual std::optional<psx::present::ArtScene> panelArt(psx::cd::Disc &disc) const {
+    (void)disc;
+    return std::nullopt;
   }
-  // The textures the title screen draws its logo from; none when the title supplies no logo.
-  virtual std::span<const psx::present::LogoTexture> logoTextures() const {
-    return {};
-  }
-  // The title's logo for its picker panel, read from its live machine: by default the last frame's draws from
-  // logoTextures while showsOwnLogo.
-  virtual std::optional<psx::host::LogoImage> panelLogo(Core &core) const;
 
   // The guest picture covers only the native width, so the present samples those columns alone.
   virtual bool guestPictureIsNativeWidth(const Game &game) const {

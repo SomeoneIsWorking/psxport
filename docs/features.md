@@ -40,8 +40,8 @@ title answers there. A hop with no title entry runs on the framework alone.
 
 | hop | owner | title |
 |---|---|---|
-| 1 | `psx/host/panel_sessions.cpp:PanelSessions::takeLogo` → `GameRuntime::panelLogo` (default: `drawnLogo` of `logoTextures` while `showsOwnLogo`); `PanelSessions::logo` is a tile's icon, drawn only while the side has no picture (`PickerPanes::build`); `PanelLayout::logoRect` sizes it | `showsOwnLogo`, `logoTextures` (`panelLogo` when not textured) |
-| 2 | `psx/host/picker_session.cpp:PickerSession::run`, `psx/host/panel_sessions.cpp:PanelSessions::advance` — every title loaded, only the focused one runs, one paced step per iteration; `PanelSessions::handOver`/`takeBack` — the picked instance plays on and returns; `psx/host/stage_sides.cpp:StageSides`; `psx/host/picker_runtime.h:PickerRuntime`; one window | |
+| 1 | `psx/host/panel_art.cpp:PanelArt::read` → `GameRuntime::panelArt` through `TitleDisc`, drawn by `psx/present/art_scene.cpp:drawArt`; `PickerPanes::build` draws it at the shared scale | `panelArt` |
+| 2 | `psx/host/picker_session.cpp:PickerSession::run` — input, layout, panes, the pick; `psx/host/product_host.cpp:ProductHost::runSelector` boots the picked title's `TitleSession` and runs the selector again on its return; `psx/host/picker_runtime.h:PickerRuntime`; one window | |
 
 ## F-RENDER — guest GPU work to the screen
 

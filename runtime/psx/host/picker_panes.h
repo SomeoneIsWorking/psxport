@@ -1,10 +1,9 @@
-// The title selector's picture: each side's own present image 1:1 (a plain tile before it has one), its
-// title's logo, and the divider.
+// The title selector's picture: each panel a tile with its title's art at the selector's one texel scale, and the
+// dividers.
 #pragma once
 
 #include "picker_layout.h"
 #include "render_pane.h"
-#include "render_state.h"
 
 #include <span>
 #include <vector>
@@ -15,19 +14,14 @@ class RenderDevice;
 
 namespace psx::host {
 
-class PanelLogo;
-
-// One panel's content for a frame.
-struct PanelSource {
-  psx::render::PresentedImage picture; // invalid while the panel has no picture of its own
-  PanelLogo *logo = nullptr;           // null until the title's own logo has been read
-};
+class PanelArt;
 
 class PickerPanes {
 public:
-  // The panes for one frame, drawn in order; valid until the next build.
+  // The panes for one frame, drawn in order; valid until the next build. `art` has one entry per panel, null for a
+  // panel with no art.
   std::span<const psx::render::Pane> build(const PickerLayout &layout,
-                                           std::span<const PanelSource> panels,
+                                           std::span<const PanelArt *const> art,
                                            int selected,
                                            psx::render::RenderDevice &device);
 

@@ -3,7 +3,6 @@
 #include "core.h"
 #include "frame_pacer.h"
 #include "game.h"
-#include "gpu_device.h"
 
 namespace psx::game {
 
@@ -21,14 +20,6 @@ std::unique_ptr<FrameDriver> GameRuntime::createFrameDriver(Game &) {
 
 std::optional<double> GameRuntime::presentDeadline(Core &core, frame::FieldCadence cadence) {
   return core.game->framePacer.subframeDeadline(core, cadence);
-}
-
-std::optional<psx::host::LogoImage> GameRuntime::panelLogo(Core &core) const {
-  const std::span<const psx::present::LogoTexture> textures = logoTextures();
-  if (textures.empty() || core.game == nullptr || !showsOwnLogo(core)) {
-    return std::nullopt;
-  }
-  return psx::present::drawnLogo(core.game->presentation.currentRecord(), core.gpuDevice().vram(), textures);
 }
 
 } // namespace psx::game

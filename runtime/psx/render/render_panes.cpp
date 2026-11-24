@@ -67,7 +67,6 @@ void RenderState::buildPanes(std::span<const Pane> panes) {
   SDL_EndGPURenderPass(pass);
   clipPresent(cmd);
   device_.submit(cmd, "panes build");
-  viewport_ = present::PaneRect{0, 0, size.width, size.height};
   finishBuild(true);
   lucent::debug("pane", "{} of {} pane(s) drawn into {}x{}", drawn, panes.size(), size.width, size.height);
 }

@@ -145,7 +145,7 @@ set(PSXPORT_FRAMEWORK_SRC
   ${PSXPORT_ROOT}/runtime/psx/gpu/texture_feedback.cpp # draws that sample VRAM gpu.c's texture cache may hold stale
   ${PSXPORT_ROOT}/runtime/psx/present/gp0_primitive_decode.cpp # a GP0 draw packet's words to a record primitive
   ${PSXPORT_ROOT}/runtime/psx/present/frame_record.cpp # one logic frame's GPU work in execution order
-  ${PSXPORT_ROOT}/runtime/psx/present/drawn_logo.cpp # a title logo rebuilt from its title screen's draws
+  ${PSXPORT_ROOT}/runtime/psx/present/art_scene.cpp # a title's still art drawn by gpu.c from its uploads and sprites
   ${PSXPORT_ROOT}/runtime/psx/present/owner_ledger.cpp # owner of every RAM word: scope instance or unowned writer
   ${PSXPORT_ROOT}/runtime/psx/present/ownership_verdict.cpp # unowned draws still or moving across an interval
   ${PSXPORT_ROOT}/runtime/psx/present/owner_journal.cpp # rows of unowned draws and held intervals
@@ -205,7 +205,6 @@ set(PSXPORT_FRAMEWORK_SRC
   ${PSXPORT_ROOT}/runtime/psx/render/record_rasterizer.cpp # FrameRecord rasterized into one VRAM image
   ${PSXPORT_ROOT}/runtime/psx/render/record_present.cpp # RenderPath::Record present, shot and recordcheck
   ${PSXPORT_ROOT}/runtime/psx/render/render_window.cpp # the one window for the whole product run
-  ${PSXPORT_ROOT}/runtime/psx/render/render_screen.cpp # a Game's present target: window or pane
   ${PSXPORT_ROOT}/runtime/psx/render/render_panes.cpp # a present image built from panes (the title selector)
   ${PSXPORT_ROOT}/runtime/psx/present/picture_announce.cpp
   ${PSXPORT_ROOT}/runtime/psx/debug/gpu_perf.cpp
@@ -226,12 +225,10 @@ set(PSXPORT_FRAMEWORK_SRC
   ${PSXPORT_ROOT}/runtime/psx/host/title_session.cpp # one steppable boot-to-exit run of one catalog title
   ${PSXPORT_ROOT}/runtime/psx/catalog/single_title_catalog.cpp # the catalog of a one-title product
   ${PSXPORT_ROOT}/runtime/psx/host/run_budget.cpp # the run's cap in presentation-fence steps
-  ${PSXPORT_ROOT}/runtime/psx/host/panel_sessions.cpp # one live session per available title and which of them runs
-  ${PSXPORT_ROOT}/runtime/psx/host/panel_logo.cpp # a title's logo image and its lazy GPU texture
+  ${PSXPORT_ROOT}/runtime/psx/host/panel_art.cpp # a title's selector picture from its disc and its lazy GPU texture
   ${PSXPORT_ROOT}/runtime/psx/host/picker_session.cpp
   ${PSXPORT_ROOT}/runtime/psx/host/picker_runtime.cpp
   ${PSXPORT_ROOT}/runtime/psx/host/picker_layout.cpp
-  ${PSXPORT_ROOT}/runtime/psx/host/stage_sides.cpp
   ${PSXPORT_ROOT}/runtime/psx/host/picker_panes.cpp
   ${PSXPORT_ROOT}/runtime/psx/host/picker_content.cpp
   ${PSXPORT_ROOT}/runtime/psx/host/executable_provisioner.cpp

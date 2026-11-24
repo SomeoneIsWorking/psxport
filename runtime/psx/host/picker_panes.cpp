@@ -1,10 +1,9 @@
 #include "picker_panes.h"
 
-#include "panel_logo.h"
-
-#include <lucent/log.h>
+#include "panel_art.h"
 
 #include <algorithm>
+#include <cstddef>
 
 namespace psx::host {
 namespace {
@@ -20,7 +19,7 @@ constexpr float kDividerRed = 0.76f;
 constexpr float kDividerGreen = 0.64f;
 constexpr float kDividerBlue = 0.18f;
 
-// A side with no frame yet is a plain tile under its logo.
+// Every panel is a plain tile under its art.
 constexpr float kTileRed = 0.11f;
 constexpr float kTileGreen = 0.11f;
 constexpr float kTileBlue = 0.13f;
@@ -41,83 +40,66 @@ void shade(bool selected, psx::render::Pane &pane) {
   pane.tintB = brightness;
 }
 
+// The largest whole texel scale at which every panel's art fits the window's height and a selected panel's clear
+// width, so selection changes a panel's width and never its art's scale.
+int artScale(const PickerLayout &layout, std::span<const PanelArt *const> art, int surfaceHeight) {
+  int scale = 0;
+  for (const PanelArt *panel : art) {
+    if (panel == nullptr) {
+      continue;
+    }
+    const int fits = std::min(surfaceHeight / panel->height(), layout.selectedClearWidth() / panel->width());
+    scale = scale == 0 ? fits : std::min(scale, fits);
+  }
+  return std::max(scale, 1);
+}
+
 } // namespace
 
 std::span<const psx::render::Pane> PickerPanes::build(const PickerLayout &layout,
-                                                      std::span<const PanelSource> panels,
+                                                      std::span<const PanelArt *const> art,
                                                       int selected,
                                                       psx::render::RenderDevice &device) {
   panes_.clear();
   dividers_.clear();
-  const int surfaceHeight = panels.empty() ? 0 : layout.panel(0).bounds.h;
+  const int surfaceHeight = art.empty() ? 0 : layout.panel(0).bounds.h;
   const int dividerPixels =
       std::max(kDividerMinimumPixels, static_cast<int>(static_cast<float>(surfaceHeight) * kDividerPerHeight));
-  LogoSize largest;
-  for (const PanelSource &source : panels) {
-    if (source.logo != nullptr && !source.logo->empty()) {
-      largest.width = std::max(largest.width, source.logo->width());
-      largest.height = std::max(largest.height, source.logo->height());
-    }
-  }
-  for (std::size_t index = 0; index < panels.size(); ++index) {
-    const PanelSource &source = panels[index];
+  const int scale = artScale(layout, art, surfaceHeight);
+  for (std::size_t index = 0; index < art.size(); ++index) {
+    const PanelArt *picture = art[index];
     const bool isSelected = static_cast<int>(index) == selected;
     const PanelLayout geometry = layout.panel(static_cast<int>(index));
 
-    // The picture at its own size, centred on the panel's cover; the seams decide what shows.
-    if (source.picture.valid()) {
-      psx::render::Pane picture{};
-      picture.texture = source.picture.texture;
-      picture.width = static_cast<float>(source.picture.width);
-      picture.height = static_cast<float>(source.picture.height);
-      picture.x = static_cast<float>(geometry.cover.x + (geometry.cover.w - source.picture.width) / 2);
-      picture.y = static_cast<float>(geometry.cover.y + (geometry.cover.h - source.picture.height) / 2);
-      cutBy(geometry, picture);
-      shade(isSelected, picture);
-      panes_.push_back(picture);
-    } else {
-      psx::render::Pane tile{};
-      tile.solid = true;
-      tile.x = static_cast<float>(geometry.cover.x);
-      tile.y = static_cast<float>(geometry.cover.y);
-      tile.width = static_cast<float>(geometry.cover.w);
-      tile.height = static_cast<float>(geometry.cover.h);
-      cutBy(geometry, tile);
-      shade(isSelected, tile);
-      tile.tintR *= kTileRed;
-      tile.tintG *= kTileGreen;
-      tile.tintB *= kTileBlue;
-      panes_.push_back(tile);
+    psx::render::Pane tile{};
+    tile.solid = true;
+    tile.x = static_cast<float>(geometry.cover.x);
+    tile.y = static_cast<float>(geometry.cover.y);
+    tile.width = static_cast<float>(geometry.cover.w);
+    tile.height = static_cast<float>(geometry.cover.h);
+    cutBy(geometry, tile);
+    shade(isSelected, tile);
+    tile.tintR *= kTileRed;
+    tile.tintG *= kTileGreen;
+    tile.tintB *= kTileBlue;
+    panes_.push_back(tile);
+
+    // Centred on the panel's cover at whole texels, so the nearest sampler keeps it sharp; the seams cut it.
+    if (picture != nullptr) {
+      const int width = picture->width() * scale;
+      const int height = picture->height() * scale;
+      psx::render::Pane pane{};
+      pane.texture = picture->texture(device);
+      pane.x = static_cast<float>(geometry.cover.x + (geometry.cover.w - width) / 2);
+      pane.y = static_cast<float>(geometry.cover.y + (geometry.cover.h - height) / 2);
+      pane.width = static_cast<float>(width);
+      pane.height = static_cast<float>(height);
+      cutBy(geometry, pane);
+      shade(isSelected, pane);
+      panes_.push_back(pane);
     }
 
-    // A tile's icon: the title's own logo at whole texels and every panel's one scale, so the nearest sampler keeps it
-    // sharp. A live picture is drawn alone.
-    if (!source.picture.valid() && source.logo != nullptr && !source.logo->empty()) {
-      const psx::present::PaneRect box =
-          geometry.logoRect(LogoSize{source.logo->width(), source.logo->height()}, largest);
-      psx::render::Pane logo{};
-      logo.texture = source.logo->texture(device);
-      logo.x = static_cast<float>(box.x);
-      logo.y = static_cast<float>(box.y);
-      logo.width = static_cast<float>(box.w);
-      logo.height = static_cast<float>(box.h);
-      cutBy(geometry, logo);
-      shade(isSelected, logo);
-      panes_.push_back(logo);
-    }
-
-    lucent::debug("picker",
-                  "panel {} picture {}x{} logo {} cover {}x{} at {},{}",
-                  index,
-                  source.picture.width,
-                  source.picture.height,
-                  source.logo != nullptr ? "yes" : "no",
-                  geometry.cover.w,
-                  geometry.cover.h,
-                  geometry.cover.x,
-                  geometry.cover.y);
-
-    if (index + 1 >= panels.size()) {
+    if (index + 1 >= art.size()) {
       continue;
     }
     // The shared seam, half a divider either side of it; the strip spans the full height so the

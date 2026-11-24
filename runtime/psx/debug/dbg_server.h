@@ -29,13 +29,6 @@ public:
   bool claimEndpoint();
   // Lets the endpoint go while this Game lives on: a title handed back to the selector's stage.
   void releaseEndpoint();
-  // From now on machine verbs this Game's own menu does not name go to a selector's focused panel: `machine`, or a
-  // refusal while that panel has not booted.
-  void routeMachineVerbsToPanel(Core *machine) {
-    mRoutesToPanel = true;
-    mMachine = machine;
-  }
-
   // Before a frame: while a client has paused the game, idle until `play`, `step` or `quit` arrives.
   void honourPause(Core *c);
   // One idle tick of a held field: host input, repaint, one command, ~15 ms.
@@ -63,8 +56,6 @@ public:
 private:
   void runCommand(Core &core, const char *line, std::string &reply);
 
-  bool mRoutesToPanel = false;
-  Core *mMachine = nullptr;
   bool mPaused = false;
   int mStep = 0;
   // Written by the listener thread, read by the product loop.
