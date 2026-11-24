@@ -305,24 +305,16 @@ def build_product(root: Path, target: str, environment: Mapping[str, str],
                   definitions: Sequence[str] = ()) -> Path:
     """Configure and build the title's player product in ``build/player``; returns that directory.
 
-    With RUN_BUILT set, the newest of the player and agent builds that already holds ``target`` is
-    returned unbuilt; a checkout with neither builds as usual."""
-    if environment.get(RUN_BUILT) == "1":
-        built = newest_build(root, target)
-        if built is not None:
-            say(f"launching the built {target} in {built.relative_to(root)} without building")
-            return built
+    With RUN_BUILT set, a player build that already holds ``target`` is returned unbuilt; the agent build is
+    never launched, as it holds whatever an agent's working tree last compiled."""
     build = root / PLAYER_BUILD
+    if environment.get(RUN_BUILT) == "1" and os.access(build / "bin" / target, os.X_OK):
+        say(f"launching the built {target} in {PLAYER_BUILD} without building")
+        return build
     say(f"building {target}…")
     configure_consumer(root, build, "Release", definitions, environment, quiet=True)
     build_targets(build, [target], environment)
     return build
-
-
-def newest_build(root: Path, target: str) -> Path | None:
-    """The player or agent build directory whose ``bin/<target>`` is newest, or None when neither exists."""
-    built = [root / tree for tree in (PLAYER_BUILD, AGENT_BUILD) if os.access(root / tree / "bin" / target, os.X_OK)]
-    return max(built, key=lambda tree: (tree / "bin" / target).stat().st_mtime, default=None)
 
 
 def _discdump_in(build: Path) -> Path | None:
