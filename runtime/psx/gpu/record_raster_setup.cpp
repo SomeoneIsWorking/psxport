@@ -270,7 +270,9 @@ bool withinVramSpan(const TriVertex input[3], int s) {
   return true;
 }
 
-std::optional<TriangleWalk> walkTriangle(const TriVertex input[3], int s) {
+// gpu.c's vertex order, core vertex and area, or nothing when it draws no triangle; the edge parts are left to
+// walkEdges, which only the native walk needs.
+std::optional<TriangleWalk> sortTriangle(const TriVertex input[3], int s) {
   if (!withinVramSpan(input, s)) {
     return std::nullopt;
   }
@@ -305,7 +307,11 @@ std::optional<TriangleWalk> walkTriangle(const TriVertex input[3], int s) {
   if (walk.denom == 0) {
     return std::nullopt;
   }
+  return walk;
+}
 
+void walkEdges(TriangleWalk &walk, int s) {
+  const TriVertex *vertices = walk.vertices;
   const std::uint64_t baseCoord = makePolyXFP(vertices[0].x);
   const std::int64_t baseStep = makePolyXFPStep(vertices[2].x - vertices[0].x, vertices[2].y - vertices[0].y);
   std::int64_t boundUpper = 0;
@@ -370,7 +376,6 @@ std::optional<TriangleWalk> walkTriangle(const TriVertex input[3], int s) {
           rows.coord[side] - static_cast<std::uint64_t>(static_cast<std::int64_t>(rows.yCoord)) * rows.step[side];
     }
   }
-  return walk;
 }
 
 // A triangle's colour or texel interpolant as a plane over VRAM-space target coordinates, in channel units. At the
@@ -396,6 +401,12 @@ using ClipPolygon = std::array<ClipPoint, 7>;
 // The first `count` corners of `polygon` cut to x0 <= x <= x1, y0 <= y <= y1 (Sutherland-Hodgman); the count left, 0
 // when nothing with area is.
 int clipPolygon(ClipPolygon &polygon, int count, double x0, double y0, double x1, double y1) {
+  // Most triangles lie inside their clip, and cutting one there keeps its corners as they are.
+  if (std::all_of(polygon.begin(), polygon.begin() + count, [&](const ClipPoint &p) {
+        return p.x >= x0 && p.x <= x1 && p.y >= y0 && p.y <= y1;
+      })) {
+    return count >= 3 ? count : 0;
+  }
   const double bounds[4] = {x0, x1, y0, y1};
   for (int side = 0; side < 4 && count >= 3; side++) {
     const double bound = bounds[side];
@@ -1260,14 +1271,17 @@ void RecordPlanner::Builder::addTriangle(const TriVertex scaled[3],
                                          bool offU,
                                          bool offV) {
   const int s = scale_;
-  const std::optional<TriangleWalk> walk = walkTriangle(scaled, s);
+  const std::optional<TriangleWalk> walk = sortTriangle(scaled, s);
   if (!walk || !withinVramSpan(native, 1)) {
     return;
   }
   // The native walk decides what the op writes, so ops and batches are the same at every scale. A triangle whose
   // places give it area where its words give none (a sliver a clip cut) writes no native pixel, as at 1x, but its
   // triangles reach native pixels its neighbours cover, which only its depth group counts.
-  const std::optional<TriangleWalk> nativeWalk = s == 1 ? walk : walkTriangle(native, 1);
+  std::optional<TriangleWalk> nativeWalk = s == 1 ? walk : sortTriangle(native, 1);
+  if (nativeWalk) {
+    walkEdges(*nativeWalk, 1);
+  }
   const TriVertex *vertices = walk->vertices;
   TriangleSetup setup;
   std::int32_t TriVertex::*const channels[5] = {
