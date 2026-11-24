@@ -43,7 +43,7 @@ bool Timing::advanceDisplayFields(FieldCadence cadence, uint32_t fieldRateMilliH
   game->core.hostTurn.onDisplayField(game->core);
   game->sio.service();
   const uint32_t completed = consumeCompletedDisplayFields(cadence);
-  for (uint32_t field = 0; field < completed; ++field) {
+  for (uint32_t field = 0; field < completed && !mTitleRunsVBlankHandler; ++field) {
     // The guest waits in VSync between turns and takes each field's VBlank before the next is latched.
     if (game->core.irqPendingEnabled(IRQ_BIT_VBLANK)) {
       game->hle.irqPoll(&game->core);

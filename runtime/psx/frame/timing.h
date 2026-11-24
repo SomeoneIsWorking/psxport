@@ -71,6 +71,11 @@ public:
   // HBlanks since the last delivered field edge, where a replaced VSync wait returns.
   [[nodiscard]] uint64_t hSyncsSinceDisplayBoundary() const;
 
+  // The title's frame driver runs the guest's VBlank handler once per field, so a field raises no VBlank interrupt.
+  void titleRunsVBlankHandler() {
+    mTitleRunsVBlankHandler = true;
+  }
+
   // Advance the host field count once at the title's native frame boundary.
   void frameTick();
   // Display fields the emulated clock has crossed: the field a draw entry or a present lands in.
@@ -90,6 +95,7 @@ public:
 
 private:
   EmulatedTime mEmulatedTime;
+  bool mTitleRunsVBlankHandler = false;
   // 0 while no replaced wait is pending; vsyncFields is never 0.
   uint32_t mVSyncWaitFields = 0;
   uint32_t mFieldsSinceVSyncWait = 0;
