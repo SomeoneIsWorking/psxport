@@ -276,6 +276,9 @@ public:
   // fetch), so a draw that reads its destination where the batch already wrote starts no new batch. Only a draw that
   // samples, as a texture, what the batch wrote still does.
   void setDestinationReadsInPass(bool inPass);
+  // The outline fonts, one bit each, whose glyphs draw from the atlas at native scale too: lettering, whose bitmap
+  // need not hold its text (present::OutlineLettering).
+  void setLetteredFonts(std::uint32_t fonts);
 
   // Every entry of a complete record, in order, into VRAM and into each canvas it reaches. A primitive
   // whose draw area spans exactly a canvas's buffer columns and covers its rows draws there with the

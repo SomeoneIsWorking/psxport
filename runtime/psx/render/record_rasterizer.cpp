@@ -357,6 +357,11 @@ void RecordRasterizer::useOutline(const present::OutlineAtlas *atlas, const std:
   outlineGeneration_ = atlas->generation;
   outlineScale_ = atlas->scale;
   outlineFonts_ = atlas->fonts;
+  std::uint32_t lettered = 0;
+  for (std::size_t f = 0; f < outlineFonts_.size(); f++) {
+    lettered |= outlineFonts_.at(f).fillCount > 0 ? 1u << f : 0u;
+  }
+  planner_.setLetteredFonts(lettered);
 }
 
 void RecordRasterizer::releaseImage() {

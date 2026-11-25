@@ -692,6 +692,7 @@ private:
 
 public:
   bool destinationInPass = false; // RecordPlanner::setDestinationReadsInPass
+  std::uint32_t letteredFonts = 0; // RecordPlanner::setLetteredFonts
 
 private:
   std::optional<RecordReadBack> readBack_; // what primitives sample
@@ -779,8 +780,8 @@ RecordOp RecordPlanner::Builder::primitiveOp(const DrawPrimitive &primitive, Rec
   }
   flags |= primitive.flipX ? kOpFlipX : 0u;
   flags |= primitive.flipY ? kOpFlipY : 0u;
-  // At native scale the font's own bitmap is exact.
-  if (primitive.outlineFont && scale_ > 1) {
+  // At native scale a font's own bitmap is exact; lettering's is not its text.
+  if (primitive.outlineFont && (scale_ > 1 || ((letteredFonts >> *primitive.outlineFont) & 1u) != 0u)) {
     flags |= kOpOutline | (static_cast<std::uint32_t>(*primitive.outlineFont) << kOpOutlineFontShift);
   }
   op[kOpFlags] = flags;
@@ -1825,6 +1826,10 @@ RecordPlanner::~RecordPlanner() = default;
 
 void RecordPlanner::setDestinationReadsInPass(bool inPass) {
   builder_->destinationInPass = inPass;
+}
+
+void RecordPlanner::setLetteredFonts(std::uint32_t fonts) {
+  builder_->letteredFonts = fonts;
 }
 
 const RecordRasterPlan &RecordPlanner::plan(const FrameRecord &record,
