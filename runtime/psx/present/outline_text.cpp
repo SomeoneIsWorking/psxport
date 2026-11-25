@@ -904,7 +904,7 @@ private:
     copyTile(glyph, tile, field.rgba);
     const bool word = !glyph.text.empty();
     const std::vector<int> glyphRows = rowIndices(bitmap, [&](int index) {
-      return glyphInk(font, bitmap, index);
+      return glyphInk(font, bitmap, index) && std::ranges::find(font.edgeIndices, index) == font.edgeIndices.end();
     });
     const std::vector<int> shadowRows = rowIndices(bitmap, [&](int index) {
       return bitmap.shadowed && shadowTexel(font, index);

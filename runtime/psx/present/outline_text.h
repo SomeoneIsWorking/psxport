@@ -104,6 +104,8 @@ struct OutlineFont {
   // The CLUT indices of the drop shadow the bitmap glyphs carry, and the texels it lies right of and below its glyph.
   // A glyph holding only those indices has no shadow.
   std::span<const int> shadowIndices;
+  // The CLUT indices the bitmap glyphs blend their edges in: ink, but never a row's colour.
+  std::span<const int> edgeIndices;
   int shadowX = 0;
   int shadowY = 0;
   OutlineLettering lettering; // for its word glyphs
