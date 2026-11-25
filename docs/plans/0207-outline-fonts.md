@@ -110,9 +110,9 @@ Phases 2a to 2e are built and shown. Phase 2 is done.
   from VRAM, so a font names only the glyphs it has faces for.
 - A word glyph (`OutlineGlyph::text`) is lettering: the text laid out by the face's advances, leaned by
   `OutlineLettering::lean`, fills the glyph's rectangle less the rim round it and the shadow right of and below it,
-  whatever the bitmap holds (Tomba 2's title menu labels, Fredoka 700). Its tile is a true distance field in field
+  whatever the bitmap holds (Tomba 2's title menu labels, Sniglet ExtraBold). Its tile is a true distance field in field
   pixels, not an MSDF: R the letters, G their rim (the letters and the letters moved by the shadow offset, widened by
-  `rimWidth`), B how far down its own letter each pixel lies. Its index texels hold the rim's index and
+  `rimWidth`), B how far down its own letter each pixel lies, raised to `gloss`. Its index texels hold the rim's index and
   `kLetteringSlot`; record.frag shades the fill through the font's run of fill indices (`fillFirst`, `fillCount`,
   passed per font beside its size), blended, so each letter runs from the first index at its top to the last at its
   bottom in the packet's CLUT and modulation.

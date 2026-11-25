@@ -444,7 +444,7 @@ private:
         std::uint8_t *pixel = &rgba[offsetOf(x, h - 1 - y, w, 4)];
         pixel[0] = fieldByte(static_cast<float>((inside / kFieldRange) + 0.5));
         pixel[1] = fieldByte(static_cast<float>((rimmed / kFieldRange) + 0.5));
-        pixel[2] = fieldByte(static_cast<float>(shade(letters, x + 0.5, y + 0.5)));
+        pixel[2] = fieldByte(static_cast<float>(std::pow(shade(letters, x + 0.5, y + 0.5), style.gloss)));
         pixel[3] = 255;
       }
     }

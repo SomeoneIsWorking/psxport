@@ -54,13 +54,15 @@ struct OutlineGlyph {
 
 // How a font's word glyphs are lettered: each letter shades down its own height through `fillCount` consecutive CLUT
 // indices from `fillFirst`, inside a rim `rimWidth` texels wide in `rimIndex` that also takes the drop shadow
-// (OutlineFont::shadowX, shadowY). The letters lean `lean` texels right for each texel up.
+// (OutlineFont::shadowX, shadowY). The letters lean `lean` texels right for each texel up. The shade runs as the depth
+// down the letter to the power `gloss`: above 1 the first indices hold longer, a highlight across the letter's top.
 struct OutlineLettering {
   int fillFirst = 0;
   int fillCount = 0;
   int rimIndex = 0;
   double rimWidth = 0;
   double lean = 0;
+  double gloss = 1;
 };
 
 // Equal cells across a page from (u, v), `columns` a row, numbered row-major: one way to name a font's glyphs.

@@ -69,6 +69,7 @@ Third-party assets and code:
 | `assets/rml/FiraSans-*.ttf`, `FiraSansCondensed-Bold.ttf` | Fira Sans, Mozilla Foundation and Telefonica S.A. | SIL OFL 1.1, `assets/rml/FiraSans-OFL.txt` |
 | `assets/rml/promptfont.ttf` | PromptFont v1.10, Yukari Hafner and Severin Meyer (github.com/Shinmera/promptfont) | SIL OFL 1.1, `assets/rml/PromptFont-OFL.txt` |
 | `assets/rml/Fredoka.ttf` | Fredoka (variable), The Fredoka Project Authors, from google/fonts `ofl/fredoka` at a60a77e1 | SIL OFL 1.1, `assets/rml/Fredoka-OFL.txt` |
+| `assets/rml/Sniglet-ExtraBold.ttf` | Sniglet ExtraBold, Haley Fiege, Brenda Gallo and Pablo Impallari, from google/fonts `ofl/sniglet` at 90abd17b | SIL OFL 1.1, `assets/rml/Sniglet-OFL.txt` |
 | `assets/rml/NotoSansJP-Symbols.ttf` | Noto Sans JP, Google LLC and Adobe, from google/fonts `ofl/notosansjp` at 66a36c8c: the wght 700 instance, subset to the symbols Tomba! 2's fonts draw (command below) | SIL OFL 1.1, `assets/rml/NotoSansJP-OFL.txt` |
 | `vendor/msdfgen` | msdfgen v1.13.1, Viktor Chlumsky (github.com/Chlumsky/msdfgen) | MIT, `vendor/msdfgen/LICENSE.txt` |
 
