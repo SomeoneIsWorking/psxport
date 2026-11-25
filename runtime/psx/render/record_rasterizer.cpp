@@ -102,7 +102,8 @@ struct ParamsUniform {
   std::int32_t outlineScale = 0;
   std::array<std::int32_t, 3> unusedOutline{};
   std::array<std::int32_t, 4> outlineFaces{};
-  // Each outline font's first texel across VRAM and its atlas row, then its size (present::OutlineAtlasFont).
+  // Each outline font's first texel across VRAM and its atlas row, then its size and lettering fill run
+  // (present::OutlineAtlasFont).
   std::array<std::array<std::int32_t, 4>, present::kMaxOutlineFonts> outlineFontPlaces{};
   std::array<std::array<std::int32_t, 4>, present::kMaxOutlineFonts> outlineFontSizes{};
 };
@@ -645,9 +646,7 @@ void RecordRasterizer::update(const present::FrameRecord &record,
   selectField(record);
 }
 
-void RecordRasterizer::advance(const present::FrameRecord &record,
-                               bool deviceAhead,
-                               const gpu::DeviceVram &vram) {
+void RecordRasterizer::advance(const present::FrameRecord &record, bool deviceAhead, const gpu::DeviceVram &vram) {
   if (chained_ && record.sequence() == applied_) {
     return;
   }
@@ -661,7 +660,8 @@ void RecordRasterizer::advance(const present::FrameRecord &record,
   }
   // Every canvas is a crop canvas or none is: a crop canvas takes the upload, a margin canvas the image's columns.
   const bool crops = !canvases_.empty() && canvases_.front().shape.crop();
-  execute(planner_.planVramUpload(vram.all(), scale_, crops ? canvasShapes({}) : std::span<const RecordCanvas>{}), false);
+  execute(planner_.planVramUpload(vram.all(), scale_, crops ? canvasShapes({}) : std::span<const RecordCanvas>{}),
+          false);
   readBack_.reset();
   for (Canvas &canvas : canvases_) {
     if (crops) {
@@ -1064,7 +1064,7 @@ void RecordRasterizer::execute(const gpu::RecordRasterPlan &plan, bool inBetween
         for (std::size_t f = 0; f < outlineFonts_.size(); f++) {
           const present::OutlineAtlasFont &font = outlineFonts_.at(f);
           params.outlineFontPlaces.at(f) = {font.originX, font.originY, font.atlasY, 0};
-          params.outlineFontSizes.at(f) = {font.width, font.height, 0, 0};
+          params.outlineFontSizes.at(f) = {font.width, font.height, font.fillFirst, font.fillCount};
         }
         for (std::size_t slot = 0; slot < outlineFaces_.size(); slot++) {
           params.outlineFaces.at(slot) = static_cast<std::int32_t>(outlineFaces_.at(slot));

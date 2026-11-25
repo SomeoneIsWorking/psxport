@@ -35,7 +35,8 @@ layout(std430, set = 2, binding = 6) readonly buffer Cluts { uint cluts[]; };
 layout(std430, set = 2, binding = 7) readonly buffer Pixels { uint pixels[]; };
 // plane: scale, origin x, origin y (native), the VRAM image's scale; ui: scale, origin x, origin y (UI pixels);
 // outline: the atlas's field pixels a texel (0 for none); faces: each button slot's face colour, 0 for the CLUT's;
-// fontPlaces: each outline font's first texel across VRAM and its atlas row; fontSizes: its width and height.
+// fontPlaces: each outline font's first texel across VRAM and its atlas row; fontSizes: its width and height, then its
+// lettering's first fill index and their count.
 layout(set = 3, binding = 0) uniform Params {
     ivec4 plane; ivec4 ui; ivec4 outline; ivec4 faces; ivec4 fontPlaces[4]; ivec4 fontSizes[4];
 } params;
@@ -102,44 +103,27 @@ uint readBackTexel(ivec2 p, uint flags) {
 
 float median(vec3 d) { return max(min(d.r, d.g), min(max(d.r, d.g), d.b)); }
 
-// outline_text.h kTracedSlot.
-const uint kTracedSlot = 255u;
+// outline_text.h kLetteringSlot.
+const uint kLetteringSlot = 255u;
 
-// A traced glyph's fill colour at index-map texel `at` + (fu, fv) / 256: the CLUT colours of the fill nearest the four
-// texel centres round it, blended; texels outside the font or its traced glyphs take no part.
-uint tracedFill(ivec2 at, uint fu, uint fv, ivec4 place, ivec2 size) {
-    vec2 p = vec2(at) + vec2(fu, fv) / 256.0 - 0.5;
-    ivec2 corner = ivec2(floor(p));
-    vec2 f = p - vec2(corner);
-    vec3 sum = vec3(0.0);
-    float weight = 0.0;
-    uint semi = 0u;
-    float heaviest = 0.0;
-    for (int k = 0; k < 4; k++) {
-        ivec2 c = corner + ivec2(k & 1, k >> 1);
-        if (c.x < 0 || c.x >= size.x || c.y < place.z || c.y >= place.z + size.y) {
-            continue;
-        }
-        uvec4 entry = uvec4(texelFetch(u_outlineIndices, ivec2(c.x * 2, c.y), 0) * 255.0 + 0.5);
-        if (entry.b != kTracedSlot) {
-            continue;
-        }
-        float w = ((k & 1) != 0 ? f.x : 1.0 - f.x) * ((k >> 1) != 0 ? f.y : 1.0 - f.y);
-        uint colour = clutEntry(v_op.z + entry.r);
-        sum += w * vec3(uvec3(colour, colour >> 5, colour >> 10) & 0x1Fu);
-        weight += w;
-        if (w >= heaviest) {
-            heaviest = w;
-            semi = colour & 0x8000u;
-        }
-    }
-    uvec3 c = uvec3(sum / max(weight, 1e-6) + 0.5);
-    return semi | c.r | (c.g << 5) | (c.b << 10);
+// A word glyph's fill `shade` of the way down its letter: the font's run of fill indices (OutlineLettering), blended.
+uint letteringFill(float shade, uint font) {
+    int first = params.fontSizes[font].z;
+    int count = params.fontSizes[font].w;
+    float k = clamp(shade, 0.0, 1.0) * float(max(count - 1, 0));
+    int low = min(int(k), max(count - 2, 0));
+    float f = clamp(k - float(low), 0.0, 1.0);
+    uint a = clutEntry(v_op.z + uint(first + low));
+    uint b = clutEntry(v_op.z + uint(first + min(low + 1, count - 1)));
+    vec3 ca = vec3(uvec3(a, a >> 5, a >> 10) & 0x1Fu);
+    vec3 cb = vec3(uvec3(b, b >> 5, b >> 10) & 0x1Fu);
+    uvec3 c = uvec3(mix(ca, cb, f) + 0.5);
+    return (a & 0x8000u) | c.r | (c.g << 5) | (c.b << 10);
 }
 
 // The glyph texel at (u, v) + (fu, fv) / 256 from the outline atlas: inside the glyph's field the CLUT index of the
-// bitmap glyph's row (a traced glyph's blended fill), inside its shadow's the shadow's (a traced glyph's rim), else
-// transparent; where the font names no glyph, VRAM's.
+// bitmap glyph's row, inside its shadow's the shadow's, else transparent (a word glyph: its shaded letters inside
+// their rim); where the font names no glyph, VRAM's.
 uint outlineTexel(uint u, uint v, uint fu, uint fv, uint flags) {
     uint font = (flags >> kOpOutlineFontShift) & 3u;
     ivec4 place = params.fontPlaces[font];
@@ -157,13 +141,16 @@ uint outlineTexel(uint u, uint v, uint fu, uint fv, uint flags) {
     uvec4 tile = uvec4(texelFetch(u_outlineIndices, ivec2(at.x * 2 + 1, at.y), 0) * 255.0 + 0.5);
     vec2 field = vec2(tile.r | (tile.g << 8), tile.b | (tile.a << 8)) + vec2(fu, fv) / 256.0 * float(params.outline.x);
     vec4 distance = texture(u_outlineFields, field / vec2(textureSize(u_outlineFields, 0)));
+    if (uint(indices.b * 255.0 + 0.5) == kLetteringSlot) {
+        if (distance.r >= 0.5) {
+            return letteringFill(distance.b, font);
+        }
+        return distance.g >= 0.5 ? clutEntry(v_op.z + uint(indices.g * 255.0 + 0.5)) : 0u;
+    }
     uint index;
     if (median(distance.rgb) >= 0.5) {
         index = uint(indices.r * 255.0 + 0.5);
         uint slot = uint(indices.b * 255.0 + 0.5);
-        if (slot == kTracedSlot) {
-            return tracedFill(at, fu, fv, place, size);
-        }
         if (slot > 0u && params.faces[slot - 1u] != 0) {
             return (clutEntry(v_op.z + index) & 0x8000u) | uint(params.faces[slot - 1u]);
         }

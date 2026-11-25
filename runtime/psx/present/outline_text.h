@@ -4,10 +4,11 @@
 // filled with glyphs, the font it drew from (OutlineGlyphs). Each sealed frame that drew such packets brings the
 // atlas up to date with those fonts' glyphs in VRAM and the pad family in the player's hand: every glyph gets its
 // codepoint's outline, fitted to the box of its own bitmap glyph, as a multi-channel distance field (msdfgen), and
-// keeps the bitmap's CLUT indices for its colours; a traced glyph gets its own bitmap's shape, smoothed. Fields are
-// drawn on a worker thread; a glyph draws its bitmap until its field lands in the atlas at a later sealed frame. The
-// record rasterizer samples the atlas for those packets' primitives (kOpOutline) instead of VRAM, so a glyph keeps its
-// ordering-table slot, its widescreen place and its replay.
+// keeps the bitmap's CLUT indices for its colours. A word glyph is lettering: its text drawn whole from the text face
+// into the glyph's rectangle, shaded by the font's OutlineLettering. Fields are drawn on a worker thread; a glyph draws
+// its bitmap until its field lands in the atlas at a later sealed frame. The record rasterizer samples the atlas for
+// those packets' primitives (kOpOutline) instead of VRAM, so a glyph keeps its ordering-table slot, its widescreen
+// place and its replay.
 #pragma once
 
 #include "device_vram.h"
@@ -19,6 +20,7 @@
 #include <memory>
 #include <optional>
 #include <span>
+#include <string_view>
 #include <vector>
 
 namespace psx::input {
@@ -31,7 +33,6 @@ enum class OutlineFace : std::uint8_t {
   Text,   // the title's text face (OutlineFont::textFace)
   Symbol, // the title's symbol face (OutlineFont::symbolFace)
   Prompt, // PromptFont, the face of the pad glyphs
-  Traced, // the glyph's own bitmap with its stairs smoothed off: lettering shaded across its fill inside a rim
 };
 
 // One glyph of a font page: the rectangle its text drawer samples, in texels of the page, and what it shows:
@@ -47,6 +48,19 @@ struct OutlineGlyph {
   // The bitmap is the PlayStation button itself in colours one outline cannot carry: under a PlayStation pad it
   // draws as the bitmap.
   bool padArt = false;
+  // A word glyph: this text from the text face fills the rectangle as lettering, whatever the bitmap holds.
+  std::u32string_view text;
+};
+
+// How a font's word glyphs are lettered: each letter shades down its own height through `fillCount` consecutive CLUT
+// indices from `fillFirst`, inside a rim `rimWidth` texels wide in `rimIndex` that also takes the drop shadow
+// (OutlineFont::shadowX, shadowY). The letters lean `lean` texels right for each texel up.
+struct OutlineLettering {
+  int fillFirst = 0;
+  int fillCount = 0;
+  int rimIndex = 0;
+  double rimWidth = 0;
+  double lean = 0;
 };
 
 // Equal cells across a page from (u, v), `columns` a row, numbered row-major: one way to name a font's glyphs.
@@ -90,9 +104,7 @@ struct OutlineFont {
   std::span<const int> shadowIndices;
   int shadowX = 0;
   int shadowY = 0;
-  // A traced glyph's CLUT indices: its fill, shaded across it, and the rim round the fill. Every other index is clear.
-  std::span<const int> fillIndices;
-  std::span<const int> rimIndices;
+  OutlineLettering lettering; // for its word glyphs
 };
 
 // The fonts a title's text drawers sample, at most this many (record_raster_setup.h kOpOutlineFontShift).
@@ -118,18 +130,19 @@ struct OutlineAtlasFont {
   int width = 0;
   int height = 0;
   int atlasY = 0;
+  int fillFirst = 0; // OutlineLettering's
+  int fillCount = 0;
 };
 
 // What record.frag samples for kOpOutline. `indices` maps the fonts' page boxes, one under another, two pixels a
 // texel: the first R and G the CLUT indices of its row of the bitmap glyph and of its shadow, B a button glyph's slot
-// in `buttons` plus one or kTracedSlot, A 255 where a named glyph's field lies (a texel without one draws from VRAM);
-// the second the field pixel in `fields` of the texel's top-left, x then y, 16 bits each, low byte first. `fields`
-// packs one tile a glyph, `scale` pixels a texel: RGB a multi-channel distance field of the glyph, A the field of its
-// shadow (the glyph's own, shifted by the shadow's offset). A traced glyph's RGB is the field of its fill and A of its
-// whole ink, the rim the band between; its R is the index of the nearest fill texel, blended between texel centres,
-// and G its rim's.
-// The B of a traced glyph's texels in OutlineAtlas::indices.
-inline constexpr std::uint8_t kTracedSlot = 255;
+// in `buttons` plus one, A 255 where a named glyph's field lies (a texel without one draws from VRAM); the second the
+// field pixel in `fields` of the texel's top-left, x then y, 16 bits each, low byte first. `fields` packs one tile a
+// glyph, `scale` pixels a texel: RGB a multi-channel distance field of the glyph, A the field of its shadow (the
+// glyph's own, shifted by the shadow's offset). A word glyph's texels have B kLetteringSlot and G the rim's index; its
+// tile has R the distance field of its letters, G of their rim (the letters and their shadow, widened by the rim), B
+// how far down its own letter each pixel lies, 0 to 1.
+inline constexpr std::uint8_t kLetteringSlot = 255;
 
 struct OutlineAtlas {
   int scale = 0;
