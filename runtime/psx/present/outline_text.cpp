@@ -37,6 +37,9 @@ constexpr int kFieldGutter = 1;
 constexpr int kFieldShelfWidth = 2048;
 // The largest field texture a weak GPU takes, pixels a side.
 constexpr int kMaxFieldSide = 8192;
+// The Gaussian a traced glyph's texels are smoothed by, texels: it rounds the stairs off a diagonal and keeps a
+// one-texel gap open.
+constexpr double kTraceSmoothing = 0.45;
 
 // The element of (x, y) in a row-major image `width` wide, `channels` elements a pixel.
 constexpr std::size_t offsetOf(int x, int y, int width, int channels = 1) {
@@ -70,6 +73,7 @@ struct FieldKey {
   int x1 = 0;
   int y1 = 0;
   bool shadowed = false;
+  std::vector<int> traced; // a traced glyph's bitmap
 
   bool operator==(const FieldKey &) const = default;
 };
@@ -80,6 +84,14 @@ bool shadowTexel(const OutlineFont &font, int index) {
 
 bool glyphTexel(const OutlineFont &font, int index) {
   return index != 0 && !shadowTexel(font, index);
+}
+
+bool tracedFill(const OutlineFont &font, int index) {
+  return std::ranges::find(font.fillIndices, index) != font.fillIndices.end();
+}
+
+bool tracedRim(const OutlineFont &font, int index) {
+  return std::ranges::find(font.rimIndices, index) != font.rimIndices.end();
 }
 
 // Whether a texel of `bitmap` is its glyph's ink rather than its shadow.
@@ -106,13 +118,16 @@ BitmapGlyph readGlyph(const OutlineFont &font, std::span<const std::uint16_t> wo
     }
   }
   // A glyph of the shadow's indices alone is drawn in them.
-  bitmap.shadowed = ink && shadow;
+  bitmap.shadowed = glyph.face != OutlineFace::Traced && ink && shadow;
+  const auto inked = [&](int index) {
+    return glyph.face == OutlineFace::Traced ? tracedFill(font, index) || tracedRim(font, index)
+                                             : glyphInk(font, bitmap, index);
+  };
   bitmap.x0 = bitmap.width;
   bitmap.y0 = bitmap.height;
   for (int y = 0; y < bitmap.height; y++) {
     for (int x = 0; x < bitmap.width; x++) {
-      const int index = bitmap.indices[offsetOf(x, y, bitmap.width)];
-      if (glyphInk(font, bitmap, index)) {
+      if (inked(bitmap.indices[offsetOf(x, y, bitmap.width)])) {
         bitmap.x0 = std::min(bitmap.x0, x);
         bitmap.y0 = std::min(bitmap.y0, y);
         bitmap.x1 = std::max(bitmap.x1, x + 1);
@@ -222,7 +237,64 @@ struct FieldJob {
   int v = 0;
   int width = 0;
   int height = 0;
+  std::vector<std::uint8_t> ink;  // a traced glyph's texels, width x height: 1 in its fill or rim
+  std::vector<std::uint8_t> fill; // 1 in its fill
 };
+
+// The field of `mask` (width x height texels, 1 inside) smoothed by kTraceSmoothing, at kFieldScale pixels a texel, as
+// fieldByte takes it, as msdfgen maps a distance: the smoothed coverage's half level, its distance to first order.
+std::vector<float> traceField(std::span<const std::uint8_t> mask, int width, int height) {
+  const int w = width * kFieldScale;
+  const int h = height * kFieldScale;
+  const double spread = kTraceSmoothing * std::sqrt(2.0);
+  // weights[p * texels + k]: the share of texel k's square the Gaussian centred on field pixel p's centre covers.
+  const auto weights = [&](int pixels, int texels) {
+    std::vector<double> share(static_cast<std::size_t>(pixels) * static_cast<std::size_t>(texels), 0.0);
+    for (int p = 0; p < pixels; p++) {
+      const double centre = (p + 0.5) / kFieldScale;
+      for (int k = 0; k < texels; k++) {
+        share[offsetOf(k, p, texels)] = 0.5 * (std::erf((k + 1 - centre) / spread) - std::erf((k - centre) / spread));
+      }
+    }
+    return share;
+  };
+  const std::vector<double> across = weights(w, width);
+  const std::vector<double> down = weights(h, height);
+  std::vector<double> rows(offsetOf(0, height, w), 0.0);
+  for (int y = 0; y < height; y++) {
+    for (int x = 0; x < width; x++) {
+      if (mask[offsetOf(x, y, width)] == 0) {
+        continue;
+      }
+      for (int p = 0; p < w; p++) {
+        rows[offsetOf(p, y, w)] += across[offsetOf(x, p, width)];
+      }
+    }
+  }
+  std::vector<double> cover(offsetOf(0, h, w), 0.0);
+  for (int q = 0; q < h; q++) {
+    for (int y = 0; y < height; y++) {
+      const double share = down[offsetOf(y, q, height)];
+      for (int p = 0; p < w; p++) {
+        cover[offsetOf(p, q, w)] += share * rows[offsetOf(p, y, w)];
+      }
+    }
+  }
+  std::vector<float> field(offsetOf(0, h, w), 0.0f);
+  const auto at = [&](int p, int q) {
+    return cover[offsetOf(std::clamp(p, 0, w - 1), std::clamp(q, 0, h - 1), w)];
+  };
+  for (int q = 0; q < h; q++) {
+    for (int p = 0; p < w; p++) {
+      const double level = at(p, q) - 0.5;
+      const double slope = std::hypot(at(p + 1, q) - at(p - 1, q), at(p, q + 1) - at(p, q - 1)) / 2.0;
+      const double distance = slope > 0.0 ? level / slope : std::copysign(kFieldRange, level);
+      field[offsetOf(p, q, w)] =
+          static_cast<float>((std::clamp(distance, -kFieldRange, kFieldRange) / kFieldRange) + 0.5);
+    }
+  }
+  return field;
+}
 
 // A drawn field; `rgba` empty where the glyph has no outline.
 struct FieldResult {
@@ -256,6 +328,9 @@ public:
   // outline.
   std::vector<std::uint8_t> draw(const FieldJob &job) {
     const FieldKey &key = job.key;
+    if (key.face == OutlineFace::Traced) {
+      return trace(job);
+    }
     const int w = job.width * kFieldScale;
     const int h = job.height * kFieldScale;
     msdfgen::FontHandle *handle = face(job.face, job.weight);
@@ -334,6 +409,21 @@ public:
   }
 
 private:
+  // A traced glyph's tile: RGB the field of its fill, A of its ink.
+  static std::vector<std::uint8_t> trace(const FieldJob &job) {
+    const std::vector<float> fill = traceField(job.fill, job.width, job.height);
+    const std::vector<float> ink = traceField(job.ink, job.width, job.height);
+    std::vector<std::uint8_t> rgba(fill.size() * 4);
+    for (std::size_t i = 0; i < fill.size(); i++) {
+      const std::uint8_t inside = fieldByte(fill[i]);
+      rgba[(i * 4) + 0] = inside;
+      rgba[(i * 4) + 1] = inside;
+      rgba[(i * 4) + 2] = inside;
+      rgba[(i * 4) + 3] = fieldByte(ink[i]);
+    }
+    return rgba;
+  }
+
   // A proportional glyph's horizontal scale (OutlineFont::proportional), no wider than `room` field pixels.
   static double proportionalScale(msdfgen::FontHandle *handle,
                                   const FieldJob &job,
@@ -656,17 +746,19 @@ private:
   std::optional<FieldKey> keyOf(const OutlineFont &font, std::size_t f, std::size_t i) const {
     const FontState &state = states_.at(f);
     const BitmapGlyph &bitmap = state.bitmaps[i];
-    if (bitmap.empty() || state.codepoints[i] == psx::input::kNoGlyph) {
+    const OutlineGlyph &glyph = font.glyphs[i];
+    const bool traced = glyph.face == OutlineFace::Traced;
+    if (bitmap.empty() || (!traced && state.codepoints[i] == psx::input::kNoGlyph)) {
       return std::nullopt;
     }
-    const OutlineGlyph &glyph = font.glyphs[i];
-    return FieldKey{state.codepoints[i],
-                    glyph.button != 0 ? OutlineFace::Prompt : glyph.face,
-                    bitmap.x0,
-                    bitmap.y0,
-                    bitmap.x1,
-                    bitmap.y1,
-                    bitmap.shadowed};
+    return FieldKey{.codepoint = state.codepoints[i],
+                    .face = glyph.button != 0 ? OutlineFace::Prompt : glyph.face,
+                    .x0 = bitmap.x0,
+                    .y0 = bitmap.y0,
+                    .x1 = bitmap.x1,
+                    .y1 = bitmap.y1,
+                    .shadowed = bitmap.shadowed,
+                    .traced = traced ? bitmap.indices : std::vector<int>{}};
   }
 
   // Asks the worker for glyph `i` of font `f`'s field from `key` unless it is already asked.
@@ -677,6 +769,12 @@ private:
     }
     at->second = key;
     const OutlineGlyph &glyph = font.glyphs[i];
+    std::vector<std::uint8_t> ink(key.traced.size());
+    std::vector<std::uint8_t> fill(key.traced.size());
+    for (std::size_t t = 0; t < key.traced.size(); t++) {
+      fill[t] = tracedFill(font, key.traced[t]) ? 1 : 0;
+      ink[t] = fill[t] != 0 || tracedRim(font, key.traced[t]) ? 1 : 0;
+    }
     // Fonts sharing a variable text face at other weights each need their own instance.
     worker_.ask({.layout = layout_,
                  .font = f,
@@ -692,7 +790,9 @@ private:
                  .u = glyph.u,
                  .v = glyph.v,
                  .width = glyph.width,
-                 .height = glyph.height});
+                 .height = glyph.height,
+                 .ink = std::move(ink),
+                 .fill = std::move(fill)});
     ++asked_;
   }
 
@@ -765,30 +865,69 @@ private:
             ? static_cast<int>(std::ranges::find(atlas_.buttons, glyph.button) - atlas_.buttons.begin()) + 1
             : 0;
     copyTile(glyph, tile, field.rgba);
+    const int mapX = glyph.u - pageX0;
+    const int mapY = where.atlasY + glyph.v - pageY0;
+    const auto entry = [&](int x, int y) {
+      return &atlas_.indices[offsetOf((mapX + x) * 2, mapY + y, atlas_.width * 2, 4)];
+    };
+    const auto tilePixel = [&](std::uint8_t *texel, int x, int y) {
+      const int fieldX = tile.x + (x * kFieldScale);
+      const int fieldY = tile.y + (y * kFieldScale);
+      texel[4] = static_cast<std::uint8_t>(fieldX & 0xFF);
+      texel[5] = static_cast<std::uint8_t>(fieldX >> 8);
+      texel[6] = static_cast<std::uint8_t>(fieldY & 0xFF);
+      texel[7] = static_cast<std::uint8_t>(fieldY >> 8);
+    };
+    if (glyph.face == OutlineFace::Traced) {
+      for (int y = 0; y < glyph.height; y++) {
+        for (int x = 0; x < glyph.width; x++) {
+          std::uint8_t *texel = entry(x, y);
+          texel[0] = static_cast<std::uint8_t>(nearest(bitmap, x, y, [&](int index) {
+            return tracedFill(font, index);
+          }));
+          texel[1] = static_cast<std::uint8_t>(nearest(bitmap, x, y, [&](int index) {
+            return tracedRim(font, index);
+          }));
+          texel[2] = kTracedSlot;
+          texel[3] = 255;
+          tilePixel(texel, x, y);
+        }
+      }
+      return;
+    }
     const std::vector<int> glyphRows = rowIndices(bitmap, [&](int index) {
       return glyphInk(font, bitmap, index);
     });
     const std::vector<int> shadowRows = rowIndices(bitmap, [&](int index) {
       return bitmap.shadowed && shadowTexel(font, index);
     });
-    const int mapX = glyph.u - pageX0;
-    const int mapY = where.atlasY + glyph.v - pageY0;
-    for (std::size_t y = 0; y < glyphRows.size(); y++) {
+    for (int y = 0; y < glyph.height; y++) {
       for (int x = 0; x < glyph.width; x++) {
-        std::uint8_t *texel =
-            &atlas_.indices[offsetOf((mapX + x) * 2, mapY + static_cast<int>(y), atlas_.width * 2, 4)];
-        texel[0] = static_cast<std::uint8_t>(glyphRows[y]);
-        texel[1] = static_cast<std::uint8_t>(shadowRows[y]);
+        std::uint8_t *texel = entry(x, y);
+        texel[0] = static_cast<std::uint8_t>(glyphRows[static_cast<std::size_t>(y)]);
+        texel[1] = static_cast<std::uint8_t>(shadowRows[static_cast<std::size_t>(y)]);
         texel[2] = static_cast<std::uint8_t>(glyphSlot);
         texel[3] = 255;
-        const int fieldX = tile.x + (x * kFieldScale);
-        const int fieldY = tile.y + (static_cast<int>(y) * kFieldScale);
-        texel[4] = static_cast<std::uint8_t>(fieldX & 0xFF);
-        texel[5] = static_cast<std::uint8_t>(fieldX >> 8);
-        texel[6] = static_cast<std::uint8_t>(fieldY & 0xFF);
-        texel[7] = static_cast<std::uint8_t>(fieldY >> 8);
+        tilePixel(texel, x, y);
       }
     }
+  }
+
+  // The index of the texel of `bitmap` nearest (x, y) that `holds`, 0 without one.
+  template <class Holds> static int nearest(const BitmapGlyph &bitmap, int x, int y, Holds holds) {
+    int best = 0;
+    int bestDistance = std::numeric_limits<int>::max();
+    for (int ty = 0; ty < bitmap.height; ty++) {
+      for (int tx = 0; tx < bitmap.width; tx++) {
+        const int index = bitmap.indices[offsetOf(tx, ty, bitmap.width)];
+        const int distance = ((tx - x) * (tx - x)) + ((ty - y) * (ty - y));
+        if (distance < bestDistance && holds(index)) {
+          best = index;
+          bestDistance = distance;
+        }
+      }
+    }
+    return best;
   }
 
   // A glyph's tile and its gutter, empty.

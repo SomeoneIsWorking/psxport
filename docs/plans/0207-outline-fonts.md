@@ -108,6 +108,14 @@ Phases 2a to 2e are built and shown. Phase 2 is done.
   indices and button slot, then the field pixel of the texel's top-left in its glyph's tile. A font not drawn keeps
   its last fields. A texel of a font's box that no named glyph with an outline covers (index A 0) draws its bitmap
   from VRAM, so a font names only the glyphs it has faces for.
+- A glyph of face `Traced` is lettering no face has, shaded across its fill inside a rim (Tomba 2's title menu
+  labels): its own bitmap is its outline. Its font names the CLUT indices of the fill and of the rim
+  (`fillIndices`, `rimIndices`); every other index is clear. Each mask (the fill, and fill and rim together) is
+  smoothed by a Gaussian of 0.45 texel, which rounds the stairs off a diagonal and keeps a one-texel gap open, and its
+  half level, to first order in distance, is the field: the fill's in RGB, the whole ink's in A, so the shader's
+  shadow branch draws the rim. Its index texels hold the index of the nearest fill texel (R), of the nearest rim
+  texel (G) and `kTracedSlot` (B); inside the fill record.frag blends the CLUT colours of the four texel centres round
+  the sample, so the shading runs smoothly at any scale and still follows the packet's CLUT and modulation.
 - A button glyph marked `padArt` is the PlayStation button itself in several colours (Tomba 2's rings and symbols):
   under a PlayStation pad it has no codepoint and draws its bitmap; under any other family its PromptFont glyph.
 - Colours stay the guest's: the index texture holds per glyph row the CLUT index most of the row's glyph

@@ -102,8 +102,44 @@ uint readBackTexel(ivec2 p, uint flags) {
 
 float median(vec3 d) { return max(min(d.r, d.g), min(max(d.r, d.g), d.b)); }
 
+// outline_text.h kTracedSlot.
+const uint kTracedSlot = 255u;
+
+// A traced glyph's fill colour at index-map texel `at` + (fu, fv) / 256: the CLUT colours of the fill nearest the four
+// texel centres round it, blended; texels outside the font or its traced glyphs take no part.
+uint tracedFill(ivec2 at, uint fu, uint fv, ivec4 place, ivec2 size) {
+    vec2 p = vec2(at) + vec2(fu, fv) / 256.0 - 0.5;
+    ivec2 corner = ivec2(floor(p));
+    vec2 f = p - vec2(corner);
+    vec3 sum = vec3(0.0);
+    float weight = 0.0;
+    uint semi = 0u;
+    float heaviest = 0.0;
+    for (int k = 0; k < 4; k++) {
+        ivec2 c = corner + ivec2(k & 1, k >> 1);
+        if (c.x < 0 || c.x >= size.x || c.y < place.z || c.y >= place.z + size.y) {
+            continue;
+        }
+        uvec4 entry = uvec4(texelFetch(u_outlineIndices, ivec2(c.x * 2, c.y), 0) * 255.0 + 0.5);
+        if (entry.b != kTracedSlot) {
+            continue;
+        }
+        float w = ((k & 1) != 0 ? f.x : 1.0 - f.x) * ((k >> 1) != 0 ? f.y : 1.0 - f.y);
+        uint colour = clutEntry(v_op.z + entry.r);
+        sum += w * vec3(uvec3(colour, colour >> 5, colour >> 10) & 0x1Fu);
+        weight += w;
+        if (w >= heaviest) {
+            heaviest = w;
+            semi = colour & 0x8000u;
+        }
+    }
+    uvec3 c = uvec3(sum / max(weight, 1e-6) + 0.5);
+    return semi | c.r | (c.g << 5) | (c.b << 10);
+}
+
 // The glyph texel at (u, v) + (fu, fv) / 256 from the outline atlas: inside the glyph's field the CLUT index of the
-// bitmap glyph's row, inside its shadow's the shadow's, else transparent; where the font names no glyph, VRAM's.
+// bitmap glyph's row (a traced glyph's blended fill), inside its shadow's the shadow's (a traced glyph's rim), else
+// transparent; where the font names no glyph, VRAM's.
 uint outlineTexel(uint u, uint v, uint fu, uint fv, uint flags) {
     uint font = (flags >> kOpOutlineFontShift) & 3u;
     ivec4 place = params.fontPlaces[font];
@@ -125,6 +161,9 @@ uint outlineTexel(uint u, uint v, uint fu, uint fv, uint flags) {
     if (median(distance.rgb) >= 0.5) {
         index = uint(indices.r * 255.0 + 0.5);
         uint slot = uint(indices.b * 255.0 + 0.5);
+        if (slot == kTracedSlot) {
+            return tracedFill(at, fu, fv, place, size);
+        }
         if (slot > 0u && params.faces[slot - 1u] != 0) {
             return (clutEntry(v_op.z + index) & 0x8000u) | uint(params.faces[slot - 1u]);
         }
