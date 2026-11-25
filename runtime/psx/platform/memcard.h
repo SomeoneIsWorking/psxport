@@ -10,6 +10,7 @@
 #include "pad_recording.h"
 #include <cstdint>
 #include <cstdio>
+#include <span>
 #include <string>
 #include <vector>
 struct Core;
@@ -63,6 +64,8 @@ public:
   // above it announced I/O-END for a save that never landed.
   bool readFrame(uint32_t frame, uint8_t *out128);
   bool writeFrame(uint32_t frame, const uint8_t *in128);
+  // Bytes of the file whose directory entry is `block`, from `offset`; false if a frame did not move.
+  bool readFile(int block, uint32_t offset, std::span<uint8_t> out);
 
   // PSX card-filesystem helpers (directory scan + free-block allocation).
   int dirFind(const char *name);

@@ -353,6 +353,22 @@ inline uint32_t mc_data_frame(int block, uint32_t off) {
 
 } // namespace
 
+bool Memcard::readFile(int block, uint32_t offset, std::span<uint8_t> out) {
+  uint8_t fr[kFrameSize];
+  uint32_t loaded = 0xFFFFFFFFu;
+  bool ok = true;
+  for (size_t i = 0; i < out.size(); i++) {
+    const uint32_t off = offset + static_cast<uint32_t>(i);
+    const uint32_t frame = mc_data_frame(block, off);
+    if (frame != loaded) {
+      ok = readFrame(frame, fr) && ok;
+      loaded = frame;
+    }
+    out[i] = fr[off % kFrameSize];
+  }
+  return ok;
+}
+
 // Deliver the libcard I/O-complete event so callers waiting on TestEvent (SwCARD-0x8000 SUCCESS +
 // EvSpIOE for save/load and card-detect flows) fall through immediately.
 void Memcard::deliverComplete(Core *c) {
@@ -528,17 +544,10 @@ void file_read(Core *c) {
     c->r[psx::cpu::kV0] = 0xFFFFFFFFu;
     return;
   }
-  uint8_t fr[Memcard::kFrameSize];
-  uint32_t loaded_frame = 0xFFFFFFFFu;
-  bool ok = true;
+  std::vector<uint8_t> bytes(len);
+  const bool ok = m.readFile(f->block, f->pos, bytes);
   for (uint32_t i = 0; i < len; i++) {
-    uint32_t off = f->pos + i;
-    uint32_t gframe = mc_data_frame(f->block, off), boff = off % Memcard::kFrameSize;
-    if (gframe != loaded_frame) {
-      ok = m.readFrame(gframe, fr) && ok;
-      loaded_frame = gframe;
-    }
-    c->mem_w8(buf + i, fr[boff]);
+    c->mem_w8(buf + i, bytes[i]);
   }
   f->pos += len;
   c->r[psx::cpu::kV0] = 0; // accepted; the result is the event below
