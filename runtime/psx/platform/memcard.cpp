@@ -8,6 +8,7 @@
 #include "fs_util.h"
 #include "game.h" // c->game->hle.deliverEvent — Hle subsystem lives on Game
 #include "game_runtime.h"
+#include <chrono>
 #include <filesystem>
 #include <lucent/content.h>
 #include <lucent/log.h>
@@ -93,22 +94,15 @@ void Memcard::init() {
 // unformatted image and by identity() to name the card a missing file will become.
 std::vector<uint8_t> Memcard::formattedDirectory() {
   std::vector<uint8_t> frames(static_cast<size_t>(kBlocks) * kFrameSize, 0);
-  const auto seal = [](uint8_t *frame) {
-    uint8_t x = 0;
-    for (uint32_t i = 0; i < 0x7F; i++) {
-      x ^= frame[i];
-    }
-    frame[0x7F] = x;
-  };
   frames[0] = 'M';
   frames[1] = 'C';
-  seal(frames.data());
+  sealFrame(frames.data());
   for (uint32_t blk = 1; blk < kBlocks; blk++) {
     uint8_t *frame = frames.data() + static_cast<size_t>(blk) * kFrameSize;
     frame[0] = kDirFree;
     frame[8] = 0xFF;
     frame[9] = 0xFF;
-    seal(frame);
+    sealFrame(frame);
   }
   return frames;
 }
@@ -216,6 +210,40 @@ int Memcard::dirFind(const char *name) {
   return -1;
 }
 
+void Memcard::sealFrame(uint8_t *frame) {
+  uint8_t x = 0;
+  for (uint32_t i = 0; i < kFrameSize - 1u; i++) {
+    x ^= frame[i];
+  }
+  frame[kFrameSize - 1u] = x;
+}
+
+std::optional<uint64_t> Memcard::writtenAt(int block) {
+  uint8_t e[kFrameSize];
+  if (!readFrame(static_cast<uint32_t>(block), e)) {
+    return std::nullopt;
+  }
+  uint64_t seconds = 0;
+  for (uint32_t i = 0; i < 8u; i++) {
+    seconds |= static_cast<uint64_t>(e[kDirWrittenAt + i]) << (8u * i);
+  }
+  return seconds != 0u ? std::optional<uint64_t>(seconds) : std::nullopt;
+}
+
+void Memcard::stampWritten(int block) {
+  uint8_t e[kFrameSize];
+  if (!readFrame(static_cast<uint32_t>(block), e)) {
+    return;
+  }
+  const auto now = std::chrono::system_clock::now().time_since_epoch();
+  const auto seconds = static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::seconds>(now).count());
+  for (uint32_t i = 0; i < 8u; i++) {
+    e[kDirWrittenAt + i] = static_cast<uint8_t>(seconds >> (8u * i));
+  }
+  sealFrame(e);
+  writeFrame(static_cast<uint32_t>(block), e);
+}
+
 int Memcard::dirCreate(const char *name, uint32_t size) {
   const char *bare = mc_strip_dev(name);
   for (uint32_t blk = 1; blk < kBlocks; blk++) {
@@ -236,11 +264,7 @@ int Memcard::dirCreate(const char *name, uint32_t size) {
     for (; bare[k] && (0x0A + k) < kFrameSize - 1; k++) {
       e[0x0A + k] = (uint8_t)bare[k];
     }
-    uint8_t x = 0;
-    for (uint32_t i = 0; i < 0x7F; i++) {
-      x ^= e[i];
-    }
-    e[0x7F] = x;
+    sealFrame(e);
     writeFrame(blk, e);
     return (int)blk;
   }
@@ -606,6 +630,9 @@ void file_write(Core *c) {
     ok = m.writeFrame(cur_frame, fr) && ok; // flush the last partial frame
   }
   f->pos += len;
+  if (ok) {
+    m.stampWritten(f->block);
+  }
   c->r[psx::cpu::kV0] = 0; // accepted; see file_read for why this is not `len`
   lucent::debug(
       "card", "write fd={} <- 0x{:08X} len={} (pos now {}) {}", fd, buf, len, f->pos, ok ? "-> IOEND" : "-> ERROR");
@@ -650,11 +677,7 @@ void file_erase(Core *c) {
   e[0] = Memcard::kDirFree;
   e[8] = 0xFF;
   e[9] = 0xFF;
-  uint8_t x = 0;
-  for (uint32_t i = 0; i < 0x7F; i++) {
-    x ^= e[i];
-  }
-  e[0x7F] = x;
+  Memcard::sealFrame(e);
   m.writeFrame((uint32_t)blk, e);
   c->r[psx::cpu::kV0] = 1;
   lucent::debug("card", "erase '{}' (block {}) -> ok", name, blk);

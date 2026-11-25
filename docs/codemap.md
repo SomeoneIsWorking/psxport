@@ -52,7 +52,7 @@ Dependency direction: title repo → `runtime/psx/game/` (the title interface) �
 - `runtime/psx/cd/disc*`, `hunk_reader.*` — CHD disc image by LBA, hunk decode ahead on worker threads, ISO9660 file reader, TOC (GetTN / GetTD), disc provisioning
 - `runtime/psx/platform/dma_*` — DMA controller DPCR / DICR, channels, linked-list chain mode, DMA callbacks, DMA IRQ
 - `runtime/psx/platform/io_peripherals.*`, `irq_edge.h` — I_STAT / I_MASK interrupt lines, root counter and SIO decode
-- `runtime/psx/platform/memcard.*`, `card_syscall_log.*` — memory card device and file, card syscall counts
+- `runtime/psx/platform/memcard.*`, `card_syscall_log.*` — memory card device and file (each file write stamps its time in the directory frame), card syscall counts
 - `runtime/psx/platform/coro.*` — coroutine / fiber for a guest task scheduler, each handoff a turn on the product's `lucent::perf::WorkClock`
 - `runtime/psx/platform/watchdog.*`, `watchdog_host.h` (`watchdog_posix.cpp`, `watchdog_win32.cpp`), `spin_detector.*` — frame watchdog, crash and interrupt reporters over the host timer and fault hooks, guest spin / hang detection
 - `runtime/psx/platform/host_clock.h`, `fs_util.*`, `blob_codec.h`, `active_low_edges.h` — host monotonic clock, host file I/O, little-endian byte codec, active-low button press and release edges

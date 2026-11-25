@@ -10,6 +10,7 @@
 #include "pad_recording.h"
 #include <cstdint>
 #include <cstdio>
+#include <optional>
 #include <span>
 #include <string>
 #include <vector>
@@ -70,6 +71,13 @@ public:
   // PSX card-filesystem helpers (directory scan + free-block allocation).
   int dirFind(const char *name);
   int dirCreate(const char *name, uint32_t size);
+  // When the guest last wrote the file at `block`, in Unix seconds: a u64 in its directory frame's unused bytes,
+  // which the BIOS leaves zero. Empty for a file written before stamping existed or by another program.
+  static constexpr uint32_t kDirWrittenAt = 0x20u;
+  std::optional<uint64_t> writtenAt(int block);
+  void stampWritten(int block);
+  // Byte 0x7F of a directory or header frame: the XOR of the bytes before it.
+  static void sealFrame(uint8_t *frame);
 
   // Directory ENUMERATION — the BIOS firstfile/nextfile pair (B0:0x42 / B0:0x43), which is how the
   // save/load browser discovers what is on the card. `dirScanBegin` arms a scan for a shell pattern
