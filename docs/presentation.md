@@ -71,7 +71,9 @@ Draw order is OT slot order (below). There are no bands, layers or painter range
 The device executes every command on both paths and holds the only guest-visible VRAM. It draws a command's
 pixels only when something reads them (beetle-psx `gpu_defer.c`): the GPU the guest talks to keeps every
 register and logs each command, and a second instance sharing its VRAM replays the log in order when a reader
-settles a rect (`DeviceVram::settled`/`all`, `GPU_SettlePixels`) or a fill makes the log two frames long. A draw
+settles a rect (`DeviceVram::settled`/`all`, `GPU_SettlePixels`) or a fill makes the log two frames long. A
+small read whose pending writers are only fills and uploads (a cycled palette row, the device's own CLUT cache
+fill) is answered from their data without replaying (`DeviceVram::read`, `GPU_ReadPixels`). A draw
 that a later fill covers before anything reads it replays for its state alone, so a double-buffered title's
 frames are never rasterized on the CPU. VRAM, GPUREAD and save states are as the eager device leaves them;
 `PSXPORT_GPU_EAGER=1` draws every command as it runs, for comparison. Any other

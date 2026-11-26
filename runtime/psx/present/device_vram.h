@@ -15,9 +15,11 @@ namespace psx::gpu {
 class DeviceVram {
 public:
   using Settle = void (*)(VramRect rect);
+  using Read = void (*)(VramRect rect, std::span<std::uint16_t> out);
 
   DeviceVram() = default;
-  DeviceVram(std::span<const std::uint16_t> words, Settle settle) : words_(words), settle_(settle) {}
+  DeviceVram(std::span<const std::uint16_t> words, Settle settle, Read read)
+      : words_(words), settle_(settle), read_(read) {}
 
   // All of VRAM, 1024x512.
   [[nodiscard]] std::span<const std::uint16_t> all() const {
@@ -30,10 +32,16 @@ public:
     }
     return words_;
   }
+  // `rect` (wrapping at VRAM's edges) copied row-major into `out`, which holds width * height words. Pixels only
+  // pending uploads and fills write are answered without making the device draw.
+  void read(VramRect rect, std::span<std::uint16_t> out) const {
+    read_(rect, out);
+  }
 
 private:
   std::span<const std::uint16_t> words_;
   Settle settle_ = nullptr;
+  Read read_ = nullptr;
 };
 
 } // namespace psx::gpu

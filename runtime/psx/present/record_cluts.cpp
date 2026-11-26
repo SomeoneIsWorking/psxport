@@ -23,10 +23,7 @@ std::uint32_t appendFromVram(FrameRecord &record, const DrawPrimitive &primitive
   const gpu::VramPoint at = gpu::decodeClut(primitive.clutWord);
   std::array<std::uint16_t, 256> entries{};
   const std::size_t count = gpu::clutEntryCount(static_cast<gpu::TexDepth>(primitive.state.texMode));
-  const std::span<const std::uint16_t> words = vram.settled({at.x, at.y, static_cast<int>(count), 1});
-  for (std::size_t i = 0; i < count; i++) {
-    entries[i] = gpu::vramHalfWord(words, {at.x + static_cast<int>(i), at.y});
-  }
+  vram.read({at.x, at.y, static_cast<int>(count), 1}, std::span<std::uint16_t>(entries.data(), count));
   return record.appendClut(std::span<const std::uint16_t>(entries.data(), count));
 }
 

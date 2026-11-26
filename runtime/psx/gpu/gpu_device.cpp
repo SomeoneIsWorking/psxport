@@ -104,8 +104,12 @@ void settleVram(VramRect rect) {
   GPU_SettlePixels(rect.x, rect.y, rect.width, rect.height);
 }
 
+void readVram(VramRect rect, std::span<uint16_t> out) {
+  GPU_ReadPixels(rect.x, rect.y, rect.width, rect.height, out.data());
+}
+
 DeviceVram deviceVram() {
-  return {{GPU_get_vram(), static_cast<size_t>(kVramWidth) * kVramHeight}, settleVram};
+  return {{GPU_get_vram(), static_cast<size_t>(kVramWidth) * kVramHeight}, settleVram, readVram};
 }
 
 std::vector<uint8_t> captureBeetleState() {
