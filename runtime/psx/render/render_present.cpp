@@ -173,6 +173,7 @@ void RenderState::buildDisplay(gpu::VramRect display, present::ScanoutWindow win
   renderDoc_.begin(presentSerial_ + 1);
   SDL_GPUCommandBuffer *cmd = device_.acquire();
   present::PresentInputs inputs = presentInputs(lastDisplay_, display.width, window);
+  sourceOrigin_ = gpu::VramPoint{0, 0};
   presentRecord(inputs);
   if (!presentsRecord_) {
     uploadDeviceVram(cmd, game_.core.gpuDevice().vram().all());
@@ -192,6 +193,10 @@ void RenderState::buildDisplay(gpu::VramRect display, present::ScanoutWindow win
                 plan.viewport.y,
                 plan.viewport.w,
                 plan.viewport.h);
+  placement_.reset();
+  if (plan.build && sourceOrigin_) {
+    placement_ = present::placePlan(inputs, plan, sourceOrigin_->x, sourceOrigin_->y);
+  }
   if (plan.build) {
     ensureVramTexture();
     SDL_GPUTexture *source = presentsRecord_ ? record_->presented().texture : vramTexture_;
@@ -374,6 +379,7 @@ void RenderState::buildImage(const std::uint8_t *rgba, PixelSize size, float fad
     return;
   }
   bringUp();
+  placement_.reset();
   ensureHostImage(size);
   SDL_GPUCommandBuffer *cmd = device_.acquire();
   device_.upload(cmd, hostUpload_, {rgba, static_cast<std::size_t>(size.width) * size.height * 4}, hostImage_, size);

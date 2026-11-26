@@ -73,7 +73,7 @@ void FramePresenter::commit(Core *core, int guestFields) {
                       core->game->outlineText,
                       core->gpuDevice().vram(),
                       core->game->hostInput.glyphs());
-  core->game->bugReport.frameSealed(*core, slot.sequence());
+  core->game->bugReport.frameSealed(*core, slot);
   commitSealed(*core, slot, guestFields);
 }
 

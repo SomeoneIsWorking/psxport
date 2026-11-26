@@ -255,6 +255,7 @@ set(PSXPORT_FRAMEWORK_SRC
   ${PSXPORT_ROOT}/runtime/psx/debug/dbg_server.cpp
   ${PSXPORT_ROOT}/runtime/psx/debug/debug_commands.cpp
   ${PSXPORT_ROOT}/runtime/psx/debug/bug_report_session.cpp
+  ${PSXPORT_ROOT}/runtime/psx/debug/draw_list_report.cpp
   ${PSXPORT_ROOT}/runtime/psx/platform/spin_detector.cpp
   ${PSXPORT_ROOT}/runtime/psx/platform/watchdog.cpp
   ${PSXPORT_ROOT}/runtime/psx/platform/$<IF:$<PLATFORM_ID:Windows>,watchdog_win32.cpp,watchdog_posix.cpp>

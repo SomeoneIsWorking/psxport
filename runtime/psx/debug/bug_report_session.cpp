@@ -3,6 +3,7 @@
 #include "config_vars.h"
 #include "core.h"
 #include "display_presenter.h"
+#include "frame_record.h"
 #include "game.h"
 #include "gpu_device.h"
 #include "image_writer.h" // image_write_rgb24
@@ -32,6 +33,7 @@ constexpr const char *kScreenshotFile = "screen.png";
 constexpr const char *kReferenceFile = "psx.png";
 constexpr const char *kClipFile = "motion.png";
 constexpr const char *kOwnersFile = "owners.jsonl";
+constexpr const char *kDrawsFile = "draws.jsonl";
 constexpr const char *kRecordingFile = "repro.pad";
 constexpr const char *kCardFile = "memcard.mcr";
 constexpr const char *kStateFile = "state.bin";
@@ -64,7 +66,7 @@ void BugReportSession::request() {
   }
 }
 
-void BugReportSession::frameSealed(Core &core, std::uint64_t sequence) {
+void BugReportSession::frameSealed(Core &core, const psx::present::FrameRecord &record) {
   if (mState != State::Capturing || mReference) {
     return;
   }
@@ -73,7 +75,8 @@ void BugReportSession::frameSealed(Core &core, std::uint64_t sequence) {
   const psx::gpu::DisplayArea display = device.displayArea();
   const psx::gpu::VramPoint origin = device.drawAreaOrigin();
   mReference = device.picture({origin.x, origin.y, display.width, display.height}, false);
-  mSealed = sequence;
+  mSealed = record.sequence();
+  mDraws.capture(record);
 }
 
 void BugReportSession::presented(Core &core, const psx::present::PresentNote &note) {
@@ -93,6 +96,7 @@ void BugReportSession::shootScreen(Core &core) {
     return;
   }
   core.game->render().presentShot(path->string().c_str());
+  mDraws.place(core.game->render().placement());
   std::error_code exists;
   mScreenShot = std::filesystem::exists(*path, exists);
 }
@@ -112,6 +116,7 @@ void BugReportSession::atFieldBoundary(Core &core) {
   case State::Requested:
     mDraft = openDraft(core);
     mReference.reset();
+    mDraws.clear();
     mScreenShot = false;
     mScreenMatches = false;
     mFieldsCapturing = 0;
@@ -128,6 +133,7 @@ void BugReportSession::atFieldBoundary(Core &core) {
     mState = State::Idle;
     mDraft.reset();
     mReference.reset();
+    mDraws.clear();
     return;
   }
 }
@@ -205,6 +211,13 @@ void BugReportSession::attachCaptures(Core &core, bug_report::Draft &draft) {
   if (const auto path = draft.pathFor(kOwnersFile, error);
       path && !game.ownerJournal.rows().empty() && game.ownerJournal.writeJsonl(core, path->string())) {
     attachOrWarn(draft, kOwnersFile, AttachmentRole::Context, "Owner journal: draws with no owner, held intervals");
+  }
+
+  if (const auto path = draft.pathFor(kDrawsFile, error); path && mDraws.captured() && mDraws.write(core, *path)) {
+    attachOrWarn(draft,
+                 kDrawsFile,
+                 AttachmentRole::Context,
+                 "Draw list of the reported frame: every primitive, where it lands in screen.png, who wrote it");
   }
 
   const std::size_t padFrames = game.pad.recordedFrames();

@@ -32,6 +32,7 @@ void RenderState::buildPanes(std::span<const Pane> panes) {
   }
   bringUp();
   direct_.reset();
+  placement_.reset();
   const PixelSize size = presentImageSize();
   ensurePresentImage(size);
   if (presentImage_ == nullptr) {

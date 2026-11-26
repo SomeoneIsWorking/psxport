@@ -130,4 +130,28 @@ inline PresentPlan planPresent(const PresentInputs &in) {
   return p;
 }
 
+// Where guest VRAM lands on the sink: VRAM columns [x, x + columns) and rows [y, y + rows) fill `viewport`.
+struct SinkPlacement {
+  int sink_w = 0;
+  int sink_h = 0;
+  PaneRect viewport;
+  int x = 0;
+  int y = 0;
+  int columns = 0;
+  int rows = 0;
+};
+
+// `plan`'s placement, its source texture holding VRAM point (originX, originY) at its (0, 0).
+inline SinkPlacement placePlan(const PresentInputs &in, const PresentPlan &plan, int originX, int originY) {
+  const int scale = plan.src_ires > 1 ? plan.src_ires : 1;
+  const int window_top = in.window_h > 0 ? in.window_top : 0;
+  return {plan.sink_w,
+          plan.sink_h,
+          plan.viewport,
+          originX + in.sx,
+          originY + in.sy - window_top,
+          plan.disp[2] / scale,
+          plan.disp[3] / scale};
+}
+
 } // namespace psx::present

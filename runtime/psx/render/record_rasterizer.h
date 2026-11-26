@@ -8,6 +8,7 @@
 #include "outline_text.h"
 #include "record_raster_setup.h"
 #include "render_device.h"
+#include "vram_rect.h"
 
 #include <SDL3/SDL_gpu.h>
 
@@ -26,6 +27,8 @@ struct RecordPicture {
   gpu::RecordRect rect;
   gpu::RecordRect drawn;
   int scale = 1;
+  // The VRAM point at the texture's (0, 0); none for a crop band, whose world and UI have their own scales.
+  std::optional<gpu::VramPoint> origin;
 };
 
 // A margin canvas's buffer and the windows of the record that last drew it, as a machine state carries it.
@@ -274,15 +277,15 @@ private:
   Pipelines makePipelines(bool fetch, RecordShader shader);
   void release(Pipelines &pipelines);
   // The set an op draws through: the ops that read the target (a blend or a mask test) through a reading set, the rest
-  // through a writing one; each set in the record.frag variant the op needs (RecordShader). Where the device fetches its
-  // target in-pass, only the reading sets fetch; elsewhere both read the snapshot and the reading sets are the writing
-  // ones.
+  // through a writing one; each set in the record.frag variant the op needs (RecordShader). Where the device fetches
+  // its target in-pass, only the reading sets fetch; elsewhere both read the snapshot and the reading sets are the
+  // writing ones.
   const Pipelines &pipelines(bool reads, RecordShader shader) const {
     return sets_[(reads && fetches_ ? kRecordShaders : 0) + static_cast<std::size_t>(shader)];
   }
   bool fetches_ = false;
   std::array<Pipelines, 2 * kRecordShaders> sets_; // writing, then reading, each by RecordShader
-  const present::DepthTest *depthTest_ = nullptr; // this present's
+  const present::DepthTest *depthTest_ = nullptr;  // this present's
   gpu::RecordPlanner planner_;
   Plane vram_;
   std::vector<Canvas> canvases_;

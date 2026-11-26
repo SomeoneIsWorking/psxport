@@ -581,7 +581,7 @@ void RecordRasterizer::present(const RecordView &view, bool inBetween, const pre
   Canvas *canvas = canvasFor(view);
   if (canvas != nullptr && canvas->shape.crop()) {
     const RecordRect whole{0, 0, canvas->plane.width, canvas->plane.height};
-    presented_ = {inBetween ? canvas->plane.inBetween : canvas->plane.image, whole, whole, canvas->plane.scale};
+    presented_ = {inBetween ? canvas->plane.inBetween : canvas->plane.image, whole, whole, canvas->plane.scale, {}};
     wovenOriginY_ = canvas->plane.originY;
   } else if (canvas != nullptr) {
     const present::RecordWindows shown =
@@ -589,10 +589,11 @@ void RecordRasterizer::present(const RecordView &view, bool inBetween, const pre
     presented_ = {inBetween ? canvas->plane.inBetween : canvas->plane.image,
                   windowOf(canvas->shape, shown.view),
                   windowOf(canvas->shape, shown.drawn),
-                  scale_};
+                  scale_,
+                  gpu::VramPoint{canvas->plane.originX, canvas->plane.originY}};
     wovenOriginY_ = canvas->plane.originY;
   } else {
-    presented_ = {inBetween ? vram_.inBetween : vram_.image, view.display, view.display, scale_};
+    presented_ = {inBetween ? vram_.inBetween : vram_.image, view.display, view.display, scale_, gpu::VramPoint{0, 0}};
     wovenOriginY_ = view.display.y0;
   }
   woven_ = presented_;
@@ -635,8 +636,14 @@ void RecordRasterizer::selectField(const present::FrameRecord &record) {
     work_.copyPixels += static_cast<std::uint64_t>(width) * static_cast<std::uint64_t>(scale_ * scale_);
   }
   SDL_EndGPUCopyPass(copy);
-  presented_ = {
-      field_, {0, 0, width, height}, {woven_.drawn.x0 - source.x0, 0, woven_.drawn.x1 - source.x0, height}, scale_};
+  const std::optional<gpu::VramPoint> origin =
+      woven_.origin ? std::optional{gpu::VramPoint{woven_.origin->x + source.x0, woven_.origin->y + source.y0}}
+                    : std::nullopt;
+  presented_ = {field_,
+                {0, 0, width, height},
+                {woven_.drawn.x0 - source.x0, 0, woven_.drawn.x1 - source.x0, height},
+                scale_,
+                origin};
 }
 
 void RecordRasterizer::update(const present::FrameRecord &record,

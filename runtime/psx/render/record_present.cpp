@@ -101,6 +101,7 @@ void RenderState::presentRecord(present::PresentInputs &inputs) {
   game_.perf.presentWork(record_->work());
   // The display, or its wide canvas's view, at the 4:3 display's aspect per column.
   const RecordPicture presented = record_->presented();
+  sourceOrigin_ = presented.origin;
   const gpu::RecordRect shown = presented.rect;
   inputs.sx = shown.x0;
   inputs.sy = shown.y0;

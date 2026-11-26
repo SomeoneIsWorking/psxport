@@ -8,6 +8,7 @@
 #include "title_debug_menu.h"
 
 #include <lucent/log.h>
+#include <lucent/text.h>
 
 #include <algorithm>
 #include <chrono>
@@ -32,19 +33,6 @@ bool sameRow(const OwnerRow &row, const OwnerFinding &finding, std::size_t scree
 
 std::string hex(std::uint32_t value) {
   return lucent::format("0x{:08X}", value);
-}
-
-// A JSON string literal; rows hold only printable ASCII from the framework and title names.
-std::string jsonString(std::string_view text) {
-  std::string out = "\"";
-  for (const char c : text) {
-    if (c == '"' || c == '\\') {
-      out += '\\';
-    }
-    out += c;
-  }
-  out += '"';
-  return out;
 }
 
 } // namespace
@@ -262,22 +250,22 @@ std::string OwnerJournal::rowJson(Core &core, const OwnerRow &row) const {
       "\"primitives_max_per_interval\":{},\"fields\":[{},{}],\"presents\":[{},{}],\"screen\":{},\"screen_key\":{},"
       "\"warp\":{},"
       "\"decomp\":{}}}",
-      jsonString(title != nullptr ? title->displayName : std::string_view{}),
-      jsonString(title != nullptr ? title->serial : std::string_view{}),
-      jsonString(ownerReasonName(row.key.reason)),
-      jsonString(heldCauseName(row.key.cause)),
-      jsonString(writerKindName(row.writer.kind)),
-      jsonString(hex(row.writer.function)),
-      jsonString(hex(row.writer.blockPc)),
-      jsonString(hex(row.writer.dispatched)),
-      jsonString(image),
+      lucent::text::json_quote(title != nullptr ? title->displayName : std::string_view{}),
+      lucent::text::json_quote(title != nullptr ? title->serial : std::string_view{}),
+      lucent::text::json_quote(ownerReasonName(row.key.reason)),
+      lucent::text::json_quote(heldCauseName(row.key.cause)),
+      lucent::text::json_quote(writerKindName(row.writer.kind)),
+      lucent::text::json_quote(hex(row.writer.function)),
+      lucent::text::json_quote(hex(row.writer.blockPc)),
+      lucent::text::json_quote(hex(row.writer.dispatched)),
+      lucent::text::json_quote(image),
       row.writer.image.generation,
-      jsonString(hex(row.key.entry)),
+      lucent::text::json_quote(hex(row.key.entry)),
       row.key.table == kNoTable ? -1 : static_cast<int>(row.key.table),
       row.key.bucketLo,
       row.key.bucketHi,
-      jsonString(hex(row.key.sampleAddress)),
-      jsonString(lucent::format("0x{:02X}", row.key.sampleCommand)),
+      lucent::text::json_quote(hex(row.key.sampleAddress)),
+      lucent::text::json_quote(lucent::format("0x{:02X}", row.key.sampleCommand)),
       row.intervals,
       row.intervalsLost,
       row.primitives,
@@ -287,9 +275,9 @@ std::string OwnerJournal::rowJson(Core &core, const OwnerRow &row) const {
       row.firstPresent,
       row.lastPresent,
       row.screen,
-      jsonString(lucent::format("0x{:X}", row.screen < screens_.size() ? screens_[row.screen].key : 0u)),
-      jsonString(route),
-      decomp.empty() ? std::string("null") : jsonString(decomp));
+      lucent::text::json_quote(lucent::format("0x{:X}", row.screen < screens_.size() ? screens_[row.screen].key : 0u)),
+      lucent::text::json_quote(route),
+      decomp.empty() ? std::string("null") : lucent::text::json_quote(decomp));
 }
 
 bool OwnerJournal::writeJsonl(Core &core, const std::string &path) const {

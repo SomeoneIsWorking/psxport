@@ -73,6 +73,10 @@ public:
 
   // The size this Game's present image is built at: the sink's.
   PixelSize presentImageSize() const;
+  // Where the last display present put guest VRAM on the sink; none for a host picture or a crop band.
+  std::optional<present::SinkPlacement> placement() const {
+    return placement_;
+  }
 
 private:
   void ensureVramTexture();
@@ -150,6 +154,9 @@ private:
   int recordFade_[4] = {}; // mode, r, g, b
   // The last present's display rect in VRAM, for a Device-path shot.
   gpu::VramRect lastDisplay_{0, 0, 320, 240};
+  // The VRAM point at the present source's (0, 0), and where the last display present placed VRAM.
+  std::optional<gpu::VramPoint> sourceOrigin_;
+  std::optional<present::SinkPlacement> placement_;
 
   // The window presents a bug report's motion clip is cut from.
   PresentClip clip_;

@@ -858,6 +858,13 @@ CPU work per present, and its size does not depend on the internal resolution. T
 `PSXPORT_BUG_REPORT_CLIP=0` turns it off on hardware that cannot spare the memory: no texture, no blit, and
 reports carry no `motion.png`.
 
+`draws.jsonl` is the sealed frame's record, one line per entry in draw order (`DrawListReport`): each primitive's
+command, vertices with their places, texture page, CLUT, blend, OT slot, draw site, packet and the guest writer
+of its first word (`OwnerLedger`), and `screen`, its box as fractions of `screen.png` in the units of
+`report.json`'s marks. The box comes from `RenderState::placement()`, where the screenshot's present put guest VRAM
+(`present::placePlan` over the plan and the record picture's VRAM origin); a crop band and a host picture have
+none, and their entries carry no box.
+
 A report reproduces from `state.bin`, the whole machine state (`psx::state::saveToFile`) taken at the
 reported frame, loaded with `PSXPORT_LOAD_STATE` on a writable copy of `memcard.mcr` (the state restores
 the card it held). `repro.pad` from boot is kept, but a replay follows only the build and settings that

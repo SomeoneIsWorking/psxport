@@ -17,6 +17,7 @@
 // screenshot, and a fact saying which picture is missing.
 #pragma once
 
+#include "draw_list_report.h"
 #include "rgb24_picture.h"
 
 #include <bug_report/draft.h>
@@ -29,8 +30,9 @@
 class Core;
 
 namespace psx::present {
+class FrameRecord;
 struct PresentNote;
-}
+} // namespace psx::present
 
 namespace psx::debug {
 
@@ -39,8 +41,8 @@ public:
   // Ask for a report at the next frame boundary. Repeated requests before it opens are one report.
   void request();
 
-  // Logic frame `sequence` was sealed: the device has drawn it into its draw area.
-  void frameSealed(Core &core, std::uint64_t sequence);
+  // Logic frame `record` was sealed: the device has drawn it into its draw area.
+  void frameSealed(Core &core, const psx::present::FrameRecord &record);
 
   // A present described by `note` is on screen.
   void presented(Core &core, const psx::present::PresentNote &note);
@@ -64,6 +66,7 @@ private:
   bool mPruned = false;
   std::optional<bug_report::Draft> mDraft;
   std::optional<psx::gpu::Rgb24Picture> mReference;
+  DrawListReport mDraws;     // the reference frame's record
   std::uint64_t mSealed = 0; // the reference picture's record
   bool mScreenShot = false;
   bool mScreenMatches = false; // the screenshot shows the reference's frame
