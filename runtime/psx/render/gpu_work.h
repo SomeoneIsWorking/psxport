@@ -10,6 +10,7 @@ struct GpuWork {
   std::uint64_t draws = 0;
   std::uint64_t pipelineBinds = 0;
   std::uint64_t renderPasses = 0;
+  std::uint64_t syncs = 0; // in-pass target read barriers (RecordRasterPlan::syncs)
   std::uint64_t textureCopies = 0;
   std::uint64_t triangles = 0;
   std::uint64_t pixels = 0; // covered by the draws' shapes at the internal resolution, once per draw
@@ -17,7 +18,8 @@ struct GpuWork {
   std::uint64_t shadedPixels = 0;
   std::uint64_t copyPixels = 0; // texture copies at the internal resolution
   std::uint64_t uploadBytes = 0;
-  // In-betweens not drawn because they do not fill what the image's kept state left out (RecordRasterPlan::overwritten).
+  // In-betweens not drawn because they do not fill what the image's kept state left out
+  // (RecordRasterPlan::overwritten).
   std::uint64_t inBetweensRefused = 0;
 };
 

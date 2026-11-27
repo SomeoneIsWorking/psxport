@@ -93,9 +93,14 @@ public:
     return device_;
   }
   // A fragment shader reads its colour target as earlier draws of the same pass left it (Metal framebuffer fetch,
-  // Vulkan rasterization-order input attachment), so a draw over them needs no snapshot of the target.
+  // Vulkan input attachment), so a draw over them needs no snapshot of the target.
   bool fetchesTarget() const {
     return fetchesTarget_;
+  }
+  // The in-pass read sees every earlier fragment of the pass; else only the draws before the pass's last
+  // SDL_SyncGPUColorTargetRead.
+  bool ordersTargetReads() const {
+    return ordersTargetReads_;
   }
   const RenderWindow &window() const {
     return window_;
@@ -232,6 +237,7 @@ private:
   RenderWindow window_;
   SDL_GPUDevice *device_ = nullptr;
   bool fetchesTarget_ = false;
+  bool ordersTargetReads_ = false;
   SDL_GPUSampler *nearest_ = nullptr;
   SDL_GPUSampler *linear_ = nullptr;
   SDL_GPUGraphicsPipeline *presentPipeline_ = nullptr;

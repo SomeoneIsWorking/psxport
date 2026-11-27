@@ -235,7 +235,7 @@ std::uint32_t paddedBytes(std::size_t bytes) {
 } // namespace
 
 RecordRasterizer::RecordRasterizer(RenderDevice &device) : device_(device), depthFormat_(depthFormat(device.handle())) {
-  planner_.setDestinationReadsInPass(device.fetchesTarget());
+  planner_.setDestinationReadsInPass(device.fetchesTarget(), device.ordersTargetReads());
   fetches_ = device.fetchesTarget();
   for (std::size_t set = 0; set < (fetches_ ? sets_.size() : kRecordShaders); set++) {
     sets_.at(set) = makePipelines(set >= kRecordShaders, static_cast<RecordShader>(set % kRecordShaders));
@@ -1141,7 +1141,9 @@ void RecordRasterizer::execute(const gpu::RecordRasterPlan &plan, bool inBetween
       drawShapes(pass,
                  plan,
                  std::span(shapes).subspan(range.firstShape, range.endShape - range.firstShape),
-                 firstShape[static_cast<std::size_t>(p)] + range.firstShape,
+                 range.firstShape,
+                 plan.syncs[static_cast<std::size_t>(p)],
+                 firstShape[static_cast<std::size_t>(p)],
                  depth);
       SDL_EndGPURenderPass(pass);
     }
@@ -1183,7 +1185,9 @@ void RecordRasterizer::execute(const gpu::RecordRasterPlan &plan, bool inBetween
 void RecordRasterizer::drawShapes(SDL_GPURenderPass *pass,
                                   const gpu::RecordRasterPlan &plan,
                                   std::span<const gpu::RecordShape> shapes,
-                                  std::uint32_t firstVertexShape,
+                                  std::uint32_t firstShape,
+                                  std::span<const std::uint32_t> syncs,
+                                  std::uint32_t planeVertexShape,
                                   bool depthTarget) {
   // Each draw is six vertices a shape (record.vert), its fragments the shapes' covered pixels.
   std::span<const gpu::RecordShape> runShapes;
@@ -1203,18 +1207,29 @@ void RecordRasterizer::drawShapes(SDL_GPURenderPass *pass,
     const bool marks = pipeline == set->groupMark || pipeline == set->modelMark || pipeline == set->modelClear;
     work_.shadedPixels += marks ? 0 : pixels;
   };
+  // The plane's syncs inside these shapes, as offsets into them.
+  auto sync = std::ranges::upper_bound(syncs, firstShape);
+  const auto nextSync = [&]() -> std::size_t {
+    return sync != syncs.end() && *sync < firstShape + shapes.size() ? *sync - firstShape : shapes.size();
+  };
   // Runs in record order, each through the pipelines its reading of the target and its shader pick; with a depth
-  // target, also by its depth run.
+  // target, also by its depth run. A run ends at a sync, which the next one starts after.
   std::size_t run = 0;
   while (run < shapes.size()) {
+    if (run == nextSync()) {
+      SDL_SyncGPUColorTargetRead(pass);
+      ++work_.syncs;
+      ++sync;
+    }
     const DepthRun key = depthRun(plan, shapes[run], depthTarget);
+    const std::size_t limit = nextSync();
     std::size_t end = run + 1;
-    while (end < shapes.size() && depthRun(plan, shapes[end], depthTarget) == key) {
+    while (end < limit && depthRun(plan, shapes[end], depthTarget) == key) {
       end++;
     }
     const auto count = static_cast<Uint32>(end - run) * 6;
     runShapes = shapes.subspan(run, end - run);
-    const Uint32 first = (firstVertexShape + static_cast<std::uint32_t>(run)) * 6;
+    const Uint32 first = (planeVertexShape + firstShape + static_cast<std::uint32_t>(run)) * 6;
     set = &pipelines(key.reads, key.shader);
     if (!depthTarget) {
       draw(set->plain, first, count);

@@ -147,14 +147,17 @@ rasterization-order flag (`VK_EXT`/`VK_ARM_rasterization_order_attachment_access
 like Metal's framebuffer fetch, wherever the device offers it. Linux builds link the pinned fork for this
 (`release_platform.pinned`).
 
-RADV (RX 6700 XT, Ryzen Z1) and NVIDIA don't offer that extension, so on this machine and the Ally the batches still
-read a snapshot. Those devices get two more tiers, in this order:
+RADV (RX 6700 XT, Ryzen Z1) and NVIDIA don't offer that extension. Those devices read in-pass through a barrier,
+and get interlock only if that proves short:
 
-1. **In-pass barrier.** The same input attachment with a subpass self-dependency, and no rasterization-order flag.
-   Where a draw reads pixels an earlier draw in the batch wrote, the planner breaks the draw at that point instead of
-   closing the batch. The rasterizer then issues a by-region barrier inside the pass (an SDL call), from colour
-   attachment write to input attachment read. This is core Vulkan 1.0, and depth and stencil don't change. The snapshot
-   copy and the pass split go away, and each break costs one more draw call.
+1. **In-pass barrier (landed 2026-11-27).** The same input attachment with a subpass self-dependency, and no
+   rasterization-order flag (`SDL_PROP_GPU_DEVICE_COLOR_TARGET_READ_IN_PASS_ORDERED_BOOLEAN` false). Where a draw
+   reads pixels an earlier draw in the batch wrote since the plane's last sync, the planner records a sync before it
+   (`RecordRasterPlan::syncs`) instead of closing the batch, and the rasterizer calls `SDL_SyncGPUColorTargetRead`
+   there: a by-region barrier inside the pass, colour attachment write to input attachment read. Tomba! 2's village
+   (the 2026-11-20 culling report's state, RX 6700 XT, 4K, 8x): render passes p50 22 → 2 per present, texture copies
+   143 → 12, copy pixels 83 → 53 Mpx, against 13 syncs; the pictures match llvmpipe's ordered read at every pixel
+   where they differ from the snapshot path (issue 0211). The meter's `target syncs` line counts the barriers.
 2. **Fragment-shader interlock** (`VK_EXT_fragment_shader_interlock`), only if measured breaks show tier 1 is not
    enough.
    - Every draw that writes colour in such a pass stores through the interlock. Attachment writes and storage writes

@@ -135,7 +135,7 @@ private:
   lucent::perf::CountHistogram mFrameWork;
   std::uint64_t mMeteredFrames = 0;
 
-  static constexpr std::size_t kGpuCounts = 10;
+  static constexpr std::size_t kGpuCounts = 11;
   std::array<lucent::perf::CountHistogram, kGpuCounts> mGpuWork;
   lucent::perf::CountHistogram mGpuTime; // ns per present
   static constexpr std::size_t kGpuLabels = 16;

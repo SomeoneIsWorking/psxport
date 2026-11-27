@@ -30,10 +30,11 @@ struct GpuCount {
   double scale;
   const char *unit;
 };
-constexpr std::array<GpuCount, 10> kGpuCountNames{{
+constexpr std::array<GpuCount, 11> kGpuCountNames{{
     {"draws", &GpuWork::draws, 1.0, "draws"},
     {"pipeline binds", &GpuWork::pipelineBinds, 1.0, "binds"},
     {"render passes", &GpuWork::renderPasses, 1.0, "passes"},
+    {"target syncs", &GpuWork::syncs, 1.0, "syncs"},
     {"texture copies", &GpuWork::textureCopies, 1.0, "copies"},
     {"triangles", &GpuWork::triangles, 1e-3, "ktri"},
     {"pixels", &GpuWork::pixels, 1e-6, "Mpx"},
@@ -173,11 +174,12 @@ void GpuPerf::presentWork(const psx::render::GpuWork &work) {
     mGpuWork[count].add(work.*kGpuCountNames[count].field);
   }
   lucent::debug(mFrameChannel,
-                "present gpu: draws={} binds={} passes={} copies={} triangles={} pixels={} shaded-pixels={} "
+                "present gpu: draws={} binds={} passes={} syncs={} copies={} triangles={} pixels={} shaded-pixels={} "
                 "copy-pixels={} upload-bytes={} in-betweens-refused={}",
                 work.draws,
                 work.pipelineBinds,
                 work.renderPasses,
+                work.syncs,
                 work.textureCopies,
                 work.triangles,
                 work.pixels,
@@ -308,14 +310,15 @@ void GpuPerf::reportCost() const {
   }
   line("frame", mFrameWork);
   if (mGpuTime.count() != 0) {
-    lucent::debug("perf",
-                  "gpu time: p50 {:.3f} p99 {:.3f} max {:.3f} ms/present over {} presents, total {:.1f} ms; each submit "
-                  "waited for, so the CPU and GPU ran serialized",
-                  static_cast<double>(mGpuTime.percentile(0.50)) * 1e-6,
-                  static_cast<double>(mGpuTime.percentile(0.99)) * 1e-6,
-                  static_cast<double>(mGpuTime.max()) * 1e-6,
-                  mGpuTime.count(),
-                  static_cast<double>(mGpuTime.total()) * 1e-6);
+    lucent::debug(
+        "perf",
+        "gpu time: p50 {:.3f} p99 {:.3f} max {:.3f} ms/present over {} presents, total {:.1f} ms; each submit "
+        "waited for, so the CPU and GPU ran serialized",
+        static_cast<double>(mGpuTime.percentile(0.50)) * 1e-6,
+        static_cast<double>(mGpuTime.percentile(0.99)) * 1e-6,
+        static_cast<double>(mGpuTime.max()) * 1e-6,
+        mGpuTime.count(),
+        static_cast<double>(mGpuTime.total()) * 1e-6);
     for (const psx::render::SubmitTime &label : mGpuLabelTime) {
       if (label.where != nullptr) {
         lucent::debug("perf",

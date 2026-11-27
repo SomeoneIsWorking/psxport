@@ -259,6 +259,9 @@ struct RecordRasterPlan {
   // Per plane (not a crop canvas), plane pixels an opaque fill of the record writes before the record reads any of
   // them, by sampling, copying, capturing or reading its destination: what they held before the record never shows.
   std::array<std::vector<RecordRect>, kRecordPlanes> overwritten;
+  // Per plane, ascending shape indices inside a batch before which the target's earlier writes must reach in-pass
+  // reads (RecordPlanner::setDestinationReadsInPass, unordered).
+  std::array<std::vector<std::uint32_t>, kRecordPlanes> syncs;
   // The canvas plane kOpCanvasTexels ops sample, 0 for none. A draw mapping a displayed buffer one texel per pixel at
   // 15 bits reads its canvas at scale, margins included; one canvas a record, and none while a capture is held.
   int sampledCanvas = 0;
@@ -272,10 +275,11 @@ public:
   RecordPlanner(const RecordPlanner &) = delete;
   RecordPlanner &operator=(const RecordPlanner &) = delete;
 
-  // The rasterizer reads a draw's destination in-pass, as the draws before it in the batch left it (Metal framebuffer
-  // fetch), so a draw that reads its destination where the batch already wrote starts no new batch. Only a draw that
-  // samples, as a texture, what the batch wrote still does.
-  void setDestinationReadsInPass(bool inPass);
+  // The rasterizer reads a draw's destination in-pass, so a draw that reads its destination where the batch already
+  // wrote starts no new batch; only a draw that samples, as a texture, what the batch wrote still does. `ordered`: the
+  // read sees every earlier draw (Metal framebuffer fetch); else it sees the draws before the plane's last sync
+  // (RecordRasterPlan::syncs), and such a draw starts after a new one.
+  void setDestinationReadsInPass(bool inPass, bool ordered);
   // The outline fonts, one bit each, whose glyphs draw from the atlas at native scale too: lettering, whose bitmap
   // need not hold its text (present::OutlineLettering).
   void setLetteredFonts(std::uint32_t fonts);

@@ -526,6 +526,12 @@ public:
     for (std::vector<RecordRect> &rects : plan_.overwritten) {
       rects.clear();
     }
+    for (std::vector<std::uint32_t> &syncs : plan_.syncs) {
+      syncs.clear();
+    }
+    for (WrittenMap &plane : synced_) {
+      plane.clear();
+    }
     for (WrittenMap &plane : read_) {
       plane.clear();
     }
@@ -674,6 +680,7 @@ private:
   int scaledOriginY_ = 0;
   std::uint32_t mapping_ = kMappingPlane;
   std::array<WrittenMap, kRecordPlanes> written_;
+  std::array<WrittenMap, kRecordPlanes> synced_; // pixels written since the plane's last sync (unordered in-pass reads)
   std::array<WrittenMap, kRecordPlanes> grouped_;    // pixels the open depth group's polygons cover
   std::array<WrittenMap, kRecordPlanes> read_;       // pixels the record read so far (RecordRasterPlan::overwritten)
   std::array<RectRegion, kRecordPlanes> batchReads_; // RecordPlaneBatch::reads of the open batch
@@ -692,6 +699,7 @@ private:
 
 public:
   bool destinationInPass = false; // RecordPlanner::setDestinationReadsInPass
+  bool destinationOrdered = false;
   std::uint32_t letteredFonts = 0; // RecordPlanner::setLetteredFonts
 
 private:
@@ -1072,6 +1080,15 @@ void RecordPlanner::Builder::commit(const RecordOp &op, bool readsDestination, c
   if (conflict) {
     closeBatch();
   }
+  if (readsDestination && destinationInPass && !destinationOrdered) {
+    for (const PlaneRect &write : opWrites_) {
+      const auto plane = static_cast<std::size_t>(write.plane);
+      if (synced_[plane].any(write.rect)) {
+        plan_.syncs[plane].push_back(static_cast<std::uint32_t>(plan_.shapes[plane].size()));
+        synced_[plane].clear();
+      }
+    }
+  }
   noteReads(op, readsDestination);
   const auto opIndex = static_cast<std::uint32_t>(plan_.ops.size());
   plan_.ops.push_back(op);
@@ -1093,6 +1110,9 @@ void RecordPlanner::Builder::commit(const RecordOp &op, bool readsDestination, c
   }
   for (const PlaneRect &write : opWrites_) {
     written_[static_cast<std::size_t>(write.plane)].mark(write.rect);
+    if (destinationInPass && !destinationOrdered) {
+      synced_[static_cast<std::size_t>(write.plane)].mark(write.rect);
+    }
   }
   for (const std::vector<PlaneRect> *rects : {&opWrites_, &opReaches_}) {
     for (const PlaneRect &write : *rects) {
@@ -1190,6 +1210,7 @@ void RecordPlanner::Builder::closeBatch() {
     any = any || end > batchStart_[plane];
     batchStart_[plane] = end;
     written_[plane].clear();
+    synced_[plane].clear();
     batchReads_[plane].clear();
   }
   if (any) {
@@ -1824,8 +1845,9 @@ RecordPlanner::RecordPlanner() : builder_(std::make_unique<Builder>()) {}
 
 RecordPlanner::~RecordPlanner() = default;
 
-void RecordPlanner::setDestinationReadsInPass(bool inPass) {
+void RecordPlanner::setDestinationReadsInPass(bool inPass, bool ordered) {
   builder_->destinationInPass = inPass;
+  builder_->destinationOrdered = ordered;
 }
 
 void RecordPlanner::setLetteredFonts(std::uint32_t fonts) {

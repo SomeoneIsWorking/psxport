@@ -225,7 +225,9 @@ private:
   void drawShapes(SDL_GPURenderPass *pass,
                   const gpu::RecordRasterPlan &plan,
                   std::span<const gpu::RecordShape> shapes,
-                  std::uint32_t firstVertexShape,
+                  std::uint32_t firstShape,
+                  std::span<const std::uint32_t> syncs,
+                  std::uint32_t planeVertexShape,
                   bool depthTarget);
   // Copies the capture's canvas pixels into capture_, sized to them.
   void capture(const gpu::RecordCapture &capture);

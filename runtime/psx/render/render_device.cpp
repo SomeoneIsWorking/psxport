@@ -157,14 +157,19 @@ void RenderDevice::bringUp() {
   }
   GPUCHK(device_, "SDL_CreateGPUDevice");
   const char *driver = SDL_GetGPUDeviceDriver(device_);
-  fetchesTarget_ = (driver != nullptr && std::strcmp(driver, "metal") == 0) ||
-                   SDL_GetBooleanProperty(SDL_GetGPUDeviceProperties(device_),
-                                          SDL_PROP_GPU_DEVICE_COLOR_TARGET_READ_IN_PASS_BOOLEAN,
-                                          false);
+  // Metal's framebuffer fetch reads in raster order; SDL's Vulkan reads through an input attachment.
+  const bool metal = driver != nullptr && std::strcmp(driver, "metal") == 0;
+  const SDL_PropertiesID properties = SDL_GetGPUDeviceProperties(device_);
+  fetchesTarget_ =
+      metal || SDL_GetBooleanProperty(properties, SDL_PROP_GPU_DEVICE_COLOR_TARGET_READ_IN_PASS_BOOLEAN, false);
+  ordersTargetReads_ =
+      metal || SDL_GetBooleanProperty(properties, SDL_PROP_GPU_DEVICE_COLOR_TARGET_READ_IN_PASS_ORDERED_BOOLEAN, false);
   lucent::info("render",
                "SDL_GPU device up (driver: {}; colour target read {})",
                driver != nullptr ? driver : "(null)",
-               fetchesTarget_ ? "in-pass" : "from a snapshot");
+               !fetchesTarget_      ? "from a snapshot"
+               : ordersTargetReads_ ? "in-pass"
+                                    : "in-pass after a sync");
   window_.claim(device_);
   nearest_ = makeSampler(SDL_GPU_FILTER_NEAREST);
   linear_ = makeSampler(SDL_GPU_FILTER_LINEAR);
