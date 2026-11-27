@@ -191,7 +191,7 @@ def stage(root: Path, plan: Plan, roms: RomMap, home: PurePosixPath) -> Path:
     shutil.copytree(assets, tree / "assets")
     carried: list[Path] = []
     environment = {key: mapped(value, plan, roms, home, carried) for key, value in plan.environment.items()
-                   if key.startswith("PSXPORT_") and key not in HOST_KEYS}
+                   if key not in HOST_KEYS}
     arguments = [mapped(value, plan, roms, home, carried) for value in plan.arguments]
     env_file = {key: mapped(value, plan, roms, home, carried) for key, value in dotenv(root).items()}
     for relative in carried:

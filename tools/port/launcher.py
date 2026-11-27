@@ -366,7 +366,9 @@ def exec_product(program: Path, arguments: Sequence[str], environment: Mapping[s
     if not os.access(program, os.X_OK):
         raise ToolError(f"the build produced no executable at {program}")
     if plan := environment.get(LAUNCH_PLAN):
-        exec_environment = {key: value for key, value in environment.items() if key != LAUNCH_PLAN}
+        # Only the product's own keys: the caller's shell may hold credentials.
+        exec_environment = {key: value for key, value in environment.items()
+                            if key.startswith("PSXPORT_") and key != LAUNCH_PLAN}
         Path(plan).write_text(json.dumps({"program": str(program.resolve()), "arguments": list(arguments),
                                           "environment": exec_environment, "cwd": str(cwd.resolve())}),
                               encoding="utf-8")
