@@ -30,9 +30,6 @@ class Shader(NamedTuple):
     source: str
     array: str
     defines: tuple[str, ...] = ()  # a variant of `source` compiled with these macros defined
-    # Only the Metal form exists: the variant reads its colour target in-pass (framebuffer fetch), which the
-    # SPIR-V path cannot express through SDL_GPU.
-    msl_only: bool = False
 
 
 SHADERS = (
@@ -51,11 +48,11 @@ SHADERS = (
     Shader("record.frag", "spv_g_record_opaque_frag", ("RECORD_OPAQUE",)),
     Shader("record.frag", "spv_g_record_triangle_frag", ("RECORD_LEAN", "RECORD_TRIANGLE")),
     Shader("record.frag", "spv_g_record_sprite_frag", ("RECORD_LEAN", "RECORD_SPRITE")),
-    Shader("record.frag", "spv_g_record_fetch_frag", ("RECORD_FETCH",), msl_only=True),
-    Shader("record.frag", "spv_g_record_fetch_lean_frag", ("RECORD_FETCH", "RECORD_LEAN"), msl_only=True),
-    Shader("record.frag", "spv_g_record_fetch_opaque_frag", ("RECORD_FETCH", "RECORD_OPAQUE"), msl_only=True),
-    Shader("record.frag", "spv_g_record_fetch_triangle_frag", ("RECORD_FETCH", "RECORD_LEAN", "RECORD_TRIANGLE"), msl_only=True),
-    Shader("record.frag", "spv_g_record_fetch_sprite_frag", ("RECORD_FETCH", "RECORD_LEAN", "RECORD_SPRITE"), msl_only=True),
+    Shader("record.frag", "spv_g_record_fetch_frag", ("RECORD_FETCH",)),
+    Shader("record.frag", "spv_g_record_fetch_lean_frag", ("RECORD_FETCH", "RECORD_LEAN")),
+    Shader("record.frag", "spv_g_record_fetch_opaque_frag", ("RECORD_FETCH", "RECORD_OPAQUE")),
+    Shader("record.frag", "spv_g_record_fetch_triangle_frag", ("RECORD_FETCH", "RECORD_LEAN", "RECORD_TRIANGLE")),
+    Shader("record.frag", "spv_g_record_fetch_sprite_frag", ("RECORD_FETCH", "RECORD_LEAN", "RECORD_SPRITE")),
 )
 
 # The Metal Shading Language version the translated shaders target: framebuffer fetch on macOS needs 2.3.
@@ -276,12 +273,9 @@ def generate(
         else:
             header.append("#define PSXPORT_MSL(name) nullptr, 0\n")
         for shader in SHADERS:
-            if shader.msl_only and spirv_cross is None:
-                continue
             spv_path = temp_dir / f"{shader.array}.spv"
             compile_shader(glslc, [shader_dir, output.parent], shader_dir, shader.source, spv_path, shader.defines)
-            if not shader.msl_only:
-                header.append(spirv_array(spv_path, shader.array))
+            header.append(spirv_array(spv_path, shader.array))
             if spirv_cross is not None:
                 source = translate_msl(spirv_cross, spv_path, temp_dir / f"{shader.array}.metal")
                 header.append(msl_array(source, msl_name(shader.array)))

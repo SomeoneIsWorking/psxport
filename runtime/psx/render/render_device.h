@@ -92,8 +92,8 @@ public:
   SDL_GPUDevice *handle() const {
     return device_;
   }
-  // A fragment shader reads its colour target as earlier draws of the same pass left it (Metal framebuffer fetch),
-  // so a draw over them needs no snapshot of the target.
+  // A fragment shader reads its colour target as earlier draws of the same pass left it (Metal framebuffer fetch,
+  // Vulkan rasterization-order input attachment), so a draw over them needs no snapshot of the target.
   bool fetchesTarget() const {
     return fetchesTarget_;
   }
@@ -178,13 +178,14 @@ public:
     SDL_GPUDepthStencilState state{};
   };
   // A pipeline drawing triangle lists into one colour target, and `depth`'s target when given. Without `input` the
-  // vertex stage makes its own vertices.
+  // vertex stage makes its own vertices. With `readInPass` it draws only in passes begun with read_in_pass.
   SDL_GPUGraphicsPipeline *makePipeline(const ShaderCode &vertex,
                                         const ShaderCode &fragment,
                                         SDL_GPUTextureFormat format,
                                         const SDL_GPUColorTargetBlendState *blend = nullptr,
                                         const SDL_GPUVertexInputState *input = nullptr,
-                                        const DepthTarget *depth = nullptr);
+                                        const DepthTarget *depth = nullptr,
+                                        bool readInPass = false);
   SDL_GPUTexture *makeTexture(PixelSize size, SDL_GPUTextureFormat format, SDL_GPUTextureUsageFlags usage);
   SDL_GPUTransferBuffer *makeTransferBuffer(SDL_GPUTransferBufferUsage usage, std::uint32_t bytes);
   // Copies `pixels` into `staging` and records their upload into the whole of `texture`.

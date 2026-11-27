@@ -30,19 +30,27 @@ constexpr ShaderCode kRecordSpriteFragment{
 // test draw already passed (stencil), so it never samples a texel or reads the target; both pipeline sets share it.
 constexpr ShaderCode kRecordDepthMarkFragment{
     spv_g_record_depth_mark_frag, spv_g_record_depth_mark_frag_len, {5, 1, 3}, PSXPORT_MSL(record_depth_mark_frag)};
-// The same reading the target in-pass (RECORD_FETCH): Metal only, so it exists only where Metal was built.
-#if defined(PSXPORT_GPU_SHADERS_MSL)
-constexpr ShaderCode kRecordFetchFragment{nullptr, 0, {5, 1, 3}, PSXPORT_MSL(record_fetch_frag)};
-constexpr ShaderCode kRecordFetchLeanFragment{nullptr, 0, {5, 1, 3}, PSXPORT_MSL(record_fetch_lean_frag)};
-constexpr ShaderCode kRecordFetchOpaqueFragment{nullptr, 0, {5, 1, 3}, PSXPORT_MSL(record_fetch_opaque_frag)};
-constexpr ShaderCode kRecordFetchTriangleFragment{nullptr, 0, {5, 1, 3}, PSXPORT_MSL(record_fetch_triangle_frag)};
-constexpr ShaderCode kRecordFetchSpriteFragment{nullptr, 0, {5, 1, 3}, PSXPORT_MSL(record_fetch_sprite_frag)};
-#endif
+// The same reading the target in-pass (RECORD_FETCH).
+constexpr ShaderCode kRecordFetchFragment{
+    spv_g_record_fetch_frag, spv_g_record_fetch_frag_len, {5, 1, 3}, PSXPORT_MSL(record_fetch_frag)};
+constexpr ShaderCode kRecordFetchLeanFragment{
+    spv_g_record_fetch_lean_frag, spv_g_record_fetch_lean_frag_len, {5, 1, 3}, PSXPORT_MSL(record_fetch_lean_frag)};
+constexpr ShaderCode kRecordFetchOpaqueFragment{spv_g_record_fetch_opaque_frag,
+                                                spv_g_record_fetch_opaque_frag_len,
+                                                {5, 1, 3},
+                                                PSXPORT_MSL(record_fetch_opaque_frag)};
+constexpr ShaderCode kRecordFetchTriangleFragment{spv_g_record_fetch_triangle_frag,
+                                                  spv_g_record_fetch_triangle_frag_len,
+                                                  {5, 1, 3},
+                                                  PSXPORT_MSL(record_fetch_triangle_frag)};
+constexpr ShaderCode kRecordFetchSpriteFragment{spv_g_record_fetch_sprite_frag,
+                                                spv_g_record_fetch_sprite_frag_len,
+                                                {5, 1, 3},
+                                                PSXPORT_MSL(record_fetch_sprite_frag)};
 
 // The record fragment shader `device` draws with: the in-pass reading one where it fetches its target. Depth-tested
 // draws use it too: the hardware interpolates their depth (record.vert), so only a mark writes it.
 const ShaderCode &recordFragment(bool fetch, RecordShader shader) {
-#if defined(PSXPORT_GPU_SHADERS_MSL)
   if (fetch) {
     switch (shader) {
     case RecordShader::Opaque:
@@ -58,8 +66,6 @@ const ShaderCode &recordFragment(bool fetch, RecordShader shader) {
     }
     return kRecordFetchFragment;
   }
-#endif
-  (void)fetch;
   switch (shader) {
   case RecordShader::Opaque:
     return kRecordOpaqueFragment;
@@ -240,7 +246,7 @@ RecordRasterizer::RecordRasterizer(RenderDevice &device) : device_(device), dept
 RecordRasterizer::Pipelines RecordRasterizer::makePipelines(bool fetch, RecordShader shader) {
   const ShaderCode &fragment = recordFragment(fetch, shader);
   Pipelines pipelines;
-  pipelines.plain = device_.makePipeline(kRecordVertex, fragment, kVramFormat);
+  pipelines.plain = device_.makePipeline(kRecordVertex, fragment, kVramFormat, nullptr, nullptr, nullptr, fetches_);
   const RenderDevice::DepthTarget slot = depthTarget(depthFormat_, SDL_GPU_COMPAREOP_ALWAYS, false);
   // Depth is 1/z, nearer larger (record.vert).
   const RenderDevice::DepthTarget tests =
@@ -276,17 +282,19 @@ RecordRasterizer::Pipelines RecordRasterizer::makePipelines(bool fetch, RecordSh
   SDL_GPUColorTargetBlendState noColour = {};
   noColour.enable_color_write_mask = true;
   noColour.color_write_mask = 0;
-  pipelines.slot = device_.makePipeline(kRecordVertex, fragment, kVramFormat, nullptr, nullptr, &slot);
-  pipelines.groupTest = device_.makePipeline(kRecordVertex, fragment, kVramFormat, nullptr, nullptr, &tests);
+  pipelines.slot = device_.makePipeline(kRecordVertex, fragment, kVramFormat, nullptr, nullptr, &slot, fetches_);
+  pipelines.groupTest = device_.makePipeline(kRecordVertex, fragment, kVramFormat, nullptr, nullptr, &tests, fetches_);
   pipelines.groupMark =
-      device_.makePipeline(kRecordVertex, kRecordDepthMarkFragment, kVramFormat, &noColour, nullptr, &marks);
-  pipelines.object = device_.makePipeline(kRecordVertex, fragment, kVramFormat, nullptr, nullptr, &covers);
-  pipelines.modelTest = device_.makePipeline(kRecordVertex, fragment, kVramFormat, nullptr, nullptr, &modelTests);
-  pipelines.modelPaint = device_.makePipeline(kRecordVertex, fragment, kVramFormat, nullptr, nullptr, &modelPaints);
+      device_.makePipeline(kRecordVertex, kRecordDepthMarkFragment, kVramFormat, &noColour, nullptr, &marks, fetches_);
+  pipelines.object = device_.makePipeline(kRecordVertex, fragment, kVramFormat, nullptr, nullptr, &covers, fetches_);
+  pipelines.modelTest =
+      device_.makePipeline(kRecordVertex, fragment, kVramFormat, nullptr, nullptr, &modelTests, fetches_);
+  pipelines.modelPaint =
+      device_.makePipeline(kRecordVertex, fragment, kVramFormat, nullptr, nullptr, &modelPaints, fetches_);
   pipelines.modelMark =
-      device_.makePipeline(kRecordVertex, kRecordDepthMarkFragment, kVramFormat, &noColour, nullptr, &leaves);
+      device_.makePipeline(kRecordVertex, kRecordDepthMarkFragment, kVramFormat, &noColour, nullptr, &leaves, fetches_);
   pipelines.modelClear =
-      device_.makePipeline(kRecordVertex, kRecordDepthMarkFragment, kVramFormat, &noColour, nullptr, &clears);
+      device_.makePipeline(kRecordVertex, kRecordDepthMarkFragment, kVramFormat, &noColour, nullptr, &clears, fetches_);
   return pipelines;
 }
 
@@ -1094,6 +1102,7 @@ void RecordRasterizer::execute(const gpu::RecordRasterPlan &plan, bool inBetween
       colour.texture = inBetween ? target.inBetween : target.image;
       colour.load_op = SDL_GPU_LOADOP_LOAD;
       colour.store_op = SDL_GPU_STOREOP_STORE;
+      colour.read_in_pass = fetches_;
       const bool depth = usesDepth[static_cast<std::size_t>(p)];
       SDL_GPUDepthStencilTargetInfo depthInfo = {};
       if (depth) {

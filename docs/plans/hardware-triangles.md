@@ -139,6 +139,30 @@ Measured on the M2, phase 2 has little to win and real costs:
 It still pays where the target read is a snapshot copy and a batch break (Vulkan, D3D12), so it stays the plan
 there, done and measured on that machine. On the Mac the draw stage's shading and the remaining copies come first.
 
+### Vulkan: the target read in-pass (2026-11-27)
+
+The SDL fork's Vulkan backend reads colour target 0 in-pass (`read_in_pass` on the pass and the pipelines,
+`SDL_PROP_GPU_DEVICE_COLOR_TARGET_READ_IN_PASS_BOOLEAN`): it becomes input attachment 0 of a subpass that has the
+rasterization-order flag (`VK_EXT`/`VK_ARM_rasterization_order_attachment_access`). The record rasterizer uses it,
+like Metal's framebuffer fetch, wherever the device offers it. Linux builds link the pinned fork for this
+(`release_platform.pinned`).
+
+RADV (RX 6700 XT, Ryzen Z1) and NVIDIA don't offer that extension, so on this machine and the Ally the batches still
+read a snapshot. Those devices get two more tiers, in this order:
+
+1. **In-pass barrier.** The same input attachment with a subpass self-dependency, and no rasterization-order flag.
+   Where a draw reads pixels an earlier draw in the batch wrote, the planner breaks the draw at that point instead of
+   closing the batch. The rasterizer then issues a by-region barrier inside the pass (an SDL call), from colour
+   attachment write to input attachment read. This is core Vulkan 1.0, and depth and stencil don't change. The snapshot
+   copy and the pass split go away, and each break costs one more draw call.
+2. **Fragment-shader interlock** (`VK_EXT_fragment_shader_interlock`), only if measured breaks show tier 1 is not
+   enough.
+   - Every draw that writes colour in such a pass stores through the interlock. Attachment writes and storage writes
+     to one image can't share a pass.
+   - Colour draws need early fragment tests, and a discard then leaves the depth and stencil writes in place. The
+     stencil "passed" mark moves to a second ordered storage image, written in the same critical section.
+   - On AMD, interlock serialises the whole overlapping fragment.
+
 ## Phase 2: RGBA8 target and fixed-function blending
 
 1. **Target format.** `kVramFormat` R8G8 → R8G8B8A8_UNORM. Colour in RGB, the mask bit in A.

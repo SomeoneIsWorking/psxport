@@ -19,7 +19,8 @@
 namespace psx::render {
 namespace {
 
-constexpr ShaderCode kFullscreenVertex{spv_g_fullscreen_vert, spv_g_fullscreen_vert_len, {0, 0, 0}, PSXPORT_MSL(fullscreen_vert)};
+constexpr ShaderCode kFullscreenVertex{
+    spv_g_fullscreen_vert, spv_g_fullscreen_vert_len, {0, 0, 0}, PSXPORT_MSL(fullscreen_vert)};
 constexpr ShaderCode kPresentFragment{spv_g_present_frag, spv_g_present_frag_len, {1, 1, 0}, PSXPORT_MSL(present_frag)};
 constexpr ShaderCode kPresentBoxFragment{
     spv_g_present_box_frag, spv_g_present_box_frag_len, {1, 1, 0}, PSXPORT_MSL(present_box_frag)};
@@ -156,7 +157,10 @@ void RenderDevice::bringUp() {
   }
   GPUCHK(device_, "SDL_CreateGPUDevice");
   const char *driver = SDL_GetGPUDeviceDriver(device_);
-  fetchesTarget_ = driver != nullptr && std::strcmp(driver, "metal") == 0;
+  fetchesTarget_ = (driver != nullptr && std::strcmp(driver, "metal") == 0) ||
+                   SDL_GetBooleanProperty(SDL_GetGPUDeviceProperties(device_),
+                                          SDL_PROP_GPU_DEVICE_COLOR_TARGET_READ_IN_PASS_BOOLEAN,
+                                          false);
   lucent::info("render",
                "SDL_GPU device up (driver: {}; colour target read {})",
                driver != nullptr ? driver : "(null)",
@@ -195,7 +199,8 @@ SDL_GPUGraphicsPipeline *RenderDevice::makePipeline(const ShaderCode &vertex,
                                                     SDL_GPUTextureFormat format,
                                                     const SDL_GPUColorTargetBlendState *blend,
                                                     const SDL_GPUVertexInputState *input,
-                                                    const DepthTarget *depth) {
+                                                    const DepthTarget *depth,
+                                                    bool readInPass) {
   SDL_GPUShader *vs = makeShader(device_, vertex, SDL_GPU_SHADERSTAGE_VERTEX);
   SDL_GPUShader *fs = makeShader(device_, fragment, SDL_GPU_SHADERSTAGE_FRAGMENT);
   SDL_GPUColorTargetDescription target = {};
@@ -215,6 +220,7 @@ SDL_GPUGraphicsPipeline *RenderDevice::makePipeline(const ShaderCode &vertex,
   info.multisample_state.sample_count = SDL_GPU_SAMPLECOUNT_1;
   info.target_info.color_target_descriptions = &target;
   info.target_info.num_color_targets = 1;
+  info.target_info.read_in_pass = readInPass;
   if (depth != nullptr) {
     info.depth_stencil_state = depth->state;
     info.target_info.depth_stencil_format = depth->format;
