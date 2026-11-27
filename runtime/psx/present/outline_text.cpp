@@ -124,21 +124,28 @@ BitmapGlyph readGlyph(const OutlineFont &font, std::span<const std::uint16_t> wo
   return bitmap;
 }
 
+// The CLUT index most of the `inked` texels in rows [y0, y1) hold; 0 without any.
+template <class Inked> int mostInked(const BitmapGlyph &bitmap, int y0, int y1, Inked inked) {
+  std::array<int, 256> counts{};
+  for (int y = y0; y < y1; y++) {
+    for (int x = 0; x < bitmap.width; x++) {
+      const int index = bitmap.indices[offsetOf(x, y, bitmap.width)];
+      if (inked(index)) {
+        counts.at(static_cast<std::size_t>(index))++;
+      }
+    }
+  }
+  const auto most = std::ranges::max_element(counts);
+  return *most != 0 ? static_cast<int>(most - counts.begin()) : 0;
+}
+
 // The CLUT index each row of a glyph draws `inked` texels in: the font's gradient runs down the glyph, so a row takes
 // the index most of its such texels hold, and a row without any takes the nearest row's.
 template <class Inked> std::vector<int> rowIndices(const BitmapGlyph &bitmap, Inked inked) {
   const auto h = static_cast<std::size_t>(bitmap.height);
   std::vector<int> rows(h, 0);
   for (std::size_t y = 0; y < h; y++) {
-    std::array<int, 256> counts{};
-    for (int x = 0; x < bitmap.width; x++) {
-      const int index = bitmap.indices[offsetOf(x, static_cast<int>(y), bitmap.width)];
-      if (inked(index)) {
-        counts.at(static_cast<std::size_t>(index))++;
-      }
-    }
-    const auto most = std::ranges::max_element(counts);
-    rows[y] = *most != 0 ? static_cast<int>(most - counts.begin()) : 0;
+    rows[y] = mostInked(bitmap, static_cast<int>(y), static_cast<int>(y) + 1, inked);
   }
   std::vector<int> banded(rows);
   for (std::size_t y = 0; y < h; y++) {
@@ -903,9 +910,13 @@ private:
             : 0;
     copyTile(glyph, tile, field.rgba);
     const bool word = !glyph.text.empty();
-    const std::vector<int> glyphRows = rowIndices(bitmap, [&](int index) {
+    const auto inked = [&](int index) {
       return glyphInk(font, bitmap, index) && std::ranges::find(font.edgeIndices, index) == font.edgeIndices.end();
-    });
+    };
+    // Pad art's rings are no gradient: another family's glyph drawn over them takes one colour.
+    const std::vector<int> glyphRows = glyph.padArt ? std::vector<int>(static_cast<std::size_t>(bitmap.height),
+                                                                       mostInked(bitmap, 0, bitmap.height, inked))
+                                                    : rowIndices(bitmap, inked);
     const std::vector<int> shadowRows = rowIndices(bitmap, [&](int index) {
       return bitmap.shadowed && shadowTexel(font, index);
     });

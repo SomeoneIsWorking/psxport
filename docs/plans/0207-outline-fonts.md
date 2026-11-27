@@ -119,7 +119,9 @@ Phases 2a to 2e are built and shown. Phase 2 is done.
 - A button glyph marked `padArt` is the PlayStation button itself in several colours (Tomba 2's rings and symbols):
   under a PlayStation pad it has no codepoint and draws its bitmap; under any other family its PromptFont glyph.
 - Colours stay the guest's: the index texture holds per glyph row the CLUT index most of the row's glyph
-  texels use (R) and its shadow's (G), so the glyph shades down its rectangle as the bitmap does; the packet's CLUT,
+  texels use (R) and its shadow's (G), so the glyph shades down its rectangle as the bitmap does; a `padArt` glyph drawn as another
+  family's takes the one index most of its ink uses, since its rings are no gradient (keyboard "L" over Tomba 2's
+  Circle was striped red and white, bug report 2026-11-20 "Prompt graphics issues"); the packet's CLUT,
   modulation and blending apply as for any texel. A button glyph's B names its button's slot in `OutlineAtlas::buttons` (four buttons across all fonts);
   at draw time `buttonFaceColours` asks `GlyphSet::faceColour` per slot and the glyph takes that colour, keeping
   its CLUT texel's semi-transparency bit: Xbox prints A green, B red, X blue, Y yellow; PlayStation, Nintendo
