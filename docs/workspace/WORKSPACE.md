@@ -106,7 +106,8 @@ Builds and runs start directly with the commands above, here or on the Ally with
 The Ally (Bazzite, 16 CPUs, 11 GB) holds its own clone of this workspace at `~/repo/psx` and
 `~/repo/shared/{bug-report,setup-ui,re-harness}`, made by the fresh-machine bootstrap above; each title's `.env`
 there points at `~/ROM/PSX CHD/<disc>.chd`. It builds inside the `my-distrobox` distrobox (Fedora 43: clang, lld,
-cmake, ninja-build, glslc, SDL3-devel, SDL3_image-devel, freetype-devel, zlib-devel; the first build there builds
+cmake, ninja-build, glslc, SDL3-devel, SDL3_image-devel, freetype-devel, zlib-devel, zlib-ng-compat-static (Fedora's zlib
+CMake package names libz.a); the first build there builds
 the pinned SDL fork into the dependency cache; `uv` lives only in the box)
 and runs on the host, whose glibc is newer than the box's. Other agents run there too. Only pushed commits reach it: push first, then sync.
 
