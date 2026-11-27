@@ -26,6 +26,7 @@ if str(TOOLS) not in sys.path:
 
 import psxport_fetch
 from automation.process import ToolError, cpu_jobs
+from port import release_platform
 
 FRAMEWORK = TOOLS.parent
 PLAYER_BUILD = Path("build/player")
@@ -212,8 +213,8 @@ def _prefix_mismatch(build: Path, definitions: Sequence[str]) -> str:
     if not requested or not cache.is_file():
         return ""
     recorded = _cache_value(build, "CMAKE_PREFIX_PATH")
-    if recorded and recorded != requested:
-        return f"the dependency prefix {recorded}, requested {requested}"
+    if recorded != requested:
+        return f"the dependency prefix {recorded or '(none)'}, requested {requested}"
     prefixes = [Path(entry) for entry in requested.split(";") if entry]
     text = cache.read_text(errors="replace")
     for prefix in prefixes:
@@ -222,6 +223,10 @@ def _prefix_mismatch(build: Path, definitions: Sequence[str]) -> str:
             value = line.partition("=")[2]
             if sibling in value and str(prefix) not in value:
                 return f"{line.partition(':')[0]} at {value}, outside the requested prefix {prefix}"
+    # Where pkg-config found SDL3; the system's, from a configure before the pins.
+    found = _cache_value(build, "SDL3_PREFIX")
+    if found and Path(found) not in prefixes:
+        return f"SDL3 at {found}, outside the requested prefix {requested}"
     return ""
 
 
@@ -237,8 +242,10 @@ def _reset_cmake_state(build: Path) -> None:
 
 
 def configure(source: Path, build: Path, build_type: str, definitions: Sequence[str],
-              environment: Mapping[str, str], *, owner: Path | None = None, quiet: bool = False) -> None:
-    """One Ninja configure of ``source`` into ``build`` with the chosen compiler.
+              environment: Mapping[str, str], *, platform: str = "host", owner: Path | None = None,
+              quiet: bool = False) -> None:
+    """One Ninja configure of ``source`` into ``build`` with the chosen compiler, linking ``platform``'s pinned
+    libraries (``release_platform.pinned``).
 
     ``build`` must be a real path under ``owner/build`` (``owner`` defaults to ``source``). A tree
     whose cached source, generator, toolchain file, compiler or dependency prefix disagrees is reset first: CMake's own re-run after a
@@ -249,6 +256,9 @@ def configure(source: Path, build: Path, build_type: str, definitions: Sequence[
     build = build.absolute()
     if not build.is_relative_to(owner / "build") or build.resolve() != build:
         raise ToolError(f"build directory must be a real path under {owner / 'build'}: {build}")
+    target = release_platform.pinned(platform)
+    if target != "host":
+        definitions = [*release_platform.definitions(target, environment), *definitions]
     # A toolchain file names its own compilers.
     cross = any(definition.startswith("-DCMAKE_TOOLCHAIN_FILE=") for definition in definitions)
     options = [*([] if cross else compiler_definitions(environment)), f"-DCMAKE_BUILD_TYPE={build_type}",
@@ -290,10 +300,10 @@ def build_targets(build: Path, targets: Sequence[str], environment: Mapping[str,
 
 
 def configure_consumer(root: Path, build: Path, build_type: str, definitions: Sequence[str],
-                       environment: Mapping[str, str], *, quiet: bool = False) -> None:
+                       environment: Mapping[str, str], *, platform: str = "host", quiet: bool = False) -> None:
     """Configure a title repository against this framework checkout."""
     configure(root, build, build_type, [f"-DPSXPORT_DIR={FRAMEWORK}", *definitions], environment,
-              quiet=quiet)
+              platform=platform, quiet=quiet)
 
 
 def run(command: Sequence[object], environment: Mapping[str, str], *, cwd: Path | None = None,

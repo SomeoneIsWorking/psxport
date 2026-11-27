@@ -2,8 +2,7 @@
 """Configure and build psxport with the launcher's configure (Ninja, Clang when installed).
 
 `--platform windows|macos` builds against that platform's pinned libraries (`port/release_platform.py`)
-in its own build tree. On a Mac, `host` is `macos` built into the host tree, since the Mac's libraries
-come from those pins.
+in its own build tree. `host` links the host's own pins (`release_platform.pinned`) in the host tree.
 """
 
 from __future__ import annotations
@@ -26,15 +25,12 @@ def main() -> int:
     parser.add_argument("--jobs", type=int, help="compile jobs (default: one per usable core)")
     args = parser.parse_args()
     environment = dict(os.environ)
-    platform_name = "macos" if args.platform == "host" and sys.platform == "darwin" else args.platform
+    # The mipsel test program and psxtest_port are Linux host checks; any other build is the framework only.
+    testprog = [] if args.platform == "host" and sys.platform == "linux" else ["-DPSXPORT_TESTPROG=OFF"]
     try:
-        if platform_name == "host":
-            platform = []
-        else:
-            # The mipsel test program and psxtest_port are host checks; a platform build is the framework only.
-            platform = [*release_platform.definitions(platform_name, environment), "-DPSXPORT_TESTPROG=OFF"]
         build = maintainer_build(ROOT, args.build or PLATFORM_BUILDS.get(args.platform, DEFAULT_BUILD))
-        configure(ROOT, build, "RelWithDebInfo", ["-DCMAKE_EXPORT_COMPILE_COMMANDS=ON", *platform], environment)
+        configure(ROOT, build, "RelWithDebInfo", ["-DCMAKE_EXPORT_COMPILE_COMMANDS=ON", *testprog], environment,
+                  platform=args.platform)
         build_targets(build, [], environment, args.jobs)
     except ToolError as error:
         print(f"[build] FAILED: {error}", file=sys.stderr)

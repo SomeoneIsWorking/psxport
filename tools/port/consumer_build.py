@@ -7,8 +7,8 @@
 Run from the title root. The configure is the launcher's (`launcher.configure_consumer`), so the
 compiler choice is the player's, at RelWithDebInfo. `--platform windows`
 cross-compiles with llvm-mingw into `build/windows`; `--platform macos` builds the Mac's own architecture into
-`build/macos`, both against the pinned target libraries (`port/release_platform.py`). On a Mac, `host` is
-`macos` built into the host tree, since the Mac's libraries come from those pins. `-DPSXPORT_DIR=<checkout>`
+`build/macos`, both against the pinned target libraries (`port/release_platform.py`). `host` links the host's
+own pins (`release_platform.pinned`) in the host tree. `-DPSXPORT_DIR=<checkout>`
 builds against another framework tree (an exported commit) with the same pins; never configure a title by hand.
 """
 
@@ -45,14 +45,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     try:
         environment = dict(os.environ)
         definitions = [f"-D{item}" for item in args.definitions]
-        platform = "macos" if args.platform == "host" and sys.platform == "darwin" else args.platform
-        if platform != "host":
-            definitions = [*release_platform.definitions(platform, environment), *definitions]
         build = maintainer_build(root, args.build or PLATFORM_BUILDS.get(args.platform, AGENT_BUILD))
-        if platform == "windows":
+        if args.platform == "windows":
             icon = app_icon.ico(desktop_shortcut.resolve(root).icon, build / "icon" / "app.ico", build / "icon")
             definitions.append(f"-DPSXPORT_PRODUCT_ICON={icon}")
-        configure_consumer(root, build, "RelWithDebInfo", definitions, environment)
+        configure_consumer(root, build, "RelWithDebInfo", definitions, environment, platform=args.platform)
         build_targets(build, args.target, environment, args.jobs)
     except ToolError as error:
         print(f"[build] FAILED: {error}", file=sys.stderr)

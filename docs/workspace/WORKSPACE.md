@@ -81,8 +81,11 @@ and `scripts/bootstrap_workspace.py` runs it for every title. psxport has no thi
 guest code runs on its own executor: a run-time recompiler like DuckStation's (decided 2026-11-17), with the
 interpreter (`runtime/cpu/guest_executor.*`) as reference and fallback.
 
-The record rasterizer follows re-harness's in-pass destination rule: Metal framebuffer fetch on macOS today, the
-other backends as our SDL fork (`SomeoneIsWorking/SDL`, pinned in `vendor/target-platform/target_platform/libraries.json`) gains them.
+The record rasterizer follows re-harness's in-pass destination rule. It uses Metal framebuffer fetch on macOS, and
+on Vulkan devices with rasterization-order attachment access it uses a Vulkan input attachment. The other backends
+get it as our SDL fork gains it (`SomeoneIsWorking/SDL`, pinned in
+`vendor/target-platform/target_platform/libraries.json`; `psxport/docs/plans/hardware-triangles.md` covers RADV and
+NVIDIA). Desktop builds link that pinned fork, never the system's SDL.
 
 ## Build
 
@@ -103,7 +106,8 @@ Builds and runs start directly with the commands above, here or on the Ally with
 The Ally (Bazzite, 16 CPUs, 11 GB) holds its own clone of this workspace at `~/repo/psx` and
 `~/repo/shared/{bug-report,setup-ui,re-harness}`, made by the fresh-machine bootstrap above; each title's `.env`
 there points at `~/ROM/PSX CHD/<disc>.chd`. It builds inside the `my-distrobox` distrobox (Fedora 43: clang, lld,
-cmake, ninja-build, glslc, SDL3-devel, SDL3_image-devel, freetype-devel, zlib-devel; `uv` lives only in the box)
+cmake, ninja-build, glslc, SDL3-devel, SDL3_image-devel, freetype-devel, zlib-devel; the first build there builds
+the pinned SDL fork into the dependency cache; `uv` lives only in the box)
 and runs on the host, whose glibc is newer than the box's. Other agents run there too. Only pushed commits reach it: push first, then sync.
 
 ```sh
